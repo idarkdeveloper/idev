@@ -156,6 +156,8 @@ class LocalPaperBroker:
         self.path = Path(path)
         self.price_fn = price_fn
         self._state = self._load(starting_cash)
+        if self._state.get("mirrors"):
+            self.name = f"local-paper (mirrors {self._state['mirrors']})"
 
     def _load(self, starting_cash: float) -> dict[str, Any]:
         if self.path.exists():
@@ -166,6 +168,29 @@ class LocalPaperBroker:
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self._state, indent=2))
+
+    @property
+    def is_fresh(self) -> bool:
+        """True until the first order or seed is persisted."""
+        return not self.path.exists()
+
+    def seed(self, positions: list[Position], cash: float | None = None,
+             label: str | None = None) -> None:
+        """Mirror a real account into the simulator (positions + optional cash)."""
+        for p in positions:
+            self._state["positions"][p.symbol.upper()] = {"qty": p.qty,
+                                                          "avg_entry_price": p.avg_entry_price}
+            if p.current_price is not None:
+                self._state["prices"][p.symbol.upper()] = p.current_price
+        if cash is not None:
+            self._state["cash"] = float(cash)
+        start = self._state["cash"] + sum(
+            p.qty * (p.current_price or p.avg_entry_price) for p in positions)
+        self._state["starting_cash"] = round(start, 2)
+        if label:
+            self._state["mirrors"] = label
+            self.name = f"local-paper (mirrors {label})"
+        self._save()
 
     def set_price(self, symbol: str, price: float) -> None:
         """Manual price override (used by tests and demo mode)."""

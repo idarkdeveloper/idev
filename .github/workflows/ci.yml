@@ -14,3 +14,4 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m pytest -q
       - run: python -m trading_agent check --demo --dry-run
+      - run: python -m trading_agent --market us check --demo --dry-run

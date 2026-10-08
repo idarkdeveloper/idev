@@ -13,7 +13,7 @@ from anthropic import beta_tool
 from .broker import Broker
 from .config import Settings
 from .notify import Notifier
-from .quiver import DisclosedTrade, QuiverClient
+from .quiver import DisclosedTrade
 from .state import State
 
 log = logging.getLogger(__name__)
@@ -35,11 +35,26 @@ Your job each run:
    order, never buy a ticker already above 20% of equity, and never sell more than is held.
 
 Rules:
-- This is paper trading. Be decisive but explain the risk in plain language.
+- Be decisive but explain the risk in plain language.
 - Do not invent prices or trades; use the tools. If a price lookup fails, say so and skip
   order placement for that ticker.
 - Keep the final message to a short plain-text summary of what you recommended and why.
 """
+
+MARKET_NOTES = {
+    "in": """\
+Market: India (NSE). Prices and amounts are in rupees (INR). Orders are in whole shares.
+The disclosed trades come from NSE bulk deals, block deals and SEBI insider (PIT) filings.
+Bulk/block deals are published the same evening, so they are fresh. The client name in a
+bulk deal can be an investor, a fund, or a broker/prop desk acting for a client; weigh the
+name accordingly. A bulk deal has a counterparty: a SELL by the watched investor is as
+informative as a BUY. Trading hours are 09:15-15:30 IST, Monday-Friday.
+""",
+    "us": """\
+Market: United States. Prices in USD; fractional shares allowed. Disclosed trades come from
+congressional (STOCK Act) and SEC insider filings, which lag the real trade by days to weeks.
+""",
+}
 
 
 @dataclass
@@ -70,10 +85,15 @@ class RunResult:
 class AgentContext:
     settings: Settings
     broker: Broker
-    quiver: QuiverClient | None
+    data: Any | None  # NSEClient | QuiverClient | None
     notifier: Notifier
     state: State
     result: RunResult
+
+    @property
+    def live_money(self) -> bool:
+        return not getattr(self.broker, "name", "").startswith("local-paper") and \
+            getattr(self.broker, "live_orders", False)
 
 
 def build_tools(ctx: AgentContext) -> list[Any]:
@@ -108,15 +128,15 @@ def build_tools(ctx: AgentContext) -> list[Any]:
         Args:
             ticker: Stock ticker symbol.
         """
-        if ctx.quiver is None:
+        if ctx.data is None:
             return json.dumps({"error": "market data client not configured"})
         try:
-            rows = ctx.quiver.congress_trades(ticker) if ctx.settings.watch_source == "congress" \
-                else ctx.quiver.insider_trades(ticker)
+            rows = ctx.data.history_for_ticker(ctx.settings.watch_investor, ticker)
         except Exception as e:  # noqa: BLE001
             return json.dumps({"error": str(e)})
-        needle = ctx.settings.watch_investor.lower()
-        mine = [t.to_dict() for t in rows if needle in t.investor.lower()][:25]
+        mine = [t.to_dict() for t in rows][:25]
+        for t in mine:
+            t.pop("raw", None)
         return json.dumps({"ticker": ticker.upper(), "trades": mine}, default=str)
 
     @beta_tool
@@ -130,7 +150,8 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             headline: One-line summary, e.g. "Pelosi bought NVDA; you hold none".
             rationale: 2-5 sentences: what changed, how it compares to the portfolio, the risk.
             confidence: One of "low", "medium", "high".
-            suggested_notional_usd: Dollar amount to buy/sell if the user acts (0 if n/a).
+            suggested_notional_usd: Amount in the account currency (INR for India, USD for
+                the US) to buy/sell if the user acts (0 if n/a).
         """
         action = action.lower().strip()
         if action not in {"buy", "sell", "hold", "watch"}:
@@ -138,13 +159,14 @@ def build_tools(ctx: AgentContext) -> list[Any]:
         rec = {"action": action, "ticker": ticker.upper(), "headline": headline,
                "rationale": rationale, "confidence": confidence.lower(),
                "suggested_notional_usd": float(suggested_notional_usd),
+               "currency": ctx.settings.currency,
                "investor": ctx.settings.watch_investor}
         ctx.result.recommendations.append(rec)
         ctx.state.record_recommendation(rec)
         subject = f"[{action.upper()} {rec['ticker']}] {headline}"
         body = (f"Investor watched: {ctx.settings.watch_investor}\n"
                 f"Action: {action.upper()} {rec['ticker']} (confidence: {rec['confidence']})\n"
-                + (f"Suggested size: ${rec['suggested_notional_usd']:,.0f}\n"
+                + (f"Suggested size: {_money(rec['suggested_notional_usd'], ctx.settings.currency)}\n"
                    if rec['suggested_notional_usd'] else "")
                 + f"\n{rationale}\n")
         delivered = ctx.notifier.send(subject, body)
@@ -156,13 +178,14 @@ def build_tools(ctx: AgentContext) -> list[Any]:
     if ctx.settings.auto_trade:
         @beta_tool
         def place_paper_order(symbol: str, side: str, notional_usd: float) -> str:
-            """Place a market order with PAPER money. Only use after send_recommendation,
-            only with high confidence, and never more than 10% of equity per order.
+            """Place a market order. Only use after send_recommendation, only with high
+            confidence, and never more than 10% of equity per order. The order goes to the
+            configured brokerage (paper simulator unless live orders were explicitly enabled).
 
             Args:
                 symbol: Ticker symbol.
                 side: "buy" or "sell".
-                notional_usd: Dollar amount to trade.
+                notional_usd: Amount to trade in the account currency (INR or USD).
             """
             try:
                 equity = ctx.broker.account().equity
@@ -179,13 +202,25 @@ def build_tools(ctx: AgentContext) -> list[Any]:
     return tools
 
 
+def _money(amount: float, currency: str) -> str:
+    sym = "₹" if currency == "INR" else "$"
+    return f"{sym}{amount:,.0f}"
+
+
 def build_user_message(ctx: AgentContext) -> str:
     trades = [t.to_dict() for t in ctx.result.new_trades]
     for t in trades:
         t.pop("raw", None)
+    if not ctx.settings.auto_trade:
+        mode = "recommendation-only (no order tool)"
+    elif ctx.live_money:
+        mode = "LIVE - orders use real money, be conservative"
+    else:
+        mode = "paper - you may place simulated orders"
     return (
+        MARKET_NOTES.get(ctx.settings.market, "") + "\n"
         f"Watched investor: {ctx.settings.watch_investor} (source: {ctx.settings.watch_source}).\n"
-        f"Paper trading is {'ENABLED - you may place paper orders' if ctx.settings.auto_trade else 'recommendation-only (no order tool)'}.\n\n"
+        f"Order mode: {mode}.\n\n"
         f"NEW disclosed trades since the last check ({len(trades)}):\n"
         f"{json.dumps(trades, indent=2)}\n\n"
         "Analyse them against the portfolio and send recommendations."

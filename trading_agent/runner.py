@@ -9,18 +9,63 @@ from .agent import AgentContext, RunResult, run_agent
 from .broker import AlpacaPaperBroker, Broker, LocalPaperBroker
 from .config import Settings
 from .notify import Notifier
-from .quiver import DisclosedTrade, QuiverClient
+from .quiver import DisclosedTrade
 from .state import State
 
 log = logging.getLogger(__name__)
 
 
+def resolve_groww_token(settings: Settings) -> str:
+    from .groww import get_access_token, totp_now
+
+    if settings.groww_access_token:
+        return settings.groww_access_token
+    if settings.groww_api_key and settings.groww_api_secret:
+        return get_access_token(settings.groww_api_key, secret=settings.groww_api_secret)
+    if settings.groww_api_key and settings.groww_totp_secret:
+        return get_access_token(settings.groww_api_key, totp=totp_now(settings.groww_totp_secret))
+    raise SystemExit("Groww selected but no GROWW_ACCESS_TOKEN or GROWW_API_KEY + "
+                     "GROWW_API_SECRET / GROWW_TOTP_SECRET is set.")
+
+
 def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
+    sim_path = settings.state_dir / "paper_broker.json"
+    if settings.use_groww:
+        from .groww import GrowwBroker
+
+        groww = GrowwBroker(resolve_groww_token(settings), live_orders=settings.groww_live_orders,
+                            exchange=settings.groww_exchange)
+        if settings.groww_live_orders:
+            log.warning("GROWW_LIVE_ORDERS=true: orders will use REAL money on Groww.")
+            return groww
+        # Paper mode: real holdings + live prices from Groww, simulated fills.
+        sim = LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
+                               price_fn=groww.latest_price)
+        if sim.is_fresh:
+            try:
+                acct = groww.account()
+                sim.seed(groww.positions(), cash=acct.cash, label="groww")
+                log.info("Seeded paper account from Groww: %d holdings, cash %.2f",
+                         len(sim.positions()), acct.cash)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Could not mirror Groww holdings (%s); starting from cash only.", e)
+        return sim
     if settings.use_alpaca:
         return AlpacaPaperBroker(settings.alpaca_key_id, settings.alpaca_secret,
                                  settings.alpaca_base_url)
-    return LocalPaperBroker(settings.state_dir / "paper_broker.json",
-                            starting_cash=settings.paper_starting_cash, price_fn=price_fn)
+    return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash, price_fn=price_fn)
+
+
+def make_data_source(settings: Settings) -> Any:
+    if settings.data_source == "nse":
+        from .nse import NSEClient
+
+        return NSEClient()
+    from .quiver import QuiverClient
+
+    if not settings.quiver_api_key:
+        raise SystemExit("QUIVER_API_KEY is not set (or use MARKET=in / --demo).")
+    return QuiverClient(settings.quiver_api_key)
 
 
 def make_notifier(settings: Settings) -> Notifier:
@@ -30,11 +75,11 @@ def make_notifier(settings: Settings) -> Notifier:
 
 def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
           trades: list[DisclosedTrade] | None = None, broker: Broker | None = None,
-          quiver: QuiverClient | None = None, notifier: Notifier | None = None,
+          data: Any | None = None, notifier: Notifier | None = None,
           runner_factory: Any | None = None) -> RunResult:
     """One pass of the routine.
 
-    * ``trades`` overrides the QuiverQuant fetch (demo / tests).
+    * ``trades`` overrides the data-source fetch (demo / tests).
     * ``force`` runs Claude even when nothing new was disclosed.
     * ``dry_run`` stops before calling Claude.
     """
@@ -43,11 +88,8 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     notifier = notifier or make_notifier(settings)
 
     if trades is None:
-        if quiver is None:
-            if not settings.quiver_api_key:
-                raise SystemExit("QUIVER_API_KEY is not set (or pass --demo).")
-            quiver = QuiverClient(settings.quiver_api_key)
-        trades = quiver.trades_for_investor(settings.watch_investor, settings.watch_source)
+        data = data or make_data_source(settings)
+        trades = data.trades_for_investor(settings.watch_investor, settings.watch_source)
 
     new = state.new_trades(trades)
     result = RunResult(investor=settings.watch_investor, new_trades=new)
@@ -65,7 +107,7 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
         state.save()
         return result
 
-    ctx = AgentContext(settings=settings, broker=broker, quiver=quiver, notifier=notifier,
+    ctx = AgentContext(settings=settings, broker=broker, data=data, notifier=notifier,
                        state=state, result=result)
     run_agent(ctx, runner_factory=runner_factory)
     # Only remember trades once they were actually analysed, so a failed API call

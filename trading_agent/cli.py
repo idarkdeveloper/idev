@@ -20,9 +20,16 @@ from .runner import check, make_broker
 def _demo_inputs(settings):
     """Fixture trades + a local broker with fixed prices, so no data keys are needed."""
     fx = resources.files("trading_agent") / "fixtures"
-    rows = json.loads((fx / "congress_sample.json").read_text())
-    prices = json.loads((fx / "prices.json").read_text())
-    trades = filter_by_investor([_norm_congress(r) for r in rows], settings.watch_investor)
+    if settings.market == "in":
+        from .nse import _norm_deal
+        snap = json.loads((fx / "nse_deals_sample.json").read_text())
+        rows = [_norm_deal(r, "bulk") for r in snap["BULK_DEALS_DATA"]]
+        rows += [_norm_deal(r, "block") for r in snap["BLOCK_DEALS_DATA"]]
+        prices = json.loads((fx / "prices_in.json").read_text())
+    else:
+        rows = [_norm_congress(r) for r in json.loads((fx / "congress_sample.json").read_text())]
+        prices = json.loads((fx / "prices.json").read_text())
+    trades = filter_by_investor(rows, settings.watch_investor)
     broker = LocalPaperBroker(settings.state_dir / "paper_broker.json",
                               starting_cash=settings.paper_starting_cash,
                               price_fn=lambda s: prices[s])
@@ -51,8 +58,15 @@ def _print_result(result) -> None:
         print(f"\n{result.final_text}")
 
 
+def _settings(args: argparse.Namespace):
+    if getattr(args, "market", None):
+        import os
+        os.environ["MARKET"] = args.market
+    return load_settings()
+
+
 def cmd_check(args: argparse.Namespace) -> int:
-    settings = load_settings()
+    settings = _settings(args)
     if args.investor:
         settings.watch_investor = args.investor
     if args.auto_trade:
@@ -83,10 +97,11 @@ def cmd_loop(args: argparse.Namespace) -> int:
 
 
 def cmd_portfolio(args: argparse.Namespace) -> int:
-    settings = load_settings()
+    settings = _settings(args)
     broker = make_broker(settings)
     acct = broker.account()
-    print(f"Broker: {broker.name}   cash ${acct.cash:,.2f}   equity ${acct.equity:,.2f}")
+    cur = "₹" if acct.currency == "INR" or settings.market == "in" else "$"
+    print(f"Broker: {broker.name}   cash {cur}{acct.cash:,.2f}   equity {cur}{acct.equity:,.2f}")
     positions = broker.positions()
     if not positions:
         print("No open positions.")
@@ -97,7 +112,16 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     if isinstance(broker, LocalPaperBroker):
         perf = broker.performance()
         print(f"\nPaper performance: {perf['pnl']:+,.2f} ({perf['pnl_pct']:+.2f}%) "
-              f"over {perf['orders']} orders from ${perf['starting_cash']:,.0f}")
+              f"over {perf['orders']} orders from {cur}{perf['starting_cash']:,.0f}")
+    return 0
+
+
+def cmd_groww_token(args: argparse.Namespace) -> int:
+    """Print a fresh Groww access token (valid until 06:00 IST next day)."""
+    from .runner import resolve_groww_token
+    settings = _settings(args)
+    settings.groww_access_token = None  # force generation from key + secret / TOTP
+    print(resolve_groww_token(settings))
     return 0
 
 
@@ -134,6 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="trading_agent",
                                 description="Claude agent that follows an investor's disclosed trades.")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--market", choices=["in", "us"], help="override MARKET (in = NSE/Groww)")
     sub = p.add_subparsers(dest="command", required=True)
 
     def add_check_args(sp: argparse.ArgumentParser) -> None:
@@ -154,6 +179,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_history)
     sub.add_parser("reset", help="forget seen trades and reset the local paper account") \
         .set_defaults(func=cmd_reset)
+    sub.add_parser("groww-token", help="generate a Groww access token from API key + secret/TOTP") \
+        .set_defaults(func=cmd_groww_token)
     return p
 
 

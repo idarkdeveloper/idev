@@ -10,7 +10,11 @@ from trading_agent.config import Settings
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         anthropic_api_key="test", claude_model="claude-opus-5-5",
-        quiver_api_key="qk", alpaca_key_id=None, alpaca_secret=None,
+        market="us", data_source="quiver", broker="local",
+        quiver_api_key="qk",
+        groww_access_token=None, groww_api_key=None, groww_api_secret=None,
+        groww_totp_secret=None, groww_live_orders=False, groww_exchange="NSE",
+        alpaca_key_id=None, alpaca_secret=None,
         alpaca_base_url="https://paper-api.alpaca.markets",
         watch_investor="Nancy Pelosi", watch_source="congress",
         paper_starting_cash=80_000, auto_trade=False,
@@ -29,7 +33,7 @@ class FakeResponse:
     def __init__(self, payload, status=200):
         self._payload = payload
         self.status_code = status
-        self.content = json.dumps(payload).encode()
+        self.content = payload.encode() if isinstance(payload, str) else json.dumps(payload).encode()
 
     def json(self):
         return self._payload
