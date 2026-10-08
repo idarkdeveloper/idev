@@ -124,7 +124,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         alpaca_base_url=env("ALPACA_BASE_URL") or "https://paper-api.alpaca.markets",
         watch_investor=env("WATCH_INVESTOR") or default_investor,
         watch_source=(env("WATCH_SOURCE") or default_source).lower(),
-        paper_starting_cash=float(env("PAPER_STARTING_CASH") or 80000),
+        paper_starting_cash=float(env("PAPER_STARTING_CASH") or (500_000 if market == "in" else 80_000)),
         auto_trade=_bool(env("AUTO_TRADE"), False),
         resend_api_key=env("RESEND_API_KEY") or None,
         notify_email_to=env("NOTIFY_EMAIL_TO") or None,

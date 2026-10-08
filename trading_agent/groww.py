@@ -78,9 +78,12 @@ class GrowwBroker:
     def __init__(self, access_token: str, *, live_orders: bool = False,
                  exchange: str = "NSE", product: str = "CNC",
                  session: requests.Session | None = None, timeout: float = 30.0,
-                 base_url: str = BASE_URL):
+                 base_url: str = BASE_URL, price_fallback: Any | None = None):
         self.token = access_token
         self.live_orders = live_orders
+        # Called as price_fallback(symbol) when Groww's Live Data API is unavailable
+        # (e.g. the Free Trial plan) or returns nothing for a symbol.
+        self.price_fallback = price_fallback
         self.exchange = exchange
         self.product = product
         self.session = session or requests.Session()
@@ -127,12 +130,22 @@ class GrowwBroker:
         for i in range(0, len(symbols), 50):
             chunk = symbols[i:i + 50]
             keys = [f"{self.exchange}_{s.upper()}" for s in chunk]
-            payload = self._req("GET", "live-data/ltp",
-                                params={"segment": "CASH", "exchange_symbols": ",".join(keys)})
+            try:
+                payload = self._req("GET", "live-data/ltp",
+                                    params={"segment": "CASH", "exchange_symbols": ",".join(keys)})
+            except Exception:  # noqa: BLE001 - plan without Live Data, outage, ...
+                if self.price_fallback is None:
+                    raise
+                payload = {}
             for s, k in zip(chunk, keys):
                 v = payload.get(k)
                 if v is not None:
                     out[s.upper()] = float(v)
+                elif self.price_fallback is not None:
+                    try:
+                        out[s.upper()] = float(self.price_fallback(s))
+                    except Exception:  # noqa: BLE001
+                        pass
         return out
 
     def latest_price(self, symbol: str) -> float:

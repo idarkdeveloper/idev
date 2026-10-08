@@ -13,6 +13,10 @@ on:
         description: "Run Claude even if nothing new was disclosed"
         type: boolean
         default: false
+      dry_run:
+        description: "Fetch and diff only; do not call Claude"
+        type: boolean
+        default: false
 
 concurrency:
   group: trading-agent
@@ -37,6 +41,8 @@ jobs:
           restore-keys: trading-agent-state-
 
       - name: Check for new disclosed trades
+        # Without ANTHROPIC_API_KEY the run degrades to a dry run instead of failing, so
+        # the schedule is harmless until the secrets are added.
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MARKET: ${{ vars.MARKET || 'in' }}
@@ -54,8 +60,14 @@ jobs:
           WATCH_INVESTOR: ${{ vars.WATCH_INVESTOR || 'ASHISH KACHOLIA' }}
           WATCH_SOURCE: ${{ vars.WATCH_SOURCE || 'deals' }}
           AUTO_TRADE: ${{ vars.AUTO_TRADE || 'false' }}
+          PAPER_STARTING_CASH: ${{ vars.PAPER_STARTING_CASH || '500000' }}
         run: |
-          python -m trading_agent check ${{ inputs.force && '--force' || '' }}
+          FLAGS="${{ inputs.force && '--force' || '' }} ${{ inputs.dry_run && '--dry-run' || '' }}"
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY secret is not set - running a dry run only. Add it under Settings > Secrets and variables > Actions."
+            FLAGS="$FLAGS --dry-run"
+          fi
+          python -m trading_agent check $FLAGS
 
       - uses: actions/cache/save@v4
         if: always()

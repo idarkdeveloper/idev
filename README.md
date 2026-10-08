@@ -50,6 +50,12 @@ Other commands: `portfolio` (account + P&L), `history` (past recommendations),
 
 ## Linking Groww
 
+**Which plan?** The **Free Trial** (₹0) is enough. It includes holdings, positions, margin
+and order APIs; it excludes *Live Data* and *Backtesting*, which this agent does not need:
+prices come from Yahoo Finance for free (`trading_agent/prices.py`, NSE symbols with
+`.NS`). Pick the ₹499/month plan only if you want Groww's own real-time quotes; the agent
+will then use them automatically and keep Yahoo as a fallback.
+
 1. In Groww, open **Trading APIs** (https://groww.in/trade-api) and either copy the daily
    **access token** (expires 06:00 IST) or create an **API key** with a secret or TOTP.
 2. Put it in `.env` as `GROWW_ACCESS_TOKEN`, or `GROWW_API_KEY` + `GROWW_API_SECRET`
@@ -83,6 +89,7 @@ small-cap moves by big investors are what you'll see most.
 | `WATCH_INVESTOR`, `WATCH_SOURCE` | Who to follow and which disclosures to read. |
 | `GROWW_ACCESS_TOKEN` / `GROWW_API_KEY` + `GROWW_API_SECRET` or `GROWW_TOTP_SECRET` | Groww access. Unset = local simulator only. |
 | `GROWW_LIVE_ORDERS` | `false` (default) = paper fills with real holdings/prices. `true` = real orders. |
+| *(prices)* | Yahoo Finance is used automatically when Groww Live Data is unavailable or no broker is linked. |
 | `AUTO_TRADE` | `false` (default) = recommendations only. `true` = Claude may place orders. |
 | `PAPER_STARTING_CASH` | Cash for the simulator when no brokerage is linked (default ₹5,00,000). |
 | `RESEND_API_KEY` + `NOTIFY_EMAIL_TO` | Email each recommendation via Resend. |
@@ -93,10 +100,23 @@ small-cap moves by big investors are what you'll see most.
 
 `.github/workflows/routine.yml` runs the check every 30 minutes on weekdays from NSE open
 through the evening bulk/block-deal publication, keeping `state/` between runs with the
-Actions cache. A run with nothing new exits before calling Claude. Enable it by adding
-repository **secrets** `ANTHROPIC_API_KEY` and `GROWW_API_KEY` + `GROWW_API_SECRET` or
-`GROWW_TOTP_SECRET` (optional: `RESEND_API_KEY`, `NOTIFY_WEBHOOK_URL`) and **variables**
-`WATCH_INVESTOR`, `NOTIFY_EMAIL_TO`, `AUTO_TRADE`. Trigger it by hand from the Actions tab.
+Actions cache. A run with nothing new exits before calling Claude; a run without the
+Claude secret degrades to a dry run instead of failing.
+
+Setup, in the repository's **Settings → Secrets and variables → Actions**:
+
+| Kind | Name | Required? | Notes |
+|---|---|---|---|
+| Secret | `ANTHROPIC_API_KEY` | **yes** | Without it the routine only lists new deals. |
+| Secret | `GROWW_API_KEY` + `GROWW_TOTP_SECRET` | no | Mirrors your real Groww holdings. TOTP flow needs no daily approval; `GROWW_API_SECRET` works too but needs a daily tap in the app. |
+| Secret | `RESEND_API_KEY`, `NOTIFY_WEBHOOK_URL` | no | Email / chat delivery. |
+| Variable | `WATCH_INVESTOR` | no | Defaults to `ASHISH KACHOLIA`. |
+| Variable | `NOTIFY_EMAIL_TO`, `NOTIFY_EMAIL_FROM` | no | With `RESEND_API_KEY`. |
+| Variable | `AUTO_TRADE`, `GROWW_LIVE_ORDERS` | no | Both default to `false`. |
+| Variable | `MARKET`, `WATCH_SOURCE`, `PAPER_STARTING_CASH` | no | Defaults: `in`, `deals`, `500000`. |
+
+Then open **Actions → trading-agent routine → Run workflow** (tick *dry_run* for a first
+look) and check the job log.
 
 ## How a check works
 

@@ -9,6 +9,7 @@ from .agent import AgentContext, RunResult, run_agent
 from .broker import AlpacaPaperBroker, Broker, LocalPaperBroker
 from .config import Settings
 from .notify import Notifier
+from .prices import YahooPrices
 from .quiver import DisclosedTrade
 from .state import State
 
@@ -28,19 +29,27 @@ def resolve_groww_token(settings: Settings) -> str:
                      "GROWW_API_SECRET / GROWW_TOTP_SECRET is set.")
 
 
+def free_prices(settings: Settings) -> YahooPrices:
+    """Keyless quotes: NSE via Yahoo (.NS / .BO suffix), US bare symbols."""
+    if settings.market == "in":
+        return YahooPrices(suffix=".BO" if settings.groww_exchange == "BSE" else ".NS")
+    return YahooPrices(suffix="")
+
+
 def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
     sim_path = settings.state_dir / "paper_broker.json"
+    price_fn = price_fn or free_prices(settings)
     if settings.use_groww:
         from .groww import GrowwBroker
 
         groww = GrowwBroker(resolve_groww_token(settings), live_orders=settings.groww_live_orders,
-                            exchange=settings.groww_exchange)
+                            exchange=settings.groww_exchange, price_fallback=price_fn)
         if settings.groww_live_orders:
             log.warning("GROWW_LIVE_ORDERS=true: orders will use REAL money on Groww.")
             return groww
         # Paper mode: real holdings + live prices from Groww, simulated fills.
         sim = LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
-                               price_fn=groww.latest_price)
+                               price_fn=groww.latest_price, currency="INR", whole_shares=True)
         if sim.is_fresh:
             try:
                 acct = groww.account()
@@ -53,7 +62,8 @@ def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
     if settings.use_alpaca:
         return AlpacaPaperBroker(settings.alpaca_key_id, settings.alpaca_secret,
                                  settings.alpaca_base_url)
-    return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash, price_fn=price_fn)
+    return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash, price_fn=price_fn,
+                            currency=settings.currency, whole_shares=settings.market == "in")
 
 
 def make_data_source(settings: Settings) -> Any:
