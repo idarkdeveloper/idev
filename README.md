@@ -48,6 +48,21 @@ Other commands: `portfolio` (account + P&L), `history` (past recommendations),
 `reset` (forget seen trades, reset the paper account), `groww-token` (mint a daily token),
 `check --json`, and `--market us` to switch to the US stack.
 
+## The dashboard
+
+```bash
+python -m trading_agent ui            # opens http://127.0.0.1:8787 in your browser
+python -m trading_agent ui --demo     # same, on bundled sample deals
+```
+
+A local web page served by the package itself (no extra dependencies) that shows the
+watched investor's disclosed deals with new ones flagged, your paper portfolio with live
+P&L, Claude's recommendations with a one-click paper order, and the run log. The
+**Run check now** button runs the same check as the CLI in the background. **Settings**
+edits the investor, disclosure source, order mode and notification targets and writes
+them to `.env`; API keys stay in `.env` by hand, and live Groww orders can never be
+switched on from the page.
+
 ## Linking Groww
 
 **Which plan?** The **Free Trial** (₹0) is enough. It includes holdings, positions, margin

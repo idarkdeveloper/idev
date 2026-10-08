@@ -32,7 +32,8 @@ def _demo_inputs(settings):
     trades = filter_by_investor(rows, settings.watch_investor)
     broker = LocalPaperBroker(settings.state_dir / "paper_broker.json",
                               starting_cash=settings.paper_starting_cash,
-                              price_fn=lambda s: prices[s])
+                              price_fn=lambda s: prices[s], currency=settings.currency,
+                              whole_shares=settings.market == "in")
     return trades, broker
 
 
@@ -154,6 +155,14 @@ def cmd_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Serve the local dashboard."""
+    from .ui import serve
+    settings = _settings(args)
+    serve(settings, host=args.host, port=args.port, open_browser=not args.no_open, demo=args.demo)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="trading_agent",
                                 description="Claude agent that follows an investor's disclosed trades.")
@@ -181,6 +190,12 @@ def build_parser() -> argparse.ArgumentParser:
         .set_defaults(func=cmd_reset)
     sub.add_parser("groww-token", help="generate a Groww access token from API key + secret/TOTP") \
         .set_defaults(func=cmd_groww_token)
+    sp = sub.add_parser("ui", help="open the local web dashboard")
+    sp.add_argument("--host", default="127.0.0.1")
+    sp.add_argument("--port", type=int, default=8787)
+    sp.add_argument("--no-open", action="store_true", help="don't open a browser tab")
+    sp.add_argument("--demo", action="store_true", help="use bundled sample deals and prices")
+    sp.set_defaults(func=cmd_ui)
     return p
 
 
