@@ -1,0 +1,12 @@
+{
+  "as_on_date": "08-Oct-2026",
+  "BULK_DEALS_DATA": [
+    {"buySell": "BUY", "clientName": "ASHISH KACHOLIA", "date": "08-Oct-2026", "name": "Senco Gold Limited", "qty": "450000", "remarks": "-", "symbol": "SENCO", "watp": "345.10"},
+    {"buySell": "SELL", "clientName": "ASHISH KACHOLIA", "date": "08-Oct-2026", "name": "Ratnaveer Precision Eng L", "qty": "300000", "remarks": "-", "symbol": "RATNAVEER", "watp": "333.40"},
+    {"buySell": "SELL", "clientName": "ALPHAGREP SECURITIES PRIVATE LIMITED", "date": "08-Oct-2026", "name": "PNGS Reva Diamond Jewel L", "qty": "827310", "remarks": "-", "symbol": "PNGSREVA", "watp": "699.87"}
+  ],
+  "BLOCK_DEALS_DATA": [
+    {"buySell": "BUY", "clientName": "ASHISH KACHOLIA", "date": "08-Oct-2026", "name": "Zaggle Prepaid Ocean Services", "qty": "600000", "remarks": null, "symbol": "ZAGGLE", "watp": "412.00"},
+    {"buySell": "BUY", "clientName": "PI OPPORTUNITIES AIF V LLP", "date": "08-Oct-2026", "name": "ICICI Bank Ltd.", "qty": "1921581", "remarks": null, "symbol": "ICICIBANK", "watp": "1343"}
+  ]
+}
