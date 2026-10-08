@@ -1,0 +1,57 @@
+# The "routine" from the reel: check for new disclosed trades automatically.
+# Runs every 30 minutes during US market hours (Mon-Fri, 13:30-20:30 UTC) and on demand.
+name: trading-agent routine
+
+on:
+  schedule:
+    - cron: "0,30 13-20 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run Claude even if nothing new was disclosed"
+        type: boolean
+        default: false
+
+concurrency:
+  group: trading-agent
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      # Remembered trades + local paper account live in ./state between runs.
+      - uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: trading-agent-state-${{ github.run_id }}
+          restore-keys: trading-agent-state-
+
+      - name: Check for new disclosed trades
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
+          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+          ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          NOTIFY_EMAIL_TO: ${{ vars.NOTIFY_EMAIL_TO }}
+          NOTIFY_EMAIL_FROM: ${{ vars.NOTIFY_EMAIL_FROM }}
+          NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          WATCH_INVESTOR: ${{ vars.WATCH_INVESTOR || 'Nancy Pelosi' }}
+          WATCH_SOURCE: ${{ vars.WATCH_SOURCE || 'congress' }}
+          AUTO_TRADE: ${{ vars.AUTO_TRADE || 'false' }}
+        run: |
+          python -m trading_agent check ${{ inputs.force && '--force' || '' }}
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: state
+          key: trading-agent-state-${{ github.run_id }}

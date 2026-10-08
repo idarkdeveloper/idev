@@ -1,0 +1,6 @@
+[
+  {"Representative": "Nancy Pelosi", "BioGuideID": "P000197", "ReportDate": "2026-10-06", "TransactionDate": "2026-09-18", "Ticker": "NVDA", "Transaction": "Purchase", "Range": "$1,000,001 - $5,000,000", "House": "Representatives", "Party": "D", "Description": "Purchased 50 call options with a strike price of $100"},
+  {"Representative": "Nancy Pelosi", "BioGuideID": "P000197", "ReportDate": "2026-10-06", "TransactionDate": "2026-09-19", "Ticker": "AVGO", "Transaction": "Purchase", "Range": "$500,001 - $1,000,000", "House": "Representatives", "Party": "D", "Description": ""},
+  {"Representative": "Nancy Pelosi", "BioGuideID": "P000197", "ReportDate": "2026-10-06", "TransactionDate": "2026-09-22", "Ticker": "AAPL", "Transaction": "Sale", "Range": "$250,001 - $500,000", "House": "Representatives", "Party": "D", "Description": "Sold 5,000 shares"},
+  {"Representative": "Dan Crenshaw", "BioGuideID": "C001120", "ReportDate": "2026-10-05", "TransactionDate": "2026-09-30", "Ticker": "TSLA", "Transaction": "Purchase", "Range": "$1,001 - $15,000", "House": "Representatives", "Party": "R", "Description": ""}
+]
