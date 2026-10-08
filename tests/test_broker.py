@@ -56,3 +56,12 @@ def test_alpaca_paper_requests():
     assert kw["json"] == {"symbol": "NVDA", "side": "buy", "type": "market",
                           "time_in_force": "day", "notional": "1000"}
     assert kw["headers"]["APCA-API-KEY-ID"] == "key"
+
+
+def test_whole_shares_mode_floors_quantity(tmp_path):
+    b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=100_000, currency="INR", whole_shares=True)
+    b.set_price("SENCO", 337.1)
+    order = b.submit_order("SENCO", "buy", notional=5000)  # 14.83 -> 14 shares
+    assert order["qty"] == 14 and b.account().currency == "INR"
+    with pytest.raises(ValueError):
+        b.submit_order("SENCO", "buy", notional=100)

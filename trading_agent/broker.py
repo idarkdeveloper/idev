@@ -13,6 +13,7 @@ that is not the paper endpoint.
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -152,9 +153,12 @@ class LocalPaperBroker:
     name = "local-paper"
 
     def __init__(self, path: Path, starting_cash: float = 80_000.0,
-                 price_fn: Any | None = None):
+                 price_fn: Any | None = None, currency: str = "USD",
+                 whole_shares: bool = False):
         self.path = Path(path)
         self.price_fn = price_fn
+        self.currency = currency
+        self.whole_shares = whole_shares  # Indian equities trade in whole shares
         self._state = self._load(starting_cash)
         if self._state.get("mirrors"):
             self.name = f"local-paper (mirrors {self._state['mirrors']})"
@@ -225,7 +229,8 @@ class LocalPaperBroker:
         equity = self._state["cash"] + sum(
             (p.market_value or p.qty * p.avg_entry_price) for p in self.positions()
         )
-        return Account(cash=round(self._state["cash"], 2), equity=round(equity, 2))
+        return Account(cash=round(self._state["cash"], 2), equity=round(equity, 2),
+                       currency=self.currency)
 
     def submit_order(self, symbol: str, side: str, notional: float | None = None,
                      qty: float | None = None) -> dict[str, Any]:
@@ -237,6 +242,10 @@ class LocalPaperBroker:
         price = self.latest_price(symbol)
         if qty is None:
             qty = round(float(notional) / price, 6)
+        if self.whole_shares:
+            qty = float(math.floor(qty))
+            if qty < 1:
+                raise ValueError(f"{symbol}: amount buys fewer than one whole share at {price}")
         cost = qty * price
         pos = self._state["positions"].get(symbol, {"qty": 0.0, "avg_entry_price": 0.0})
 
