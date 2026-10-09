@@ -19,6 +19,8 @@ from .runner import check, make_broker
 
 def _demo_inputs(settings):
     """Fixture trades + a local broker with fixed prices, so no data keys are needed."""
+    from .costs import cost_model_for
+
     fx = resources.files("trading_agent") / "fixtures"
     if settings.market == "in":
         from .nse import _norm_deal
@@ -33,7 +35,8 @@ def _demo_inputs(settings):
     broker = LocalPaperBroker(settings.state_dir / "paper_broker.json",
                               starting_cash=settings.paper_starting_cash,
                               price_fn=lambda s: prices[s], currency=settings.currency,
-                              whole_shares=settings.market == "in")
+                              whole_shares=settings.market == "in",
+                              cost_model=cost_model_for(settings.market))
     return trades, broker
 
 
@@ -290,7 +293,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
     w = Watcher(settings, every=args.every, window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
                 auto_exit=settings.auto_trade,
-                check_fn=lambda: check(settings, broker=broker, data=data, notifier=notifier))
+                check_fn=lambda: check(settings, broker=broker, data=data, notifier=notifier,
+                                       dry_run=not settings.anthropic_api_key))
     print(f"Watching {settings.watch_investor} every {w.every}s, {args.window_start}-{args.window_end} IST, "
           f"weekdays. Ctrl+C to stop.")
     try:

@@ -39,6 +39,8 @@ EDITABLE_ENV_KEYS = {
     "auto_trade": "AUTO_TRADE",
     "notify_email_to": "NOTIFY_EMAIL_TO",
     "notify_webhook_url": "NOTIFY_WEBHOOK_URL",
+    "market": "MARKET",
+    "paper_starting_cash": "PAPER_STARTING_CASH",
 }
 
 
@@ -165,7 +167,9 @@ class App:
         return {
             "now": _now(),
             "regime": regime,
-            "watch": self.watcher.status() if self.watcher else {"on": False, "every": 60},
+            "watch": ({**self.watcher.status(), "auto_exit": self.watcher.auto_exit} if self.watcher
+                      else {"on": False, "every": 60, "auto_exit": False}),
+            "orders": self.orders(),
             "backtest": self.last_backtest,
             "screen": self.last_screen,
             "costs": _cost_table(self.settings.market),
@@ -176,11 +180,13 @@ class App:
                 "auto_trade": s.auto_trade, "claude_model": s.claude_model,
                 "notify_email_to": s.notify_email_to or "",
                 "notify_webhook_url": s.notify_webhook_url or "",
+                "paper_starting_cash": s.paper_starting_cash,
                 "demo": self.demo_trades is not None,
             },
             "connections": {
                 "claude": bool(s.anthropic_api_key),
                 "groww": s.use_groww,
+                "groww_credentials": s.has_groww_credentials,
                 "groww_live_orders": s.groww_live_orders,
                 "data": s.data_source,
                 "prices": "groww" if s.use_groww else "yahoo",
@@ -312,28 +318,53 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
-    def set_watch(self, on: bool, every: int | None = None) -> dict[str, Any]:
+    def set_watch(self, on: bool, every: int | None = None, auto_exit: bool | None = None) -> dict[str, Any]:
         if on:
-            if self.watcher is None or (every and every != self.watcher.every):
+            want_exit = self.settings.auto_trade if auto_exit is None else bool(auto_exit)
+            if (self.watcher is None or (every and every != self.watcher.every)
+                    or want_exit != self.watcher.auto_exit):
                 if self.watcher:
                     self.watcher.stop()
                 self.watcher = Watcher(
                     self.settings, every=every or 60, data=self.data, broker=self.broker,
                     notifier=make_notifier(self.settings), prices=self.prices,
-                    auto_exit=self.settings.auto_trade,
+                    auto_exit=want_exit,
+                    # No Claude key: compare deals only, instead of failing every tick.
                     check_fn=lambda: check(self.settings, trades=self.deals(refresh=True), broker=self.broker,
                                            data=self.data, notifier=make_notifier(self.settings),
-                                           momentum=self.momentum, context=self.context),
+                                           momentum=self.momentum, context=self.context,
+                                           dry_run=not self.settings.anthropic_api_key),
                 )
             self.watcher.start()
         elif self.watcher:
             self.watcher.stop()
-        return self.watcher.status() if self.watcher else {"on": False, "every": every or 60}
+        if self.watcher:
+            st = self.watcher.status()
+            st["auto_exit"] = self.watcher.auto_exit
+            return st
+        return {"on": False, "every": every or 60, "auto_exit": bool(auto_exit)}
 
-    def paper_order(self, symbol: str, side: str, notional: float) -> dict[str, Any]:
+    def paper_order(self, symbol: str, side: str, notional: float | None = None,
+                    qty: float | None = None) -> dict[str, Any]:
         if not self.paper_only:
             raise PermissionError("orders from the dashboard are allowed only on the paper simulator")
+        symbol = str(symbol).strip().upper()
+        if not symbol:
+            raise ValueError("symbol required")
+        if side not in ("buy", "sell"):
+            raise ValueError("side must be buy or sell")
+        if qty not in (None, "", 0, "0"):
+            return self.broker.submit_order(symbol, side, qty=float(qty))
+        if notional in (None, "", 0, "0"):
+            raise ValueError("enter an amount or a quantity")
         return self.broker.submit_order(symbol, side, notional=float(notional))
+
+    def close_position(self, symbol: str) -> dict[str, Any]:
+        symbol = symbol.upper()
+        pos = next((p for p in self.broker.positions() if p.symbol == symbol), None)
+        if pos is None:
+            raise LookupError(f"no open position in {symbol}")
+        return self.paper_order(symbol, "sell", qty=pos.qty)
 
     def dismiss(self, index: int) -> bool:
         st = State(self.settings.state_dir / "state.json")
@@ -354,7 +385,7 @@ class App:
         if isinstance(self._broker, LocalPaperBroker):
             old = self._broker
             self._broker = LocalPaperBroker(old.path, price_fn=old.price_fn, currency=old.currency,
-                                            whole_shares=old.whole_shares,
+                                            whole_shares=old.whole_shares, cost_model=old.cost_model,
                                             starting_cash=self.settings.paper_starting_cash)
         elif self.demo_trades is None:
             self._broker = None
@@ -369,6 +400,19 @@ class App:
             if key == "auto_trade":
                 value = "true" if value in (True, "true", "1", 1) else "false"
                 self.settings.auto_trade = value == "true"
+            elif key == "market":
+                value = str(value).strip().lower()
+                if value not in ("in", "us"):
+                    raise ValueError("market must be 'in' or 'us'")
+                if value == self.settings.market:
+                    continue
+                self._switch_market(value)
+            elif key == "paper_starting_cash":
+                cash = float(value)
+                if cash <= 0:
+                    raise ValueError("starting cash must be positive")
+                self.settings.paper_starting_cash = cash
+                value = f"{cash:g}"
             else:
                 value = str(value).strip()
                 setattr(self.settings, key, (value or None) if key.startswith("notify") else value)
@@ -378,6 +422,85 @@ class App:
         if applied and self.dotenv is not None:
             _write_env(self.dotenv, applied)
         return applied
+
+    def _switch_market(self, market: str) -> None:
+        """Rebuild everything that depends on the market: data source, broker, prices."""
+        s = self.settings
+        if self.watcher:
+            self.watcher.stop()
+            self.watcher = None
+        s.market = market
+        s.data_source = "nse" if market == "in" else "quiver"
+        s.watch_source = "deals" if market == "in" else "congress"
+        if market == "us" and s.broker == "groww":
+            s.broker = "local"
+        self.prices = free_prices(s)
+        self.momentum = MomentumScreen(self.prices)
+        if self.demo_trades is None:
+            self._broker = None
+            self._data = None
+        self._deals, self._deals_at = None, 0.0
+        self.last_screen = None
+        self.last_backtest = None
+
+    # -- calculators and tools ------------------------------------------------
+    def cost_quote(self, amount: float) -> dict[str, Any]:
+        from .costs import cost_model_for
+        if amount <= 0:
+            raise ValueError("amount must be positive")
+        m = cost_model_for(self.settings.market)
+        if not hasattr(m, "round_trip"):
+            bps = m.round_trip_bps(amount)
+            return {"amount": amount, "model": "flat", "total_bps": bps, "total": amount * bps / 10_000}
+        rt = m.round_trip(amount)
+        return {"amount": amount, "model": "india_delivery", "buy": rt["buy"], "sell": rt["sell"],
+                "charges": rt["charges"], "charges_bps": rt["charges_bps"], "total": rt["total"],
+                "total_bps": rt["total_bps"], "slippage_bps_one_way": m.slippage_bps}
+
+    def size_quote(self, ticker: str, equity: float | None = None, risk_pct: float = 1.0,
+                   max_pct: float = 10.0) -> dict[str, Any]:
+        from .risk import atr, position_size
+        eq = equity or self.broker.account().equity
+        price = self.broker.latest_price(ticker)
+        try:
+            a = atr(self.prices.history(ticker, "1y")) if not self.demo_trades else None
+        except Exception:  # noqa: BLE001
+            a = None
+        r = position_size(eq, price, a, risk_pct=risk_pct / 100, max_pct=max_pct / 100,
+                          whole_shares=self.settings.market == "in")
+        r.update(ticker=ticker.upper(), equity=eq)
+        if r["notional"]:
+            try:
+                r["round_trip_cost"] = self.cost_quote(r["notional"])
+            except Exception:  # noqa: BLE001
+                pass
+        return r
+
+    def groww_test(self) -> dict[str, Any]:
+        """Check Groww credentials end to end without ever returning the token."""
+        from .groww import GrowwBroker
+        from .runner import resolve_groww_token
+        s = self.settings
+        if not s.has_groww_credentials:
+            return {"ok": False, "message": "No Groww credentials in .env (GROWW_ACCESS_TOKEN, or GROWW_API_KEY "
+                                            "with GROWW_API_SECRET or GROWW_TOTP_SECRET)."}
+        try:
+            token = resolve_groww_token(s)
+            g = GrowwBroker(token, live_orders=False, exchange=s.groww_exchange, price_fallback=self.prices)
+            holdings = g.holdings()
+            acct = g.account()
+        except SystemExit as e:
+            return {"ok": False, "message": str(e)}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+        return {"ok": True, "message": f"Connected: {len(holdings)} holdings, cash {acct.cash:,.2f} {acct.currency}",
+                "holdings": len(holdings), "cash": acct.cash, "equity": acct.equity}
+
+    def orders(self, limit: int = 50) -> list[dict[str, Any]]:
+        b = self.broker
+        if isinstance(b, LocalPaperBroker):
+            return list(reversed(b.orders()))[:limit]
+        return []
 
 
 def _cost_table(market: str) -> dict[str, Any]:
@@ -444,12 +567,17 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/favicon.ico":
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.end_headers()
             elif path == "/api/state":
                 self._json(app.snapshot())
             elif path == "/api/jobs":
                 self._json([j.to_dict() for j in app.jobs])
             elif path == "/api/regime":
-                self._json(app.context.fetch() if app.context else {"error": "not configured"})
+                from urllib.parse import parse_qs
+                force = (parse_qs(urlparse(self.path).query).get("refresh") or ["0"])[0] in ("1", "true")
+                self._json(app.context.fetch(force=force) if app.context else {"error": "not configured"})
             elif path == "/api/lookup":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()
@@ -461,6 +589,22 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.last_backtest or {})
             elif path == "/api/screen":
                 self._json(app.last_screen or {})
+            elif path in ("/api/costs", "/api/size", "/api/orders"):
+                from urllib.parse import parse_qs
+                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                try:
+                    if path == "/api/costs":
+                        self._json(app.cost_quote(float(q.get("amount") or 0)))
+                    elif path == "/api/size":
+                        t = (q.get("ticker") or "").strip()
+                        if not t:
+                            raise ValueError("ticker required")
+                        self._json(app.size_quote(t, float(q["equity"]) if q.get("equity") else None,
+                                                  float(q.get("risk_pct") or 1.0), float(q.get("max_pct") or 10.0)))
+                    else:
+                        self._json(app.orders(int(q.get("limit") or 50)))
+                except (ValueError, LookupError) as e:
+                    self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
             else:
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -472,8 +616,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     job = app.start_check(force=bool(body.get("force")), dry_run=bool(body.get("dry_run")))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/order":
-                    order = app.paper_order(body["symbol"], body.get("side", "buy"), body["notional"])
+                    order = app.paper_order(body.get("symbol", ""), body.get("side", "buy"),
+                                            body.get("notional"), body.get("qty"))
                     self._json({"ok": True, "order": order})
+                elif path == "/api/close":
+                    self._json({"ok": True, "order": app.close_position(str(body.get("symbol", "")))})
+                elif path == "/api/groww-test":
+                    self._json(app.groww_test())
                 elif path == "/api/dismiss":
                     self._json({"ok": app.dismiss(int(body["index"]))})
                 elif path == "/api/settings":
@@ -490,7 +639,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     job = app.start_screen(str(body.get("universe") or "NIFTY200"), int(body.get("top", 20)))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/watch":
-                    self._json(app.set_watch(bool(body.get("on")), int(body["every"]) if body.get("every") else None))
+                    self._json(app.set_watch(bool(body.get("on")), int(body["every"]) if body.get("every") else None,
+                                             body.get("auto_exit")))
                 else:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             except PermissionError as e:

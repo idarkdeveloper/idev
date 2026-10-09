@@ -154,3 +154,68 @@ def test_backtest_job_and_watch_toggle(server):
     assert st["watch"]["on"] is True
     status, w = _post(base + "/api/watch", {"on": False})
     assert w["on"] is False
+
+
+def test_calculators_orders_close_and_groww_test(server):
+    base, app = server
+    status, c = _get(base + "/api/costs?amount=10000")
+    assert status == 200 and c["model"] == "india_delivery" and 69 < c["charges_bps"] < 70
+    assert c["buy"]["stamp_duty"] > 0 and c["sell"]["dp_charge"] == 20
+    status, _ = _get(base + "/api/costs?amount=0")
+    assert status == 400
+    status, sz = _get(base + "/api/size?ticker=nvda&risk_pct=1&max_pct=10")
+    assert status == 200 and sz["ticker"] == "NVDA" and sz["qty"] > 0 and sz["notional"] <= 8000.01
+    status, _ = _get(base + "/api/size")
+    assert status == 400
+    # trade ticket by quantity, then close the position
+    status, j = _post(base + "/api/order", {"symbol": "nvda", "side": "buy", "qty": 5})
+    assert status == 200 and j["order"]["qty"] == 5
+    status, j = _post(base + "/api/order", {"symbol": "NVDA", "side": "buy"})
+    assert status == 400 and "amount or a quantity" in j["error"]
+    status, j = _post(base + "/api/order", {"symbol": "NVDA", "side": "short", "qty": 1})
+    assert status == 400
+    _, st = _get(base + "/api/state")
+    assert st["orders"][0]["symbol"] == "NVDA" and st["positions"][0]["qty"] == 5
+    status, j = _post(base + "/api/close", {"symbol": "nvda"})
+    assert status == 200 and j["order"]["side"] == "sell" and j["order"]["qty"] == 5
+    status, j = _post(base + "/api/close", {"symbol": "NVDA"})
+    assert status == 400 and "no open position" in j["error"]
+    status, orders = _get(base + "/api/orders")
+    assert status == 200 and len(orders) == 2 and orders[0]["side"] == "sell"
+    status, g = _post(base + "/api/groww-test", {})
+    assert status == 200 and g["ok"] is False and "credentials" in g["message"]
+    assert "token" not in json.dumps(g).lower().replace("access_token", "")
+
+
+def test_settings_market_switch_and_cash(server):
+    base, app = server
+    status, j = _post(base + "/api/settings", {"market": "us", "paper_starting_cash": "250000"})
+    assert status == 200 and j["applied"] == {"MARKET": "us", "PAPER_STARTING_CASH": "250000"}
+    _, st = _get(base + "/api/state")
+    assert st["settings"]["market"] == "us" and st["settings"]["paper_starting_cash"] == 250000
+    assert st["settings"]["watch_source"] == "congress" and st["settings"]["data_source"] == "quiver"
+    env = (app.settings.state_dir / ".env").read_text()
+    assert "MARKET=us" in env and "PAPER_STARTING_CASH=250000" in env
+    status, j = _post(base + "/api/settings", {"market": "mars"})
+    assert status == 400
+    status, j = _post(base + "/api/settings", {"paper_starting_cash": "-5"})
+    assert status == 400
+
+
+def test_watch_auto_exit_flag_and_regime_refresh(server):
+    base, app = server
+    status, w = _post(base + "/api/watch", {"on": True, "every": 45, "auto_exit": True})
+    assert status == 200 and w["on"] and w["every"] == 45 and w["auto_exit"] is True
+    _, st = _get(base + "/api/state")
+    assert st["watch"]["auto_exit"] is True
+    _post(base + "/api/watch", {"on": False})
+    status, r = _get(base + "/api/regime?refresh=1")
+    assert status == 200  # "not configured" in the fixture, but the route works
+
+
+def test_reset_keeps_cost_model(server, tmp_path):
+    base, app = server
+    from trading_agent.costs import IndianDeliveryCosts
+    app._broker.cost_model = IndianDeliveryCosts()
+    _post(base + "/api/reset", {})
+    assert app._broker.cost_model is not None
