@@ -66,6 +66,12 @@
   .radio{display:flex;align-items:flex-start;gap:14px;padding:14px;border:1px solid #D3D7DE;border-radius:12px} .radio input{width:20px;height:20px;min-height:20px;margin:2px 0 0;padding:0}
   .conn{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px} .conn .dot.off{background:var(--amber)}
   footer{font-size:12px;color:var(--mute);padding:8px 0 24px}
+  details.menu{position:relative} details.menu>summary{list-style:none} details.menu>summary::-webkit-details-marker{display:none}
+  details.menu .menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:5;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px;display:flex;flex-direction:column;gap:4px;min-width:260px;box-shadow:0 8px 24px rgba(22,24,29,.12)}
+  details.menu .menu-pop button{justify-content:flex-start;border:none;min-height:40px;font-weight:500}
+  details.menu .menu-pop button:hover{background:var(--chip)}
+  .kv{display:grid;grid-template-columns:1fr auto;gap:4px 16px;font-size:13px} .kv span:nth-child(even){font-family:var(--mono);text-align:right}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden} .seg button{border:none;border-radius:0;min-height:40px} .seg button.on{background:var(--tealbg);color:var(--teal2)}
   @media (max-width:900px){.tiles,.grid4{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap,main{padding:16px}.grid2{grid-template-columns:1fr}}
 </style>
 </head>
@@ -82,12 +88,22 @@
       <button type="button" id="btn-watch" title="Poll deals and announcements every minute during market hours"><span>Start watch</span></button>
       <button type="button" id="btn-settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>Settings</button>
       <button type="button" class="primary" id="btn-check"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg><span>Run check now</span></button>
+      <details class="menu" id="check-menu">
+        <summary class="btn" aria-label="More check options" style="padding:0 12px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
+        <div class="menu-pop">
+          <button type="button" data-check="force">Force: ask Claude even if nothing is new</button>
+          <button type="button" data-check="dry">Dry run: fetch and compare only, no Claude</button>
+        </div>
+      </details>
     </div>
   </div>
 </header>
 
 <main>
-  <section class="card regime" id="regime"><span class="sub">Loading global context…</span></section>
+  <section class="card" style="display:flex;align-items:center;gap:8px;padding-right:12px">
+    <div class="regime" id="regime" style="flex:1 1 auto"><span class="sub">Loading global context…</span></div>
+    <button type="button" class="small" id="btn-regime" aria-label="Refresh global context" title="Refresh global context"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"></path></svg></button>
+  </section>
 
   <section class="row" style="align-items:baseline">
     <h1>Following <span style="color:var(--teal)" id="investor"></span></h1>
@@ -104,7 +120,26 @@
       </div>
       <div class="card">
         <div class="cardhead"><h2>Paper portfolio</h2><span class="sub" id="pricesrc"></span></div>
-        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th><th class="num">Trailing stop</th></tr></thead><tbody id="positions"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th><th class="num">Trailing stop</th><th></th></tr></thead><tbody id="positions"></tbody></table></div>
+        <form class="cardbody" id="tk-form" style="border-top:1px solid var(--line)">
+          <h3>Paper order</h3>
+          <div class="row">
+            <input id="tk-symbol" name="symbol" placeholder="Ticker" style="flex:1 1 140px;text-transform:uppercase" required>
+            <div class="seg" role="group" aria-label="Side"><button type="button" class="on" data-side="buy">Buy</button><button type="button" data-side="sell">Sell</button></div>
+            <input id="tk-amount" name="notional" type="number" min="0" step="any" placeholder="Amount" style="flex:1 1 120px">
+            <span class="sub">or</span>
+            <input id="tk-qty" name="qty" type="number" min="0" step="any" placeholder="Shares" style="flex:1 1 100px">
+          </div>
+          <div class="row">
+            <button type="button" class="small" id="tk-size">Suggest size</button>
+            <button type="submit" class="primary small" id="tk-submit">Place paper order</button>
+            <span class="sub" id="tk-note">Fills at the latest price, charges deducted. Never touches your real Groww account.</span>
+          </div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Order history</h2><span class="sub" id="fees-note"></span></div>
+        <div class="scroll"><table><thead><tr><th>Time</th><th>Side</th><th>Stock</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Value</th><th class="num">Charges</th></tr></thead><tbody id="orders"></tbody></table></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Factor screen</h2><span class="sub">12-1 momentum + 6m return − volatility, above 200-day MA, liquid</span></div>
@@ -112,7 +147,8 @@
           <div class="row">
             <select id="sc-universe" name="universe" style="flex:1 1 200px"><option>NIFTY50</option><option>NIFTY100</option><option selected>NIFTY200</option><option>NIFTY500</option><option>NIFTYMIDCAP150</option><option>NIFTYSMALLCAP250</option></select>
             <input id="sc-top" name="top" type="number" value="20" min="5" max="100" style="flex:0 1 110px">
-            <button type="submit" class="primary small" id="sc-run">Run screen</button><span class="sub" id="sc-status"></span>
+            <button type="submit" class="primary small" id="sc-run">Run screen</button>
+            <button type="button" class="small" id="sc-export">Export JSON</button><span class="sub" id="sc-status"></span>
           </div>
           <div id="sc-result" class="sub">Ranks every constituent; takes a minute or two the first time while price history is cached.</div>
         </form>
@@ -124,9 +160,9 @@
             <div class="field"><label for="bt-investor">Investor</label><input id="bt-investor" name="investor"></div>
             <div class="field"><label for="bt-days">Days back</label><input id="bt-days" name="days" type="number" value="365" min="30" max="1500"></div>
             <div class="field"><label for="bt-h">Horizons (days)</label><input id="bt-h" name="horizons" value="5,20,60"></div>
-            <div class="field"><label for="bt-cost">Round-trip cost (bps)</label><input id="bt-cost" name="cost_bps" type="number" value="50" min="0" max="500"></div>
+            <div class="field"><label for="bt-cost">Round-trip cost (bps)</label><input id="bt-cost" name="cost_bps" type="number" value="50" min="0" max="500" step="any"></div>
           </div>
-          <div class="row"><button type="submit" class="primary small" id="bt-run">Run backtest</button><span class="sub" id="bt-status"></span></div>
+          <div class="row"><button type="submit" class="primary small" id="bt-run">Run backtest</button><button type="button" class="small" id="bt-export">Export JSON</button><span class="sub" id="bt-status"></span></div>
           <div id="bt-result"></div>
         </form>
       </div>
@@ -141,6 +177,24 @@
         <form class="cardbody" id="lk-form">
           <div class="row"><input id="lk-ticker" placeholder="Ticker, e.g. SENCO" style="flex:1 1 160px;text-transform:uppercase"><button type="submit" class="small">Check</button></div>
           <div id="lk-result" class="sub">Momentum, latest price and NSE announcements.</div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Position size</h2></div>
+        <form class="cardbody" id="sz-form">
+          <div class="row"><input id="sz-ticker" name="ticker" placeholder="Ticker" style="flex:1 1 140px;text-transform:uppercase" required><button type="submit" class="small">Size it</button></div>
+          <div class="grid2" style="gap:10px">
+            <div class="field"><label for="sz-risk">Risk per trade (% of equity)</label><input id="sz-risk" name="risk_pct" type="number" value="1" min="0.1" max="5" step="0.1"></div>
+            <div class="field"><label for="sz-max">Max position (% of equity)</label><input id="sz-max" name="max_pct" type="number" value="10" min="1" max="50" step="1"></div>
+          </div>
+          <div id="sz-result" class="sub">Shares so that a 2× ATR move costs your chosen risk, plus a stop level.</div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Trade cost</h2></div>
+        <form class="cardbody" id="cs-form">
+          <div class="row"><input id="cs-amount" name="amount" type="number" min="1" step="any" value="25000" style="flex:1 1 140px" aria-label="Trade amount"><button type="submit" class="small">Calculate</button></div>
+          <div id="cs-result" class="sub">Brokerage, STT, exchange, SEBI, stamp duty, GST and DP charge for a buy and later sell.</div>
         </form>
       </div>
       <div class="row"><h2>Recommendations</h2><span class="sub">from Claude, newest first</span></div>
@@ -158,13 +212,22 @@
       <div class="field"><label for="f-source">Disclosures</label><select id="f-source" name="watch_source"></select></div>
       <div class="field"><label for="f-email">Email recommendations to</label><input id="f-email" name="notify_email_to" type="email" placeholder="you@example.com"><div class="sub">Needs RESEND_API_KEY in .env</div></div>
       <div class="field"><label for="f-webhook">Webhook (Slack, Discord, n8n)</label><input id="f-webhook" name="notify_webhook_url" type="url" placeholder="https://hooks.slack.com/…"></div>
+      <div class="field"><label for="f-market">Market</label><select id="f-market" name="market"><option value="in">India · NSE · Groww</option><option value="us">United States · paper</option></select><div class="sub">Switching rebuilds data, prices and broker</div></div>
+      <div class="field"><label for="f-cash">Paper starting cash</label><input id="f-cash" name="paper_starting_cash" type="number" min="1000" step="any"><div class="sub">Applies after Reset paper account</div></div>
+    </div>
+    <div class="field"><label>Watch mode</label>
+      <div class="grid2">
+        <div class="field"><label for="f-every">Poll every (seconds)</label><input id="f-every" type="number" min="15" max="3600" step="15" value="60"></div>
+        <div class="radio" style="align-items:center"><input type="checkbox" id="f-autoexit" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-autoexit" style="color:var(--ink)">Sell paper positions that hit their trailing stop</label></div>
+      </div>
     </div>
     <div class="field"><label>Order mode</label>
       <div class="radio"><input type="radio" name="auto_trade" value="false" id="m-reco"><div><label for="m-reco" style="font-size:15px;color:var(--ink)">Recommendations only</label><div class="sub">Claude explains what changed. Nothing is bought or sold.</div></div></div>
       <div class="radio"><input type="radio" name="auto_trade" value="true" id="m-paper"><div><label for="m-paper" style="font-size:15px;color:var(--ink)">Paper trading</label><div class="sub">Claude places simulated orders, max 10% of equity each, whole shares.</div></div></div>
       <div class="radio" style="opacity:.6"><input type="radio" disabled id="m-live"><div><label for="m-live" style="font-size:15px;color:var(--ink)">Live orders on Groww <span class="pill bad" style="padding:2px 8px;font-size:11px">REAL MONEY</span></label><div class="sub">Only via GROWW_LIVE_ORDERS=true in .env, never from here.</div></div></div>
     </div>
-    <div class="field"><label>Connections</label><div id="conns" style="display:flex;flex-direction:column;gap:8px"></div></div>
+    <div class="field"><label>Connections</label><div id="conns" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div class="row"><button type="button" class="small" id="btn-groww-test">Test Groww connection</button><span class="sub" id="groww-test-result"></span></div></div>
     <div class="row"><button type="button" class="danger small" id="btn-reset">Reset paper account</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
   </form>
 </dialog>
@@ -247,8 +310,9 @@
     $("positions").innerHTML = S.positions.length ? S.positions.map(p => `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
         <td class="num">${money(p.market_value)}</td><td class="num ${p.unrealized_pl>0?"up":p.unrealized_pl<0?"down":""}">${signed(p.unrealized_pl)}</td>
-        <td class="num ${p.stop!=null && p.current_price!=null && p.current_price<=p.stop?"down":""}">${p.stop!=null?money(p.stop,2):"n/a"}</td></tr>`).join("")
-      : `<tr><td colspan="7" class="empty">No open positions. ${s.auto_trade ? "" : "Use a recommendation's paper-buy button, or switch to paper trading in Settings."}</td></tr>`;
+        <td class="num ${p.stop!=null && p.current_price!=null && p.current_price<=p.stop?"down":""}">${p.stop!=null?money(p.stop,2):"n/a"}</td>
+        <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>`).join("")
+      : `<tr><td colspan="8" class="empty">No open positions. ${s.auto_trade ? "" : "Use a recommendation's paper-buy button, or switch to paper trading in Settings."}</td></tr>`;
 
     $("recs").innerHTML = S.recommendations.length ? S.recommendations.map(r => `<article class="card rec ${esc(r.action)} ${r.dismissed?"dismissed":""}">
         <div class="row" style="gap:8px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><span style="font-size:16px;font-weight:700">${esc(r.ticker)}</span>
@@ -267,12 +331,23 @@
 
     if(!$("bt-investor").value) $("bt-investor").value = s.watch_investor;
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
+    renderOrders();
+    if(!btCostSet && S.costs && S.costs.examples){ $("bt-cost").value = S.costs.examples["25000"]; btCostSet = true; }
     if(S.screen && S.screen.top) renderScreen(S.screen);
     $("sc-run").disabled = S.busy;
     $("btn-check").disabled = S.busy; $("btn-check").querySelector("span").textContent = S.busy ? "Running…" : "Run check now";
     $("bt-run").disabled = S.busy;
   }
 
+  let btCostSet = false;
+  function renderOrders(){
+    const o = S.orders || [], perf = S.performance;
+    $("fees-note").textContent = perf ? `${perf.orders} orders · charges paid ${money(perf.fees_paid||0,2)}` : "";
+    $("orders").innerHTML = o.length ? o.map(x => `<tr><td class="mono sub" style="white-space:nowrap">${when(x.filled_at)}</td>
+      <td><span class="side-chip ${x.side==="sell"?"sell":"buy"}">${esc(x.side.toUpperCase())}</span></td><td style="font-weight:600">${esc(x.symbol)}</td>
+      <td class="num">${x.qty}</td><td class="num">${money(x.filled_avg_price,2)}</td><td class="num">${money(x.notional)}</td><td class="num">${x.fees!=null?money(x.fees,2):"n/a"}</td></tr>`).join("")
+      : `<tr><td colspan="7" class="empty">No paper orders yet.</td></tr>`;
+  }
   function renderScreen(sc){
     const rows = sc.top.map(r => `<tr><td class="num">${r.rank}</td><td style="font-weight:600"><a href="#" data-lookup="${esc(r.symbol)}" style="text-decoration:none">${esc(r.symbol)}</a><div class="sub">${esc(r.name)}</div></td>
       <td class="num ${r.ret_12_1>=0?"up":"down"}">${pct(r.ret_12_1)}</td><td class="num ${r.ret_6m>=0?"up":"down"}">${pct(r.ret_6m)}</td><td class="num">${pct(r.ret_1m)}</td><td class="num">${r.vol_60d!=null?Math.round(r.vol_60d*100)+"%":"n/a"}</td><td class="num">${pct(r.pct_from_52w_high)}</td><td class="num">${r.score.toFixed(2)}</td></tr>`).join("");
@@ -294,12 +369,19 @@
   async function refresh(){ try { S = await api("/api/state"); render(); } catch(e){ toast("Could not load: "+e.message); } }
   function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Failed: ":"Done: ")+j.message); $("bt-status").textContent=""; $("sc-status").textContent=""; } }, 2500); }
 
-  $("btn-check").addEventListener("click", async () => {
-    try { const j = await api("/api/check", {force:false, dry_run:!S.connections.claude}); toast(j.ok===false ? j.message : "Check started"); await refresh(); pollWhileBusy(); }
+  async function runCheck(force, dry){
+    try { const j = await api("/api/check", {force, dry_run: dry || !S.connections.claude}); toast(j.ok===false ? j.message : (dry ? "Dry run started" : force ? "Forced check started" : "Check started")); await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
+  }
+  $("btn-check").addEventListener("click", () => runCheck(false, false));
+  document.querySelectorAll("[data-check]").forEach(b => b.addEventListener("click", () => { $("check-menu").open = false; runCheck(b.dataset.check === "force", b.dataset.check === "dry"); }));
+  $("btn-regime").addEventListener("click", async () => {
+    $("btn-regime").disabled = true;
+    try { await api("/api/regime?refresh=1"); await refresh(); toast("Global context refreshed"); } catch(e){ toast(e.message); }
+    $("btn-regime").disabled = false;
   });
   $("btn-watch").addEventListener("click", async () => {
-    try { const on = !(S.watch && S.watch.on); const w = await api("/api/watch", {on, every:60}); toast(w.on ? "Watching deals and announcements every 60s in market hours" : "Watch stopped"); await refresh(); }
+    try { const on = !(S.watch && S.watch.on); const every = Number($("f-every").value) || 60; const w = await api("/api/watch", {on, every, auto_exit: $("f-autoexit").checked}); toast(w.on ? `Watching deals, announcements and stops every ${w.every}s in market hours${w.auto_exit?" · auto-exit on":""}` : "Watch stopped"); await refresh(); }
     catch(e){ toast(e.message); }
   });
   $("bt-form").addEventListener("submit", async (ev) => {
@@ -313,6 +395,56 @@
     const f = Object.fromEntries(new FormData(ev.target).entries());
     try { const j = await api("/api/screen", f); if(j.ok===false){ toast(j.message); return; } $("sc-status").textContent = "Scoring the universe…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
+  });
+  let side = "buy";
+  document.querySelectorAll("[data-side]").forEach(b => b.addEventListener("click", () => { side = b.dataset.side; document.querySelectorAll("[data-side]").forEach(x => x.classList.toggle("on", x === b)); $("tk-submit").textContent = `Place paper ${side}`; }));
+  $("tk-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const sym = $("tk-symbol").value.trim().toUpperCase(), qty = $("tk-qty").value, amt = $("tk-amount").value;
+    if(!sym){ toast("Enter a ticker"); return; }
+    if(!qty && !amt){ toast("Enter an amount or a number of shares"); return; }
+    if(!confirm(`Paper ${side} ${sym} ${qty ? qty + " shares" : "for " + money(Number(amt))}?`)) return;
+    try { const j = await api("/api/order", {symbol:sym, side, notional: amt ? Number(amt) : null, qty: qty ? Number(qty) : null}); toast(`Filled ${j.order.qty} ${sym} @ ${money(j.order.filled_avg_price,2)}, charges ${money(j.order.fees||0,2)}`); $("tk-qty").value=""; $("tk-amount").value=""; await refresh(); }
+    catch(e){ toast(e.message); }
+  });
+  $("tk-size").addEventListener("click", async () => {
+    const t = $("tk-symbol").value.trim().toUpperCase(); if(!t){ toast("Enter a ticker first"); return; }
+    try { const r = await api(`/api/size?ticker=${encodeURIComponent(t)}`); $("tk-qty").value = r.qty; $("tk-amount").value = ""; $("tk-note").textContent = `${r.qty} shares ≈ ${money(r.notional)} · stop ${money(r.stop,2)} · ${r.basis}`; }
+    catch(e){ toast(e.message); }
+  });
+  $("sz-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = Object.fromEntries(new FormData(ev.target).entries()); const t = (f.ticker||"").trim().toUpperCase();
+    $("sz-result").innerHTML = `<span class="sub">Sizing ${esc(t)}…</span>`;
+    try {
+      const r = await api(`/api/size?ticker=${encodeURIComponent(t)}&risk_pct=${f.risk_pct}&max_pct=${f.max_pct}`);
+      const c = r.round_trip_cost;
+      $("sz-result").innerHTML = `<div class="kv"><span>Price</span><span>${money(r.price,2)}</span><span>ATR(14)</span><span>${r.atr!=null?money(r.atr,2)+" ("+pct(r.atr_pct)+")":"n/a"}</span>
+        <span>Shares</span><span>${r.qty}</span><span>Position</span><span>${money(r.notional)}</span><span>Stop</span><span>${money(r.stop,2)}</span>
+        <span>Max position</span><span>${money(r.max_notional)}</span>${c?`<span>Round-trip cost</span><span>${money(c.total,2)} (${c.total_bps.toFixed(0)} bps)</span>`:""}</div>
+        <div class="sub" style="margin-top:6px">${esc(r.basis)}</div>
+        <div class="row" style="margin-top:8px"><button type="button" class="small" id="sz-use">Use in paper order</button></div>`;
+      $("sz-use").addEventListener("click", () => { $("tk-symbol").value = r.ticker; $("tk-qty").value = r.qty; $("tk-amount").value = ""; $("tk-form").scrollIntoView({behavior:"smooth", block:"center"}); });
+    } catch(e){ $("sz-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
+  });
+  $("cs-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try {
+      const r = await api(`/api/costs?amount=${encodeURIComponent($("cs-amount").value)}`);
+      if(r.model !== "india_delivery"){ $("cs-result").innerHTML = `<div class="kv"><span>Round trip</span><span>${money(r.total,2)} (${r.total_bps.toFixed(1)} bps)</span></div>`; return; }
+      const row = (k, label) => `<span>${label}</span><span>${money(r.buy[k],2)} / ${money(r.sell[k],2)}</span>`;
+      $("cs-result").innerHTML = `<div class="sub" style="margin-bottom:6px">buy / sell</div><div class="kv">${row("brokerage","Brokerage")}${row("stt","STT")}${row("exchange","Exchange")}${row("sebi","SEBI fee")}${row("stamp_duty","Stamp duty")}${row("dp_charge","DP charge")}${row("gst","GST")}
+        <span style="font-weight:600">Charges, round trip</span><span style="font-weight:600">${money(r.charges,2)} (${r.charges_bps.toFixed(1)} bps)</span>
+        <span>+ slippage ${r.slippage_bps_one_way} bps/side</span><span>${money(r.total,2)} (${r.total_bps.toFixed(1)} bps)</span></div>
+        <div class="sub" style="margin-top:6px">A trade must gain at least ${(r.total_bps/100).toFixed(2)}% just to break even.</div>`;
+    } catch(e){ $("cs-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
+  });
+  const download = (name, obj) => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], {type:"application/json"})); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
+  $("sc-export").addEventListener("click", () => S.screen ? download(`screen-${S.screen.universe}.json`, S.screen) : toast("Run a screen first"));
+  $("bt-export").addEventListener("click", () => S.backtest ? download(`backtest-${(S.backtest.summary||{}).investor||"result"}.json`, S.backtest) : toast("Run a backtest first"));
+  $("btn-groww-test").addEventListener("click", async () => {
+    $("groww-test-result").textContent = "Testing…";
+    try { const r = await api("/api/groww-test", {}); $("groww-test-result").textContent = r.message; } catch(e){ $("groww-test-result").textContent = e.message; }
   });
   async function lookup(t){
     $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
@@ -329,6 +461,11 @@
   document.addEventListener("click", async (ev) => {
     const l = ev.target.closest("a[data-lookup]"); if(l){ ev.preventDefault(); lookup(l.dataset.lookup); $("lk-form").scrollIntoView({behavior:"smooth", block:"center"}); return; }
     const b = ev.target.closest("button"); if(!b) return;
+    if(b.dataset.close !== undefined){
+      if(!confirm(`Sell the whole paper position in ${b.dataset.close}?`)) return;
+      try { const j = await api("/api/close", {symbol:b.dataset.close}); toast(`Sold ${j.order.qty} ${j.order.symbol} @ ${money(j.order.filled_avg_price,2)}`); await refresh(); } catch(e){ toast(e.message); }
+      return;
+    }
     if(b.dataset.order !== undefined){
       const r = S.recommendations.find(x => String(x.index) === b.dataset.order);
       if(!confirm(`Paper ${r.action} ${r.ticker} for ${money(r.suggested_notional_usd)}?`)) return;
@@ -346,6 +483,9 @@
     $("f-source").innerHTML = SOURCES[s.market].map(([v,l]) => `<option value="${v}" ${v===s.watch_source?"selected":""}>${l}</option>`).join("");
     $("f-email").value = s.notify_email_to; $("f-webhook").value = s.notify_webhook_url;
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
+    $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
+    $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
+    $("groww-test-result").textContent = c.groww_credentials ? "" : "No Groww keys in .env";
     $("conns").innerHTML = [
       conn(c.claude, "Claude", c.claude ? s.claude_model + " · key set" : "ANTHROPIC_API_KEY missing in .env"),
       conn(c.groww, "Groww", c.groww ? (c.groww_live_orders ? "linked · LIVE orders enabled" : "linked · holdings mirrored, paper fills") : "not linked · local paper account"),
@@ -359,7 +499,11 @@
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true";
-    try { await api("/api/settings", body); $("dlg").close(); toast("Saved to .env"); $("bt-investor").value = body.watch_investor || ""; await refresh(); } catch(e){ toast(e.message); }
+    try {
+      const marketChanged = body.market !== S.settings.market;
+      await api("/api/settings", body);
+      if(S.watch && S.watch.on && !marketChanged) await api("/api/watch", {on:true, every:Number($("f-every").value)||60, auto_exit:$("f-autoexit").checked});
+      $("dlg").close(); toast(marketChanged ? "Saved; market switched" : "Saved to .env"); $("bt-investor").value = body.watch_investor || ""; await refresh(); } catch(e){ toast(e.message); }
   });
   $("btn-reset").addEventListener("click", async () => {
     if(!confirm("Forget seen deals and reset the paper account?")) return;

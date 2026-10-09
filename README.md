@@ -119,8 +119,22 @@ who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
   minute between 08:45 and 18:30 IST on weekdays, notifying on anything new. Meant for a
   machine with a fixed IP, which the April 2026 SEBI rules require for live orders.
 
-The dashboard surfaces all of it: regime strip, stock lookup (momentum, price,
-announcements), backtest form with results table, and the watch toggle.
+Everything the CLI does is also in the dashboard:
+
+| CLI | Dashboard |
+|---|---|
+| `check`, `check --force`, `check --dry-run` | **Run check now** and its options menu |
+| `watch`, `loop` | **Start watch** (interval and auto-exit on stops in Settings) |
+| `portfolio`, `history`, `reset` | Paper portfolio, order history, recommendations, run log, Reset in Settings |
+| `momentum` | Look up a stock (also click any ticker) |
+| `size` | Position size panel, and *Suggest size* in the paper order ticket |
+| `costs` | Trade cost panel with the full buy/sell breakdown |
+| `screen`, `backtest` (+ `--json`) | Factor screen and Backtest panels, each with *Export JSON* |
+| `groww-token` | *Test Groww connection* in Settings (the token itself is never shown) |
+| `--market`, `.env` strategy keys | Settings: investor, disclosures, market, starting cash, order mode, notifications |
+
+The dashboard can also place paper buys and sells for any ticker and close positions;
+these only ever touch the local paper account.
 
 ## What the big firms do, applied at retail size
 
