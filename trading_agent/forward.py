@@ -43,6 +43,52 @@ def _now() -> datetime:
     return datetime.now(IST)
 
 
+def rebalance_to(broker: Any, picks: list[str], *, top: int, price_fn: Callable[[str], float],
+                 cost_model: Any | None) -> list[dict[str, Any]]:
+    """Trade ``broker`` to equal weights in ``picks`` (the forward-test rules): sell what
+    dropped out, trim a kept name only above 125% of its target, then buy up to the target
+    while cash lasts. Returns the trades; a missing price or cash skips one trade."""
+    picks = [p.upper() for p in picks][:top]
+    held = {p.symbol: p for p in broker.positions()}
+    trades: list[dict[str, Any]] = []
+
+    def trade(sym: str, side: str, qty: int) -> None:
+        if qty < 1:
+            return
+        try:
+            o = broker.submit_order(sym, side, qty=qty)
+            trades.append({"symbol": sym, "side": side, "qty": o["qty"], "price": o["filled_avg_price"]})
+        except Exception as e:  # noqa: BLE001 - a missing price or cash skips one trade
+            trades.append({"symbol": sym, "side": side, "qty": qty, "error": str(e)})
+
+    for sym, p in held.items():  # 1. sell what dropped out
+        if sym not in picks:
+            trade(sym, "sell", int(p.qty))
+    target = broker.account().equity / top
+    for sym in picks:  # 2. trim what grew far past its weight
+        p = held.get(sym)
+        if p is not None and p.current_price and p.qty * p.current_price > target * TRIM_ABOVE:
+            trade(sym, "sell", int(math.floor((p.qty * p.current_price - target) / p.current_price)))
+    cash = broker.account().cash
+    for sym in picks:  # 3. buy up to the target, while cash lasts
+        p = next((x for x in broker.positions() if x.symbol == sym), None)
+        have = p.qty * p.current_price if p and p.current_price else 0.0
+        if have >= target * 0.95:
+            continue
+        try:
+            price = float(price_fn(sym))
+        except Exception as e:  # noqa: BLE001
+            trades.append({"symbol": sym, "side": "buy", "qty": 0, "error": f"no price: {e}"})
+            continue
+        budget = min(target - have, cash)
+        charges = float(cost_model.charges("buy", budget)) if cost_model else 0.0
+        qty = int(math.floor((budget - charges) / price))
+        if qty >= 1:
+            trade(sym, "buy", qty)
+            cash = broker.account().cash
+    return trades
+
+
 class ForwardTest:
     def __init__(self, state_dir: Path, *, universe: str = "NIFTYMIDCAP150", top: int = 20,
                  capital: float = 500_000.0, benchmark: str | None = None,
@@ -102,48 +148,10 @@ class ForwardTest:
     def rebalance(self, picks: list[str], *, eligible: int | None = None) -> dict[str, Any]:
         """Trade the paper account to equal weights in ``picks``."""
         top = self.data["top"]
-        picks = [p.upper() for p in picks][:top]
-        held = {p.symbol: p for p in self.broker.positions()}
-        trades: list[dict[str, Any]] = []
         fees_before = self.broker.performance()["fees_paid"]
-
-        def trade(sym: str, side: str, qty: int) -> None:
-            if qty < 1:
-                return
-            try:
-                o = self.broker.submit_order(sym, side, qty=qty)
-                trades.append({"symbol": sym, "side": side, "qty": o["qty"], "price": o["filled_avg_price"]})
-            except Exception as e:  # noqa: BLE001 - a missing price or cash skips one trade
-                trades.append({"symbol": sym, "side": side, "qty": qty, "error": str(e)})
-
-        for sym, p in held.items():  # 1. sell what dropped out
-            if sym not in picks:
-                trade(sym, "sell", int(p.qty))
-        equity = self.broker.account().equity
-        target = equity / top
-        for sym in picks:  # 2. trim what grew far past its weight
-            p = held.get(sym)
-            if p is not None and p.current_price and p.qty * p.current_price > target * TRIM_ABOVE:
-                trade(sym, "sell", int(math.floor((p.qty * p.current_price - target) / p.current_price)))
-        cash = self.broker.account().cash
-        for sym in picks:  # 3. buy up to the target, while cash lasts
-            p = next((x for x in self.broker.positions() if x.symbol == sym), None)
-            have = p.qty * p.current_price if p and p.current_price else 0.0
-            if have >= target * 0.95:
-                continue
-            try:
-                price = float(self.price_fn(sym))
-            except Exception as e:  # noqa: BLE001
-                trades.append({"symbol": sym, "side": "buy", "qty": 0, "error": f"no price: {e}"})
-                continue
-            budget = min(target - have, cash)
-            charges = float(self.cost_model.charges("buy", budget)) if self.cost_model else 0.0
-            qty = int(math.floor((budget - charges) / price))
-            if qty >= 1:
-                trade(sym, "buy", qty)
-                cash = self.broker.account().cash
-        entry = {"date": self.now().date().isoformat(), "month": self._month(), "picks": picks,
-                 "eligible": eligible, "trades": trades,
+        trades = rebalance_to(self.broker, picks, top=top, price_fn=self.price_fn, cost_model=self.cost_model)
+        entry = {"date": self.now().date().isoformat(), "month": self._month(),
+                 "picks": [p.upper() for p in picks][:top], "eligible": eligible, "trades": trades,
                  "charges": round(self.broker.performance()["fees_paid"] - fees_before, 2)}
         self.data["rebalances"] = (self.data["rebalances"] + [entry])[-60:]
         self.data["last_rebalance"] = self._month()

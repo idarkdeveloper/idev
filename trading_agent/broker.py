@@ -168,12 +168,14 @@ class LocalPaperBroker:
 
     def __init__(self, path: Path, starting_cash: float = 80_000.0,
                  price_fn: Any | None = None, currency: str = "USD",
-                 whole_shares: bool = False, cost_model: Any | None = None):
+                 whole_shares: bool = False, cost_model: Any | None = None,
+                 now_fn: Any | None = None):
         self.path = Path(path)
         self.price_fn = price_fn
         self.currency = currency
         self.whole_shares = whole_shares  # Indian equities trade in whole shares
         self.cost_model = cost_model  # object with .charges(side, notional); None = free
+        self.now_fn = now_fn or _utc_now  # Replay stamps fills with the replay date
         self._state = self._load(starting_cash)
         self._state.setdefault("fees_paid", 0.0)
         if not self._state.get("created_at"):
@@ -310,7 +312,7 @@ class LocalPaperBroker:
             "id": uuid.uuid4().hex[:12], "symbol": symbol, "side": side, "qty": qty,
             "filled_avg_price": price, "notional": round(cost, 2), "fees": round(fees, 2),
             "status": "filled",
-            "filled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "filled_at": self.now_fn(),
         }
         self._state["orders"].append(order)
         self._save()
@@ -318,6 +320,15 @@ class LocalPaperBroker:
 
     def orders(self) -> list[dict[str, Any]]:
         return list(self._state["orders"])
+
+    def credit(self, amount: float, note: str, at: str) -> None:
+        """Add cash that isn't a trade (a dividend paid out in Replay)."""
+        self._state["cash"] += float(amount)
+        self._state.setdefault("credits", []).append({"at": at, "amount": round(float(amount), 2), "note": note})
+        self._save()
+
+    def credits(self) -> list[dict[str, Any]]:
+        return list(self._state.get("credits", []))
 
     def performance(self) -> dict[str, Any]:
         acct = self.account()
