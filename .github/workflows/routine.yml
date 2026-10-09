@@ -77,6 +77,15 @@ jobs:
           fi
           python -m trading_agent check $FLAGS
 
+      # Forward test of the factor screen (paper only): once a weekday after the 15:30 close,
+      # rebalancing on the first such run of each month. Never fails the routine.
+      - name: Forward test of the factor screen
+        continue-on-error: true
+        env:
+          MARKET: ${{ vars.MARKET || 'in' }}
+          PAPER_STARTING_CASH: ${{ vars.PAPER_STARTING_CASH || '500000' }}
+        run: python -m trading_agent forward --if-due --universe "${{ vars.FORWARD_UNIVERSE || 'NIFTYMIDCAP150' }}"
+
       # Never put the cached Groww access token into the Actions cache: it can trade.
       # Each run generates its own (well under Groww's 150 a day at this schedule).
       - name: Drop cached Groww token

@@ -243,6 +243,27 @@ The dashboard draws all of it: account value, a one-year price chart with the 20
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.
 
+## Forward test: the screen on months it has never seen
+
+The factor backtest beat its index fund after charges in one place, the Midcap 150, over
+one five-year window. A backtest can be fitted to its own past, so
+`python -m trading_agent forward` runs the same screen forward in a **separate paper
+account** (`state/forward/`), never touching the investor-following account or Groww:
+
+- **First run:** puts the capital (`PAPER_STARTING_CASH`, or `--capital`) into the top 20
+  (`--top`) of the universe (`--universe`, default `NIFTYMIDCAP150`) in equal weights, whole
+  shares, with real delivery charges. The same capital goes into the index fund
+  (MID150BEES for the Midcap 150), charges included, as the benchmark.
+- **Each month:** the first run after the close re-ranks today's members with the same
+  score. It sells names that dropped out, buys new ones, and trims a kept name only when
+  it is more than 25% over its target weight, so small trims don't each pay a ₹20 DP charge.
+- **Every weekday:** one point is recorded for the strategy and the fund, so the gap builds
+  up over months the backtest never saw. `forward --status` shows it without trading. The
+  dashboard has a *Factor screen, forward* card with both curves.
+
+The scheduled routine runs `forward --if-due`, which does nothing except on weekdays after
+15:40 IST, once a day. Give it several months before reading anything into the gap.
+
 ## Can algo trading predict a share? The signal lab
 
 `python -m trading_agent signal-lab --universe NIFTY50 --years 5` (or the *Signal lab*

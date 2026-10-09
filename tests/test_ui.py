@@ -310,3 +310,20 @@ def test_page_is_served_as_utf8(server):
     with urllib.request.urlopen(base + "/", timeout=5) as r:
         html = r.read().decode("utf-8")
     assert "Â" not in html and "â‚¹" not in html and "·" in html
+
+
+def test_forward_test_appears_in_the_dashboard(server):
+    from datetime import datetime
+    from trading_agent.forward import IST, ForwardTest
+    base, app = server
+    _, st = _get(base + "/api/state")
+    assert st["forward"] is None
+    prices = {"MID150BEES": 200.0, "A": 100.0, "B": 50.0}
+    ft = ForwardTest(app.settings.state_dir, top=2, capital=100_000, price_fn=lambda s: prices[s],
+                     now=lambda: datetime(2026, 10, 9, 16, 0, tzinfo=IST))
+    ft.run(lambda: {"top": [{"symbol": "A"}, {"symbol": "B"}], "eligible": 9})
+    prices.clear()  # the dashboard must not need live prices
+    _, st = _get(base + "/api/state")
+    f = st["forward"]
+    assert f["universe"] == "NIFTYMIDCAP150" and f["benchmark"] == "MID150BEES" and f["days"] == 1
+    assert {h["symbol"] for h in f["holdings"]} == {"A", "B"} and f["last_rebalance"] == "2026-10"

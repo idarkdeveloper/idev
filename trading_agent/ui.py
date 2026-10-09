@@ -182,6 +182,7 @@ class App:
             "watch": ({**self.watcher.status(), "auto_exit": self.watcher.auto_exit} if self.watcher
                       else {"on": False, "every": 60, "auto_exit": False}),
             "orders": self.orders(),
+            "forward": self.forward_summary(),
             "backtest": self.last_backtest,
             "screen": self.last_screen,
             "factor_backtest": self.last_factor_bt,
@@ -632,6 +633,20 @@ class App:
             return {"ok": False, "message": f"{type(e).__name__}: {e}"}
         return {"ok": True, "message": f"Connected: {len(holdings)} holdings, cash {acct.cash:,.2f} {acct.currency}",
                 "holdings": len(holdings), "cash": acct.cash, "equity": acct.equity}
+
+    def forward_summary(self) -> dict[str, Any] | None:
+        """The forward test's standing from stored prices (no network: the page polls)."""
+        from .forward import ForwardTest
+        d = self.settings.state_dir / "forward"
+        files = sorted(f for f in d.glob("*.json") if not f.stem.endswith("_broker")) if d.exists() else []
+        if not files:
+            return None
+        try:
+            s = ForwardTest(self.settings.state_dir, universe=files[0].stem.upper(), price_fn=None).summary()
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)}
+        s["history"] = s["history"][-1000:]
+        return s
 
     def orders(self, limit: int = 50) -> list[dict[str, Any]]:
         """Paper fills plus live Groww orders (from state.json), newest first."""

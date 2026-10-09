@@ -165,6 +165,34 @@ def cmd_orders(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_forward(args: argparse.Namespace) -> int:
+    """Paper-trade the factor screen forward, month by month, against its index fund."""
+    from .costs import cost_model_for
+    from .forward import ForwardTest, format_forward
+    from .runner import free_prices
+    from .screen import load_universe, run_screen
+
+    settings = _settings(args)
+    prices = free_prices(settings)
+    ft = ForwardTest(settings.state_dir, universe=args.universe, top=args.top,
+                     capital=args.capital or settings.paper_starting_cash, price_fn=prices.latest_price,
+                     cost_model=cost_model_for("in"))
+    if args.status:
+        print(format_forward(ft.summary()))
+        return 0
+    if args.if_due and not ft.due():
+        print("Forward test: nothing due (runs on weekdays after 15:40 IST, once a day).")
+        return 0
+
+    def screen() -> dict:
+        members = load_universe(ft.universe)
+        print(f"Ranking {len(members)} {ft.universe} members for this month's rebalance…")
+        return run_screen(members, prices, top=ft.data["top"])
+
+    print(format_forward(ft.run(screen, force_rebalance=args.rebalance)))
+    return 0
+
+
 def cmd_groww_check(args: argparse.Namespace) -> int:
     """Check the live-trading assumptions against your Groww account (read-only by default)."""
     from .groww import InstrumentTicks
@@ -533,6 +561,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--refresh", action="store_true")
     sp.add_argument("--limit", type=int, default=30)
     sp.set_defaults(func=cmd_orders)
+    sp = sub.add_parser("forward", help="paper-trade the factor screen forward against its index fund")
+    sp.add_argument("--universe", default="NIFTYMIDCAP150")
+    sp.add_argument("--top", type=int, default=20, help="names to hold (set on the first run)")
+    sp.add_argument("--capital", type=float, help="starting capital (first run only; default PAPER_STARTING_CASH)")
+    sp.add_argument("--rebalance", action="store_true", help="rebalance now even if this month is done")
+    sp.add_argument("--status", action="store_true", help="show the current standing without trading")
+    sp.add_argument("--if-due", action="store_true", help="for schedules: skip unless a weekday after the close")
+    sp.set_defaults(func=cmd_forward)
     sp = sub.add_parser("groww-check", help="verify live-trading assumptions on your Groww account")
     sp.add_argument("--live-test", metavar="SYMBOL",
                     help="also place a REAL 1-share limit buy below market (then cancel) and a test GTT")

@@ -6,3 +6,4 @@ venv/
 state/
 *.egg-info/
 .pytest_cache/
+.playwright-mcp/

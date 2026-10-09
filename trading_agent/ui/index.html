@@ -131,6 +131,8 @@
   .regime .sig { font-size: 13px; color: var(--color-muted); flex: 1 1 300px; }
   .mkts { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); border-top: 1px solid var(--color-divider); padding-left: 18px; }
   .mkts:empty { display: none; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .stats .mkt .v { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 22px; }
   .mkt { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px 10px 0; margin-right: 14px; border-right: 1px solid var(--color-divider); min-width: 0; }
   .mkt:last-child { border-right: none; }
   .mkt .k { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -323,6 +325,10 @@
           <div class="sub">Monthly rebalance into the top stocks with the same ranking, real Indian charges on every trade, compared with NIFTY 50 including dividends and an equal-weight hold of the universe. Uses the universe selected above. NIFTY 50 uses each month's actual members, including stocks later dropped; other universes use today's members.</div>
           <div id="fb-result"></div>
         </form>
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Factor screen, forward</h2><span class="sub" id="fw-sub">paper-trading the screen month by month against its index fund</span></div>
+        <div class="cardbody" id="fw-body"></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Signal lab</h2><span class="sub">Do algo-trading signals predict the next move? Measured, not assumed</span></div>
@@ -533,6 +539,7 @@
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
     renderOrders();
     renderEquity();
+    renderForward();
     if(S.factor_backtest && S.factor_backtest.dates && $("fb-result").dataset.at !== S.factor_backtest.at){ renderFactor(S.factor_backtest); $("fb-result").dataset.at = S.factor_backtest.at; }
     $("fb-run").disabled = S.busy;
     if(S.signal_lab && S.signal_lab.results && $("sl-result").dataset.at !== S.signal_lab.at){ renderSignalLab(S.signal_lab); $("sl-result").dataset.at = S.signal_lab.at; }
@@ -650,6 +657,30 @@
     el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "histogram")}">${g}</svg>`;
   }
   const rupeesShort = v => { const a = Math.abs(v); return (v < 0 ? "−" : "") + sym() + (a >= 1e7 ? (a / 1e7).toFixed(2) + " Cr" : a >= 1e5 ? (a / 1e5).toFixed(2) + " L" : Math.round(a).toLocaleString("en-IN")); };
+
+  function renderForward(){
+    const f = S.forward, el = $("fw-body");
+    if(!f || f.error){
+      el.innerHTML = `<div class="sub">${f && f.error ? "Forward test unreadable: " + esc(f.error) + ". " : ""}Not started. Run <b>python -m trading_agent forward</b> once after the 15:30 close: it buys the top 20 of the Midcap 150 in a separate paper account, puts the same money in MID150BEES, and then rebalances on the first weekday after the close each month (the scheduled routine does this by itself).</div>`;
+      return;
+    }
+    const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
+    $("fw-sub").textContent = `top ${f.top} of ${f.universe} vs ${f.benchmark} · started ${shortDate((f.started||"").slice(0,10))}`;
+    const h = f.history || [];
+    const fall = v => v != null && v < 0 ? "worst fall " + pct(v) : "no fall yet";
+    el.innerHTML = `<div class="stats">
+        ${stat("Strategy", pct(f.strategy_return, 2), fall(f.strategy_max_drawdown))}
+        ${stat(esc(f.benchmark), pct(f.benchmark_return, 2), fall(f.benchmark_max_drawdown))}
+        ${stat("Gap", pct(f.gap, 2), "strategy minus fund", f.gap > 0 ? "up" : f.gap < 0 ? "down" : "")}
+        ${stat("Charges paid", money(f.charges_paid), `${f.rebalances} rebalance${f.rebalances === 1 ? "" : "s"} · last ${esc(f.last_rebalance || "none")}`)}
+      </div>
+      <div class="chart" id="fw-chart"></div>
+      <div class="sub">${h.length < 60 ? "Too early to judge: a few months of daily points before the gap means anything. " : ""}Holding ${f.holdings.length} names${f.holdings.length ? ": " + f.holdings.slice(0, 8).map(x => esc(x.symbol)).join(", ") + (f.holdings.length > 8 ? ` and ${f.holdings.length - 8} more` : "") : ""}.</div>`;
+    lineChart($("fw-chart"), {x: h.map(p => p.date), legend: true, endLabels: false, height: 180, left: 64, yFmt: rupeesShort,
+      series: [{name: "Strategy", color: C.s1, values: h.map(p => p.equity)}, {name: esc(f.benchmark), color: C.s2, values: h.map(p => p.bench)}],
+      refs: [{y: f.capital, label: "Capital"}], label: "Forward test value over time",
+      empty: "The chart starts after the first daily point."});
+  }
 
   function renderEquity(){
     const h = S.equity_history || [], el = $("eq-chart"), start = S.settings.paper_starting_cash;
