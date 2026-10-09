@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
+from contextlib import contextmanager
 from datetime import date
 from typing import Any, Callable
 
@@ -15,7 +17,16 @@ from .news import ClockedNews
 from .scorecard import end_trial, what_happened_next
 from .trial import BENCHMARKS, PORTFOLIOS, ReplayUniverse, Trial, list_trials
 
+log = logging.getLogger(__name__)
 _SLUG = re.compile(r"^[a-z0-9-]{1,40}$")
+
+
+class ReplayBusy(Exception):
+    """A step or tool job is changing this replay right now."""
+
+
+class NotFound(Exception):
+    """No such replay."""
 
 
 class ReplayApp:
@@ -40,6 +51,7 @@ class ReplayApp:
         self._trials: dict[str, Trial] = {}
         self._tools: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
+        self._trial_locks: dict[str, threading.Lock] = {}
 
     # -- helpers -------------------------------------------------------------------
     def _universe(self, name: str) -> Any:
@@ -49,16 +61,50 @@ class ReplayApp:
 
     def trial(self, slug: str) -> Trial:
         if not _SLUG.match(slug or ""):
-            raise LookupError("no such replay")
+            raise NotFound("no such replay")
         with self._lock:
             t = self._trials.get(slug)
             if t is None:
                 root = self.dir / slug
                 if not (root / "trial.json").exists():
-                    raise LookupError("no such replay")
+                    raise NotFound("no such replay")
                 t = Trial.load(root, self.source, _LazyUniverse(self, root), screen_fn=self.screen_fn)
                 self._trials[slug] = t
             return t
+
+    def _trial_lock(self, slug: str) -> threading.Lock:
+        with self._lock:
+            return self._trial_locks.setdefault(slug, threading.Lock())
+
+    @contextmanager
+    def _guard(self, slug: str):
+        lk = self._trial_lock(slug)
+        if not lk.acquire(blocking=False):
+            raise ReplayBusy("A step is running for this replay; try again when it finishes.")
+        try:
+            yield
+        finally:
+            lk.release()
+
+    def _background(self, slug: str, kind: str, fn: Callable[[Any], str]) -> Any:
+        """Run a job that holds the replay's lock for its whole run."""
+        lk = self._trial_lock(slug)
+        if not lk.acquire(blocking=False):
+            raise ReplayBusy("A step is running for this replay; try again when it finishes.")
+
+        def run(job: Any) -> str:
+            try:
+                return fn(job)
+            finally:
+                lk.release()
+        try:
+            job = self.app.run_background(kind, run)
+        except BaseException:
+            lk.release()
+            raise
+        if job.ok is False and job.finished_at:  # refused: fn never ran
+            lk.release()
+        return job
 
     def _news(self, t: Trial) -> ClockedNews:
         return ClockedNews(self.news_client, t.clock)
@@ -84,18 +130,22 @@ class ReplayApp:
 
     def step(self, slug: str, body: dict[str, Any]) -> Any:
         t = self.trial(slug)
-        target = step_target(t.clock.today, str(body.get("by") or "month"), self.today_fn())
 
         def run(job: Any) -> str:
+            target = step_target(t.clock.today, str(body.get("by") or "month"), self.today_fn())
             def progress(msg: str) -> None:
                 job.message = msg
             r = step(t, target, today=self.today_fn(), progress=progress)
             job.result = r
             capped = " (stopped at today's date)" if r["to"] < step_target(r["from"], str(body.get("by") or "month"), "9999-12-31") else ""
             return f"Moved to {r['to']}: {r['days']} trading days, {len(r['rebalances'])} rebalance(s), {len(r['stops'])} stop(s){capped}"
-        return self.app.run_background("replay_step", run)
+        return self._background(slug, "replay_step", run)
 
     def order(self, slug: str, body: dict[str, Any]) -> dict[str, Any]:
+        with self._guard(slug):
+            return self._order(slug, body)
+
+    def _order(self, slug: str, body: dict[str, Any]) -> dict[str, Any]:
         t = self.trial(slug)
         o = t.order(str(body.get("symbol") or ""), str(body.get("side") or "buy"),
                     notional=float(body["notional"]) if body.get("notional") else None,
@@ -106,17 +156,29 @@ class ReplayApp:
         return {"ok": True, "order": o}
 
     def set_auto_stop(self, slug: str, on: bool) -> dict[str, Any]:
+        with self._guard(slug):
+            return self._set_auto_stop(slug, on)
+
+    def _set_auto_stop(self, slug: str, on: bool) -> dict[str, Any]:
         t = self.trial(slug)
         t.data["auto_stop"] = bool(on)
         t.save()
         return {"ok": True, "auto_stop": t.data["auto_stop"]}
 
     def end(self, slug: str) -> dict[str, Any]:
+        with self._guard(slug):
+            return self._end(slug)
+
+    def _end(self, slug: str) -> dict[str, Any]:
         t = self.trial(slug)
         end_trial(t)
-        return self.snapshot(slug)
+        return self._snapshot(slug)
 
     def lookup(self, slug: str, ticker: str) -> dict[str, Any]:
+        with self._guard(slug):
+            return self._lookup(slug, ticker)
+
+    def _lookup(self, slug: str, ticker: str) -> dict[str, Any]:
         t = self.trial(slug)
         sym = ticker.strip().upper()
         out: dict[str, Any] = {"ticker": sym, "name": None, "today": t.clock.today, "announcements": [],
@@ -145,6 +207,10 @@ class ReplayApp:
         return out
 
     def ask(self, slug: str, body: dict[str, Any]) -> dict[str, Any]:
+        with self._guard(slug):
+            return self._ask(slug, body)
+
+    def _ask(self, slug: str, body: dict[str, Any]) -> dict[str, Any]:
         if not self.settings.anthropic_api_key:
             raise PermissionError("Ask Claude needs ANTHROPIC_API_KEY in .env")
         from .claude import ask
@@ -166,7 +232,7 @@ class ReplayApp:
 
         def run(job: Any) -> str:
             from ..costs import cost_model_for
-            members, membership = t.universe.current, t.universe.membership
+            members, membership = t.universe.members_on(t.clock.today), t.universe.membership
             if kind == "signal_lab":
                 from ..signal_lab import format_signal_lab, run_signal_lab
                 r = run_signal_lab(members, t.prices, years=years, membership=membership,
@@ -180,14 +246,22 @@ class ReplayApp:
                 text = format_factor_backtest(r)
             self._tools.setdefault(slug, {})[kind] = {"date": t.clock.today, "years": years, "text": text}
             return f"{kind.replace('_', ' ')} as of {t.clock.today} finished"
-        return self.app.run_background("replay_tool", run)
+        return self._background(slug, "replay_tool", run)
 
     def tools(self, slug: str) -> dict[str, Any]:
+        with self._guard(slug):
+            return self._tools(slug)
+
+    def _tools(self, slug: str) -> dict[str, Any]:
         t = self.trial(slug)
         return {k: v for k, v in self._tools.get(slug, {}).items() if v["date"] == t.clock.today}
 
     # -- the page's data ------------------------------------------------------------
     def snapshot(self, slug: str) -> dict[str, Any]:
+        with self._guard(slug):
+            return self._snapshot(slug)
+
+    def _snapshot(self, slug: str) -> dict[str, Any]:
         t = self.trial(slug)
         d, eq = t.data, t.data["equity"]
         positions = []
@@ -236,6 +310,8 @@ class ReplayApp:
 
     # -- routing -------------------------------------------------------------------
     def route(self, method: str, path: str, query: dict[str, str], body: dict[str, Any] | None) -> tuple[int, Any]:
+        if body is not None and not isinstance(body, dict):
+            return 400, {"error": "request body must be a JSON object"}
         body = body or {}
         try:
             if method == "GET" and path == "/replay/api/trials":
@@ -275,10 +351,17 @@ class ReplayApp:
             if method == "POST" and action == "tool":
                 return 202, self.tool(slug, body).to_dict()
             return 404, {"error": "not found"}
+        except NotFound as e:
+            return 404, {"error": str(e)}
+        except ReplayBusy as e:
+            return 409, {"error": str(e)}
         except PermissionError as e:
             return 403, {"error": str(e)}
         except (ValueError, LookupError, KeyError) as e:
             return 400, {"error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            log.exception("replay route %s %s failed", method, path)
+            return 500, {"error": f"{type(e).__name__}: {e}"}
 
 
 class _LazyUniverse:

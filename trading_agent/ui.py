@@ -973,7 +973,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             if path.startswith("/replay/api/"):
                 try:
                     self._replay("POST")
-                except json.JSONDecodeError as e:
+                except (json.JSONDecodeError, ValueError) as e:  # bad JSON or Content-Length
                     self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
                 return
             try:

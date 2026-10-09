@@ -90,15 +90,19 @@ def test_second_step_while_busy_is_refused(rapp):
 def test_snapshot_after_restart_needs_no_network(rapp, settings):
     app, r = rapp
     slug = create(app, r)
+    st, _ = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 5})
+    assert st == 200
 
     class NoNetwork:
         def history(self, *a, **k):
-            raise AssertionError("network used")
+            raise ConnectionError("offline")
         dividends = history
     fresh = ReplayApp(App(settings, dotenv=None), source=NoNetwork(), universe_factory=lambda n: FakeUniverse(),
                       news_client=FakeNews(), today_fn=lambda: "2026-10-09", screen_fn=top_by_6m)
     snap = fresh.snapshot(slug)
-    assert snap["trial"]["slug"] == slug and snap["you"]["cash"] == 100000
+    assert snap["trial"]["slug"] == slug and snap["you"]["cash"] < 100000
+    pos = snap["you"]["positions"]
+    assert [p["symbol"] for p in pos] == ["D"] and pos[0]["current_price"] > 0 and pos[0]["stop"] is None
 
 
 def test_ask_needs_a_key(rapp):
@@ -116,3 +120,69 @@ def test_replay_never_builds_a_groww_broker(rapp, monkeypatch):
     slug = create(app, r)
     r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
     r.snapshot(slug)
+
+
+@pytest.fixture
+def gated(settings):
+    settings.market = "in"
+    app = App(settings, dotenv=None)
+    entered, release, armed = threading.Event(), threading.Event(), []
+
+    def screen(members, prices, top):
+        if armed:
+            entered.set()
+            release.wait(5)
+        return top_by_6m(members, prices, top)
+    r = ReplayApp(app, source=market(), universe_factory=lambda name: FakeUniverse(), news_client=FakeNews(),
+                  today_fn=lambda: "2026-10-09", screen_fn=screen)
+    app._replay = r
+    return app, r, entered, release, armed
+
+
+def test_actions_are_409_while_a_step_runs(gated):
+    app, r, entered, release, armed = gated
+    slug = create(app, r)
+    armed.append(1)
+    st, j = r.route("POST", f"/replay/api/trial/{slug}/step", {}, {"by": "month"})
+    assert st == 202 and entered.wait(5)
+    st, body = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
+    assert st == 409 and "step is running" in body["error"]
+    assert r.route("GET", f"/replay/api/trial/{slug}", {}, None)[0] == 409
+    release.set()
+    wait(app, app.jobs[-1])
+    assert app.jobs[-1].ok, app.jobs[-1].message
+    st, _ = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
+    assert st == 200
+
+
+def test_lock_released_after_refused_step(rapp):
+    app, r = rapp
+    slug = create(app, r)
+    gate = threading.Event()
+    blocker = app.run_background("check", lambda job: gate.wait(5) and "done")
+    st, j = r.route("POST", f"/replay/api/trial/{slug}/step", {}, {"by": "week"})
+    assert st == 202 and j["ok"] is False
+    st, _ = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
+    assert st == 200
+    gate.set()
+    wait(app, blocker)
+
+
+def test_unknown_slug_is_404_and_bad_body_is_400(rapp):
+    app, r = rapp
+    assert r.route("GET", "/replay/api/trial/nope", {}, None)[0] == 404
+    slug = create(app, r)
+    st, body = r.route("POST", f"/replay/api/trial/{slug}/order", {}, ["x"])
+    assert st == 400 and body["error"] == "request body must be a JSON object"
+
+
+def test_unexpected_error_is_500(rapp):
+    app, r = rapp
+    slug = create(app, r)
+    app.settings.anthropic_api_key = "k"
+
+    def boom():
+        raise RuntimeError("kaput")
+    r.client_factory = boom
+    st, body = r.route("POST", f"/replay/api/trial/{slug}/ask", {}, {})
+    assert st == 500 and "RuntimeError: kaput" in body["error"]
