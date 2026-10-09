@@ -135,25 +135,36 @@ def cmd_holdings(args: argparse.Namespace) -> int:
     if not settings.has_groww_credentials:
         print("Groww isn't linked: add GROWW_API_KEY + GROWW_API_SECRET / GROWW_TOTP_SECRET to .env.")
         return 1
+    from .instruments import CompanyNames, nse_then_bse
+    from .prices import YahooPrices
+    bse = YahooPrices(suffix=".BO", cache_dir=settings.state_dir / "cache")
     g = GrowwBroker(resolve_groww_token(settings), live_orders=False, exchange=settings.groww_exchange,
-                    price_fallback=free_prices(settings))
+                    price_fallback=nse_then_bse(free_prices(settings), bse))
     rows = sorted(g.positions(), key=lambda p: -(p.market_value or p.qty * p.avg_entry_price))
+    names = CompanyNames(settings.state_dir / "cache").lookup([p.symbol for p in rows])
     if not rows:
         print("No holdings in your Groww account.")
         return 0
-    print(f"{'Stock':<12} {'Qty':>6} {'Buy price':>11} {'Current':>11} {'Invested':>12} {'Value':>12} {'P&L':>12} {'P&L %':>8}")
+    print(f"{'Stock':<12} {'Company':<44} {'Qty':>6} {'Buy price':>11} {'Current':>11} {'Invested':>12} {'Value':>12} {'P&L':>12} {'P&L %':>8}")
+    def company(sym: str) -> str:
+        info = names.get(sym.upper()) or {}
+        n = (info.get("name") or "").replace(" Limited", " Ltd")
+        if info.get("exchange") == "BSE":
+            n += " (BSE)"
+        return n[:44]
+
     inv_all = inv_priced = value = 0.0
     for p in rows:
         invested = p.qty * p.avg_entry_price
         inv_all += invested
         if p.current_price is None:
-            print(f"{p.symbol:<12} {p.qty:>6g} {p.avg_entry_price:>11,.2f} {'no price':>11} {invested:>12,.0f}")
+            print(f"{p.symbol:<12} {company(p.symbol):<44} {p.qty:>6g} {p.avg_entry_price:>11,.2f} {'no price':>11} {invested:>12,.0f}")
             continue
         v = p.qty * p.current_price
         inv_priced += invested
         value += v
         pct = (p.current_price / p.avg_entry_price - 1) * 100 if p.avg_entry_price else 0.0
-        print(f"{p.symbol:<12} {p.qty:>6g} {p.avg_entry_price:>11,.2f} {p.current_price:>11,.2f} {invested:>12,.0f} "
+        print(f"{p.symbol:<12} {company(p.symbol):<44} {p.qty:>6g} {p.avg_entry_price:>11,.2f} {p.current_price:>11,.2f} {invested:>12,.0f} "
               f"{v:>12,.0f} {v - invested:>+12,.0f} {pct:>+7.2f}%")
     pl = value - inv_priced
     print(f"\nInvested ₹{inv_all:,.0f} · value now ₹{value:,.0f} · P&L ₹{pl:+,.0f} "

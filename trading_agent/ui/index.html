@@ -704,7 +704,8 @@
       + stat("Profit / loss", sinr(m.pl), "on holdings with a price", tone(m.pl))
       + stat("Return", spct(m.pl_pct), "vs what you paid", tone(m.pl_pct));
     rows.innerHTML = m.holdings.length ? m.holdings.map(h => `<tr>
-        <td style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.sellable_qty < h.qty ? `<div class="sub">${h.sellable_qty} free to sell</div>` : ""}</td>
+        <td><div style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.exchange === "BSE" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">BSE</span>' : ""}</div>
+          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}</td>
         <td class="num">${h.qty}</td><td class="num">${inr(h.avg_price, 2)}</td>
         <td class="num">${h.price != null ? inr(h.price, 2) : '<span class="sub">no price</span>'}</td>
         <td class="num">${inr(h.invested)}</td><td class="num">${inr(h.value)}</td>

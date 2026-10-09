@@ -342,6 +342,8 @@ def test_my_groww_portfolio_shows_buy_current_and_pl(server, monkeypatch):
              "pledge_quantity": 4},
             {"trading_symbol": "NSE", "quantity": 8, "average_price": 1000.0, "demat_free_quantity": 8, "t1_quantity": 0}]}},
         ("GET", "/live-data/ltp"): {"status": "SUCCESS", "payload": {"NSE_TCS": 3300.0, "NSE_INFY": 1400.0}},
+        ("GET", "EQUITY_L.csv"): "SYMBOL,NAME OF COMPANY\nTCS,Tata Consultancy Services Limited\nINFY,Infosys Limited\n",
+        ("GET", "instrument.csv"): "exchange,trading_symbol,name,segment\nBSE,NSE,NSE,CASH\n",
     }
     sess = FakeSession(routes)
     monkeypatch.setattr(groww.requests, "Session", lambda: sess)
@@ -358,6 +360,8 @@ def test_my_groww_portfolio_shows_buy_current_and_pl(server, monkeypatch):
     assert tcs["avg_price"] == 3000 and tcs["price"] == 3300 and tcs["pl"] == 6000 and abs(tcs["pl_pct"] - 0.10) < 1e-9
     assert infy["pl"] == -2000 and abs(infy["pl_pct"] + 0.125) < 1e-9 and infy["sellable_qty"] == 6
     assert nse["price"] is None and nse["value"] is None and m["unpriced"] == ["NSE"]
+    assert tcs["name"] == "Tata Consultancy Services Limited" and tcs["exchange"] == "NSE"
+    assert nse["name"] == "National Stock Exchange of India Limited" and nse["exchange"] == "BSE"
     assert m["invested"] == 60000 + 16000 + 8000 and m["value"] == 66000 + 14000 and m["pl"] == 4000
     assert abs(m["pl_pct"] - 4000 / 76000) < 1e-9
     assert sess.writes() == []  # read-only

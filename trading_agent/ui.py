@@ -634,19 +634,28 @@ class App:
             return {"linked": False}
         from .groww import GrowwBroker
         from .runner import resolve_groww_token
+        from .instruments import CompanyNames, nse_then_bse
+        from .prices import YahooPrices
+        bse = YahooPrices(suffix=".BO", cache_dir=s.state_dir / "cache")
         try:
             g = GrowwBroker(resolve_groww_token(s), live_orders=False, exchange=s.groww_exchange,
-                            price_fallback=self.prices)
+                            price_fallback=nse_then_bse(self.prices, bse))
             positions = g.positions()
         except SystemExit as e:
             return {"linked": True, "error": str(e)}
         except Exception as e:  # noqa: BLE001
             return {"linked": True, "error": f"{type(e).__name__}: {e}"}
+        try:
+            names = CompanyNames(s.state_dir / "cache").lookup([p.symbol for p in positions])
+        except Exception:  # noqa: BLE001 - names are optional
+            names = {}
         rows = []
         for p in positions:
             invested = p.qty * p.avg_entry_price
             value = p.qty * p.current_price if p.current_price is not None else None
-            rows.append({"symbol": p.symbol, "qty": p.qty, "sellable_qty": p.free_qty,
+            info = names.get(p.symbol.upper()) or {}
+            rows.append({"symbol": p.symbol, "name": info.get("name"), "exchange": info.get("exchange"),
+                         "qty": p.qty, "sellable_qty": p.free_qty,
                          "avg_price": p.avg_entry_price, "price": p.current_price,
                          "invested": round(invested, 2), "value": round(value, 2) if value is not None else None,
                          "pl": round(value - invested, 2) if value is not None else None,
