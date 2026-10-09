@@ -135,6 +135,7 @@ def test_backtest_drops_loss_makers_point_in_time():
                             fundamentals=FakeFundamentals(), quality=1.0)
     assert all("UP2" not in p["picks"] and "UP" in p["picks"] for p in q["picks"])
     assert q["fundamentals"]["quality"] == 1.0 and q["fundamentals"]["avg_coverage"] > 0.5
+    assert q["fundamentals"]["value"] == 0.0  # regression: the weight was overwritten by the portfolio's value
     assert "share count" in q["fundamentals"]["note"]
 
 

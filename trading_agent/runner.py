@@ -68,18 +68,21 @@ def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
         if settings.groww_live_orders:
             log.warning("GROWW_LIVE_ORDERS=true: orders will use REAL money on Groww.")
             return groww
-        # Paper mode: real holdings + live prices from Groww, simulated fills.
+        # Paper mode: a separate practice account (PAPER_STARTING_CASH, no stocks) with live
+        # prices from Groww and simulated fills. Real holdings are shown on their own and
+        # are never copied in, so the two never look like duplicates.
         sim = LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
                                price_fn=groww.latest_price, currency="INR", whole_shares=True,
                                cost_model=cost_model_for("in"))
-        if sim.is_fresh:
-            try:
-                acct = groww.account()
-                sim.seed(groww.positions(), cash=acct.cash, label="groww")
-                log.info("Seeded paper account from Groww: %d holdings, cash %.2f",
-                         len(sim.positions()), acct.cash)
-            except Exception as e:  # noqa: BLE001
-                log.warning("Could not mirror Groww holdings (%s); starting from cash only.", e)
+        if sim.is_untouched_mirror:
+            # Older versions copied the Groww holdings in on the first run. A copy nobody has
+            # traded in is just a stale duplicate, so start the practice account afresh.
+            log.info("Replacing the untouched copy of the Groww holdings with a fresh practice "
+                     "account of %.0f.", settings.paper_starting_cash)
+            sim.path.unlink()
+            sim = LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
+                                   price_fn=groww.latest_price, currency="INR", whole_shares=True,
+                                   cost_model=cost_model_for("in"))
         return sim
     if settings.use_alpaca:
         return AlpacaPaperBroker(settings.alpaca_key_id, settings.alpaca_secret,
@@ -111,7 +114,7 @@ def record_equity(state: State, broker: Any) -> None:
     try:
         acct = broker.account()
         n = len(broker.positions())
-        state.record_equity(acct.equity, acct.cash, n)
+        state.record_equity(acct.equity, acct.cash, n, since=getattr(broker, "created_at", None))
     except Exception as e:  # noqa: BLE001
         log.debug("equity point skipped: %s", e)
 

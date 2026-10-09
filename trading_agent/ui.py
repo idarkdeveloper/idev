@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import threading
 import time
 import webbrowser
@@ -88,6 +89,7 @@ class App:
         self.last_factor_bt: dict[str, Any] | None = None
         self.last_signal_lab: dict[str, Any] | None = None
         self._my_portfolio: dict[str, Any] | None = None
+        self._names: Any | None = None  # CompanyNames, built on first use
         self._my_portfolio_at = 0.0
         self.demo_trades = demo_trades
         self._deals: list[DisclosedTrade] | None = demo_trades
@@ -96,6 +98,7 @@ class App:
         self.jobs: list[Job] = []
         self.lock = threading.Lock()
         self.busy = False
+        self.running: Job | None = None  # the job holding the one slot
 
     # -- lazy singletons ------------------------------------------------------
     @property
@@ -113,6 +116,20 @@ class App:
     @property
     def paper_only(self) -> bool:
         return isinstance(self.broker, LocalPaperBroker)
+
+    JOB_LABELS = {"check": "A check", "dry_run": "A dry run", "backtest": "The deal backtest",
+                  "screen": "The factor screen", "factor_backtest": "The portfolio backtest",
+                  "signal_lab": "The signal lab"}
+
+    def _refused(self, job: Job) -> Job:
+        """One long job at a time. A refused attempt is answered but not recorded, so it
+        can't later be reported as the result of the job that was actually running."""
+        r = self.running
+        what = self.JOB_LABELS.get(r.kind, "Another job") if r else "Another job"
+        since = f" (started {r.started_at[11:16]} UTC)" if r and r.started_at else ""
+        job.ok, job.finished_at = False, _now()
+        job.message = f"{what} is still running{since}; try again when it finishes."
+        return job
 
     # -- deals ----------------------------------------------------------------
     def deals(self, refresh: bool = False) -> list[DisclosedTrade]:
@@ -148,6 +165,7 @@ class App:
         except Exception as e:  # noqa: BLE001
             acct, positions, broker_error = None, [], str(e)
         perf = self.broker.performance() if isinstance(self.broker, LocalPaperBroker) else None
+        since = self.broker.created_at if isinstance(self.broker, LocalPaperBroker) else None
         gtt = st.data.get("gtt_stops", {})
         for pos in positions:  # trailing-stop level and GTT status for the table
             g = gtt.get(pos["symbol"].upper())
@@ -189,8 +207,8 @@ class App:
             "screen": self.last_screen,
             "factor_backtest": self.last_factor_bt,
             "signal_lab": self.last_signal_lab,
-            "equity_history": st.data.get("equity_history", [])[-1000:],
-            "equity_stats": st.equity_stats(),
+            "equity_history": st.equity_history(since)[-1000:],
+            "equity_stats": st.equity_stats(since),
             "costs": _cost_table(self.settings.market),
             "settings": {
                 "market": s.market, "currency": s.currency, "watch_investor": s.watch_investor,
@@ -217,17 +235,18 @@ class App:
             "broker_error": broker_error, "deals": deals, "deals_error": self._deals_error,
             "recommendations": recs, "runs": list(reversed(st.data["runs"][-20:])),
             "seen_count": st.seen_count, "busy": self.busy,
+            "running": ({"kind": self.running.kind, "label": self.JOB_LABELS.get(self.running.kind, self.running.kind),
+                         "started_at": self.running.started_at} if self.busy and self.running else None),
             "jobs": [j.to_dict() for j in self.jobs[-5:]],
         }
 
     # -- actions --------------------------------------------------------------
     def start_check(self, *, force: bool, dry_run: bool) -> Job:
         job = Job(id=len(self.jobs) + 1, kind="dry_run" if dry_run else "check")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "a check is already running", _now()
-            return job
-        self.busy = True
+            return self._refused(job)
+        self.jobs.append(job)
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -256,9 +275,36 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
+    @property
+    def names(self) -> Any | None:
+        """Company-name list for search; none in demo mode (no network needed there)."""
+        if self.demo_trades is not None:
+            return None
+        if self._names is None:
+            from .instruments import CompanyNames
+            self._names = CompanyNames(self.settings.state_dir / "cache")
+        return self._names
+
+    def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
+        n = self.names
+        return n.search(query, limit) if n is not None else []
+
+    def resolve(self, text: str) -> tuple[str, str | None]:
+        """A ticker, or a company name a person typed, to (ticker, company name)."""
+        n = self.names
+        if n is None:
+            return text.strip().upper(), None
+        try:
+            return n.resolve(text)
+        except Exception:  # noqa: BLE001 - name list unavailable: treat the text as a ticker
+            return text.strip().upper(), None
+
     def lookup(self, ticker: str) -> dict[str, Any]:
+        typed = ticker
+        ticker, company = self.resolve(ticker)
         stats = self.momentum.stats(ticker)
-        out: dict[str, Any] = {"ticker": ticker.upper(), "momentum": stats,
+        out: dict[str, Any] = {"ticker": ticker.upper(), "name": company, "momentum": stats,
+                               "matched_from": typed if typed.strip().upper() != ticker.upper() else None,
                                "momentum_summary": stats.get("error") or momentum_summary(stats),
                                "announcements": [], "announcements_error": None}
         data = self.data
@@ -299,11 +345,10 @@ class App:
         from .backtest import run_backtest
 
         job = Job(id=len(self.jobs) + 1, kind="backtest")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "another job is running", _now()
-            return job
-        self.busy = True
+            return self._refused(job)
+        self.jobs.append(job)
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -339,11 +384,10 @@ class App:
         from .screen import load_universe, run_screen
 
         job = Job(id=len(self.jobs) + 1, kind="screen")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "another job is running", _now()
-            return job
-        self.busy = True
+            return self._refused(job)
+        self.jobs.append(job)
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -518,6 +562,7 @@ class App:
     def size_quote(self, ticker: str, equity: float | None = None, risk_pct: float = 1.0,
                    max_pct: float = 10.0) -> dict[str, Any]:
         from .risk import atr, position_size
+        ticker, company = self.resolve(ticker)
         eq = equity or self.broker.account().equity
         price = self.broker.latest_price(ticker)
         try:
@@ -526,7 +571,7 @@ class App:
             a = None
         r = position_size(eq, price, a, risk_pct=risk_pct / 100, max_pct=max_pct / 100,
                           whole_shares=self.settings.market == "in")
-        r.update(ticker=ticker.upper(), equity=eq)
+        r.update(ticker=ticker.upper(), equity=eq, name=company)
         if r["notional"]:
             try:
                 r["round_trip_cost"] = self.cost_quote(r["notional"])
@@ -551,14 +596,13 @@ class App:
         from .screen import load_universe
 
         job = Job(id=len(self.jobs) + 1, kind="factor_backtest")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "another job is running", _now()
-            return job
+            return self._refused(job)
+        self.jobs.append(job)
         if self.settings.market != "in":
             job.ok, job.message, job.finished_at = False, "the factor backtest uses NSE indices; switch market to India", _now()
             return job
-        self.busy = True
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -593,14 +637,13 @@ class App:
         from .signal_lab import run_signal_lab
 
         job = Job(id=len(self.jobs) + 1, kind="signal_lab")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "another job is running", _now()
-            return job
+            return self._refused(job)
+        self.jobs.append(job)
         if self.settings.market != "in":
             job.ok, job.message, job.finished_at = False, "the signal lab uses NSE indices; switch market to India", _now()
             return job
-        self.busy = True
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -655,6 +698,7 @@ class App:
             value = p.qty * p.current_price if p.current_price is not None else None
             info = names.get(p.symbol.upper()) or {}
             rows.append({"symbol": p.symbol, "name": info.get("name"), "exchange": info.get("exchange"),
+                         "kind": info.get("kind") or "equity", "maturity": info.get("maturity"),
                          "qty": p.qty, "sellable_qty": p.free_qty,
                          "avg_price": p.avg_entry_price, "price": p.current_price,
                          "invested": round(invested, 2), "value": round(value, 2) if value is not None else None,
@@ -817,6 +861,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 from urllib.parse import parse_qs
                 force = (parse_qs(urlparse(self.path).query).get("refresh") or ["0"])[0] in ("1", "true")
                 self._json(app.context.fetch(force=force) if app.context else {"error": "not configured"})
+            elif path == "/api/search":
+                from urllib.parse import parse_qs
+                q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+                self._json(app.search(q))
             elif path == "/api/lookup":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()
@@ -912,20 +960,18 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-class _QuietServer(ThreadingHTTPServer):
-    """Skip the traceback when the browser drops a request mid-reply (page reload, tab closed,
-    a poll cancelled). Windows reports it as WinError 10053; nothing is lost."""
-
+class _Server(ThreadingHTTPServer):
     def handle_error(self, request: Any, client_address: Any) -> None:
-        import sys
+        # The browser gave up on a request (page reloaded or closed mid-reply): nothing is
+        # wrong, so don't print a traceback. Anything else is still reported.
         if isinstance(sys.exc_info()[1], (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
-            log.debug("client %s disconnected mid-reply", client_address)
+            log.debug("client %s closed the connection early", client_address)
             return
         super().handle_error(request, client_address)
 
 
 def make_server(app: App, host: str = "127.0.0.1", port: int = 8787) -> ThreadingHTTPServer:
-    server = _QuietServer((host, port), make_handler(app))
+    server = _Server((host, port), make_handler(app))
     server.daemon_threads = True
     return server
 

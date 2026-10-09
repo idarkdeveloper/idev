@@ -81,9 +81,12 @@ will then use them automatically and keep Yahoo as a fallback.
    because Groww allows only 150 token generations a day. `GROWW_ACCESS_TOKEN` in `.env`
    always wins. `python -m trading_agent groww-token` prints the token (`--fresh` forces a
    new one).
-3. Run `python -m trading_agent portfolio`. The first run mirrors your real holdings and
-   cash into `state/paper_broker.json`; from then on paper fills happen there while prices
-   stay live from Groww.
+3. Run `python -m trading_agent portfolio`. With Groww linked (and live orders off) the
+   agent trades a separate practice account in `state/paper_broker.json`: it starts with
+   `PAPER_STARTING_CASH` and no stocks, fills are simulated, and prices are live from Groww.
+   Your real holdings are never copied into it; the dashboard shows them on their own
+   ("My Groww portfolio"). An untouched copy left by an older version is replaced
+   automatically.
 
 Real orders on Groww are sent only when **both** `AUTO_TRADE=true` and
 `GROWW_LIVE_ORDERS=true`. Every call that can place, change or cancel an order (orders and
@@ -389,7 +392,7 @@ Setup, in the repository's **Settings → Secrets and variables → Actions**:
 | Kind | Name | Required? | Notes |
 |---|---|---|---|
 | Secret | `ANTHROPIC_API_KEY` | **yes** | Without it the routine only lists new deals. |
-| Secret | `GROWW_API_KEY` + `GROWW_TOTP_SECRET` | no | Mirrors your real Groww holdings. TOTP flow needs no daily approval; `GROWW_API_SECRET` works too but needs a daily tap in the app. |
+| Secret | `GROWW_API_KEY` + `GROWW_TOTP_SECRET` | no | Shows your real Groww holdings and gives live prices. TOTP flow needs no daily approval; `GROWW_API_SECRET` works too but needs a daily tap in the app. |
 | Secret | `RESEND_API_KEY`, `NOTIFY_WEBHOOK_URL` | no | Email / chat delivery. |
 | Variable | `WATCH_INVESTOR` | no | Defaults to `ASHISH KACHOLIA`. |
 | Variable | `NOTIFY_EMAIL_TO`, `NOTIFY_EMAIL_FROM` | no | With `RESEND_API_KEY`. |

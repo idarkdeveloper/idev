@@ -84,6 +84,8 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
     quality and/or value weight, each rebalance also ranks on NSE results filings that had
     been broadcast by that day (point-in-time)."""
     universe = list(universe)
+    # ``value`` is also the name of the portfolio's rupee value below: keep the weight apart
+    quality_w, value_w = float(quality), float(value)
     industries = {m["symbol"]: m.get("industry", "") for m in universe}
     current = [m["symbol"] for m in universe]
     rng = _yahoo_range(years)
@@ -110,7 +112,7 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
     if len(rebal) < 2:
         raise ValueError("not enough price history for a backtest; try fewer years")
     in_index = (lambda day: membership.members_on(day)) if membership else (lambda day: set(current))
-    use_funds = fundamentals is not None and bool(quality or value)
+    use_funds = fundamentals is not None and bool(quality_w or value_w)
     filings: dict[str, list[dict[str, Any]]] = {}
     shares_now: dict[str, float] = {}
     fund_cover: list[float] = []
@@ -190,7 +192,7 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
                 funds[r["symbol"]] = with_price(m, _price_at(hist[r["symbol"]], dates_of[r["symbol"]], day))
             have = [f for f in funds.values() if "error" not in f]
             fund_cover.append(len(have) / len(funds) if funds else 0.0)
-            apply_fundamentals(ranked, funds, quality=quality, value=value, industries=industries)
+            apply_fundamentals(ranked, funds, quality=quality_w, value=value_w, industries=industries)
         picks = [r["symbol"] for r in ranked if r["eligible"]][:top]
         if not picks:
             cash_months += 1
@@ -257,7 +259,7 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
         "missing_history": [{"symbol": m, "why": DELISTED.get(m, "no price history found")} for m in missing],
         "index_changes": membership.changes_between(rebal[0], rebal[-1]) if membership else [],
         "caveat": _caveat(benchmark, membership, point_in_time, dropped, missing),
-        "fundamentals": ({"quality": quality, "value": value, "source": "NSE results filings, point-in-time",
+        "fundamentals": ({"quality": quality_w, "value": value_w, "source": "NSE results filings, point-in-time",
                           "avg_coverage": round(statistics.fmean(fund_cover), 3) if fund_cover else 0.0,
                           "note": "Valued on today's share count with split-adjusted prices, so later share "
                                   "issues leak in slightly. ROE and debt start around 2022-23, when balance "

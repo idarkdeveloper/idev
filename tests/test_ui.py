@@ -329,22 +329,6 @@ def test_forward_test_appears_in_the_dashboard(server):
     assert {h["symbol"] for h in f["holdings"]} == {"A", "B"} and f["last_rebalance"] == "2026-10"
 
 
-def test_dropped_connection_is_quiet(capsys):
-    from trading_agent.ui import _QuietServer
-
-    srv = _QuietServer.__new__(_QuietServer)
-    try:
-        raise ConnectionAbortedError(10053, "aborted by the software in your host machine")
-    except ConnectionAbortedError:
-        srv.handle_error(None, ("127.0.0.1", 52352))
-    assert "Traceback" not in capsys.readouterr().err
-    try:
-        raise ValueError("a real bug")
-    except ValueError:
-        srv.handle_error(None, ("127.0.0.1", 52352))
-    assert "a real bug" in capsys.readouterr().err  # real errors still print
-
-
 def test_my_groww_portfolio_shows_buy_current_and_pl(server, monkeypatch):
     from trading_agent import groww
     from .conftest import FakeSession
@@ -386,3 +370,80 @@ def test_my_groww_portfolio_shows_buy_current_and_pl(server, monkeypatch):
     assert len(sess.calls) == n  # cached for a minute
     _, html = _get(base + "/")
     assert 'id="mp-rows"' in html and "My Groww portfolio" in html
+
+
+def test_refused_job_is_not_recorded_and_names_the_running_one(server, monkeypatch):
+    import threading as th
+    from trading_agent import screen as screen_mod
+    base, app = server
+    release = th.Event()
+
+    def slow_screen(members, prices, **kw):
+        release.wait(5)
+        return {"universe_size": 1, "scored": 1, "eligible": 1, "errors": 0, "top": [], "all": [], "fundamentals": None}
+
+    monkeypatch.setattr(screen_mod, "load_universe", lambda u: [{"symbol": "A", "name": "A", "industry": ""}])
+    monkeypatch.setattr(screen_mod, "run_screen", slow_screen)
+    status, j = _post(base + "/api/screen", {"universe": "NIFTY50", "top": 5})
+    assert status == 202 and j["ok"] is None
+    _, st = _get(base + "/api/state")
+    assert st["busy"] and st["running"]["label"] == "The factor screen"
+    status, refused = _post(base + "/api/signal-lab", {"universe": "NIFTY50", "years": 3, "horizons": "5"})
+    assert refused["ok"] is False and refused["message"].startswith("The factor screen is still running")
+    release.set()
+    for _ in range(50):
+        _, st = _get(base + "/api/state")
+        if not st["busy"]:
+            break
+        time.sleep(0.05)
+    assert not st["busy"] and st["running"] is None
+    assert st["jobs"][-1]["kind"] == "screen" and st["jobs"][-1]["ok"] is True  # the refusal left no trace
+    assert all("still running" not in (x["message"] or "") for x in st["jobs"])
+
+
+def test_search_endpoint_is_offline_in_demo(server):
+    base, app = server
+    status, hits = _get(base + "/api/search?q=tata")
+    assert status == 200 and hits == []
+    _, lk = _get(base + "/api/lookup?ticker=senco")
+    assert lk["ticker"] == "SENCO" and lk["matched_from"] is None
+
+
+def test_server_ignores_browser_closing_connection_early(capsys):
+    import sys as _sys
+    from trading_agent.ui import _Server
+
+    srv = _Server.__new__(_Server)  # no socket needed to test the error hook
+    try:
+        raise ConnectionAbortedError(10053, "aborted by the host")
+    except ConnectionAbortedError:
+        srv.handle_error(None, ("127.0.0.1", 1))
+    assert "Traceback" not in capsys.readouterr().err
+    try:
+        raise ValueError("real bug")
+    except ValueError:
+        srv.handle_error(None, ("127.0.0.1", 1))
+    assert "real bug" in capsys.readouterr().err
+
+
+def test_equity_curve_ignores_points_from_before_the_paper_account(tmp_path):
+    from trading_agent.broker import LocalPaperBroker
+    from trading_agent.state import State
+
+    st = State(tmp_path / "state.json")
+    st.data["equity_history"] = [{"at": "2026-10-09T16:21:03+00:00", "equity": 179426.0, "cash": 0.0, "positions": 16}]
+    b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=100_000, price_fn=lambda s: 100.0)
+    assert b.created_at > "2026-10-09T16:21:03+00:00"
+    assert st.equity_history(b.created_at) == [] and st.equity_stats(b.created_at) is None
+    st.record_equity(100_000, 100_000, 0, since=b.created_at)
+    assert [p["equity"] for p in st.data["equity_history"]] == [100_000]
+
+
+def test_old_paper_file_dates_itself_from_its_first_order(tmp_path):
+    import json
+    from trading_agent.broker import LocalPaperBroker
+
+    path = tmp_path / "pb.json"
+    path.write_text(json.dumps({"cash": 1.0, "starting_cash": 1.0, "positions": {}, "prices": {},
+                                "orders": [{"filled_at": "2026-10-09T17:54:09+00:00"}]}))
+    assert LocalPaperBroker(path).created_at == "2026-10-09T17:54:09+00:00"

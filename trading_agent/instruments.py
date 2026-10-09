@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Iterable
@@ -62,7 +63,7 @@ class CompanyNames:
         return self._nse
 
     def _groww_names(self) -> dict[str, dict[str, str]]:
-        """symbol -> {name, exchange}; NSE wins when a symbol trades on both."""
+        """symbol -> {name, exchange, series}; NSE wins when a symbol trades on both."""
         if self._groww is None:
             out: dict[str, dict[str, str]] = {}
             try:
@@ -71,26 +72,96 @@ class CompanyNames:
                         continue
                     sym, exch = (r.get("trading_symbol") or "").upper(), (r.get("exchange") or "").upper()
                     if sym and (sym not in out or exch == "NSE"):
-                        out[sym] = {"name": (r.get("name") or "").strip(), "exchange": exch}
+                        out[sym] = {"name": (r.get("name") or "").strip(), "exchange": exch,
+                                    "series": (r.get("series") or "").strip().upper()}
             except Exception as e:  # noqa: BLE001
                 log.warning("Groww instrument list unavailable: %s", e)
             self._groww = out
         return self._groww
 
     def lookup(self, symbols: Iterable[str]) -> dict[str, dict[str, Any]]:
-        """{symbol: {"name": str | None, "exchange": "NSE" | "BSE" | None}}."""
+        """{symbol: {"name", "exchange": "NSE" | "BSE" | None, "kind": "equity" | "bond", "maturity"}}."""
         symbols = [s.upper() for s in symbols]
         nse = self._nse_names()
-        out = {s: {"name": nse[s], "exchange": "NSE"} for s in symbols if nse.get(s)}
+        out = {s: {"name": nse[s], "exchange": "NSE", "kind": "equity", "maturity": None} for s in symbols if nse.get(s)}
         missing = [s for s in symbols if s not in out]
         if missing:
             g = self._groww_names()
             for s in missing:
                 info = g.get(s) or {}
                 name = info.get("name")
-                out[s] = {"name": name if name and name.upper() != s else KNOWN_NAMES.get(s),
-                          "exchange": info.get("exchange")}
+                name = name if name and name.upper() != s else KNOWN_NAMES.get(s)
+                kind = "bond" if is_debt(info.get("exchange"), info.get("series")) else "equity"
+                maturity = None
+                if kind == "bond" and name:
+                    m = MATURITY.search(name)  # Groww writes bond names like "Prachay Capital Limited Mar'31"
+                    if m:
+                        name, maturity = name[:m.start()].strip(), f"{m.group(1)} 20{m.group(2)}"
+                out[s] = {"name": name, "exchange": info.get("exchange"), "kind": kind, "maturity": maturity}
         return out
+
+
+    # -- search by company name ---------------------------------------------------
+    @staticmethod
+    def _norm(text: str) -> str:
+        t = re.sub(r"[^a-z0-9& ]+", " ", text.lower())
+        t = re.sub(r"\b(limited|ltd|the|india|of|and|co|company|corporation|corp)\b", " ", t)
+        return re.sub(r"\s+", " ", t).strip()
+
+    def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
+        """NSE-listed companies matching a ticker or company name, best first."""
+        q = (query or "").strip()
+        if len(q) < 2:
+            return []
+        qu, qn = q.upper(), self._norm(q)
+        words = qn.split()
+        scored = []
+        for sym, name in self._nse_names().items():
+            nn = self._norm(name)
+            if sym == qu:
+                score = 100
+            elif nn == qn and qn:
+                score = 95
+            elif sym.startswith(qu.replace(" ", "")):
+                score = 80
+            elif qn and nn.startswith(qn):
+                score = 75
+            elif words and all(re.search(r"\b" + re.escape(w), nn) for w in words):
+                score = 60
+            elif qn and qn in nn:
+                score = 40
+            else:
+                continue
+            scored.append((score, len(name), sym, name))
+        scored.sort(key=lambda x: (-x[0], x[1], x[2]))
+        return [{"symbol": sym, "name": name, "score": score} for score, _, sym, name in scored[:limit]]
+
+    def resolve(self, text: str) -> tuple[str, str | None]:
+        """(ticker, company name) for a ticker or a company name typed by a person.
+
+        A known NSE ticker is kept as is; otherwise the best name match is used when it is
+        a clear one (all the words appear in the name). Falls back to the text in capitals."""
+        raw = (text or "").strip()
+        nse = self._nse_names()
+        if raw.upper() in nse:
+            return raw.upper(), nse[raw.upper()]
+        hits = self.search(raw, limit=1)
+        if hits and hits[0]["score"] >= 60:
+            return hits[0]["symbol"], hits[0]["name"]
+        return raw.upper().replace(" ", ""), None
+
+
+MATURITY = re.compile(r"\s+([A-Z][a-z]{2})'(\d{2})$")
+
+
+def is_debt(exchange: str | None, series: str | None) -> bool:
+    """Bonds and other debt by their exchange series (BSE F/G; NSE N*, Y*, Z*, GS, GB, SG)."""
+    ex, se = (exchange or "").upper(), (series or "").upper()
+    if ex == "BSE":
+        return se in ("F", "G")
+    if ex == "NSE":
+        return se[:1] in ("N", "Y", "Z") or se in ("GS", "GB", "SG")
+    return False
 
 
 def nse_then_bse(nse_prices: Any, bse_prices: Any):
