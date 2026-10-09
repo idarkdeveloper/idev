@@ -1005,6 +1005,7 @@
         <span>Shares</span><span>${r.qty}</span><span>Position</span><span>${money(r.notional)}</span><span>Stop</span><span>${money(r.stop,2)}</span>
         <span>Max position</span><span>${money(r.max_notional)}</span>${c?`<span>Round-trip cost</span><span>${money(c.total,2)} (${c.total_bps.toFixed(0)} bps)</span>`:""}</div>
         <div class="sub" style="margin-top:6px">${esc(r.basis)}</div>
+        ${sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct)) ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct))}</div>` : ""}
         <div class="row" style="margin-top:8px"><button type="button" class="small" id="sz-use">Use in paper order</button></div>`;
       $("sz-use").addEventListener("click", () => { $("tk-symbol").value = r.ticker; $("tk-qty").value = r.qty; $("tk-amount").value = ""; $("tk-form").scrollIntoView({behavior:"smooth", block:"center"}); });
     } catch(e){ $("sz-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
@@ -1114,6 +1115,64 @@
   window.addEventListener("resize", placeSuggest);
   window.addEventListener("scroll", () => { if(sug.classList.contains("open")) placeSuggest(); }, {passive: true});
 
+  // ---- "What this means" for a looked-up stock and for a position size ----
+  const daysAgo = (at) => { const d = new Date(String(at).replace(" ", "T")); return isNaN(d) ? null : Math.floor((Date.now() - d) / 864e5); };
+  const shortDay = (at) => { const d = new Date(String(at).replace(" ", "T")); return isNaN(d) ? String(at).slice(0, 10) : d.toLocaleDateString("en-IN", {day: "numeric", month: "short"}); };
+  const clip = (t, n) => t.length <= n ? t : t.slice(0, t.lastIndexOf(" ", n) > n * 0.6 ? t.lastIndexOf(" ", n) : n).replace(/[,;:.]$/, "") + "…";
+  function lookupTakeaway(r){
+    const m = r.momentum || {}, out = [], name = r.name ? r.name.replace(/ Limited$/, "") : r.ticker;
+    if(m.error) return "";
+    const p6 = m.ret_6m, p12 = m.ret_12_1, hi = m.pct_from_52w_high;
+    const trend = m.verdict === "strong" ? "a strong uptrend" : m.verdict === "weak" ? "a weak, falling trend" : "no clear trend";
+    out.push(`${esc(name)} is in ${trend}: ${pct(p6)} over 6 months and ${pct(p12)} over the past year leaving out the latest month.`);
+    if(m.above_200dma === false) out.push("It trades below its 200-day average, so the strategy's rules make no new buy here.");
+    if(p6 != null && p6 > 0.5) out.push(`It has already risen ${pct(p6)} in six months: stocks this stretched often fall back sharply on any disappointment.`);
+    if(hi != null && hi > -0.03) out.push("It is right at its 52-week high.");
+    else if(hi != null && hi < -0.3) out.push(`It is ${Math.abs(hi * 100).toFixed(0)}% below its 52-week high.`);
+    const anns = (r.announcements || []).filter(a => { const d = daysAgo(a.at); return d == null || d <= 60; });
+    const find = (re) => anns.find(a => re.test((a.category || "") + " " + (a.text || "")));
+    const tw = find(/trading window/i), res = find(/financial result|outcome of board meeting/i);
+    if(res && daysAgo(res.at) != null && daysAgo(res.at) <= 14) out.push(`Results came out on ${shortDay(res.at)}: the price may still be reacting.`);
+    else if(tw) out.push(`It closed its insider trading window on ${shortDay(tw.at)}, which usually means quarterly results are due within a few weeks: a big move either way is possible around them.`);
+    const deal = find(/acquisition|amalgamation|merger|demerger|scheme of arrangement|takeover/i);
+    if(deal) out.push(`Corporate action on ${shortDay(deal.at)} ("${esc(clip((deal.text || deal.category).replace(/^.*?(informed the Exchange (about|regarding) )/i, "").replace(/Hon ble/g, "Hon'ble"), 90))}"): read it before buying.`);
+    const flags = [[/pledge/i, "a promoter pledge disclosure"], [/auditor/i, "a change of auditor"], [/credit rating/i, "a credit rating update"],
+                   [/buy ?back/i, "a share buyback"], [/bonus|split|sub-division/i, "a bonus issue or share split"],
+                   [/penalty|show cause|adjudicat|settlement order|sebi order|levied|fine imposed/i, "a regulatory order or penalty"]];
+    const hits = flags.filter(([re]) => find(re)).map(([, txt]) => txt);
+    if(hits.length) out.push(`Also in the last two months: ${hits.join(", ")}. Worth a look.`);
+    const pos = r.position;
+    if(pos && r.price){
+      const pl = r.price / pos.avg_entry_price - 1, room = pos.stop ? r.price / pos.stop - 1 : null;
+      out.push(`You hold ${pos.qty} at ${money(pos.avg_entry_price, 2)} (${pl >= 0 ? "+" : ""}${(pl * 100).toFixed(1)}%)${room != null ? `; its trailing stop at ${money(pos.stop, 2)} is ${(room * 100).toFixed(1)}% below the price` : ""}.`);
+    }
+    const strong = m.verdict === "strong" && m.above_200dma !== false;
+    out.push(strong ? `Bottom line: trend-wise it is the kind of stock the screen buys${tw || res || deal ? ", but there is event risk ahead, so keep any position small" : ""}${p6 != null && p6 > 0.5 ? " and expect big swings" : ""}.`
+                    : m.verdict === "weak" || m.above_200dma === false ? "Bottom line: the momentum rules say wait; a disclosed buy here would be a watch, not a buy."
+                    : "Bottom line: nothing decisive either way; it needs a reason beyond the price trend.");
+    return out.join(" ");
+  }
+  function sizeTakeaway(r, riskPct, maxPct){
+    if(!r || !r.price || !r.equity) return "";
+    const out = [], share = r.notional / r.equity;
+    if(!r.qty){
+      return `At ${money(r.price, 2)} a share, even one share would break the ${maxPct}% cap on your ${money(r.equity)} account, so the suggested size is zero.`;
+    }
+    out.push(`Buy ${r.qty} share${r.qty === 1 ? "" : "s"} for about ${money(r.notional)}: ${(share * 100).toFixed(1)}% of your ${money(r.equity)}.`);
+    if(r.atr){
+      const byRisk = Math.floor((r.equity * riskPct / 100) / (2 * r.atr));
+      if(byRisk > r.qty) out.push(`The ${maxPct}% cap set this: the ${riskPct}% risk rule alone would allow about ${byRisk} shares (${money(byRisk * r.price)}), so the cap is protecting you from putting too much in one stock.`);
+      else out.push(`The ${riskPct}% risk rule set this: a ${pct(2 * r.atr / r.price)} move (twice the usual daily range) would cost about ${riskPct}% of your equity.`);
+    } else out.push("There was no volatility data, so it is sized at half the cap.");
+    if(r.stop){
+      const loss = r.qty * (r.price - r.stop);
+      out.push(`If it falls to the stop at ${money(r.stop, 2)} (${pct(r.stop / r.price - 1)}), you would lose about ${money(loss)}, ${(loss / r.equity * 100).toFixed(2)}% of your equity.`);
+    }
+    const c = r.round_trip_cost;
+    if(c) out.push(`Buying and selling costs about ${money(c.total)} (${(c.total_bps / 100).toFixed(2)}%), so it must rise ${(c.total_bps / 100).toFixed(2)}% just to break even${c.total_bps > 70 ? "; at this size the flat ₹20 charges weigh heavily, and a bigger, rarer trade costs less in percent" : ""}.`);
+    return out.join(" ");
+  }
+
   async function lookup(t){
     $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
     try {
@@ -1123,6 +1182,7 @@
       $("lk-ticker").value = r.ticker;
       $("lk-result").innerHTML = `${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div>
         <div class="sub">${esc(r.momentum_summary)}</div>
+        ${lookupTakeaway(r) ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${lookupTakeaway(r)}</div>` : ""}
         <div class="chart" id="lk-chart" style="margin-top:6px"></div>
         <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div>`;
       const hist = r.history || [], pos = r.position, refs = [];
