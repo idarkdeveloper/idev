@@ -502,3 +502,40 @@ def test_demo_routes_share_the_page_with_a_prefix(settings):
         assert st["settings"]["demo"] is True
     finally:
         srv.shutdown()
+
+
+def test_serve_demo_app_resets_only_the_isolated_demo(settings):
+    """`serve(demo=True)` builds the normal App; the Demo tab is the isolated child."""
+    settings.market = "in"
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    live_pb, live_state = settings.state_dir / "paper_broker.json", settings.state_dir / "state.json"
+    live_pb.write_text("{}")
+    live_state.write_text("{}")
+    app = App(settings)  # what serve(demo=True) now builds
+    assert app.demo_trades is None and app.demo is not app
+    app.demo.reset()
+    assert live_pb.read_text() == "{}" and live_state.read_text() == "{}"
+    assert app.demo.dotenv is None
+
+
+def test_demo_settings_ignore_notification_keys(settings):
+    settings.market = "in"
+    demo = App(settings).demo
+    applied = demo.update_settings({"notify_webhook_url": "https://example.invalid/h", "notify_email_to": "a@b.c"})
+    assert demo.settings.notify_webhook_url is None and demo.settings.notify_email_to is None
+    assert "NOTIFY_WEBHOOK_URL" not in applied
+
+
+def test_run_background_busy_check_is_atomic(settings):
+    app = App(settings, dotenv=None)
+    gate = threading.Event()
+    jobs, start = [], threading.Barrier(8)
+
+    def go():
+        start.wait()
+        jobs.append(app.run_background("x", lambda j: gate.wait(5) and "ok"))
+    ts = [threading.Thread(target=go) for _ in range(8)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    gate.set()
+    assert sum(1 for j in jobs if j in app.jobs) == 1

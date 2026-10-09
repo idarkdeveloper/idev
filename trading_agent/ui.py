@@ -100,6 +100,7 @@ class App:
         self._deals_error: str | None = None
         self.jobs: list[Job] = []
         self.lock = threading.Lock()
+        self._slot_lock = threading.Lock()  # guards busy/running only; never held across a job
         self.busy = False
         self.running: Job | None = None  # the job holding the one slot
         self._replay: Any | None = None  # ReplayApp, built on first use
@@ -109,8 +110,6 @@ class App:
     @property
     def demo(self) -> "App":
         """The Demo page's app: bundled sample deals and prices, its own state, no Groww, no .env writes."""
-        if self.demo_trades is not None:
-            return self  # started with --demo: this app is the demo
         with self._lazy_lock:
             if self._demo is None:
                 import dataclasses
@@ -157,11 +156,12 @@ class App:
 
     def run_background(self, kind: str, fn: Callable[[Job], str]) -> Job:
         """Run ``fn(job)`` in the one job slot; it returns the success message."""
-        job = Job(id=len(self.jobs) + 1, kind=kind)
-        if self.busy:
-            return self._refused(job)
-        self.jobs.append(job)
-        self.busy, self.running = True, job
+        with self._slot_lock:  # the check and the claim of the slot are one step
+            job = Job(id=len(self.jobs) + 1, kind=kind)
+            if self.busy:
+                return self._refused(job)
+            self.jobs.append(job)
+            self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -296,11 +296,12 @@ class App:
 
     # -- actions --------------------------------------------------------------
     def start_check(self, *, force: bool, dry_run: bool) -> Job:
-        job = Job(id=len(self.jobs) + 1, kind="dry_run" if dry_run else "check")
-        if self.busy:
-            return self._refused(job)
-        self.jobs.append(job)
-        self.busy, self.running = True, job
+        with self._slot_lock:
+            job = Job(id=len(self.jobs) + 1, kind="dry_run" if dry_run else "check")
+            if self.busy:
+                return self._refused(job)
+            self.jobs.append(job)
+            self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -549,9 +550,12 @@ class App:
 
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
         applied: dict[str, str] = {}
+        is_demo = self.dotenv is None and self.demo_trades is not None
         for key, env_key in EDITABLE_ENV_KEYS.items():
             if key not in changes:
                 continue
+            if is_demo and key.startswith("notify"):
+                continue  # the Demo page never sends notifications
             value = changes[key]
             if key in ("auto_trade", "groww_gtt_stops"):
                 value = "true" if value in (True, "true", "1", 1, "on") else "false"
@@ -1089,11 +1093,8 @@ def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: in
           open_browser: bool = True, demo: bool = False) -> None:
     settings = settings or load_settings()
     kwargs: dict[str, Any] = {}
-    if demo:
-        from .cli import _demo_inputs
-
-        trades, broker = _demo_inputs(settings)
-        kwargs.update(demo_trades=trades, broker=broker)
+    # --demo only opens the Demo tab: the app itself is the normal one, and /demo is the
+    # isolated child (own state dir, no Groww, no .env writes, no notifications).
     from .regime import GlobalContext
     from .prices import YahooPrices
 
