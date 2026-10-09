@@ -131,6 +131,7 @@ Everything the CLI does is also in the dashboard:
 | `costs` | Trade cost panel with the full buy/sell breakdown |
 | `screen`, `backtest` (+ `--json`) | Factor screen and Backtest panels, each with *Export JSON* |
 | `factor-backtest` | *Backtest the screen as a portfolio* under the factor screen, with a growth-of-100 chart |
+| `signal-lab` | *Signal lab* card: which algo-trading signals predicted the next week, month or quarter |
 | `scorecard` | *Claude's track record* panel |
 | `groww-token` | *Test Groww connection* in Settings (the token itself is never shown) |
 | `--market`, `.env` strategy keys | Settings: investor, disclosures, market, starting cash, order mode, notifications |
@@ -192,6 +193,30 @@ these only ever touch the local paper account.
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.
+
+## Can algo trading predict a share? The signal lab
+
+`python -m trading_agent signal-lab --universe NIFTY50 --years 5` (or the *Signal lab*
+card) measures whether the rules algo traders use actually predicted anything:
+
+- **12 signals**: 12-1 momentum, 6-month return, price vs 200-day average, 50/200-day
+  cross, MACD, nearness to the 52-week high, 1-month reversal, RSI, Bollinger bands,
+  low volatility, volume surge, and the factor screen's score. A **walk-forward model**
+  (ridge regression) also learns the best mix of them, retrained each period on past
+  periods only.
+- Each signal ranks that day's index members (past members for NIFTY 50). The trade
+  starts at the next close and is held 5, 20 or 60 trading days, measured against
+  NIFTY 50 with dividends.
+- The score is the rank correlation between signal and result, its t-statistic, and
+  the gap between the top and bottom fifth after Indian charges (about 0.8% a round
+  trip at ₹25,000). Because a dozen signals at three horizons give one lucky t ≥ 2 in
+  twenty, "predictive" needs t ≥ 3 and a gap bigger than the charges.
+
+On NIFTY 50, Sept 2021 to Oct 2026, every signal and the model came out **no edge** at
+every horizon. The best (RSI oversold, next month) reached t = 1.2. On NIFTY 200, 12-1
+momentum reached t = 2.3 for the next month, but only on today's members, which flatter
+trend signals, and below the t ≥ 3 bar. Large Indian stocks priced these patterns in
+long ago; treat any tip that a chart pattern "predicts" a share with the same test.
 
 ## Momentum and "who traded"
 

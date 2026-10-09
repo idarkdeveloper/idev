@@ -248,3 +248,16 @@ def test_check_records_equity(settings, sample_rows):
     check(settings, trades=[], broker=broker, notifier=Notifier())  # nothing new: still records
     hist = State(settings.state_dir / "state.json").data.get("equity_history", [])
     assert len(hist) == 1 and hist[0]["equity"] == 1000
+
+
+def test_signal_lab_endpoints(server):
+    base, app = server
+    status, r = _get(base + "/api/signal-lab")
+    assert status == 200 and r == {}
+    status, j = _post(base + "/api/signal-lab", {"universe": "NIFTY50", "horizons": "0,20"})
+    assert status == 400 and "horizons" in j["error"]
+    app.settings.market = "us"
+    status, job = _post(base + "/api/signal-lab", {"universe": "NIFTY50", "years": 3})
+    assert status == 202 and job["kind"] == "signal_lab" and job["ok"] is False and "India" in job["message"]
+    _, st = _get(base + "/api/state")
+    assert st["signal_lab"] is None

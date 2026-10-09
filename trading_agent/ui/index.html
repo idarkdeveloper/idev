@@ -73,6 +73,7 @@
   .legend-row{display:flex;gap:6px 16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
   .legend-row span{display:inline-flex;align-items:center;gap:6px} .legend-row i{display:inline-block;width:16px;height:3px;border-radius:2px}
   .chart-empty{padding:18px 0;color:var(--mute);font-size:13px}
+  .callout{padding:10px 12px;border-radius:10px;background:var(--chip);color:var(--ink);font-size:14px}
   details.menu{position:relative} details.menu>summary{list-style:none} details.menu>summary::-webkit-details-marker{display:none}
   details.menu .menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:5;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px;display:flex;flex-direction:column;gap:4px;min-width:260px;box-shadow:0 8px 24px rgba(22,24,29,.12)}
   details.menu .menu-pop button{justify-content:flex-start;border:none;min-height:40px;font-weight:500}
@@ -172,6 +173,18 @@
           </div>
           <div class="sub">Monthly rebalance into the top stocks with the same ranking, real Indian charges on every trade, compared with NIFTY 50 including dividends and an equal-weight hold of the universe. Uses the universe selected above. NIFTY 50 uses each month's actual members, including stocks later dropped; other universes use today's members.</div>
           <div id="fb-result"></div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Signal lab</h2><span class="sub">Do algo-trading signals predict the next move? Measured, not assumed</span></div>
+        <form class="cardbody" id="sl-form">
+          <div class="row">
+            <label for="sl-universe" style="font-weight:500">Universe</label><select id="sl-universe" name="universe" style="flex:1 1 150px"><option selected>NIFTY50</option><option>NIFTY100</option><option>NIFTY200</option><option>NIFTY500</option><option>NIFTYMIDCAP150</option><option>NIFTYSMALLCAP250</option></select>
+            <label for="sl-years" style="font-weight:500">Years</label><select id="sl-years" name="years" style="flex:0 1 80px"><option>3</option><option selected>5</option><option>9</option></select>
+            <button type="submit" class="primary small" id="sl-run">Run signal lab</button><span class="sub" id="sl-status"></span>
+          </div>
+          <div class="sub">Tests 12 common signals (momentum, moving-average crosses, RSI, MACD, Bollinger bands, volume) and a model that learns from past periods only. Each ranks that day's index members; the trade starts at the next close; returns are measured against NIFTY 50 with dividends, after Indian charges.</div>
+          <div id="sl-result"></div>
         </form>
       </div>
       <div class="card">
@@ -360,6 +373,8 @@
     renderEquity();
     if(S.factor_backtest && S.factor_backtest.dates && $("fb-result").dataset.at !== S.factor_backtest.at){ renderFactor(S.factor_backtest); $("fb-result").dataset.at = S.factor_backtest.at; }
     $("fb-run").disabled = S.busy;
+    if(S.signal_lab && S.signal_lab.results && $("sl-result").dataset.at !== S.signal_lab.at){ renderSignalLab(S.signal_lab); $("sl-result").dataset.at = S.signal_lab.at; }
+    $("sl-run").disabled = S.busy;
     if(!btCostSet && S.costs && S.costs.examples){ $("bt-cost").value = S.costs.examples["25000"]; btCostSet = true; }
     if(S.screen && S.screen.top) renderScreen(S.screen);
     $("sc-run").disabled = S.busy;
@@ -511,7 +526,52 @@
   }
 
   async function refresh(){ try { S = await api("/api/state"); render(); } catch(e){ toast("Could not load: "+e.message); } }
-  function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Failed: ":"Done: ")+j.message); $("bt-status").textContent=""; $("sc-status").textContent=""; $("fb-status").textContent=""; } }, 2500); }
+  const VERDICT = {"predictive": ["ok", "Predictive"], "could be luck": ["warn", "Could be luck"], "too small to trade": ["warn", "Too small to trade"],
+                   "reversed": ["bad", "Reversed"], "no edge": ["", "No edge"], "not enough data": ["", "Not enough data"]};
+  function tBars(el, rows, cfg){
+    if(!rows.length){ el.innerHTML = `<div class="chart-empty">No results for this horizon.</div>`; return; }
+    const W = Math.max(300, el.clientWidth || 560), longest = Math.max(...rows.map(r => r.label.length));
+    const lw = Math.min(Math.round(longest * 6.8 + 12), Math.round(W * 0.42)), rowH = 22, m = {l: lw, r: 14, t: 6, b: 24};
+    const fit = t => t.length * 6.8 + 12 <= lw ? t : t.slice(0, Math.max(4, Math.floor((lw - 12) / 6.8) - 1)) + "…";
+    const H = m.t + m.b + rows.length * rowH, pw = W - m.l - m.r;
+    const ts = rows.map(r => r.t), lo = Math.min(-3.5, ...ts), hi = Math.max(3.5, ...ts), tk = niceTicks(lo, hi, 6);
+    const X = v => m.l + (v - tk[0]) / (tk[tk.length - 1] - tk[0]) * pw;
+    let g = "";
+    tk.forEach(t => { g += `<line x1="${X(t)}" x2="${X(t)}" y1="${m.t}" y2="${H - m.b}" stroke="${t === 0 ? C.base : C.grid}"/><text x="${X(t)}" y="${H - 6}" text-anchor="middle">${t}</text>`; });
+    [[2, C.ctx, "4 3"], [-2, C.ctx, "4 3"], [3, "var(--ink2)", "2 2"]].forEach(([v, c, d]) => { g += `<line x1="${X(v)}" x2="${X(v)}" y1="${m.t}" y2="${H - m.b}" stroke="${c}" stroke-dasharray="${d}"/>`; });
+    rows.forEach((r, i) => {
+      const y = m.t + i * rowH, x0 = X(0), x1 = X(r.t), bh = 12, yb = y + (rowH - bh) / 2;
+      g += `<text x="${m.l - 8}" y="${y + rowH / 2 + 4}" text-anchor="end" style="fill:var(--ink2)${r.model ? ";font-weight:600" : ""}">${esc(fit(r.label))}<title>${esc(r.label)}</title></text>`;
+      g += `<rect x="${Math.min(x0, x1)}" y="${yb}" width="${Math.max(1, Math.abs(x1 - x0))}" height="${bh}" rx="3" fill="${r.t >= 0 ? C.pos : C.neg}"><title>${esc(r.label)}: t ${r.t.toFixed(2)}, ${esc((VERDICT[r.verdict] || ["", r.verdict])[1])}</title></rect>`;
+    });
+    el.innerHTML = `<div class="legend-row" style="margin-bottom:6px"><span><i style="background:${C.pos}"></i>Predicted the right way</span><span><i style="background:${C.neg}"></i>Wrong way</span><span><i style="background:repeating-linear-gradient(90deg, ${C.ctx} 0 4px, transparent 4px 7px)"></i>t = ±2: could be luck</span><span><i style="background:repeating-linear-gradient(90deg, var(--ink2) 0 2px, transparent 2px 4px)"></i>t = 3: predictive bar</span></div>`
+      + `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label)}">${g}</svg>`;
+  }
+  function renderSignalLab(r, h){
+    if(!r || !r.results){ return; }
+    h = String(h || $("sl-result").dataset.h || (r.horizons.includes(20) ? 20 : r.horizons[0]));
+    if(!r.results[h]) h = String(r.horizons[0]);
+    $("sl-result").dataset.h = h;
+    const res = r.results[h], label = k => (r.signals[k] || {}).label || k;
+    const rows = Object.entries(res).filter(([, s]) => s.t_stat != null).map(([k, s]) => ({k, label: label(k), t: s.t_stat, verdict: s.verdict, model: k === "walk_forward_model", s}))
+      .sort((a, b) => b.t - a.t);
+    const it = (r.index_timing || {})[h];
+    const tabs = r.horizons.map(x => `<button type="button" class="small${String(x) === h ? " primary" : ""}" data-h="${x}">${x === 5 ? "Next week" : x === 20 ? "Next month" : x === 60 ? "Next quarter" : x + " days"}</button>`).join("");
+    $("sl-result").innerHTML = `<div class="sub">${esc(r.universe)} · ${r.with_history}/${r.universe_size} stocks · ${shortDate(r.start)} to ${shortDate(r.end)} · charges ${(r.round_trip_cost * 100).toFixed(2)}% a round trip · ${when(r.at)}</div>
+      <div class="row" style="gap:6px">${r.point_in_time ? `<span class="pill">Point-in-time members</span>` : `<span class="pill warn">Today's members only: flatters trend signals</span>`}</div>
+      <div class="callout" style="font-weight:500">${esc(r.summary)}</div>
+      <div class="row" style="gap:6px" id="sl-tabs">${tabs}</div>
+      <h3 style="margin-top:4px">How strongly each signal predicted ${h === "5" ? "the next week" : h === "20" ? "the next month" : h === "60" ? "the next quarter" : "the next " + h + " days"} (t-statistic)</h3>
+      <div class="chart" id="sl-chart"></div>
+      <div class="scroll"><table><thead><tr><th>Signal</th><th class="num">Rank corr.</th><th class="num">t</th><th class="num">Top fifth − bottom fifth</th><th class="num">Top fifth beat index</th><th>Verdict</th></tr></thead><tbody>
+      ${rows.map(x => { const v = VERDICT[x.verdict] || ["", x.verdict]; return `<tr><td title="${esc((r.signals[x.k] || {}).about || "")}">${esc(x.label)}<div class="sub">${esc((r.signals[x.k] || {}).family || "")}</div></td><td class="num">${x.s.ic >= 0 ? "+" : ""}${x.s.ic.toFixed(3)}</td><td class="num">${x.t >= 0 ? "+" : ""}${x.t.toFixed(2)}</td><td class="num ${x.s.top_minus_bottom >= 0 ? "up" : "down"}">${pct(x.s.top_minus_bottom, 2)}</td><td class="num">${x.s.top_beats_index_share == null ? "n/a" : Math.round(x.s.top_beats_index_share * 100) + "%"}</td><td><span class="pill ${v[0]}" style="white-space:nowrap">${esc(v[1])}</span></td></tr>`; }).join("")}
+      </tbody></table></div>
+      ${it && it.difference != null ? `<div class="sub">Market timing: when NIFTY was above its 200-day average, it returned ${pct(it.above.mean, 2)} over the next ${h} days on average (${it.above.n} periods), against ${pct(it.below.mean, 2)} when below (${it.below.n}); t ${it.t_stat >= 0 ? "+" : ""}${(it.t_stat || 0).toFixed(2)}.</div>` : ""}
+      <div class="sub">A coin toss scores a rank correlation near 0 and t near 0. "Predictive" needs t ≥ 3 and a top-minus-bottom gap larger than the charges, because with a dozen signals and three horizons about one test in twenty passes t ≥ 2 by luck.</div>`;
+    tBars($("sl-chart"), rows, {label: `t-statistic of each signal, next ${h} trading days`});
+    document.querySelectorAll("#sl-tabs button").forEach(b => b.addEventListener("click", () => renderSignalLab(r, b.dataset.h)));
+  }
+  function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Failed: ":"Done: ")+j.message); $("bt-status").textContent=""; $("sc-status").textContent=""; $("fb-status").textContent=""; $("sl-status").textContent=""; } }, 2500); }
 
   async function runCheck(force, dry){
     try { const j = await api("/api/check", {force, dry_run: dry || !S.connections.claude}); toast(j.ok===false ? j.message : (dry ? "Dry run started" : force ? "Forced check started" : "Check started")); await refresh(); pollWhileBusy(); }
@@ -625,6 +685,12 @@
     $("scd-run").disabled = false;
   }
   $("scd-run").addEventListener("click", loadScorecard);
+  $("sl-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const body = {universe: $("sl-universe").value, years: Number($("sl-years").value), horizons: "5,20,60"};
+    try { const j = await api("/api/signal-lab", body); if(j.ok===false){ toast(j.message); return; } $("sl-status").textContent = "Loading price history and testing every signal…"; await refresh(); pollWhileBusy(); }
+    catch(e){ toast(e.message); }
+  });
   $("fb-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const body = {universe: $("sc-universe").value, years: Number($("fb-years").value), top: Number($("fb-top").value)};

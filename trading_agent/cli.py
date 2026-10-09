@@ -265,6 +265,28 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_signal_lab(args: argparse.Namespace) -> int:
+    """Test whether common algo-trading signals predicted next-period returns."""
+    from .costs import cost_model_for
+    from .membership import membership_for
+    from .runner import free_prices
+    from .screen import load_universe
+    from .signal_lab import SIGNALS, format_signal_lab, run_signal_lab
+
+    settings = _settings(args)
+    members = load_universe(args.universe)
+    membership = None if args.todays_members else membership_for(
+        args.universe, [m["symbol"] for m in members], args.changes)
+    horizons = [int(h) for h in str(args.horizons).split(",") if h.strip()]
+    print(f"Testing {len(SIGNALS)} signals and a walk-forward model on {args.universe.upper()} over {args.years} years…")
+    r = run_signal_lab(members, free_prices(settings), horizons=horizons, years=args.years,
+                       membership=membership, cost_model=cost_model_for("in"))
+    print(format_signal_lab(r))
+    if args.json:
+        print(json.dumps(r, indent=2, default=str))
+    return 0
+
+
 def cmd_factor_backtest(args: argparse.Namespace) -> int:
     """Backtest the factor screen as a monthly-rebalanced portfolio with real charges."""
     from .costs import cost_model_for
@@ -421,6 +443,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="ignore membership history and use today's constituents (survivorship-biased)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_factor_backtest)
+    sp = sub.add_parser("signal-lab", help="test whether algo-trading signals predicted returns")
+    sp.add_argument("--universe", default="NIFTY50")
+    sp.add_argument("--years", type=int, default=5)
+    sp.add_argument("--horizons", default="5,20,60", help="holding periods in trading days")
+    sp.add_argument("--changes", metavar="CSV", help="index change log for point-in-time membership")
+    sp.add_argument("--todays-members", action="store_true",
+                    help="use today's constituents (survivorship-biased)")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_signal_lab)
     sp = sub.add_parser("costs", help="show the verified Indian delivery cost model")
     sp.add_argument("amounts", nargs="*", type=float, default=[10_000, 25_000, 100_000])
     sp.set_defaults(func=cmd_costs)
