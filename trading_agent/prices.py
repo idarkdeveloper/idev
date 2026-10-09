@@ -19,6 +19,14 @@ YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 
+def _check_status(resp: Any, ysym: str) -> None:
+    """4xx (not 429) means Yahoo does not serve this symbol: an answer, not an outage."""
+    status = getattr(resp, "status_code", 200)
+    if isinstance(status, int) and 400 <= status < 500 and status != 429:
+        raise LookupError(f"Yahoo has no data for {ysym} (HTTP {status})")
+    resp.raise_for_status()
+
+
 class YahooPrices:
     def __init__(self, suffix: str = ".NS", session: requests.Session | None = None,
                  timeout: float = 20.0, cache_dir: Path | None = None,
@@ -68,7 +76,7 @@ class YahooPrices:
             return json.loads(cache.read_text())
         resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
                                 params={"range": range_, "interval": "1d"}, timeout=self.timeout)
-        resp.raise_for_status()
+        _check_status(resp, ysym)
         data: Any = resp.json()
         try:
             res = data["chart"]["result"][0]
@@ -101,7 +109,7 @@ class YahooPrices:
             return json.loads(cache.read_text())
         resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
                                 params={"range": range_, "interval": "1d", "events": "div"}, timeout=self.timeout)
-        resp.raise_for_status()
+        _check_status(resp, ysym)
         try:
             events = (resp.json()["chart"]["result"][0].get("events") or {}).get("dividends") or {}
         except (KeyError, IndexError, TypeError) as e:

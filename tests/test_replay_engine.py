@@ -145,3 +145,28 @@ def test_a_price_source_failure_aborts_the_step_and_changes_nothing(tmp_path):
     assert t.clock.today == "2021-03-15" and not (t.root / ".pre-step").exists()
     src.down = False
     assert step(t, "2021-03-26", today="2026-10-09")["to"] == "2021-03-26"
+
+
+def test_a_member_the_source_does_not_know_is_skipped_not_fatal(tmp_path):
+    class Delisted(FakeSource):
+        def history(self, symbol, range_="2y"):
+            if symbol.upper() == "OLDCO":
+                raise LookupError("Yahoo has no data for OLDCO.NS (HTTP 404)")
+            return super().history(symbol, range_)
+
+    class Uni(FakeUniverse):
+        def __init__(self):
+            super().__init__(("A", "B", "C", "D", "E", "OLDCO"))
+
+    def screen(members, prices, top):
+        ok = []
+        for m in members:
+            try:
+                prices.history(m["symbol"], "1y")
+                ok.append(m)
+            except LookupError:
+                pass
+        return top_by_6m(ok, prices, top)
+    t = make(tmp_path, source=Delisted(market().bars), universe_obj=Uni(), screen_fn=screen)
+    r = step(t, "2021-04-15", today="2026-10-09")
+    assert r["to"] == "2021-04-15" and t.clock.today == "2021-04-15"

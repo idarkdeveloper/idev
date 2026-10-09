@@ -116,7 +116,13 @@ class Trial:
             self._open_brokers()
             raise
         finally:
-            shutil.rmtree(backup, ignore_errors=True)
+            self._drop_backup(backup)
+
+    @staticmethod
+    def _drop_backup(backup: Path) -> None:
+        """Marker first, so a kill mid-cleanup can't leave a marker with a partial backup."""
+        (backup / "ok").unlink(missing_ok=True)
+        shutil.rmtree(backup, ignore_errors=True)
 
     def _restore(self, saved: dict[str, bytes]) -> None:
         for f in self.FILES:
@@ -139,7 +145,7 @@ class Trial:
                     p.write_bytes((backup / f).read_bytes())
                 elif p.exists():
                     p.unlink()
-        shutil.rmtree(backup, ignore_errors=True)  # no marker: the backup itself was interrupted
+        cls._drop_backup(backup)  # no marker: the backup itself was interrupted
 
     # -- create / load -------------------------------------------------------------
     @classmethod
