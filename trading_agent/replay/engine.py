@@ -63,6 +63,7 @@ def step(trial: Any, until: str, *, today: str | None = None,
     until = min(until, today)
     if until <= start:
         raise ValueError(f"the replay is already at {start}")
+    trial.prices.take_fetch_errors()  # start clean
     days = trial.prices.calendar(CALENDAR, start, until)
     report: dict[str, Any] = {"from": start, "to": until, "days": len(days), "rebalances": [],
                               "stops": [], "dividends": []}
@@ -89,5 +90,11 @@ def step(trial: Any, until: str, *, today: str | None = None,
         trial.clock.advance_to(until)
         trial.data["clock"] = until
         trial.refresh_picks()
+        # The broker and the screens fall back to stored prices when Yahoo fails; a step built
+        # on those would look fine and be wrong, so any failed fetch undoes the whole step.
+        failed = trial.prices.take_fetch_errors()
+        if failed:
+            sym, err = next(iter(failed.items()))
+            raise RuntimeError(f"Price data could not be loaded for {sym}: {err}; nothing was changed — try again")
         trial.save()
     return report

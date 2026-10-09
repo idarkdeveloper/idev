@@ -204,6 +204,17 @@ def parse_pit_xbrl(xml_text: str, filing: dict[str, Any] | None = None) -> list[
     return out
 
 
+_TICKER = re.compile(r"^[A-Z0-9&.\-]{1,20}$")
+
+
+def check_ticker(symbol: str) -> str:
+    """Upper-cased NSE ticker, or ValueError: it ends up in file names, so keep it plain."""
+    sym = str(symbol or "").strip().upper()
+    if not _TICKER.match(sym) or sym.startswith("."):
+        raise ValueError(f"{symbol!r} is not a valid ticker (letters, digits, & . - only, up to 20)")
+    return sym
+
+
 class NSEClient:
     """Pass ``session`` to inject a fake in tests."""
 
@@ -416,7 +427,7 @@ class NSEClient:
 
         NSE's date-range query times out, but the per-symbol query returns the whole history,
         so Replay fetches it once a day and slices it at its clock."""
-        sym = symbol.upper()
+        sym = check_ticker(symbol)
         path = self.cache_dir / "nse_ann" / f"{sym}.json" if self.cache_dir else None
         if path and path.exists() and time.time() - path.stat().st_mtime < max_age_s:
             return json.loads(path.read_text(encoding="utf-8"))

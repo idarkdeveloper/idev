@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterator
 from ..broker import LocalPaperBroker
 from ..costs import cost_model_for
 from ..forward import rebalance_to
+from ..nse import check_ticker
 from .clock import EARLIEST_START, ClockedPrices, ReplayClock
 
 BENCHMARKS = {"NIFTYMIDCAP150": "MID150BEES", "NIFTY50": "NIFTYBEES", "NIFTY100": "NIFTYBEES",
@@ -93,23 +94,52 @@ class Trial:
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        """All or nothing: on any error, put every file, the data and the clock back."""
+        """All or nothing: on any error, put every file, the data and the clock back.
+
+        The files are also copied to ``.pre-step/`` (marker file ``ok`` written last) so a
+        killed process is undone by the next ``Trial.load``."""
         saved = {f: (self.root / f).read_bytes() for f in self.FILES if (self.root / f).exists()}
+        backup = self.root / ".pre-step"
+        shutil.rmtree(backup, ignore_errors=True)
+        backup.mkdir(parents=True)
+        for f, b in saved.items():
+            (backup / f).write_bytes(b)
+        (backup / "ok").write_text("ok", encoding="utf-8")
         data, clock = json.loads(json.dumps(self.data)), self.clock.today
         try:
             yield
         except BaseException:
-            for f in self.FILES:
-                p = self.root / f
-                if f in saved:
-                    p.write_bytes(saved[f])
-                elif p.exists():
-                    p.unlink()
+            self._restore(saved)
             self.data = data
             self.clock = ReplayClock(clock)
             self.prices.clock = self.clock
             self._open_brokers()
             raise
+        finally:
+            shutil.rmtree(backup, ignore_errors=True)
+
+    def _restore(self, saved: dict[str, bytes]) -> None:
+        for f in self.FILES:
+            p = self.root / f
+            if f in saved:
+                p.write_bytes(saved[f])
+            elif p.exists():
+                p.unlink()
+
+    @classmethod
+    def _recover(cls, root: Path) -> None:
+        """Undo a step that was killed part-way: its broker files are ahead of trial.json."""
+        backup = Path(root) / ".pre-step"
+        if not backup.exists():
+            return
+        if (backup / "ok").exists():
+            for f in cls.FILES:
+                p = Path(root) / f
+                if (backup / f).exists():
+                    p.write_bytes((backup / f).read_bytes())
+                elif p.exists():
+                    p.unlink()
+        shutil.rmtree(backup, ignore_errors=True)  # no marker: the backup itself was interrupted
 
     # -- create / load -------------------------------------------------------------
     @classmethod
@@ -154,6 +184,7 @@ class Trial:
     @classmethod
     def load(cls, root: Path, source: Any, universe_obj: Any,
              screen_fn: Callable[..., list[dict[str, Any]]] | None = None) -> "Trial":
+        cls._recover(Path(root))
         data = json.loads((Path(root) / "trial.json").read_text(encoding="utf-8"))
         return cls(root, data, source, universe_obj, screen_fn)
 
@@ -177,10 +208,14 @@ class Trial:
             raise ValueError("this replay has ended; it is read-only")
         if side not in ("buy", "sell"):
             raise ValueError("side must be buy or sell")
-        symbol = symbol.strip().upper()
+        symbol = check_ticker(symbol)
         # Look the price up first so a stock not yet listed raises the clocked error with its
         # listing date (LocalPaperBroker would otherwise swallow it into a generic message).
         self.prices.latest_price(symbol)
+        if side == "buy":
+            last = self.prices.last_trade_date(symbol)
+            if last and (date.fromisoformat(self.clock.today) - date.fromisoformat(last)).days > 7:
+                raise LookupError(f"{symbol} last traded {last}: it is suspended or delisted on the replay date")
         return self.you.submit_order(symbol, side, notional=notional, qty=qty)
 
     def rebalance_agent(self) -> dict[str, Any]:
@@ -213,11 +248,11 @@ def list_trials(replay_dir: Path) -> list[dict[str, Any]]:
     for p in sorted(Path(replay_dir).glob("*/trial.json")):
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        last = d["equity"][-1] if d.get("equity") else {}
-        ret = {w: (last[w] / d["cash"] - 1) if last.get(w) else None for w in PORTFOLIOS}
-        out.append({"slug": d["slug"], "name": d["name"], "start": d["start"], "clock": d["clock"],
-                    "universe": d["universe"], "ended": d["ended"], **ret})
+            last = d["equity"][-1] if d.get("equity") else {}
+            ret = {w: (last[w] / d["cash"] - 1) if last.get(w) else None for w in PORTFOLIOS}
+            out.append({"slug": d["slug"], "name": d["name"], "start": d["start"], "clock": d["clock"],
+                        "universe": d["universe"], "ended": d["ended"], **ret})
+        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError, ZeroDivisionError):
+            continue  # unreadable or half-written: leave it out of the list
     out.sort(key=lambda r: r["clock"], reverse=True)
     return out

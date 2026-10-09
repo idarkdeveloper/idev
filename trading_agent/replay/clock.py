@@ -64,13 +64,27 @@ class ClockedPrices:
         self._dates: dict[str, list[str]] = {}
         self._divs: dict[str, list[dict[str, Any]]] = {}
         self._lock = threading.Lock()
+        self.fetch_errors: dict[str, str] = {}
+
+    def take_fetch_errors(self) -> dict[str, str]:
+        """Symbols whose price fetch failed (network, not "no such symbol") since the last call."""
+        with self._lock:
+            out, self.fetch_errors = self.fetch_errors, {}
+            return out
 
     def _all(self, symbol: str) -> tuple[list[dict[str, Any]], list[str]]:
         s = symbol.upper()
         with self._lock:
             if s in self._bars:
                 return self._bars[s], self._dates[s]
-        bars = self.source.history(s, self.RANGE)
+        try:
+            bars = self.source.history(s, self.RANGE)
+        except LookupError:
+            raise  # no such symbol / not listed: an answer, not a failure
+        except Exception as e:
+            with self._lock:
+                self.fetch_errors[s] = str(e) or type(e).__name__
+            raise
         with self._lock:
             self._bars[s], self._dates[s] = bars, [b["date"] for b in bars]
             return self._bars[s], self._dates[s]
@@ -78,6 +92,10 @@ class ClockedPrices:
     def history(self, symbol: str, range_: str = "2y") -> list[dict[str, Any]]:
         bars, dates = self._all(symbol)
         out = bars[:bisect.bisect_right(dates, self.clock.today)]
+        if self.field == "adj_close":
+            # Dividends-reinvested mode: one consistent series, so every chart, stat and stop
+            # reads the same prices the fills use.
+            out = [{**b, "close": b["adj_close"]} for b in out]
         keep = _KEEP.get(range_)
         return out[-keep:] if keep else out
 

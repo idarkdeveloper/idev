@@ -114,3 +114,34 @@ def test_ended_trial_cannot_step(tmp_path):
     t.data["ended"] = "2021-03-15"
     with pytest.raises(ValueError, match="ended"):
         step(t, "2021-04-15", today="2026-10-09")
+
+
+def test_a_price_source_failure_aborts_the_step_and_changes_nothing(tmp_path):
+    class Flaky(FakeSource):
+        down = False
+
+        def history(self, symbol, range_="2y"):
+            if self.down and symbol.upper() == "B":
+                raise ConnectionError("Yahoo is down")
+            return super().history(symbol, range_)
+    def tolerant_screen(members, prices, top):  # like the real screen: a symbol that fails is skipped
+        ok = []
+        for m in members:
+            try:
+                prices.history(m["symbol"], "1y")
+                ok.append(m)
+            except Exception:  # noqa: BLE001
+                pass
+        return top_by_6m(ok, prices, top)
+    src = Flaky(market().bars)
+    t = make(tmp_path, source=src, screen_fn=tolerant_screen)
+    assert "B" in {p.symbol for p in t.agent.positions()}
+    before = {f: (t.root / f).read_bytes() for f in Trial.FILES if (t.root / f).exists()}
+    t.prices._bars.pop("B"), t.prices._dates.pop("B")  # as after a restart: B must be fetched again
+    src.down = True
+    with pytest.raises(RuntimeError, match="Price data could not be loaded for B.*nothing was changed"):
+        step(t, "2021-03-26", today="2026-10-09")
+    assert {f: (t.root / f).read_bytes() for f in Trial.FILES if (t.root / f).exists()} == before
+    assert t.clock.today == "2021-03-15" and not (t.root / ".pre-step").exists()
+    src.down = False
+    assert step(t, "2021-03-26", today="2026-10-09")["to"] == "2021-03-26"

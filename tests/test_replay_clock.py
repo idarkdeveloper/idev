@@ -96,3 +96,29 @@ def test_dividend_source_error_propagates_and_is_not_cached():
         p.dividends("X")
     src.fail = False
     assert p.dividends("X") == [{"date": "2021-06-15", "amount": 10.0}]
+
+
+def test_reinvest_history_is_one_consistent_adjusted_series():
+    bars = [{"date": "2021-03-01", "close": 100.0, "adj_close": 90.0, "volume": 1},
+            {"date": "2021-03-02", "close": 101.0, "adj_close": 91.0, "volume": 1}]
+    src = FakeSource({"X": bars})
+    reinvest = ClockedPrices(src, ReplayClock("2021-03-02"), field="adj_close")
+    assert [b["close"] for b in reinvest.history("X")] == [90.0, 91.0]
+    assert reinvest.history("X")[-1]["adj_close"] == 91.0 and reinvest.latest_price("X") == 91.0
+    assert [b["close"] for b in reinvest._all("X")[0]] == [100.0, 101.0]  # cached source bars unchanged
+    cash = ClockedPrices(src, ReplayClock("2021-03-02"), field="close")
+    assert [b["close"] for b in cash.history("X")] == [100.0, 101.0]
+
+
+def test_fetch_errors_are_recorded_but_lookup_errors_are_not():
+    class Flaky(FakeSource):
+        def history(self, symbol, range_="2y"):
+            if symbol.upper() == "BAD":
+                raise ConnectionError("offline")
+            return super().history(symbol, range_)
+    p = ClockedPrices(Flaky({"A": path(100, 0.001)}), ReplayClock("2021-03-02"))
+    with pytest.raises(ConnectionError):
+        p.history("BAD")
+    with pytest.raises(LookupError):
+        p.history("NOSUCH")
+    assert p.take_fetch_errors() == {"BAD": "offline"} and p.take_fetch_errors() == {}
