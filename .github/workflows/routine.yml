@@ -69,6 +69,12 @@ jobs:
             echo "::warning::ANTHROPIC_API_KEY secret is not set - running a dry run only. Add it under Settings > Secrets and variables > Actions."
             FLAGS="$FLAGS --dry-run"
           fi
+          # Lost state (cache evicted or first run): record today's deals as seen instead of
+          # re-sending a month of old deals as new. Manual runs still analyse everything.
+          if [ "${{ github.event_name }}" = "schedule" ] && [ ! -f state/state.json ]; then
+            echo "::warning::No saved state was restored; recording current deals as seen without calling Claude."
+            FLAGS="--baseline"
+          fi
           python -m trading_agent check $FLAGS
 
       # Never put the cached Groww access token into the Actions cache: it can trade.

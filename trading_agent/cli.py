@@ -49,7 +49,8 @@ def _print_result(result) -> None:
     for t in result.new_trades:
         print(f"  - {t.summary()}")
     if result.skipped:
-        print("(dry run: Claude was not called)")
+        print("(baseline: recorded as seen, Claude was not called)" if result.baseline
+              else "(dry run: Claude was not called)")
         return
     print(f"\nModel: {result.model}")
     print(f"Recommendations sent: {len(result.recommendations)}")
@@ -80,7 +81,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     if args.demo:
         trades, broker = _demo_inputs(settings)
         kwargs.update(trades=trades, broker=broker)
-    result = check(settings, force=args.force, dry_run=args.dry_run, **kwargs)
+    result = check(settings, force=args.force, dry_run=args.dry_run,
+                   baseline=getattr(args, "baseline", False), **kwargs)
     _print_result(result)
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, default=str))
@@ -161,6 +163,41 @@ def cmd_orders(args: argparse.Namespace) -> int:
     for o in orders[-args.limit:]:
         print(_fmt_live_order(o))
     return 0
+
+
+def cmd_groww_check(args: argparse.Namespace) -> int:
+    """Check the live-trading assumptions against your Groww account (read-only by default)."""
+    from .groww import InstrumentTicks
+    from .groww_check import format_rows, live_test, read_only_checks, save
+    from .runner import make_groww, token_cache
+    settings = _settings(args)
+    if not settings.has_groww_credentials:
+        print("No Groww credentials in .env.")
+        return 1
+    if args.live_test and not (settings.groww_live_orders and args.i_understand_real_orders):
+        print("Refusing the live test: it places a REAL 1-share limit order (and a GTT) on Groww. "
+              "It needs GROWW_LIVE_ORDERS=true and --i-understand-real-orders.")
+        return 1
+    cache = token_cache(settings)
+    if settings.groww_access_token:
+        source = "GROWW_ACCESS_TOKEN in .env"
+    elif settings.groww_api_key and cache.get(settings.groww_api_key):
+        source = "cached token (no new generation used)"
+    else:
+        source = "newly generated from the API key (counts toward 150 a day)"
+    broker = make_groww(settings)
+    ticks = InstrumentTicks(settings.state_dir / "cache")
+    c = read_only_checks(broker, token_source=source, cache=cache, api_key=settings.groww_api_key,
+                         tick_fn=lambda sym: ticks.tick_size(sym, settings.groww_exchange))
+    if args.live_test:
+        print(f"Placing a REAL 1-share limit BUY of {args.live_test.upper()} {args.offset_pct:g}% below "
+              "the last price, then cancelling it...")
+        live_test(broker, args.live_test, offset_pct=args.offset_pct, c=c)
+    print(format_rows(c))
+    st = State(settings.state_dir / "state.json")
+    save(st, c, live=bool(args.live_test))
+    st.save()
+    return 0 if all(r["ok"] is not False for r in c.rows) else 2
 
 
 def cmd_gtt(args: argparse.Namespace) -> int:
@@ -476,6 +513,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--demo", action="store_true", help="use bundled sample trades/prices")
         sp.add_argument("--auto-trade", action="store_true", help="allow PAPER orders this run")
         sp.add_argument("--json", action="store_true", help="also print the result as JSON")
+        sp.add_argument("--baseline", action="store_true",
+                        help="record current trades as seen without calling Claude (after lost state)")
 
     sp = sub.add_parser("check", help="run one check now"); add_check_args(sp)
     sp.set_defaults(func=cmd_check)
@@ -494,6 +533,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--refresh", action="store_true")
     sp.add_argument("--limit", type=int, default=30)
     sp.set_defaults(func=cmd_orders)
+    sp = sub.add_parser("groww-check", help="verify live-trading assumptions on your Groww account")
+    sp.add_argument("--live-test", metavar="SYMBOL",
+                    help="also place a REAL 1-share limit buy below market (then cancel) and a test GTT")
+    sp.add_argument("--offset-pct", type=float, default=3.0, help="how far below the last price to rest the buy")
+    sp.add_argument("--i-understand-real-orders", action="store_true")
+    sp.set_defaults(func=cmd_groww_check)
     sp = sub.add_parser("gtt", help="show Groww GTT stop-losses; --sync updates them (live only)")
     sp.add_argument("--sync", action="store_true")
     sp.set_defaults(func=cmd_gtt)

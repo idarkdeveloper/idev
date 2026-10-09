@@ -134,6 +134,7 @@ class RunResult:
     fallback_used: bool = False
     stop: str | None = None  # end_turn, max_tokens, step_limit, refusal
     usage: Usage = field(default_factory=Usage)
+    baseline: bool = False  # trades recorded as seen without analysis (lost state)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -148,6 +149,7 @@ class RunResult:
             "fallback_used": self.fallback_used,
             "stop": self.stop,
             "usage": self.usage.to_dict(),
+            "baseline": self.baseline,
         }
 
 

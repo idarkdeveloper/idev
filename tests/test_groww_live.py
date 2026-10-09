@@ -496,3 +496,83 @@ def test_config_reads_slippage_and_gtt_toggle(tmp_path, monkeypatch):
     monkeypatch.setenv("MAX_SLIPPAGE_PCT", "12")
     with pytest.raises(SystemExit):
         load_settings()
+
+
+# --------------------------------------------------------------------------- #
+# 8. groww-check: verification you run yourself
+# --------------------------------------------------------------------------- #
+CHECK_ROUTES = {
+    ("GET", "/order/list"): ok({"order_list": []}),
+    ("GET", "/order-advance/list"): ok({"data": []}),
+}
+
+
+def test_groww_check_read_only_makes_no_writes(tmp_path):
+    from trading_agent.groww_check import format_rows, read_only_checks
+    sess = FakeSession({**routes(), **CHECK_ROUTES})
+    c = read_only_checks(GrowwBroker("tok", session=sess), token_source="cached token",
+                         tick_fn=lambda s: 0.10)
+    text = format_rows(c)
+    assert "[PASS] holdings" in text and "[PASS] sellable fields" in text and "sellable 8" in text
+    assert "[PASS] tick RELIANCE: tick size 0.1" in text and "[PASS] GTT list" in text
+    assert sess.writes() == []
+
+
+def test_groww_check_flags_missing_sellable_fields():
+    from trading_agent.groww_check import read_only_checks
+    sess = FakeSession({**routes({("GET", "/holdings/user"): ok({"holdings": [
+        {"trading_symbol": "TCS", "quantity": 3, "average_price": 1.0}]})}), **CHECK_ROUTES})
+    c = read_only_checks(GrowwBroker("tok", session=sess), token_source="env")
+    row = next(r for r in c.rows if r["check"] == "sellable fields")
+    assert row["ok"] is False and "demat_free_quantity" in row["detail"]
+
+
+def test_groww_check_live_test_refuses_unless_live():
+    from trading_agent.groww_check import live_test
+    sess = FakeSession({**routes(), **GTT_ROUTES})
+    with pytest.raises(LiveOrdersDisabled):
+        live_test(GrowwBroker("tok", session=sess, live_orders=False), "RELIANCE")
+    assert sess.calls == []
+
+
+def test_groww_check_live_test_places_and_cleans_up():
+    from trading_agent.groww_check import live_test
+    sess = FakeSession({**routes({
+        ("GET", "/order/status/reference/"): ok({"groww_order_id": "GMK1", "order_status": "OPEN"}),
+        ("GET", "/order/status/GMK1"): Seq(*[ok({"groww_order_id": "GMK1", "order_status": "OPEN"})] * 3,
+                                           ok({"groww_order_id": "GMK1", "order_status": "CANCELLED"})),
+        ("POST", "/order/cancel"): ok({"groww_order_id": "GMK1", "order_status": "CANCELLATION_REQUESTED"}),
+        ("GET", "/order-advance/status/CASH/GTT/internal/gtt_91a7f4"): ok(
+            {"smart_order_id": "gtt_91a7f4", "status": "ACTIVE", "trigger_price": "2318.20"}),
+    }), **GTT_ROUTES})
+    c = live_test(live_broker(sess), "RELIANCE", offset_pct=3)
+    res = {r["check"]: r for r in c.rows}
+    order = next(c_[2]["json"] for c_ in sess.calls if c_[1].endswith("/order/create"))
+    assert order["quantity"] == 1 and order["order_type"] == "LIMIT" and order["price"] == 2776.10  # 3% below
+    for name in ("live: place limit order", "live: status by reference", "live: order detail fields",
+                 "live: cancel order", "live: GTT create", "live: GTT modify", "live: GTT cancel"):
+        assert res[name]["ok"] is True, (name, res[name])
+    gtt = next(c_[2]["json"] for c_ in sess.calls if c_[1].endswith("/order-advance/create"))
+    assert gtt["quantity"] == 1 and gtt["trigger_price"] == "2289.60"  # 20% below the price
+    assert any(c_[1].endswith("/order/cancel") for c_ in sess.calls)
+    assert any(c_[1].endswith("/order-advance/cancel/CASH/GTT/gtt_91a7f4") for c_ in sess.calls)
+
+
+def test_cli_groww_check_refuses_live_test_without_both_switches(tmp_path, monkeypatch, capsys):
+    from trading_agent import cli
+    _isolated_env(tmp_path, monkeypatch, GROWW_ACCESS_TOKEN="tok", GROWW_LIVE_ORDERS="true")
+    assert cli.main(["groww-check", "--live-test", "RELIANCE"]) == 1  # missing the acknowledgement flag
+    assert "REAL 1-share" in capsys.readouterr().out
+    monkeypatch.setenv("GROWW_LIVE_ORDERS", "false")
+    assert cli.main(["groww-check", "--live-test", "RELIANCE", "--i-understand-real-orders"]) == 1
+
+
+def test_cli_baseline_marks_seen_without_claude(tmp_path, monkeypatch, capsys):
+    from trading_agent import cli
+    _isolated_env(tmp_path, monkeypatch, MARKET="in")
+    assert cli.main(["check", "--demo", "--baseline"]) == 0
+    st = State(tmp_path / "state" / "state.json")
+    assert len(st.data["seen"]) == 3 and st.data["runs"][-1]["baseline"] is True
+    assert "baseline" in capsys.readouterr().out
+    assert cli.main(["check", "--demo", "--dry-run"]) == 0
+    assert "No new disclosed trades" in capsys.readouterr().out

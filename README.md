@@ -118,6 +118,17 @@ GTT smart orders) refuses with `LiveOrdersDisabled` before touching the network 
   The dashboard has the toggle in Settings and shows each holding's GTT status. The
   toggle does nothing unless `GROWW_LIVE_ORDERS=true`, which the dashboard cannot set.
 
+**Check it against your account before relying on it.** These paths are tested offline
+against Groww's documented formats. `python -m trading_agent groww-check` reads your
+account to confirm the rest: token source and expiry, that holdings carry
+`demat_free_quantity` and `t1_quantity`, tick sizes, and that the order and GTT lists
+are readable. With `GROWW_LIVE_ORDERS=true`, `groww-check --live-test SYMBOL
+--i-understand-real-orders` places **real** but harmless orders: a 1-share limit buy 3%
+below the last price (`--offset-pct`), read back by id and by reference, then cancelled.
+If you hold a free share of SYMBOL, it also creates a 1-share GTT 20% below the price,
+raises it once and cancels it. Results go to `state/state.json` (`groww_checks`). If
+anything fails to cancel, the output says so and names the id to cancel in the Groww app.
+
 ## Which investors can I follow?
 
 `WATCH_INVESTOR` is matched against the **client name** in NSE bulk and block deals, or the
@@ -169,6 +180,7 @@ Everything the CLI does is also in the dashboard:
 | `index-history` | Built automatically when the signal lab or portfolio backtest uses a broad index |
 | `scorecard` | *Claude's track record* panel |
 | `groww-token` | *Test Groww connection* in Settings (the token itself is never shown) |
+| `groww-check` | CLI only: verifies live-trading assumptions on your account |
 | `orders`, `orders --refresh` | Order history (live orders show their Groww status) |
 | `gtt`, `gtt --sync` | *GTT stop* column in the portfolio, toggle in Settings |
 | `--market`, `.env` strategy keys | Settings: investor, disclosures, market, starting cash, order mode, notifications |
@@ -345,6 +357,11 @@ Setup, in the repository's **Settings → Secrets and variables → Actions**:
 Then open **Actions → trading-agent routine → Run workflow** (tick *dry_run* for a first
 look) and check the job log.
 
+If a scheduled run starts without saved state (first run, or the Actions cache was
+evicted after 7 days unused), it runs `check --baseline`: current deals are recorded as
+seen without calling Claude, so a month of old deals isn't re-sent as new. A manual run
+always analyses everything.
+
 ## How a check works
 
 1. Fetch the last 30 days of bulk and block deals (and insider filings if selected),
@@ -376,8 +393,15 @@ log says so instead of ending with a blank summary.
 ## Notes on the data
 
 NSE's JSON endpoints are public but undocumented; the client sends browser-like headers.
-Bulk/block deals are reliable. The insider (PIT) endpoint sometimes returns an empty list
-without a browser session, so treat `WATCH_SOURCE=insider` as best-effort.
+Bulk/block deals are reliable. Insider (PIT) filings moved in May 2026: NSE's old
+`api/corporates-pit` JSON ends on 2 May 2026, and newer filings are XBRL documents listed by
+`api/corporates-pit-gg`. The client reads both (the old feed only for dates before May
+2026). Each XBRL filing is downloaded once and its parsed rows are cached in
+`state/cache/nse_pit/` (about 1.5 KB a filing). NSE's archive host blocks bursts for about
+a minute, so filings are fetched one at a time with a short pause, at most 400 new ones
+per run, and a run stops early if NSE refuses; the rest are read on the next run. A
+30-day window is about 750 filings: the first run reads 400 (about 4 minutes), the next
+run the rest, and after that only new filings, which takes seconds.
 
 ## Development
 

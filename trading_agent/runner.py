@@ -93,7 +93,7 @@ def make_data_source(settings: Settings) -> Any:
     if settings.data_source == "nse":
         from .nse import NSEClient
 
-        return NSEClient()
+        return NSEClient(cache_dir=settings.state_dir / "cache")
     from .quiver import QuiverClient
 
     if not settings.quiver_api_key:
@@ -133,12 +133,14 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
           trades: list[DisclosedTrade] | None = None, broker: Broker | None = None,
           data: Any | None = None, notifier: Notifier | None = None,
           runner_factory: Any | None = None, momentum: Any | None = None,
-          context: Any | None = None) -> RunResult:
+          context: Any | None = None, baseline: bool = False) -> RunResult:
     """One pass of the routine.
 
     * ``trades`` overrides the data-source fetch (demo / tests).
     * ``force`` runs Claude even when nothing new was disclosed.
     * ``dry_run`` stops before calling Claude.
+    * ``baseline`` records every current trade as seen without calling Claude: used when
+      the saved state was lost, so a month of old deals isn't re-sent as new.
     """
     state = State(settings.state_dir / "state.json")
     broker = broker or make_broker(settings)
@@ -151,6 +153,15 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     new = state.new_trades(trades)
     result = RunResult(investor=settings.watch_investor, new_trades=new)
     log.info("%d disclosed trades for %s, %d new", len(trades), settings.watch_investor, len(new))
+
+    if baseline:
+        state.mark_seen(new)
+        result.skipped = result.baseline = True
+        state.record_run({"new_trades": len(new), "baseline": True})
+        record_equity(state, broker)
+        state.save()
+        log.warning("Baseline: %d current trades recorded as seen without analysis", len(new))
+        return result
 
     if not new and not force:
         result.skipped = True

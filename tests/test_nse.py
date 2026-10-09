@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
 
+import pytest
+import requests
+
 from trading_agent.nse import NSEClient, _iso, _norm_deal, _norm_insider
 from .conftest import FakeSession
 
@@ -78,3 +81,109 @@ def test_client_filters_by_investor_and_dedupes():
     assert [t.ticker for t in hist] == ["ZAGGLE"]
     # browser-like headers were sent
     assert "Mozilla" in sess.calls[-1][2]["headers"]["User-Agent"]
+
+
+PIT_XBRL = """<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:in-bse-co="http://www.bseindia.com/xbrl/co">
+  <in-bse-co:Symbol contextRef="MainI">DMART</in-bse-co:Symbol>
+  <in-bse-co:NameOfTheCompany contextRef="MainI">AVENUE SUPERMARTS LIMITED</in-bse-co:NameOfTheCompany>
+  <in-bse-co:DateOfFiling contextRef="MainI">2026-10-09</in-bse-co:DateOfFiling>
+  <in-bse-co:DisclosureUnderRegulation contextRef="MainI">Regulation 7 (2)</in-bse-co:DisclosureUnderRegulation>
+  <in-bse-co:CategoryOfPerson contextRef="Disclosure1">Promoters</in-bse-co:CategoryOfPerson>
+  <in-bse-co:NameOfThePerson contextRef="Disclosure1">RADHAKISHAN DAMANI</in-bse-co:NameOfThePerson>
+  <in-bse-co:SecuritiesAcquiredOrDisposedNumberOfSecurity contextRef="Disclosure1">4500</in-bse-co:SecuritiesAcquiredOrDisposedNumberOfSecurity>
+  <in-bse-co:SecuritiesAcquiredOrDisposedValueOfSecurity contextRef="Disclosure1">15075000</in-bse-co:SecuritiesAcquiredOrDisposedValueOfSecurity>
+  <in-bse-co:SecuritiesAcquiredOrDisposedTransactionType contextRef="Disclosure1">Buy</in-bse-co:SecuritiesAcquiredOrDisposedTransactionType>
+  <in-bse-co:DateOfAllotmentAdviceOrAcquisitionOfSharesOrSaleOfSharesSpecifyFromDate contextRef="Disclosure1">2026-10-07</in-bse-co:DateOfAllotmentAdviceOrAcquisitionOfSharesOrSaleOfSharesSpecifyFromDate>
+  <in-bse-co:DateOfIntimationToCompany contextRef="Disclosure1">2026-10-08</in-bse-co:DateOfIntimationToCompany>
+  <in-bse-co:ModeOfAcquisitionOrDisposal contextRef="Disclosure1">Market Purchase</in-bse-co:ModeOfAcquisitionOrDisposal>
+  <in-bse-co:NameOfThePerson contextRef="Disclosure2">GOPIKISHAN DAMANI</in-bse-co:NameOfThePerson>
+  <in-bse-co:SecuritiesAcquiredOrDisposedNumberOfSecurity contextRef="Disclosure2">100</in-bse-co:SecuritiesAcquiredOrDisposedNumberOfSecurity>
+  <in-bse-co:SecuritiesAcquiredOrDisposedTransactionType contextRef="Disclosure2">Pledge</in-bse-co:SecuritiesAcquiredOrDisposedTransactionType>
+  <in-bse-co:DateOfAllotmentAdviceOrAcquisitionOfSharesOrSaleOfSharesSpecifyFromDate contextRef="Disclosure2">2026-10-06</in-bse-co:DateOfAllotmentAdviceOrAcquisitionOfSharesOrSaleOfSharesSpecifyFromDate>
+</xbrli:xbrl>"""
+
+PIT_LIST = {"data": [
+    {"symbol": "DMART", "companyName": "AVENUE SUPERMARTS LIMITED", "regulation": "Regulation 7 (2)",
+     "broadcastDateTime": "09-Oct-2026 19:18:02",
+     "xmlFileName": "https://nsearchives.nseindia.com/corporate/xbrl/IT_1_WebXMLFile_A.xml"},
+    {"symbol": "BAD", "xmlFileName": "https://nsearchives.nseindia.com/corporate/xbrl/IT_2_WebXMLFile_B.xml"},
+]}
+
+
+def test_parse_pit_xbrl_filing():
+    from trading_agent.nse import parse_pit_xbrl
+    rows = parse_pit_xbrl(PIT_XBRL, PIT_LIST["data"][0])
+    assert [r.investor for r in rows] == ["RADHAKISHAN DAMANI", "GOPIKISHAN DAMANI"]
+    a, b = rows
+    assert a.ticker == "DMART" and a.transaction == "Purchase" and a.source == "insider"
+    assert a.transaction_date == "2026-10-07" and a.report_date == "2026-10-08"
+    assert a.size == "4500 sh (₹15075000)" and a.raw["category"] == "Promoters"
+    assert b.transaction == "Pledge" and b.report_date == "2026-10-09"  # falls back to filing date
+    with pytest.raises(ValueError):  # entity tricks are refused
+        parse_pit_xbrl('<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]><x>&a;</x>')
+
+
+def test_insider_feed_uses_xbrl_after_may_2026_and_caches(tmp_path):
+    from datetime import date
+    from .conftest import Seq
+    sess = FakeSession({
+        ("GET", "api/corporates-pit-gg"): PIT_LIST,
+        ("GET", "WebXMLFile_A.xml"): PIT_XBRL,
+        ("GET", "WebXMLFile_B.xml"): "<html>not xml",
+        ("GET", "api/corporates-pit"): {"data": [
+            {"symbol": "INFY", "acqName": "Salil Parekh", "tdpTransactionType": "Sell", "secAcq": "10",
+             "acqfromDt": "02-Apr-2026", "intimDt": "03-Apr-2026"}]},
+    })
+    sleeps = []
+    c = NSEClient(session=sess, cache_dir=tmp_path, sleep=sleeps.append)
+    rows = c.insider_trades(30, end=date(2026, 10, 9))
+    assert {r.investor for r in rows} == {"RADHAKISHAN DAMANI", "GOPIKISHAN DAMANI"}
+    assert not any("corporates-pit?" in u or u.endswith("corporates-pit") for _, u, _ in sess.calls)
+    assert (tmp_path / "nse_pit" / "IT_1_WebXMLFile_A.json").exists()
+    # cached: a second client downloads nothing but the list
+    sess2 = FakeSession({("GET", "api/corporates-pit-gg"): PIT_LIST, ("GET", "WebXMLFile_B.xml"): "<html>x",
+                         ("GET", "api/corporates-pit"): sess.routes[("GET", "api/corporates-pit")]})
+    c2 = NSEClient(session=sess2, cache_dir=tmp_path, sleep=sleeps.append)
+    assert len(c2.insider_trades(30, end=date(2026, 10, 9))) == 2
+    assert not any("WebXMLFile_A" in u for _, u, _ in sess2.calls)
+    # a window that starts before May 2026 also reads the old JSON feed
+    both = c2.trades_for_investor("parekh", "insider", days=200)
+    assert [t.ticker for t in both] == ["INFY"]
+    # watched investor matching works on the new feed
+    assert [t.ticker for t in c2.trades_for_investor("radhakishan", "insider")] == ["DMART"]
+
+
+def test_insider_feed_backs_off_when_nse_refuses(tmp_path):
+    from datetime import date
+    from .conftest import FakeResponse
+    files = [{"symbol": f"S{i}", "xmlFileName": f"https://nsearchives.nseindia.com/x/F{i}.xml"} for i in range(5)]
+
+    class Denied(FakeResponse):
+        def raise_for_status(self):
+            raise requests.HTTPError("403 Access Denied", response=self)
+
+    class Refusing(FakeSession):
+        def request(self, method, url, **kw):
+            if url.endswith(".xml"):
+                self.calls.append((method, url, kw))
+                return Denied("<HTML>Access Denied", 403)
+            return super().request(method, url, **kw)
+
+    sess = Refusing({("GET", "api/corporates-pit-gg"): {"data": files}})
+    sleeps = []
+    c = NSEClient(session=sess, cache_dir=tmp_path, sleep=sleeps.append)
+    assert c.insider_trades(10, end=date(2026, 10, 9)) == []
+    xml_calls = [u for _, u, _ in sess.calls if u.endswith(".xml")]
+    assert len(xml_calls) == 2 and 60 in sleeps  # one back-off, then stop for this run
+
+
+def test_insider_download_cap_per_run(tmp_path):
+    from datetime import date
+    files = [{"symbol": "DMART", "xmlFileName": f"https://nsearchives.nseindia.com/x/F{i}.xml"} for i in range(5)]
+    sess = FakeSession({("GET", "api/corporates-pit-gg"): {"data": files}, ("GET", ".xml"): PIT_XBRL})
+    sleeps = []
+    c = NSEClient(session=sess, cache_dir=tmp_path, max_new_downloads=3, sleep=sleeps.append)
+    c.insider_trades(10, end=date(2026, 10, 9))
+    assert len([u for _, u, _ in sess.calls if u.endswith(".xml")]) == 3
+    assert sleeps == [0.25, 0.25]  # pause between downloads, not before the first
