@@ -198,6 +198,19 @@
   .seg button { border: none; border-radius: 0; min-height: 34px; padding: 0 12px; font-size: 13px; font-weight: 400; }
   .seg button + button { border-left: 1px solid var(--color-divider); }
   .seg button.on { color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+  /* company suggestions under the ticker boxes */
+  .suggest { position: fixed; z-index: 30; display: none; background: var(--color-surface); border-radius: var(--radius-md);
+             box-shadow: var(--shadow-lg); padding: 4px; max-height: 340px; overflow-y: auto; overscroll-behavior: contain; }
+  .suggest.open { display: block; }
+  .suggest .opt { display: grid; grid-template-columns: minmax(84px, auto) minmax(0, 1fr); align-items: baseline; gap: 12px;
+                  padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+  .suggest .opt .sym { font-weight: 600; font-size: 13px; letter-spacing: .02em; white-space: nowrap; }
+  .suggest .opt .nm { font-size: 13px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .suggest .opt[aria-selected="true"] { background: color-mix(in srgb, var(--color-accent) 16%, transparent); }
+  .suggest .opt[aria-selected="true"] .nm { color: var(--color-text); }
+  .suggest mark { background: none; color: var(--color-accent); font-weight: 600; }
+  .suggest .none, .suggest .hint { padding: 8px 10px; font-size: 12px; color: var(--color-muted); }
+  .suggest .hint { border-top: 1px solid var(--color-divider); margin-top: 4px; padding-bottom: 4px; }
   .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; font-size: 13px; }
   .kv span:nth-child(even) { text-align: right; }
   .callout { padding: 10px 12px; border-radius: var(--radius-md); background: var(--color-neutral-900); font-size: 14px; }
@@ -302,7 +315,7 @@
         <form class="cardbody" id="tk-form" style="border-top:1px solid var(--line)">
           <h3>Paper order</h3>
           <div class="row">
-            <input id="tk-symbol" name="symbol" list="name-suggest" autocomplete="off" placeholder="Ticker (pick from the list)" style="flex:1 1 140px;text-transform:uppercase" required>
+            <input id="tk-symbol" name="symbol" autocomplete="off" placeholder="Ticker (pick from the list)" style="flex:1 1 140px;text-transform:uppercase" required>
             <div class="seg" role="group" aria-label="Side"><button type="button" class="on" data-side="buy">Buy</button><button type="button" data-side="sell">Sell</button></div>
             <input id="tk-amount" name="notional" type="number" min="0" step="any" placeholder="Amount" style="flex:1 1 120px">
             <span class="sub">or</span>
@@ -388,14 +401,14 @@
       <div class="card">
         <div class="cardhead"><h2>Look up a stock</h2></div>
         <form class="cardbody" id="lk-form">
-          <div class="row"><input id="lk-ticker" list="name-suggest" autocomplete="off" placeholder="Ticker or company name, e.g. Tata Steel" style="flex:1 1 160px"><button type="submit" class="small">Check</button></div>
+          <div class="row"><input id="lk-ticker" autocomplete="off" placeholder="Ticker or company name, e.g. Tata Steel" style="flex:1 1 160px"><button type="submit" class="small">Check</button></div>
           <div id="lk-result" class="sub">Momentum, latest price and NSE announcements.</div>
         </form>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Position size</h2></div>
         <form class="cardbody" id="sz-form">
-          <div class="row"><input id="sz-ticker" name="ticker" list="name-suggest" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 140px" required><button type="submit" class="small">Size it</button></div>
+          <div class="row"><input id="sz-ticker" name="ticker" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 140px" required><button type="submit" class="small">Size it</button></div>
           <div class="grid2" style="gap:10px">
             <div class="field"><label for="sz-risk">Risk per trade (% of equity)</label><input id="sz-risk" name="risk_pct" type="number" value="1" min="0.1" max="5" step="0.1"></div>
             <div class="field"><label for="sz-max">Max position (% of equity)</label><input id="sz-max" name="max_pct" type="number" value="10" min="1" max="50" step="1"></div>
@@ -449,7 +462,7 @@
     <div class="row group" style="flex-direction:row"><button type="button" class="danger small" id="btn-reset">Reset paper account</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
   </form>
 </dialog>
-<datalist id="name-suggest"></datalist>
+<div class="suggest" id="suggest" role="listbox" aria-label="Matching companies"></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -460,8 +473,10 @@
                    us:[["congress","Congress trades"],["insider","Insider filings"]]};
   const WHO = {promoter_insider:"Promoter", institution:"Institution", individual:"Individual", broker_desk:"Broker desk", corporate:"Corporate", unknown:"?"};
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-  const sym = () => S && S.settings.currency === "INR" ? "₹" : "$";
-  const money = (v, d=0) => v == null ? "n/a" : sym() + Number(v).toLocaleString(S.settings.currency === "INR" ? "en-IN" : "en-US", {maximumFractionDigits:d, minimumFractionDigits:d});
+  // Rupees until the first /api/state answer says otherwise (a lookup can finish before it).
+  const currency = () => (S && S.settings && S.settings.currency) || "INR";
+  const sym = () => currency() === "INR" ? "₹" : "$";
+  const money = (v, d=0) => v == null ? "n/a" : sym() + Number(v).toLocaleString(currency() === "INR" ? "en-IN" : "en-US", {maximumFractionDigits:d, minimumFractionDigits:d});
   const signed = (v, d=0) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + money(Math.abs(v), d);
   const pct = (v, d=1) => v == null ? "n/a" : (v >= 0 ? "+" : "") + (v*100).toFixed(d) + "%";
   const when = (iso) => { if(!iso) return ""; const dt = new Date(iso); return dt.toLocaleString(undefined,{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); };
@@ -1013,20 +1028,91 @@
     $("groww-test-result").textContent = "Testing…";
     try { const r = await api("/api/groww-test", {}); $("groww-test-result").textContent = r.message; } catch(e){ $("groww-test-result").textContent = e.message; }
   });
-  // Company-name suggestions for the ticker boxes: "tata st" offers TATASTEEL (Tata Steel Limited).
-  let suggestTimer = null, lastQuery = "";
-  ["lk-ticker", "sz-ticker", "tk-symbol"].forEach(id => $(id).addEventListener("input", (ev) => {
-    const q = ev.target.value.trim();
-    clearTimeout(suggestTimer);
-    if(q.length < 2 || q === lastQuery) return;
-    suggestTimer = setTimeout(async () => {
-      lastQuery = q;
-      try {
-        const hits = await api("/api/search?q=" + encodeURIComponent(q));
-        $("name-suggest").innerHTML = hits.map(h => `<option value="${esc(h.symbol)}">${esc(h.name)}</option>`).join("");
-      } catch(e){ /* suggestions are optional */ }
-    }, 200);
-  }));
+  // Company suggestions under the ticker boxes: a small listbox in the page's own style
+  // (the browser's datalist can't be styled). Up/Down move, Enter picks, Esc closes.
+  const sug = $("suggest"), sugCache = new Map();
+  let sugFor = null, sugItems = [], sugActive = -1, sugTimer = null, sugSeq = 0;
+  const hl = (text, q) => {
+    const i = text.toLowerCase().indexOf(q.toLowerCase());
+    return i < 0 || !q ? esc(text) : esc(text.slice(0, i)) + "<mark>" + esc(text.slice(i, i + q.length)) + "</mark>" + esc(text.slice(i + q.length));
+  };
+  function placeSuggest(){
+    if(!sugFor) return;
+    const r = sugFor.getBoundingClientRect(), w = Math.min(Math.max(r.width, 340), window.innerWidth - 16);
+    sug.style.width = w + "px";
+    sug.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + "px";
+    const below = window.innerHeight - r.bottom;
+    if(below < 220 && r.top > below){ sug.style.top = ""; sug.style.bottom = (window.innerHeight - r.top + 4) + "px"; }
+    else { sug.style.bottom = ""; sug.style.top = (r.bottom + 4) + "px"; }
+  }
+  function closeSuggest(){
+    sug.classList.remove("open"); sugItems = []; sugActive = -1;
+    if(sugFor){ sugFor.setAttribute("aria-expanded", "false"); sugFor.removeAttribute("aria-activedescendant"); }
+  }
+  function renderSuggest(q){
+    if(!sugFor) return;
+    sug.innerHTML = sugItems.length
+      ? sugItems.map((h, i) => `<div class="opt" role="option" id="sug-${i}" data-i="${i}" aria-selected="${i === sugActive}"><span class="sym">${hl(h.symbol, q)}</span><span class="nm">${hl(h.name, q)}</span></div>`).join("")
+        + `<div class="hint">↑ ↓ to move · Enter to choose · Esc to close</div>`
+      : `<div class="none">No matching companies on NSE</div>`;
+    sug.classList.add("open"); placeSuggest();
+    sugFor.setAttribute("aria-expanded", "true");
+    if(sugActive >= 0){ sugFor.setAttribute("aria-activedescendant", "sug-" + sugActive); $("sug-" + sugActive).scrollIntoView({block: "nearest"}); }
+    else sugFor.removeAttribute("aria-activedescendant");
+  }
+  function setActive(i){  // move the highlight without rebuilding the list
+    sugActive = i;
+    sug.querySelectorAll(".opt").forEach(o => o.setAttribute("aria-selected", String(Number(o.dataset.i) === i)));
+    if(i >= 0){ sugFor.setAttribute("aria-activedescendant", "sug-" + i); $("sug-" + i).scrollIntoView({block: "nearest"}); }
+  }
+  function pickSuggest(i){
+    const h = sugItems[i], input = sugFor;
+    if(!h || !input) return;
+    input.value = h.symbol; closeSuggest();
+    if(input.id === "lk-ticker") lookup(h.symbol);
+    else input.focus();
+  }
+  async function fetchSuggest(q){
+    const seq = ++sugSeq;
+    let hits = sugCache.get(q.toLowerCase());
+    if(!hits){
+      try { hits = await api("/api/search?q=" + encodeURIComponent(q)); sugCache.set(q.toLowerCase(), hits); }
+      catch(e){ hits = []; }
+    }
+    if(seq !== sugSeq || !sugFor || sugFor.value.trim() !== q) return;  // a newer keystroke won
+    sugItems = hits; sugActive = hits.length ? 0 : -1; renderSuggest(q);
+  }
+  ["lk-ticker", "sz-ticker", "tk-symbol"].forEach(id => {
+    const input = $(id);
+    input.setAttribute("role", "combobox"); input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-controls", "suggest"); input.setAttribute("aria-expanded", "false");
+    input.addEventListener("input", () => {
+      sugFor = input; const q = input.value.trim();
+      clearTimeout(sugTimer);
+      if(q.length < 2){ closeSuggest(); return; }
+      sugTimer = setTimeout(() => fetchSuggest(q), 150);
+    });
+    input.addEventListener("keydown", (ev) => {
+      if(sugFor !== input || !sug.classList.contains("open")) return;
+      if(ev.key === "ArrowDown" || ev.key === "ArrowUp"){
+        ev.preventDefault(); if(!sugItems.length) return;
+        setActive((sugActive + (ev.key === "ArrowDown" ? 1 : -1) + sugItems.length) % sugItems.length);
+      } else if(ev.key === "Enter" && sugActive >= 0){ ev.preventDefault(); pickSuggest(sugActive); }
+      else if(ev.key === "Escape"){ ev.preventDefault(); closeSuggest(); }
+      else if(ev.key === "Tab"){ closeSuggest(); }
+    });
+    input.addEventListener("blur", () => setTimeout(() => { if(document.activeElement !== input) closeSuggest(); }, 120));
+  });
+  sug.addEventListener("mousedown", (ev) => {  // mousedown, so the input keeps focus until the pick
+    const o = ev.target.closest(".opt"); if(!o) return;
+    ev.preventDefault(); pickSuggest(Number(o.dataset.i));
+  });
+  sug.addEventListener("mousemove", (ev) => {
+    const o = ev.target.closest(".opt"); if(!o || Number(o.dataset.i) === sugActive) return;
+    setActive(Number(o.dataset.i));
+  });
+  window.addEventListener("resize", placeSuggest);
+  window.addEventListener("scroll", () => { if(sug.classList.contains("open")) placeSuggest(); }, {passive: true});
 
   async function lookup(t){
     $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
