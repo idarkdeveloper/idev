@@ -76,6 +76,51 @@ congressional (STOCK Act) and SEC insider filings, which lag the real trade by d
 }
 
 
+# USD per million tokens: (input, output, cache read). Cache writes (5-minute TTL) bill at
+# 1.25x input. First-party API rates; used only to estimate what a check cost.
+PRICES_PER_MTOK: dict[str, tuple[float, float, float]] = {
+    "claude-opus-5-5": (4.0, 20.0, 0.20),
+    "claude-opus-5": (5.0, 25.0, 0.50),
+    "claude-opus-4-8": (5.0, 25.0, 0.50),
+    "claude-sonnet-5-5": (2.0, 10.0, 0.20),
+    "claude-fable-5-1": (10.0, 50.0, 0.25),
+    "claude-haiku-5-5": (0.10, 0.50, 0.01),
+}
+
+
+@dataclass
+class Usage:
+    requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost_usd: float | None = 0.0
+
+    def add(self, model: str | None, usage: Any) -> None:
+        if usage is None:
+            return
+        n = {k: int(getattr(usage, k, 0) or 0) for k in
+             ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
+        self.requests += 1
+        self.input_tokens += n["input_tokens"]
+        self.output_tokens += n["output_tokens"]
+        self.cache_read_tokens += n["cache_read_input_tokens"]
+        self.cache_write_tokens += n["cache_creation_input_tokens"]
+        price = PRICES_PER_MTOK.get(model or "")
+        if price is None or self.cost_usd is None:
+            self.cost_usd = None  # unknown model: don't guess
+            return
+        inp, out, read = price
+        self.cost_usd += (n["input_tokens"] * inp + n["output_tokens"] * out + n["cache_read_input_tokens"] * read
+                          + n["cache_creation_input_tokens"] * inp * 1.25) / 1e6
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"requests": self.requests, "input_tokens": self.input_tokens, "output_tokens": self.output_tokens,
+                "cache_read_tokens": self.cache_read_tokens, "cache_write_tokens": self.cache_write_tokens,
+                "cost_usd": round(self.cost_usd, 4) if self.cost_usd is not None else None}
+
+
 @dataclass
 class RunResult:
     investor: str
@@ -86,6 +131,9 @@ class RunResult:
     model: str | None = None
     skipped: bool = False
     refusal: bool = False
+    fallback_used: bool = False
+    stop: str | None = None  # end_turn, max_tokens, step_limit, refusal
+    usage: Usage = field(default_factory=Usage)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -97,6 +145,9 @@ class RunResult:
             "model": self.model,
             "skipped": self.skipped,
             "refusal": self.refusal,
+            "fallback_used": self.fallback_used,
+            "stop": self.stop,
+            "usage": self.usage.to_dict(),
         }
 
 
@@ -335,6 +386,9 @@ def build_user_message(ctx: AgentContext) -> str:
     )
 
 
+MAX_STEPS = 20
+
+
 def run_agent(ctx: AgentContext, client: anthropic.Anthropic | None = None,
               runner_factory: Any | None = None) -> RunResult:
     """Drive one Claude run over ``ctx.result.new_trades``.
@@ -353,7 +407,10 @@ def run_agent(ctx: AgentContext, client: anthropic.Anthropic | None = None,
         tools=tools,
         messages=[{"role": "user", "content": build_user_message(ctx)}],
         output_config={"effort": "high"},
-        max_iterations=20,
+        max_iterations=MAX_STEPS,
+        # Each step resends the whole conversation; caching the growing prefix makes the
+        # repeated part bill at the cache-read rate instead of full input price.
+        cache_control={"type": "ephemeral"},
     )
     # Server-side refusal fallback: if a safety classifier declines, the API re-runs
     # the request on a fallback model inside the same call.
@@ -366,16 +423,29 @@ def run_agent(ctx: AgentContext, client: anthropic.Anthropic | None = None,
     last = None
     for message in runner:
         last = message
+        usage = getattr(message, "usage", None)
+        ctx.result.usage.add(getattr(message, "model", None), usage)
+        if any(getattr(i, "type", None) == "fallback_message" for i in (getattr(usage, "iterations", None) or [])):
+            ctx.result.fallback_used = True
     if last is None:
         return ctx.result
 
     ctx.result.model = getattr(last, "model", None)
-    if getattr(last, "stop_reason", None) == "refusal":
+    stop = getattr(last, "stop_reason", None)
+    if stop == "refusal":
         ctx.result.refusal = True
+        ctx.result.stop = "refusal"
         ctx.result.final_text = "Claude declined this request (stop_reason=refusal)."
         return ctx.result
 
-    ctx.result.final_text = "\n".join(
-        b.text for b in last.content if getattr(b, "type", None) == "text"
-    ).strip()
+    text = "\n".join(b.text for b in last.content if getattr(b, "type", None) == "text").strip()
+    if stop == "tool_use":  # the runner stopped at max_iterations with a tool call pending
+        ctx.result.stop = "step_limit"
+        text = (text + "\n\n" if text else "") + f"(Stopped after {MAX_STEPS} steps before Claude finished.)"
+    elif stop == "max_tokens":
+        ctx.result.stop = "max_tokens"
+        text = (text + "\n\n" if text else "") + "(Claude's reply hit the output limit and was cut short.)"
+    else:
+        ctx.result.stop = stop
+    ctx.result.final_text = text
     return ctx.result
