@@ -93,6 +93,7 @@ class App:
         self.last_signal_lab: dict[str, Any] | None = None
         self._my_portfolio: dict[str, Any] | None = None
         self._names: Any | None = None  # CompanyNames, built on first use
+        self._news: Any | None = None  # NewsService, built on first use
         self._my_portfolio_at = 0.0
         self.demo_trades = demo_trades
         self._deals: list[DisclosedTrade] | None = demo_trades
@@ -352,6 +353,16 @@ class App:
             self._names = CompanyNames(self.settings.state_dir / "cache")
         return self._names
 
+    @property
+    def news(self) -> Any | None:
+        """Headlines + tags for the look-up; none in demo mode (no network needed there)."""
+        if self.demo_trades is not None:
+            return None
+        if self._news is None:
+            from .news import NewsService
+            self._news = NewsService(self.settings)
+        return self._news
+
     def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         n = self.names
         return n.search(query, limit) if n is not None else []
@@ -380,6 +391,12 @@ class App:
                 out["announcements"] = data.announcements(ticker, limit=8)
             except Exception as e:  # noqa: BLE001
                 out["announcements_error"] = str(e)
+        out["news"] = None
+        if self.news is not None:
+            try:
+                out["news"] = self.news.for_symbol(ticker, company)
+            except Exception as e:  # noqa: BLE001 - headlines are a nicety, never a failed look-up
+                out["news"] = {"items": [], "errors": [f"{type(e).__name__}: {e}"], "tagger": "none"}
         try:
             out["price"] = self.broker.latest_price(ticker)
         except Exception:  # noqa: BLE001

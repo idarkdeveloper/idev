@@ -475,6 +475,43 @@ def cmd_momentum(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_news(args: argparse.Namespace) -> int:
+    from .news import NewsService, make_tagger
+    settings = _settings(args)
+    if args.check_tagger:
+        tagger = make_tagger(settings)
+        print(f"NEWS_TAGGER={settings.news_tagger}: active tagger is {tagger.name}.")
+        if settings.news_tagger in ("auto", "ollama"):
+            from .news import OllamaTagger
+            o = OllamaTagger(settings.ollama_url, settings.ollama_model)
+            if o.available():
+                print(f"Ollama at {settings.ollama_url} is running and has {settings.ollama_model}.")
+            else:
+                print(f"Ollama at {settings.ollama_url} is not ready for {settings.ollama_model}. "
+                      f"Start it with `ollama serve` and fetch the model with `ollama pull {settings.ollama_model}`.")
+        elif settings.news_tagger == "claude":
+            print(f"Claude ({settings.news_claude_model}) labels headlines; this uses your API credit.")
+        return 0
+    if not args.symbol:
+        print("Give a SYMBOL, or use --check-tagger.")
+        return 2
+    symbol, name = args.symbol.upper(), None
+    svc = NewsService(settings)
+    try:
+        from .instruments import CompanyNames
+        symbol, name = CompanyNames(settings.state_dir / "cache").resolve(args.symbol)
+    except Exception:  # noqa: BLE001 - names are a nicety
+        pass
+    res = svc.for_symbol(symbol, name)
+    print(f"{symbol}{' - ' + name if name else ''}: {len(res['items'])} headline(s), last 7 days (tagger: {res['tagger']})")
+    for i in res["items"]:
+        tag = f"{i['sentiment']}/{i['event']}/{i['confidence']}" if i["sentiment"] else "untagged"
+        print(f"  {i['published'][:16].replace('T', ' ')}  {i['source']}  [{tag}]\n    {i['title']}\n    {i['link']}")
+    for e in res["errors"]:
+        print(f"  note: {e}")
+    return 0
+
+
 def cmd_screen(args: argparse.Namespace) -> int:
     """Rank an NSE index universe on momentum, trend, low volatility and liquidity."""
     from .runner import free_prices
@@ -663,7 +700,12 @@ def cmd_watch(args: argparse.Namespace) -> int:
     broker = make_broker(settings)
     notifier = make_notifier(settings)
     from .runner import free_prices
-    w = Watcher(settings, every=args.every, window=(args.window_start, args.window_end),
+    news = None
+    if settings.market == "in":
+        from .news import NewsService
+        from .instruments import CompanyNames
+        news = NewsService(settings, names=CompanyNames(settings.state_dir / "cache"))
+    w = Watcher(settings, every=args.every, news=news, window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
                 auto_exit=settings.auto_trade,
                 holidays=_market_holidays(settings),
@@ -755,6 +797,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("momentum", help="momentum stats for one or more tickers")
     sp.add_argument("tickers", nargs="+")
     sp.set_defaults(func=cmd_momentum)
+    sp = sub.add_parser("news", help="recent headlines for a stock, tagged positive/neutral/negative")
+    sp.add_argument("symbol", nargs="?")
+    sp.add_argument("--check-tagger", action="store_true", help="show which tagger is active and whether Ollama is ready")
+    sp.set_defaults(func=cmd_news)
     sp = sub.add_parser("screen", help="rank an NSE index on momentum, trend, low vol, liquidity")
     sp.add_argument("--universe", default="NIFTY200", help="NIFTY50 | NIFTY100 | NIFTY200 | NIFTY500 | NIFTYMIDCAP150 | NIFTYSMALLCAP250")
     sp.add_argument("--top", type=int, default=20)

@@ -42,7 +42,8 @@ class Watcher:
                  tz: tzinfo = IST, check_fn: Callable[[], Any] | None = None,
                  data: Any | None = None, broker: Any | None = None, notifier: Any | None = None,
                  weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False,
-                 holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake):
+                 holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
+                 news: Any | None = None):
         self.settings = settings
         self._prices = prices  # object with .history(symbol, range) for ATR-based stops
         self.auto_exit = auto_exit  # sell paper positions that hit their trailing stop
@@ -55,6 +56,7 @@ class Watcher:
         self._awake_on: bool | None = None
         self._check_fn = check_fn
         self._data = data
+        self._news = news  # NewsService: negative headlines for held stocks
         self._broker = broker
         self._notifier = notifier
         self._stop = threading.Event()
@@ -107,6 +109,35 @@ class Watcher:
             if self._notifier is not None:
                 body = "\n".join(f"{a['at']} {a['symbol']} [{a['category']}] {a['text']}" for a in fresh)
                 self._notifier.send(f"[NEWS] {len(fresh)} new announcement(s)", body)
+        return fresh
+
+    def poll_news(self) -> list[dict[str, Any]]:
+        """Notify once per headline that is negative with medium/high confidence, for held or recently
+        recommended stocks. Fetching is cached and each headline is tagged once, so a tick is cheap."""
+        if self._news is None:
+            return []
+        from .news import is_alert
+        st = State(self.settings.state_dir / "state.json")
+        seen = st.data.setdefault("seen_news", {})
+        fresh: list[dict[str, Any]] = []
+        for t in self.interesting_tickers():
+            try:
+                items = self._news.for_symbol(t)["items"]
+            except Exception as e:  # noqa: BLE001
+                log.warning("news for %s failed: %s", t, e)
+                continue
+            for i in items:
+                if is_alert(i) and i["id"] not in seen:
+                    seen[i["id"]] = i["published"]
+                    fresh.append({**i, "symbol": t})
+        if fresh:
+            st.save()
+            if self._notifier is not None:
+                for i in fresh:
+                    self._notifier.send(f"[NEWS] {i['symbol']}: {i['title']}",
+                                        f"{i['source']}, {i['published']}\n{i['link']}\n"
+                                        f"Tagged {i['sentiment']} ({i['event']}, {i['confidence']} confidence) by a "
+                                        "language model; headlines can be wrong or late.")
         return fresh
 
     def check_trailing_stops(self) -> list[dict[str, Any]]:
@@ -178,6 +209,7 @@ class Watcher:
             log.exception("watch check failed")
             info["check_error"] = f"{type(e).__name__}: {e}"
         info["new_announcements"] = self.poll_announcements()
+        info["negative_news"] = self.poll_news()
         info["stop_hits"] = self.check_trailing_stops()
         live = self.sync_live()
         if live is not None:

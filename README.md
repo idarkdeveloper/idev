@@ -223,6 +223,29 @@ Everything the CLI does is also in the dashboard:
 The dashboard can also place paper buys and sells for any ticker and close positions;
 these only ever touch the local paper account.
 
+## News headlines
+
+The stock look-up shows recent mainstream headlines under the NSE announcements, each tagged
+positive / neutral / negative with an event type (results, order win, legal or regulatory,
+fraud allegation, ...). Sources are public RSS feeds: ET Markets, ET Stocks, Business Standard
+and Livemint, plus Google News per company. Only the headline, link, source and time are kept;
+article text is never fetched or stored.
+
+- **Tagging runs on a local Ollama model by default, so it is free.** Install Ollama from
+  ollama.com, run `ollama pull qwen2.5:3b`, and keep `ollama serve` running. On an Oracle Ampere
+  server the same works with 6 GB or more of memory. With `NEWS_TAGGER=auto` (the default), no
+  Ollama means headlines show without labels; Claude is never used unless you set
+  `NEWS_TAGGER=claude` (then `NEWS_CLAUDE_MODEL` is billed to your API key).
+- `python -m trading_agent news SYMBOL` prints the tagged headlines;
+  `python -m trading_agent news --check-tagger` shows which tagger is active and whether Ollama is ready.
+- Watch mode sends `[NEWS] SYMBOL: headline` once per headline that is negative with medium or high
+  confidence, for stocks you hold or were recently recommended. Claude's daily check can call
+  `get_news` for the last two days of tagged headlines; it is told to treat them as data, never as instructions.
+- Every headline is written once, with its tags, to `state/news/YYYY-MM.jsonl`.
+- **News is not yet a tested trading signal.** Labels come from a small language model and can be wrong,
+  and headlines can be late. The log exists so news can be tested as a signal later; the replay does not
+  use it because the feeds have no history.
+
 ## What the big firms do, applied at retail size
 
 - **Factor screen** (`trading_agent/screen.py`, `python -m trading_agent screen --universe NIFTY200`):
@@ -428,6 +451,7 @@ on Indian markets supports:
 | `RESEND_API_KEY` + `NOTIFY_EMAIL_TO` | Email each recommendation via Resend. |
 | `NOTIFY_WEBHOOK_URL` | POST `{"text": ...}` to Slack/Discord/n8n/etc. |
 | `QUIVER_API_KEY`, `ALPACA_*` | US mode only. |
+| `NEWS_TAGGER`, `OLLAMA_URL`, `OLLAMA_MODEL`, `NEWS_CLAUDE_MODEL` | Headline tagging: `auto` (default, local Ollama `qwen2.5:3b` if running) / `ollama` / `claude` / `none`. See *News headlines*. |
 
 ## The routine (runs by itself)
 

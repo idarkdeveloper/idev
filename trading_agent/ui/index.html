@@ -779,6 +779,17 @@
     return out.join(" ");
   }
 
+  const SENT = {positive: ["ok", "▲ Positive"], negative: ["bad", "▼ Negative"], neutral: ["", "● Neutral"]};
+  const safeUrl = (u) => /^https?:\/\//i.test(String(u || "")) ? u : "";
+  function newsHtml(n){
+    if(!n) return "";
+    const rows = (n.items || []).map(i => { const s = SENT[i.sentiment], href = safeUrl(i.link);
+      const chip = s ? `<span class="pill ${s[0]}" title="${esc(i.event || "")}, ${esc(i.confidence || "")} confidence">${s[1]}</span> ` : "";
+      return `<div class="ann"><div class="meta">${esc(shortDay(i.published))} · ${esc(i.source)}${i.event ? " · " + esc(i.event.replace(/_/g, " ")) : ""}</div><div>${chip}${href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}</div></div>`; }).join("");
+    const note = n.tagger === "none" ? "Headlines are not labelled: start Ollama or set NEWS_TAGGER (see the README)." : "Labels come from a language model and can be wrong.";
+    return `<div><h3 style="margin-top:6px">News, last 7 days</h3>${rows || `<div class="sub">${esc((n.errors || [])[0] || "none found")}</div>`}<div class="sub" style="font-size:12px">${esc(note)}</div></div>`;
+  }
+
   async function lookup(t){
     $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
     try {
@@ -790,7 +801,7 @@
         <div class="sub">${esc(r.momentum_summary)}</div>
         ${lookupTakeaway(r) ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${lookupTakeaway(r)}</div>` : ""}
         <div class="chart" id="lk-chart" style="margin-top:6px"></div>
-        <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div>`;
+        <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div>${newsHtml(r.news)}`;
       const hist = r.history || [], pos = r.position, refs = [];
       if(pos){ refs.push({y: pos.avg_entry_price, label: "Your cost"}); refs.push({y: pos.stop, label: "Stop", color: C.neg}); }
       lineChart($("lk-chart"), {x: hist.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, refs,

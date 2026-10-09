@@ -128,6 +128,9 @@ window.TA = (function(){
                    [/penalty|show cause|adjudicat|settlement order|sebi order|levied|fine imposed/i, "a regulatory order or penalty"]];
     const hits = flags.filter(([re]) => find(re)).map(([, txt]) => txt);
     if(hits.length) out.push(`Also in the last two months: ${hits.join(", ")}. Worth a look.`);
+    const bad = ((r.news && r.news.items) || []).find(n => n.sentiment === "negative" && (n.confidence === "medium" || n.confidence === "high")
+                                                            && (d => d != null && d <= 3)(daysAgo(n.published, now)));
+    if(bad) out.push(`Negative news on ${shortDay(bad.published)} (${esc(bad.source)}): "${esc(clip(bad.title, 110))}". Read it before buying.`);
     const pos = r.position;
     if(pos && r.price){
       const pl = r.price / pos.avg_entry_price - 1, room = pos.stop ? r.price / pos.stop - 1 : null;

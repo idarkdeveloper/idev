@@ -198,8 +198,13 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
         momentum = momentum or MomentumScreen(prices)
         context = context or GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache",
                                                        cache_ttl=900))
+    news = None
+    if settings.market == "in":
+        from .news import NewsService
+        from .instruments import CompanyNames
+        news = NewsService(settings, names=CompanyNames(settings.state_dir / "cache"))
     ctx = AgentContext(settings=settings, broker=broker, data=data, notifier=notifier,
-                       state=state, result=result, momentum=momentum, context=context)
+                       state=state, result=result, momentum=momentum, context=context, news=news)
     run_agent(ctx, runner_factory=runner_factory)
     # Only remember trades once they were actually analysed, so a failed API call
     # (bad key, outage) is retried on the next run instead of silently dropped.

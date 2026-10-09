@@ -68,6 +68,11 @@ class Settings:
     groww_proxy_url: str | None = None  # send Groww calls through this fixed-IP proxy (e.g. from GitHub Actions)
     # Needed when the API key is not scoped to one workspace (the API then asks for it).
     anthropic_workspace_id: str | None = None
+    # News headline tagging: auto = local Ollama when it is running, else untagged (never Claude implicitly)
+    news_tagger: str = "auto"  # auto | ollama | claude | none
+    ollama_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen2.5:3b"
+    news_claude_model: str = "claude-haiku-4-5"
 
     @property
     def use_alpaca(self) -> bool:
@@ -116,6 +121,9 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         raise SystemExit("MAX_SLIPPAGE_PCT must be a number (percent), e.g. 0.5") from None
     if not 0 < slippage <= 5:
         raise SystemExit(f"MAX_SLIPPAGE_PCT must be between 0 and 5 percent, got {slippage}")
+    news_tagger = (env("NEWS_TAGGER") or "auto").lower()
+    if news_tagger not in {"auto", "ollama", "claude", "none"}:
+        raise SystemExit(f"NEWS_TAGGER must be auto, ollama, claude or none, got {news_tagger!r}")
     data_source = (env("DATA_SOURCE") or ("nse" if market == "in" else "quiver")).lower()
     default_investor = "ASHISH KACHOLIA" if market == "in" else "Nancy Pelosi"
     default_source = "deals" if data_source == "nse" else "congress"
@@ -149,4 +157,8 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         groww_allowed_ip=env("GROWW_ALLOWED_IP") or None,
         groww_proxy_url=env("GROWW_PROXY_URL") or None,
         anthropic_workspace_id=env("ANTHROPIC_WORKSPACE_ID") or None,
+        news_tagger=news_tagger,
+        ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),
+        ollama_model=env("OLLAMA_MODEL") or "qwen2.5:3b",
+        news_claude_model=env("NEWS_CLAUDE_MODEL") or "claude-haiku-4-5",
     )
