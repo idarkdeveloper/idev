@@ -331,7 +331,7 @@ def _comparison(base: dict[str, Any], universe: str | None) -> tuple[list[float 
         return None, {"symbol": None, "kind": None, "note": "no comparison curve was available"}
     if sym.startswith("^"):
         return bench, {"symbol": sym, "kind": "price index", "note": "a price index without dividends"}
-    if expected is None and (universe or "").upper() == "NIFTY50":
+    if expected is None and (universe or "").upper() == "NIFTY50" and sym.upper() == "NIFTYBEES":
         return bench, {"symbol": sym, "kind": "index fund", "note": ""}
     why = (f"the {expected} fund didn't exist for the whole window" if expected
            else "this universe has no index fund of its own")
@@ -410,7 +410,7 @@ def format_validation(v: dict[str, Any]) -> str:
         lines.append(f"  {y['year']:<6}{str(y['chosen_top'] or '-'):>7}{pct(y['return'])}{pct(y['fund_return'])}{flag}")
     if wf["years"]:
         lines.append(f"  {'all':<6}{'':>7}{pct(wf['oos_return'])}{pct(wf['fund_return'])}   "
-                     f"(beat the fund in {wf['beat_years']} of {len(wf['years'])} years)")
+                     f"(beat the fund in {wf['beat_years']} of {wf.get('used_years', len(wf['years']))} years used)")
     c = v.get("comparison") or {}
     if d["probability"] is not None:
         lines.append(f"Odds it truly beats {c.get('symbol')} after {d['trials']} tries: {d['probability']*100:.0f}% "

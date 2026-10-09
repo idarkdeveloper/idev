@@ -130,8 +130,8 @@ def _year_bounds(dates: list[str]) -> list[list[Any]]:
         bounds[1][1] = bounds[0][1]
         bounds = bounds[1:]
     for b in bounds:
-        # only a year cut short by the end of the data can be partial
-        b[3] = b[3] and int(dates[b[2]][5:7]) - int(dates[b[1]][5:7]) < 11 and dates[b[2]][:4] == dates[b[1]][:4]
+        # the last year is partial unless the data runs into the next year (Jan to Dec alone is 11 months)
+        b[3] = b[3] and dates[b[2]][:4] == dates[b[1]][:4]
     return bounds
 
 
@@ -173,4 +173,4 @@ def walk_forward(runs: dict[int, list[float | None]], dates: list[str],
             beat += r > fr
     return {"candidates": tops, "years": out, "oos_return": oos - 1 if used else None,
             "fund_return": fund - 1 if used and fund_curve is not None else None,
-            "beat_years": beat, "full_years": full}
+            "beat_years": beat, "full_years": full, "used_years": used}

@@ -313,3 +313,23 @@ def test_format_validation_reads_in_plain_english():
     v = validate_factor_backtest(lambda t: dict(r), 20, base=r, universe="NIFTYMIDCAP150")
     text = format_validation(v)
     assert "Skill or luck?" in text and "truly beats" in text and "Monte Carlo" in text and "2022" in text
+
+
+def test_a_jan_to_dec_final_year_is_partial_and_nifty50_fund_is_exact():
+    from trading_agent.validation import walk_forward
+    from trading_agent.factor_backtest import _comparison
+
+    dates = [f"{y}-{m:02d}-01" for y in (2022, 2023, 2024) for m in range(1, 13)]
+    dates = dates[:-11] + ["2024-12-01"]  # the data stops on 1 Dec 2024 after starting January 2024
+    dates = [d for d in dates if not d.startswith("2024")] + [f"2024-{m:02d}-01" for m in range(1, 13)]
+    curve = [100 * 1.01 ** i for i in range(len(dates))]
+    wf = walk_forward({10: curve, 20: curve}, dates, curve)
+    last = wf["years"][-1]
+    assert last["year"] == 2024 and last["partial"] is True
+    assert wf["used_years"] == len(wf["years"])
+    run = {"benchmark_symbol": "BANKBEES", "index_fund_symbol": None, "index_fund": None,
+           "benchmark": curve, "price_index_symbol": None}
+    _, label = _comparison(run, universe="NIFTY50")
+    assert label["kind"] == "other benchmark"  # BANKBEES is not the NIFTY 50 fund
+    run["benchmark_symbol"] = "NIFTYBEES"
+    assert _comparison(run, universe="NIFTY50")[1]["kind"] == "index fund"
