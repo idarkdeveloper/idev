@@ -854,8 +854,20 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """Skip the traceback when the browser drops a request mid-reply (page reload, tab closed,
+    a poll cancelled). Windows reports it as WinError 10053; nothing is lost."""
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        import sys
+        if isinstance(sys.exc_info()[1], (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            log.debug("client %s disconnected mid-reply", client_address)
+            return
+        super().handle_error(request, client_address)
+
+
 def make_server(app: App, host: str = "127.0.0.1", port: int = 8787) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), make_handler(app))
+    server = _QuietServer((host, port), make_handler(app))
     server.daemon_threads = True
     return server
 

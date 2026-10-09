@@ -327,3 +327,19 @@ def test_forward_test_appears_in_the_dashboard(server):
     f = st["forward"]
     assert f["universe"] == "NIFTYMIDCAP150" and f["benchmark"] == "MID150BEES" and f["days"] == 1
     assert {h["symbol"] for h in f["holdings"]} == {"A", "B"} and f["last_rebalance"] == "2026-10"
+
+
+def test_dropped_connection_is_quiet(capsys):
+    from trading_agent.ui import _QuietServer
+
+    srv = _QuietServer.__new__(_QuietServer)
+    try:
+        raise ConnectionAbortedError(10053, "aborted by the software in your host machine")
+    except ConnectionAbortedError:
+        srv.handle_error(None, ("127.0.0.1", 52352))
+    assert "Traceback" not in capsys.readouterr().err
+    try:
+        raise ValueError("a real bug")
+    except ValueError:
+        srv.handle_error(None, ("127.0.0.1", 52352))
+    assert "a real bug" in capsys.readouterr().err  # real errors still print
