@@ -217,6 +217,7 @@ class NSEClient:
         self._warm = False
         # Insider filings never change once filed, so their parsed rows are cached by file name.
         self.pit_cache = Path(cache_dir) / "nse_pit" if cache_dir else None
+        self.cache_dir = Path(cache_dir) if cache_dir else None
         self._pit_mem: dict[str, list[DisclosedTrade]] = {}
         self.max_insider_filings = max_insider_filings
         self.max_new_downloads = max_new_downloads  # the rest wait for the next run
@@ -409,6 +410,24 @@ class NSEClient:
         out = [_norm_announcement(r) for r in rows]
         out.sort(key=lambda a: a["at"], reverse=True)
         return out[:limit]
+
+    def announcement_history(self, symbol: str, max_age_s: float = 86400.0) -> list[dict[str, Any]]:
+        """Every NSE announcement for one company, newest first (back to 2004 for old listings).
+
+        NSE's date-range query times out, but the per-symbol query returns the whole history,
+        so Replay fetches it once a day and slices it at its clock."""
+        sym = symbol.upper()
+        path = self.cache_dir / "nse_ann" / f"{sym}.json" if self.cache_dir else None
+        if path and path.exists() and time.time() - path.stat().st_mtime < max_age_s:
+            return json.loads(path.read_text(encoding="utf-8"))
+        data = self._get("api/corporate-announcements", params={"index": "equities", "symbol": sym},
+                         referer=f"{self.base_url}/companies-listing/corporate-filings-announcements")
+        rows = data if isinstance(data, list) else data.get("data", [])
+        out = sorted((_norm_announcement(r) for r in rows), key=lambda a: a["at"], reverse=True)
+        if path:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(out), encoding="utf-8")
+        return out
 
     # -- public --------------------------------------------------------------
     def trades_for_investor(self, investor: str, source: str = "deals",
