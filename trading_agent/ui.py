@@ -21,7 +21,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from .broker import Broker, LocalPaperBroker
@@ -38,6 +38,9 @@ log = logging.getLogger(__name__)
 DEALS_TTL_SECONDS = 600
 # The only static files besides the page: Inter, served locally so the page needs no network.
 FONT_FILES = {"/fonts/inter-latin.woff2", "/fonts/inter-latin-ext.woff2"}
+STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-8"),
+                "/static/common.js": ("common.js", "text/javascript; charset=utf-8"),
+                "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8")}
 EDITABLE_ENV_KEYS = {
     "watch_investor": "WATCH_INVESTOR",
     "watch_source": "WATCH_SOURCE",
@@ -99,6 +102,7 @@ class App:
         self.lock = threading.Lock()
         self.busy = False
         self.running: Job | None = None  # the job holding the one slot
+        self._replay: Any | None = None  # ReplayApp, built on first use
 
     # -- lazy singletons ------------------------------------------------------
     @property
@@ -119,7 +123,8 @@ class App:
 
     JOB_LABELS = {"check": "A check", "dry_run": "A dry run", "backtest": "The deal backtest",
                   "screen": "The factor screen", "factor_backtest": "The portfolio backtest",
-                  "signal_lab": "The signal lab"}
+                  "signal_lab": "The signal lab", "replay_create": "Starting a replay",
+                  "replay_step": "A replay step", "replay_tool": "A replay tool"}
 
     def _refused(self, job: Job) -> Job:
         """One long job at a time. A refused attempt is answered but not recorded, so it
@@ -130,6 +135,35 @@ class App:
         job.ok, job.finished_at = False, _now()
         job.message = f"{what} is still running{since}; try again when it finishes."
         return job
+
+    def run_background(self, kind: str, fn: Callable[[Job], str]) -> Job:
+        """Run ``fn(job)`` in the one job slot; it returns the success message."""
+        job = Job(id=len(self.jobs) + 1, kind=kind)
+        if self.busy:
+            return self._refused(job)
+        self.jobs.append(job)
+        self.busy, self.running = True, job
+
+        def run() -> None:
+            try:
+                job.message = fn(job) or "done"
+                job.ok = True
+            except Exception as e:  # noqa: BLE001
+                log.exception("%s failed", kind)
+                job.ok, job.message = False, f"{type(e).__name__}: {e}" if not isinstance(e, (ValueError, LookupError)) else str(e)
+            finally:
+                job.finished_at = _now()
+                self.busy = False
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    @property
+    def replay(self) -> Any:
+        if self._replay is None:
+            from .replay.web import ReplayApp
+            self._replay = ReplayApp(self)
+        return self._replay
 
     # -- deals ----------------------------------------------------------------
     def deals(self, refresh: bool = False) -> list[DisclosedTrade]:
@@ -807,6 +841,7 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
 # --------------------------------------------------------------------------- #
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     index_html = (resources.files("trading_agent") / "ui" / "index.html").read_text(encoding="utf-8")
+    replay_html = (resources.files("trading_agent") / "ui" / "replay.html").read_text(encoding="utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "trading-agent-ui/1"
@@ -824,6 +859,27 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
+        def _bytes(self, body: bytes, ctype: str, cache: str = "no-cache") -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", cache)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _replay(self, method: str) -> bool:
+            from urllib.parse import parse_qs
+            u = urlparse(self.path)
+            if u.path in ("/replay", "/replay/"):
+                self._bytes(replay_html.encode(), "text/html; charset=utf-8")
+                return True
+            if not u.path.startswith("/replay/api/"):
+                return False
+            body = self._body() if method == "POST" else None
+            status, payload = app.replay.route(method, u.path, {k: v[0] for k, v in parse_qs(u.query).items()}, body)
+            self._json(payload, status)
+            return True
+
         def _body(self) -> dict[str, Any]:
             n = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(n) if n else b""
@@ -831,6 +887,17 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path in STATIC_FILES:
+                name, ctype = STATIC_FILES[path]
+                try:
+                    data = (resources.files("trading_agent") / "ui" / name).read_bytes()
+                except FileNotFoundError:  # not shipped yet
+                    self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._bytes(data, ctype)
+                return
+            if self._replay("GET"):
+                return
             if path in ("/", "/index.html"):
                 body = index_html.encode()
                 self.send_response(200)
@@ -903,6 +970,12 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if path.startswith("/replay/api/"):
+                try:
+                    self._replay("POST")
+                except json.JSONDecodeError as e:
+                    self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+                return
             try:
                 body = self._body()
                 if path == "/api/check":
