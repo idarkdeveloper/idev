@@ -85,3 +85,15 @@ def test_a_failed_download_is_retried_after_an_hour(tmp_path, monkeypatch):
     assert h.holiday(date(2026, 1, 26)) is None
     clock[0] += 3600  # over an hour later: asks NSE again
     assert h.holiday(date(2026, 1, 26)) == "Republic Day" and h.error is None
+
+
+def test_cli_prints_rupees_when_output_is_redirected(tmp_path):
+    import subprocess
+    import sys
+    out = tmp_path / "out.txt"
+    code = ("import sys; from trading_agent.cli import _utf8_output; _utf8_output(); print('₹1,00,000')")
+    with open(out, "wb") as f:
+        r = subprocess.run([sys.executable, "-c", code], stdout=f, stderr=subprocess.PIPE,
+                           env={**__import__("os").environ, "PYTHONIOENCODING": "cp1252"})
+    assert r.returncode == 0, r.stderr.decode(errors="replace")
+    assert out.read_bytes().decode("utf-8").strip() == "₹1,00,000"
