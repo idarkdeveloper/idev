@@ -8,8 +8,10 @@ from typing import Any
 from .agent import AgentContext, RunResult, run_agent
 from .broker import AlpacaPaperBroker, Broker, LocalPaperBroker
 from .config import Settings
+from .momentum import MomentumScreen
 from .notify import Notifier
 from .prices import YahooPrices
+from .regime import GlobalContext
 from .quiver import DisclosedTrade
 from .state import State
 
@@ -30,10 +32,9 @@ def resolve_groww_token(settings: Settings) -> str:
 
 
 def free_prices(settings: Settings) -> YahooPrices:
-    """Keyless quotes: NSE via Yahoo (.NS / .BO suffix), US bare symbols."""
-    if settings.market == "in":
-        return YahooPrices(suffix=".BO" if settings.groww_exchange == "BSE" else ".NS")
-    return YahooPrices(suffix="")
+    """Keyless quotes and history: NSE via Yahoo (.NS / .BO suffix), US bare symbols."""
+    suffix = (".BO" if settings.groww_exchange == "BSE" else ".NS") if settings.market == "in" else ""
+    return YahooPrices(suffix=suffix, cache_dir=settings.state_dir / "cache")
 
 
 def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
@@ -86,7 +87,8 @@ def make_notifier(settings: Settings) -> Notifier:
 def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
           trades: list[DisclosedTrade] | None = None, broker: Broker | None = None,
           data: Any | None = None, notifier: Notifier | None = None,
-          runner_factory: Any | None = None) -> RunResult:
+          runner_factory: Any | None = None, momentum: Any | None = None,
+          context: Any | None = None) -> RunResult:
     """One pass of the routine.
 
     * ``trades`` overrides the data-source fetch (demo / tests).
@@ -117,8 +119,13 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
         state.save()
         return result
 
+    if trades is None:  # live run: free price history for momentum and the global regime
+        prices = free_prices(settings)
+        momentum = momentum or MomentumScreen(prices)
+        context = context or GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache",
+                                                       cache_ttl=900))
     ctx = AgentContext(settings=settings, broker=broker, data=data, notifier=notifier,
-                       state=state, result=result)
+                       state=state, result=result, momentum=momentum, context=context)
     run_agent(ctx, runner_factory=runner_factory)
     # Only remember trades once they were actually analysed, so a failed API call
     # (bad key, outage) is retried on the next run instead of silently dropped.

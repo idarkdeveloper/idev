@@ -32,7 +32,8 @@ def _demo_inputs(settings):
     trades = filter_by_investor(rows, settings.watch_investor)
     broker = LocalPaperBroker(settings.state_dir / "paper_broker.json",
                               starting_cash=settings.paper_starting_cash,
-                              price_fn=lambda s: prices[s])
+                              price_fn=lambda s: prices[s], currency=settings.currency,
+                              whole_shares=settings.market == "in")
     return trades, broker
 
 
@@ -154,6 +155,103 @@ def cmd_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backtest(args: argparse.Namespace) -> int:
+    """Replay an investor's disclosed deals against subsequent returns vs NIFTY 50."""
+    from .backtest import format_summary, run_backtest
+    from .runner import free_prices, make_data_source
+
+    settings = _settings(args)
+    investor = args.investor or settings.watch_investor
+    horizons = tuple(int(h) for h in args.horizons.split(","))
+    if args.demo:
+        import dataclasses
+        import datetime as dt
+        deals, broker = _demo_inputs(settings)
+        # Sample deals are dated today; pretend they happened a quarter ago so there is
+        # price history after them to measure.
+        back = (dt.date.today() - dt.timedelta(days=100)).isoformat()
+        deals = [dataclasses.replace(d, transaction_date=back, report_date=back) for d in deals]
+        prices = _DemoHistory(broker.price_fn)
+    else:
+        data = make_data_source(settings)
+        deals = data.trades_for_investor(investor, settings.watch_source, days=args.days) \
+            if settings.data_source == "nse" else data.trades_for_investor(investor, settings.watch_source)
+        prices = free_prices(settings)
+    print(f"{len(deals)} disclosed deals by {investor} in the last {args.days} days; pricing…")
+    result = run_backtest(investor, deals, prices, horizons=horizons, cost_bps=args.cost_bps,
+                          benchmark=args.benchmark)
+    print(format_summary(result.summary()))
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, default=str))
+    return 0
+
+
+class _DemoHistory:
+    """Synthetic 2-year history for demo mode: a gentle drift around the fixture price."""
+
+    def __init__(self, price_fn):
+        self.price_fn = price_fn
+
+    def history(self, symbol, range_="2y"):
+        import datetime as dt
+        import math
+        try:
+            last = float(self.price_fn(symbol.replace("^", "IDX_")))
+        except Exception:
+            last = 100.0 if symbol.startswith("^") else 50.0
+        out = []
+        today = dt.date.today()
+        n = 500
+        drift = 0.6 + (sum(map(ord, symbol)) % 7) / 10  # 0.6 .. 1.2, fixed per symbol
+        for i in range(n):
+            d = today - dt.timedelta(days=int((n - i) * 365 / 252))
+            px = last * (drift + (1 - drift) * i / n) * (1 + 0.03 * math.sin(i / 9))
+            out.append({"date": d.isoformat(), "close": px, "adj_close": px, "volume": 1e5})
+        return out
+
+
+def cmd_momentum(args: argparse.Namespace) -> int:
+    from .momentum import MomentumScreen, momentum_summary
+    from .runner import free_prices
+    settings = _settings(args)
+    screen = MomentumScreen(free_prices(settings))
+    for t in args.tickers:
+        stats = screen.stats(t)
+        print(f"{t.upper():<12} {stats.get('error') or momentum_summary(stats)}")
+    return 0
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Always-on local mode: poll deals and announcements during market hours."""
+    from .runner import make_broker, make_data_source, make_notifier
+    from .watch import Watcher
+
+    settings = _settings(args)
+    if args.auto_trade:
+        settings.auto_trade = True
+    data = make_data_source(settings)
+    broker = make_broker(settings)
+    notifier = make_notifier(settings)
+    w = Watcher(settings, every=args.every, window=(args.window_start, args.window_end),
+                data=data, broker=broker, notifier=notifier,
+                check_fn=lambda: check(settings, broker=broker, data=data, notifier=notifier))
+    print(f"Watching {settings.watch_investor} every {w.every}s, {args.window_start}-{args.window_end} IST, "
+          f"weekdays. Ctrl+C to stop.")
+    try:
+        w.run_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Serve the local dashboard."""
+    from .ui import serve
+    settings = _settings(args)
+    serve(settings, host=args.host, port=args.port, open_browser=not args.no_open, demo=args.demo)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="trading_agent",
                                 description="Claude agent that follows an investor's disclosed trades.")
@@ -181,6 +279,30 @@ def build_parser() -> argparse.ArgumentParser:
         .set_defaults(func=cmd_reset)
     sub.add_parser("groww-token", help="generate a Groww access token from API key + secret/TOTP") \
         .set_defaults(func=cmd_groww_token)
+    sp = sub.add_parser("backtest", help="replay an investor's disclosed deals vs NIFTY 50")
+    sp.add_argument("--investor", help="override WATCH_INVESTOR")
+    sp.add_argument("--days", type=int, default=365, help="how far back to fetch deals")
+    sp.add_argument("--horizons", default="5,20,60", help="holding periods in trading days")
+    sp.add_argument("--cost-bps", type=float, default=50.0, help="round-trip cost in basis points")
+    sp.add_argument("--benchmark", default="^NSEI")
+    sp.add_argument("--demo", action="store_true", help="use bundled sample deals and synthetic prices")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_backtest)
+    sp = sub.add_parser("momentum", help="momentum stats for one or more tickers")
+    sp.add_argument("tickers", nargs="+")
+    sp.set_defaults(func=cmd_momentum)
+    sp = sub.add_parser("watch", help="always-on local mode: poll deals + announcements in market hours")
+    sp.add_argument("--every", type=int, default=60, help="seconds between polls")
+    sp.add_argument("--window-start", default="08:45", help="IST, HH:MM")
+    sp.add_argument("--window-end", default="18:30", help="IST, HH:MM")
+    sp.add_argument("--auto-trade", action="store_true", help="allow paper orders")
+    sp.set_defaults(func=cmd_watch)
+    sp = sub.add_parser("ui", help="open the local web dashboard")
+    sp.add_argument("--host", default="127.0.0.1")
+    sp.add_argument("--port", type=int, default=8787)
+    sp.add_argument("--no-open", action="store_true", help="don't open a browser tab")
+    sp.add_argument("--demo", action="store_true", help="use bundled sample deals and prices")
+    sp.set_defaults(func=cmd_ui)
     return p
 
 

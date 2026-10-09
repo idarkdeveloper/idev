@@ -38,6 +38,13 @@ class State:
         rec = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **rec}
         self.data["recommendations"] = (self.data["recommendations"] + [rec])[-500:]
 
+    def dismiss_recommendation(self, index: int) -> bool:
+        recs = self.data["recommendations"]
+        if 0 <= index < len(recs):
+            recs[index]["dismissed"] = True
+            return True
+        return False
+
     @property
     def seen_count(self) -> int:
         return len(self.data["seen"])
