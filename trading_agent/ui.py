@@ -88,6 +88,7 @@ class App:
         self.last_factor_bt: dict[str, Any] | None = None
         self.last_signal_lab: dict[str, Any] | None = None
         self._my_portfolio: dict[str, Any] | None = None
+        self._names: Any | None = None  # CompanyNames, built on first use
         self._my_portfolio_at = 0.0
         self.demo_trades = demo_trades
         self._deals: list[DisclosedTrade] | None = demo_trades
@@ -272,9 +273,36 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
+    @property
+    def names(self) -> Any | None:
+        """Company-name list for search; none in demo mode (no network needed there)."""
+        if self.demo_trades is not None:
+            return None
+        if self._names is None:
+            from .instruments import CompanyNames
+            self._names = CompanyNames(self.settings.state_dir / "cache")
+        return self._names
+
+    def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
+        n = self.names
+        return n.search(query, limit) if n is not None else []
+
+    def resolve(self, text: str) -> tuple[str, str | None]:
+        """A ticker, or a company name a person typed, to (ticker, company name)."""
+        n = self.names
+        if n is None:
+            return text.strip().upper(), None
+        try:
+            return n.resolve(text)
+        except Exception:  # noqa: BLE001 - name list unavailable: treat the text as a ticker
+            return text.strip().upper(), None
+
     def lookup(self, ticker: str) -> dict[str, Any]:
+        typed = ticker
+        ticker, company = self.resolve(ticker)
         stats = self.momentum.stats(ticker)
-        out: dict[str, Any] = {"ticker": ticker.upper(), "momentum": stats,
+        out: dict[str, Any] = {"ticker": ticker.upper(), "name": company, "momentum": stats,
+                               "matched_from": typed if typed.strip().upper() != ticker.upper() else None,
                                "momentum_summary": stats.get("error") or momentum_summary(stats),
                                "announcements": [], "announcements_error": None}
         data = self.data
@@ -532,6 +560,7 @@ class App:
     def size_quote(self, ticker: str, equity: float | None = None, risk_pct: float = 1.0,
                    max_pct: float = 10.0) -> dict[str, Any]:
         from .risk import atr, position_size
+        ticker, company = self.resolve(ticker)
         eq = equity or self.broker.account().equity
         price = self.broker.latest_price(ticker)
         try:
@@ -540,7 +569,7 @@ class App:
             a = None
         r = position_size(eq, price, a, risk_pct=risk_pct / 100, max_pct=max_pct / 100,
                           whole_shares=self.settings.market == "in")
-        r.update(ticker=ticker.upper(), equity=eq)
+        r.update(ticker=ticker.upper(), equity=eq, name=company)
         if r["notional"]:
             try:
                 r["round_trip_cost"] = self.cost_quote(r["notional"])
@@ -667,6 +696,7 @@ class App:
             value = p.qty * p.current_price if p.current_price is not None else None
             info = names.get(p.symbol.upper()) or {}
             rows.append({"symbol": p.symbol, "name": info.get("name"), "exchange": info.get("exchange"),
+                         "kind": info.get("kind") or "equity", "maturity": info.get("maturity"),
                          "qty": p.qty, "sellable_qty": p.free_qty,
                          "avg_price": p.avg_entry_price, "price": p.current_price,
                          "invested": round(invested, 2), "value": round(value, 2) if value is not None else None,
@@ -829,6 +859,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 from urllib.parse import parse_qs
                 force = (parse_qs(urlparse(self.path).query).get("refresh") or ["0"])[0] in ("1", "true")
                 self._json(app.context.fetch(force=force) if app.context else {"error": "not configured"})
+            elif path == "/api/search":
+                from urllib.parse import parse_qs
+                q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+                self._json(app.search(q))
             elif path == "/api/lookup":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()

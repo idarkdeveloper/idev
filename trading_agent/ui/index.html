@@ -296,7 +296,7 @@
         <form class="cardbody" id="tk-form" style="border-top:1px solid var(--line)">
           <h3>Paper order</h3>
           <div class="row">
-            <input id="tk-symbol" name="symbol" placeholder="Ticker" style="flex:1 1 140px;text-transform:uppercase" required>
+            <input id="tk-symbol" name="symbol" list="name-suggest" autocomplete="off" placeholder="Ticker (pick from the list)" style="flex:1 1 140px;text-transform:uppercase" required>
             <div class="seg" role="group" aria-label="Side"><button type="button" class="on" data-side="buy">Buy</button><button type="button" data-side="sell">Sell</button></div>
             <input id="tk-amount" name="notional" type="number" min="0" step="any" placeholder="Amount" style="flex:1 1 120px">
             <span class="sub">or</span>
@@ -382,14 +382,14 @@
       <div class="card">
         <div class="cardhead"><h2>Look up a stock</h2></div>
         <form class="cardbody" id="lk-form">
-          <div class="row"><input id="lk-ticker" placeholder="Ticker, e.g. SENCO" style="flex:1 1 160px;text-transform:uppercase"><button type="submit" class="small">Check</button></div>
+          <div class="row"><input id="lk-ticker" list="name-suggest" autocomplete="off" placeholder="Ticker or company name, e.g. Tata Steel" style="flex:1 1 160px"><button type="submit" class="small">Check</button></div>
           <div id="lk-result" class="sub">Momentum, latest price and NSE announcements.</div>
         </form>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Position size</h2></div>
         <form class="cardbody" id="sz-form">
-          <div class="row"><input id="sz-ticker" name="ticker" placeholder="Ticker" style="flex:1 1 140px;text-transform:uppercase" required><button type="submit" class="small">Size it</button></div>
+          <div class="row"><input id="sz-ticker" name="ticker" list="name-suggest" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 140px" required><button type="submit" class="small">Size it</button></div>
           <div class="grid2" style="gap:10px">
             <div class="field"><label for="sz-risk">Risk per trade (% of equity)</label><input id="sz-risk" name="risk_pct" type="number" value="1" min="0.1" max="5" step="0.1"></div>
             <div class="field"><label for="sz-max">Max position (% of equity)</label><input id="sz-max" name="max_pct" type="number" value="10" min="1" max="50" step="1"></div>
@@ -443,6 +443,7 @@
     <div class="row group" style="flex-direction:row"><button type="button" class="danger small" id="btn-reset">Reset paper account</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
   </form>
 </dialog>
+<datalist id="name-suggest"></datalist>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -709,8 +710,8 @@
       + stat("Profit / loss", sinr(m.pl), "on holdings with a price", tone(m.pl))
       + stat("Return", spct(m.pl_pct), "vs what you paid", tone(m.pl_pct));
     rows.innerHTML = m.holdings.length ? m.holdings.map(h => `<tr>
-        <td><div style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.exchange === "BSE" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">BSE</span>' : ""}</div>
-          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}</td>
+        <td><div style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.kind === "bond" ? ' <span class="pill warn" style="font-size:10px;padding:1px 6px">Bond</span>' : ""}${h.exchange === "BSE" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">BSE</span>' : ""}</div>
+          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}${h.kind === "bond" ? ` · bond${h.maturity ? " maturing " + esc(h.maturity) : ""}` : ""}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}</td>
         <td class="num">${h.qty}</td><td class="num">${inr(h.avg_price, 2)}</td>
         <td class="num">${h.price != null ? inr(h.price, 2) : '<span class="sub">no price</span>'}</td>
         <td class="num">${inr(h.invested)}</td><td class="num">${inr(h.value)}</td>
@@ -1006,13 +1007,29 @@
     $("groww-test-result").textContent = "Testing…";
     try { const r = await api("/api/groww-test", {}); $("groww-test-result").textContent = r.message; } catch(e){ $("groww-test-result").textContent = e.message; }
   });
+  // Company-name suggestions for the ticker boxes: "tata st" offers TATASTEEL (Tata Steel Limited).
+  let suggestTimer = null, lastQuery = "";
+  ["lk-ticker", "sz-ticker", "tk-symbol"].forEach(id => $(id).addEventListener("input", (ev) => {
+    const q = ev.target.value.trim();
+    clearTimeout(suggestTimer);
+    if(q.length < 2 || q === lastQuery) return;
+    suggestTimer = setTimeout(async () => {
+      lastQuery = q;
+      try {
+        const hits = await api("/api/search?q=" + encodeURIComponent(q));
+        $("name-suggest").innerHTML = hits.map(h => `<option value="${esc(h.symbol)}">${esc(h.name)}</option>`).join("");
+      } catch(e){ /* suggestions are optional */ }
+    }, 200);
+  }));
+
   async function lookup(t){
     $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
     try {
       const r = await api("/api/lookup?ticker=" + encodeURIComponent(t));
       const m = r.momentum || {}; const v = m.verdict || "n/a";
       const cls = v==="strong"?"ok":v==="weak"?"bad":"";
-      $("lk-result").innerHTML = `<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div>
+      $("lk-ticker").value = r.ticker;
+      $("lk-result").innerHTML = `${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div>
         <div class="sub">${esc(r.momentum_summary)}</div>
         <div class="chart" id="lk-chart" style="margin-top:6px"></div>
         <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div>`;

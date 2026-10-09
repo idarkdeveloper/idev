@@ -399,3 +399,11 @@ def test_refused_job_is_not_recorded_and_names_the_running_one(server, monkeypat
     assert not st["busy"] and st["running"] is None
     assert st["jobs"][-1]["kind"] == "screen" and st["jobs"][-1]["ok"] is True  # the refusal left no trace
     assert all("still running" not in (x["message"] or "") for x in st["jobs"])
+
+
+def test_search_endpoint_is_offline_in_demo(server):
+    base, app = server
+    status, hits = _get(base + "/api/search?q=tata")
+    assert status == 200 and hits == []
+    _, lk = _get(base + "/api/lookup?ticker=senco")
+    assert lk["ticker"] == "SENCO" and lk["matched_from"] is None

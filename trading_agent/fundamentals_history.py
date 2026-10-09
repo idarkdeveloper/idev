@@ -217,7 +217,9 @@ class ResultsHistory:
                     self.sleep(60)
                     self.session = requests.Session()
                     self._warm = False
-            return None
+                return None
+            # 404 and other permanent answers: remember it, so it isn't fetched again every run
+            rec = {"period_end": filing["period_end"], "error": f"HTTP {status}"}
         except Exception as e:  # noqa: BLE001 - an unparseable filing is recorded as empty
             log.debug("results filing %s unreadable: %s", filing["xbrl"], e)
             rec = {"period_end": filing["period_end"], "error": f"{type(e).__name__}: {e}"}
