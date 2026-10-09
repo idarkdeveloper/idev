@@ -1,5 +1,5 @@
 (function(){
-  const {$, esc, pct, toast, api, tile, C, lineChart, rupeesShort, inr, sinr, spct, lookupTakeaway, attachSuggest, shortDate, money} = TA;
+  const {$, esc, pct, toast, api, tile, C, lineChart, rupeesShort, inr, sinr, spct, lookupTakeaway, attachSuggest, shortDate} = TA;
   let T = null, slug = null, side = "buy";
   const WHO = {you: "You", agent: "Agent (rules)", nifty: "Nifty"};
   const tone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
@@ -48,8 +48,13 @@
   // ---- one replay ----
   async function open(s){
     slug = s; show("trial");
-    try { T = await api(`/replay/api/trial/${encodeURIComponent(s)}`); render(); loadTools(); }
-    catch(e){ toast(e.message); location.hash = ""; }
+    let r;
+    try { r = await fetch(`/replay/api/trial/${encodeURIComponent(s)}`); }
+    catch(e){ toast(e.message); return; }
+    const body = await r.json().catch(() => ({}));
+    if(r.status === 404){ toast(body.error || "No such replay"); location.hash = ""; return; }
+    if(!r.ok){ toast(body.error || "Could not load this replay"); if(!T) $("step-status").textContent = body.error || ""; return; }
+    T = body; render(); loadTools();
   }
   function render(){
     const t = T.trial, ended = !!t.ended;
@@ -106,10 +111,11 @@
   }
   function renderScore(){
     const s = T.scorecard, n = T.next;
+    const days = (new Date(T.trial.ended) - new Date(T.trial.start)) / 86400000;
     if(!s){ $("scorecard").innerHTML = ""; return; }
     const col = w => { const x = s[w]; return `<div class="mkt"><span class="k">${WHO[w]}</span><span class="v ${tone(x.return)}">${spct(x.return)}</span>
-      <span class="sub" style="font-size:12px">${inr(x.final)} · ${spct(x.cagr)} a year · ${fall(x.max_drawdown)}<br>${x.trades} trade${x.trades === 1 ? "" : "s"} · charges ${inr(x.charges)}${x.dividends ? ` · dividends ${inr(x.dividends)}` : ""}
-      ${x.best ? `<br>best ${esc(x.best.symbol)} ${sinr(x.best.pnl)} · worst ${esc(x.worst.symbol)} ${sinr(x.worst.pnl)}` : ""}${x.hit_rate != null && w !== "nifty" ? `<br>${Math.round(x.hit_rate * 100)}% of stocks made money` : ""}</span></div>`; };
+      <span class="sub" style="font-size:12px">${inr(x.final)} · ${days >= 365 && x.cagr != null ? spct(x.cagr) + " a year · " : ""}${fall(x.max_drawdown)}<br>${x.trades} trade${x.trades === 1 ? "" : "s"} · charges ${inr(x.charges)}${x.dividends ? ` · dividends ${inr(x.dividends)}` : ""}
+      ${x.best && w !== "nifty" ? (x.best.symbol !== x.worst.symbol ? `<br>best ${esc(x.best.symbol)} ${sinr(x.best.pnl)} · worst ${esc(x.worst.symbol)} ${sinr(x.worst.pnl)}` : `<br>only ${esc(x.best.symbol)} ${sinr(x.best.pnl)}`) : ""}${x.hit_rate != null && w !== "nifty" ? `<br>${Math.round(x.hit_rate * 100)}% of stocks made money` : ""}</span></div>`; };
     const graded = (s.claude || []).filter(g => g.return != null && (g.action === "buy" || g.action === "sell"));
     $("scorecard").innerHTML = `<div class="card"><div class="cardhead"><h2>Scorecard</h2><span class="sub">${esc(shortDate(T.trial.start))} to ${esc(shortDate(T.trial.ended))}${T.trial.dividends === "cash" ? " · dividends credited before tax" : ""}</span></div>
       <div class="cardbody"><div class="stats">${["you", "agent", "nifty"].map(col).join("")}</div>
@@ -137,7 +143,7 @@
   });
   $("b-home").addEventListener("click", () => { location.hash = ""; });
   document.querySelectorAll("#ro-form [data-side]").forEach(b => b.addEventListener("click", () => {
-    side = b.dataset.side; document.querySelectorAll("#ro-form [data-side]").forEach(x => x.classList.toggle("on", x === b));
+    side = b.dataset.side; document.querySelectorAll("#ro-form [data-side]").forEach(x => { x.classList.toggle("on", x === b); x.setAttribute("aria-pressed", x === b); });
   }));
   $("ro-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -165,7 +171,7 @@
         <div class="sub">${esc(r.momentum_summary || "")}</div>
         ${note ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${note}</div>` : ""}
         <div class="chart" id="rl-chart" style="margin-top:6px"></div>
-        <h3 style="margin-top:6px">NSE announcements, last 60 days</h3>${r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file ? `<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error || "none in the 60 days before the replay date")}</div>`}`;
+        <h3 style="margin-top:6px">NSE announcements, last 60 days</h3>${r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file && /^https?:\/\//.test(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error || "none in the 60 days before the replay date")}</div>`}`;
       const h = r.history || [];
       lineChart($("rl-chart"), {x: h.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, label: `${r.ticker} price, year before the replay date`,
         yFmt: v => "₹" + Math.round(v).toLocaleString("en-IN"), empty: "No price history before this date.",

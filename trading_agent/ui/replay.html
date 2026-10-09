@@ -45,13 +45,13 @@
 
   <section id="trial" hidden style="display:flex;flex-direction:column;gap:32px">
     <div class="card">
-      <div class="cardbody row" style="gap:8px">
+      <div class="cardbody"><div class="row" style="gap:8px">
         <button type="button" class="small" id="b-home">← All replays</button>
         <button type="button" class="primary small" data-step="week">+1 week</button>
         <button type="button" class="primary small" data-step="month">+1 month</button>
         <button type="button" class="primary small" data-step="year">+1 year</button>
         <button type="button" class="small" id="b-end">End replay</button>
-        <span class="sub" id="step-status" style="margin-left:auto"></span>
+        <span class="sub" id="step-status" aria-live="polite" style="margin-left:auto"></span></div>
       </div>
     </div>
     <section class="tiles" id="race-tiles"></section>
@@ -69,11 +69,11 @@
           <form class="cardbody" id="ro-form" style="border-top:1px solid var(--line)">
             <h3>Order on <span id="ro-date"></span></h3>
             <div class="row">
-              <input id="ro-symbol" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 160px;text-transform:uppercase" required>
-              <div class="seg" role="group" aria-label="Side"><button type="button" class="on" data-side="buy">Buy</button><button type="button" data-side="sell">Sell</button></div>
-              <input id="ro-amount" type="number" min="0" step="any" placeholder="Amount" style="flex:1 1 110px">
+              <input id="ro-symbol" aria-label="Stock to buy or sell" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 160px;text-transform:uppercase" required>
+              <div class="seg" role="group" aria-label="Side"><button type="button" class="on" aria-pressed="true" data-side="buy">Buy</button><button type="button" aria-pressed="false" data-side="sell">Sell</button></div>
+              <input id="ro-amount" aria-label="Amount in rupees" type="number" min="0" step="any" placeholder="Amount" style="flex:1 1 110px">
               <span class="sub">or</span>
-              <input id="ro-qty" type="number" min="0" step="1" placeholder="Shares" style="flex:1 1 90px">
+              <input id="ro-qty" aria-label="Number of shares" type="number" min="0" step="1" placeholder="Shares" style="flex:1 1 90px">
               <button type="submit" class="primary small">Place</button>
             </div>
             <label class="row sub" style="gap:6px"><input type="checkbox" id="ro-autostop"> Auto-sell at my trailing stops (checked every trading day of a step)</label>
@@ -97,7 +97,7 @@
       <aside class="side">
         <div class="card">
           <div class="cardhead"><h2>Look up a stock</h2></div>
-          <form class="cardbody" id="rl-form"><div class="row"><input id="rl-ticker" autocomplete="off" placeholder="Ticker or company name" style="flex:1;text-transform:uppercase"><button type="submit" class="small">Check</button></div>
+          <form class="cardbody" id="rl-form"><div class="row"><input id="rl-ticker" aria-label="Stock to look up" autocomplete="off" placeholder="Ticker or company name" style="flex:1;text-transform:uppercase"><button type="submit" class="small">Check</button></div>
             <div id="rl-result" class="sub">Momentum, price and NSE announcements as they stood on the replay date.</div></form>
         </div>
         <div class="card">
@@ -113,7 +113,7 @@
   </section>
 </main>
 <div class="suggest" id="suggest" role="listbox" aria-label="Matching companies"></div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status"></div>
 <script src="/static/common.js"></script>
 <script src="/static/replay.js"></script>
 </body>
