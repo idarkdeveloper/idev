@@ -77,3 +77,22 @@ def test_yahoo_dividends_parsed_from_chart_events(tmp_path):
         "1": {"amount": 3.6, "date": 1687405500}, "0": {"amount": 5.1, "date": 1655264700}}}}]}}
     p = YahooPrices(session=FakeSession({("GET", "TATASTEEL.NS"): payload}), cache_dir=tmp_path)
     assert p.dividends("TATASTEEL") == [{"date": "2022-06-15", "amount": 5.1}, {"date": "2023-06-22", "amount": 3.6}]
+
+
+def test_dividend_source_error_propagates_and_is_not_cached():
+    from .replay_fakes import FakeSource
+
+    class Flaky(FakeSource):
+        fail = True
+
+        def dividends(self, symbol, range_="10y"):
+            if self.fail:
+                raise RuntimeError("HTTP 429")
+            return super().dividends(symbol, range_)
+
+    src = Flaky({"X": path(100, 0.0)}, {"X": [{"date": "2021-06-15", "amount": 10.0}]})
+    p = ClockedPrices(src, ReplayClock("2021-07-01"))
+    with pytest.raises(RuntimeError, match="HTTP 429"):
+        p.dividends("X")
+    src.fail = False
+    assert p.dividends("X") == [{"date": "2021-06-15", "amount": 10.0}]

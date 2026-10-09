@@ -110,10 +110,9 @@ class ClockedPrices:
     def dividends(self, symbol: str) -> list[dict[str, Any]]:
         s = symbol.upper()
         if s not in self._divs:
-            try:
-                self._divs[s] = sorted(self.source.dividends(s, self.RANGE), key=lambda d: d["date"])
-            except Exception:  # noqa: BLE001 - no dividend data means none credited
-                self._divs[s] = []
+            # A source error propagates and nothing is cached, so a transient failure is retried
+            # on the next call instead of silently dropping the dividends.
+            self._divs[s] = sorted(self.source.dividends(s, self.RANGE), key=lambda d: d["date"])
         return [d for d in self._divs[s] if d["date"] <= self.clock.today]
 
     def calendar(self, symbol: str, after: str, until: str) -> list[str]:
