@@ -813,6 +813,37 @@
     el.innerHTML = `<div class="legend-row" style="margin-bottom:6px"><span><i style="background:${C.pos}"></i>Predicted the right way</span><span><i style="background:${C.neg}"></i>Wrong way</span><span><i style="background:repeating-linear-gradient(90deg, ${C.ctx} 0 4px, transparent 4px 7px)"></i>t = ±2: could be luck</span><span><i style="background:repeating-linear-gradient(90deg, var(--ink2) 0 2px, transparent 2px 4px)"></i>t = 3: predictive bar</span></div>`
       + `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label)}">${g}</svg>`;
   }
+  // Plain-English reading of one horizon's results, built from the numbers shown.
+  function signalTakeaway(rows, r, h){
+    const per = h === "5" ? "week" : h === "20" ? "month" : h === "60" ? "quarter" : h + " trading days";
+    const cost = r.round_trip_cost || 0, t2 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2);
+    const gapOf = x => x.s.top_minus_bottom, fam = x => (r.signals[x.k] || {}).family || "";
+    const names = xs => xs.map(x => x.label).join(", ");
+    const by = v => rows.filter(x => x.verdict === v), signals = rows.filter(x => !x.model);
+    const pred = by("predictive"), rev = by("reversed"), luck = by("could be luck"), small = by("too small to trade");
+    const out = [];
+    if(pred.length){
+      out.push(`${names(pred)} predicted the next ${per} strongly enough to matter: t of 3 or more and a gap between the top and bottom fifth bigger than the ${(cost * 100).toFixed(2)}% charges. Treat it as a candidate, and check it holds on the other horizons too.`);
+    } else {
+      const best = rows[0];
+      out.push(`None of the ${signals.length} signals reliably predicted the next ${per}.`);
+      if(best) out.push(`The strongest, ${best.label} (t ${t2(best.t)}), ${best.t < 2 ? "is inside the range luck alone produces (under 2)" : "is borderline"}, and its top fifth beat the bottom fifth by ${pct(gapOf(best), 2)}, ${gapOf(best) != null && gapOf(best) < cost ? "less than" : "against"} the ${(cost * 100).toFixed(2)}% a round trip costs in charges.`);
+    }
+    if(luck.length || small.length) out.push(`${names(luck.concat(small))} looked promising but ${small.length && !luck.length ? "the gap is smaller than the charges" : "could still be luck (t between 2 and 3)"}.`);
+    const up = signals.filter(x => x.t > 0).length, down = signals.filter(x => x.t < 0).length;
+    if(!pred.length && Math.abs(up - down) <= 3) out.push(`${up} pointed the right way and ${down} the wrong way, about the split you'd get from coin tosses.`);
+    const avg = f => { const xs = signals.filter(x => fam(x) === f).map(x => x.t); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
+    const trend = avg("trend"), mr = avg("mean reversion");
+    if(trend != null && mr != null && trend < -0.5 && mr > 0.5) out.push(`Trend signals (recent winners, stocks near highs) leaned the wrong way and mean-reversion ones (recent losers) the right way: over a ${per}, winners in this index tended to give a little back. Too weak to trade on.`);
+    else if(trend != null && mr != null && trend > 0.5 && mr < -0.5) out.push(`Trend signals leaned the right way and mean-reversion ones the wrong way: over a ${per}, winners tended to keep going, though not reliably.`);
+    if(rev.length) out.push(`${names(rev)} came out reversed (t of −2 or below): doing the opposite would have worked, which may be real or chance.`);
+    const model = rows.find(x => x.model);
+    if(model && model.verdict !== "predictive") out.push(`The walk-forward model, which combines every signal and learns only from the past, did no better (t ${t2(model.t)}).`);
+    out.push(pred.length ? "Bottom line: one possible edge worth watching, not yet a reason to trade."
+                         : `Bottom line: don't buy or sell ${esc(r.universe)} stocks on these signals alone over a ${per}.`);
+    return out.join(" ");
+  }
+
   function renderSignalLab(r, h){
     if(!r || !r.results){ return; }
     h = String(h || $("sl-result").dataset.h || (r.horizons.includes(20) ? 20 : r.horizons[0]));
@@ -827,6 +858,7 @@
       <div class="row" style="gap:6px">${r.point_in_time ? `<span class="pill">Point-in-time members</span>` : `<span class="pill warn">Today's members only: flatters trend signals</span>`}</div>
       <div class="callout" style="font-weight:500">${esc(r.summary)}</div>
       <div class="row" style="gap:6px" id="sl-tabs">${tabs}</div>
+      <div class="callout"><b style="color:var(--color-accent)">What this means.</b> ${signalTakeaway(rows, r, h)}</div>
       <h3 style="margin-top:4px">How strongly each signal predicted ${h === "5" ? "the next week" : h === "20" ? "the next month" : h === "60" ? "the next quarter" : "the next " + h + " days"} (t-statistic)</h3>
       <div class="chart" id="sl-chart"></div>
       <div class="scroll"><table><thead><tr><th>Signal</th><th class="num">Rank corr.</th><th class="num">t</th><th class="num">Top fifth − bottom fifth</th><th class="num">Top fifth beat index</th><th>Verdict</th></tr></thead><tbody>
