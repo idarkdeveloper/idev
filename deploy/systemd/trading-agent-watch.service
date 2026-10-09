@@ -1,0 +1,18 @@
+# Without Docker: copy the repo to /opt/trading-agent, create a venv there, put .env next to it, then
+#   sudo cp deploy/systemd/*.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now trading-agent-watch trading-agent-dashboard
+[Unit]
+Description=Trading Agent watch mode (NSE deals, announcements, stops)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agent
+WorkingDirectory=/opt/trading-agent
+Environment=TZ=Asia/Kolkata
+ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent watch
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

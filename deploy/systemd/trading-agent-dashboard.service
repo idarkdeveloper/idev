@@ -1,0 +1,15 @@
+[Unit]
+Description=Trading Agent dashboard (loopback only; reach it through an SSH tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agent
+WorkingDirectory=/opt/trading-agent
+Environment=TZ=Asia/Kolkata
+ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent ui --host 127.0.0.1 --port 8787 --no-open
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

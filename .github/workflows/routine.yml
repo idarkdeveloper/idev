@@ -51,6 +51,9 @@ jobs:
           GROWW_TOTP_SECRET: ${{ secrets.GROWW_TOTP_SECRET }}
           GROWW_LIVE_ORDERS: ${{ vars.GROWW_LIVE_ORDERS || 'false' }}
           GROWW_GTT_STOPS: ${{ vars.GROWW_GTT_STOPS || 'false' }}
+          # Live orders from Actions need a fixed-IP proxy registered with Groww (docs/hosting.md).
+          GROWW_ALLOWED_IP: ${{ secrets.GROWW_ALLOWED_IP }}
+          GROWW_PROXY_URL: ${{ secrets.GROWW_PROXY_URL }}
           MAX_SLIPPAGE_PCT: ${{ vars.MAX_SLIPPAGE_PCT || '0.5' }}
           QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
           ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}

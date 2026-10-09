@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import requests
+
 from .agent import AgentContext, RunResult, run_agent
 from .broker import AlpacaPaperBroker, Broker, LocalPaperBroker
 from .config import Settings
@@ -48,10 +50,21 @@ def make_groww(settings: Settings, price_fn: Any | None = None) -> Any:
     from .groww import GrowwBroker, InstrumentTicks
 
     ticks = InstrumentTicks(settings.state_dir / "cache") if settings.groww_live_orders else None
-    return GrowwBroker(resolve_groww_token(settings), live_orders=settings.groww_live_orders,
+    session = groww_session(settings)
+    return GrowwBroker(resolve_groww_token(settings, session=session), live_orders=settings.groww_live_orders,
                        exchange=settings.groww_exchange, price_fallback=price_fn,
-                       max_slippage_pct=settings.max_slippage_pct,
+                       max_slippage_pct=settings.max_slippage_pct, session=session,
+                       allowed_ip=settings.groww_allowed_ip,
                        tick_size_fn=(lambda sym: ticks.tick_size(sym, settings.groww_exchange)) if ticks else None)
+
+
+def groww_session(settings: Settings) -> requests.Session:
+    """A session for every Groww call; through GROWW_PROXY_URL when set, so a runner without a
+    fixed IP (GitHub Actions) can still reach Groww from the registered address."""
+    s = requests.Session()
+    if getattr(settings, "groww_proxy_url", None):
+        s.proxies = {"https": settings.groww_proxy_url, "http": settings.groww_proxy_url}
+    return s
 
 
 def free_prices(settings: Settings) -> YahooPrices:

@@ -1,0 +1,23 @@
+# Two services from one image, sharing the state volume:
+#   watch     - deals, announcements and stops every minute on NSE trading days
+#   dashboard - the web page, reachable ONLY from the server itself (use an SSH tunnel)
+# Secrets come from ../.env on the server (never baked into the image).
+services:
+  watch:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    env_file: ../.env
+    volumes: [ "agent-state:/app/state" ]
+    command: ["python", "-m", "trading_agent", "watch"]
+    restart: unless-stopped
+
+  dashboard:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    env_file: ../.env
+    volumes: [ "agent-state:/app/state" ]
+    # 0.0.0.0 inside the container, but published on the server's loopback only.
+    command: ["python", "-m", "trading_agent", "ui", "--host", "0.0.0.0", "--port", "8787", "--no-open"]
+    ports: [ "127.0.0.1:8787:8787" ]
+    restart: unless-stopped
+
+volumes:
+  agent-state: {}

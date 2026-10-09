@@ -56,6 +56,10 @@ class LiveOrdersDisabled(PermissionError):
     """Raised by every call that would place, modify or cancel a real order."""
 
 
+class WrongIP(LiveOrdersDisabled):
+    """Live order refused: this machine's public IP is not the one registered with Groww."""
+
+
 # --------------------------------------------------------------------------- #
 # Pure helpers
 # --------------------------------------------------------------------------- #
@@ -324,8 +328,18 @@ class GrowwBroker:
                  max_slippage_pct: float = 0.5,
                  tick_size_fn: Callable[[str], float | None] | None = None,
                  sleep: Callable[[float], None] = time.sleep,
-                 confirm_backoff: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0)):
+                 confirm_backoff: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0),
+                 allowed_ip: str | None = None, ip_fn: Callable[[], str] | None = None,
+                 ip_cache_s: float = 600.0, clock: Callable[[], float] = time.time):
         self.token = access_token
+        # SEBI 2026: Groww accepts API orders only from the registered IP. With allowed_ip set,
+        # every order-changing call first checks the public IP (through this client's own
+        # session, so through the same proxy Groww sees) and refuses from any other address.
+        self.allowed_ip = (allowed_ip or "").strip() or None
+        self.ip_fn = ip_fn
+        self.ip_cache_s = ip_cache_s
+        self.clock = clock
+        self._ip_seen: tuple[float, str] | None = None
         self.live_orders = live_orders
         # Called as price_fallback(symbol) when Groww's Live Data API is unavailable
         # (e.g. the Free Trial plan) or returns nothing for a symbol.
@@ -356,6 +370,28 @@ class GrowwBroker:
                 f"Groww live orders are disabled; refusing to {what} "
                 "(set GROWW_LIVE_ORDERS=true to place real orders)."
             )
+        if self.allowed_ip:
+            ip = self.current_ip()
+            if ip != self.allowed_ip:
+                raise WrongIP(f"refusing to {what}: this machine's public IP is {ip}, but the IP registered "
+                              f"with Groww is {self.allowed_ip} (GROWW_ALLOWED_IP). Orders from any other "
+                              "IP are rejected under SEBI's rules.")
+
+    def current_ip(self) -> str:
+        """The public IP Groww sees, cached for a few minutes. Raises WrongIP when it can't be found."""
+        now = self.clock()
+        if self._ip_seen and now - self._ip_seen[0] < self.ip_cache_s:
+            return self._ip_seen[1]
+        try:
+            if self.ip_fn is not None:
+                ip = self.ip_fn()
+            else:
+                from .netcheck import public_ip
+                ip = public_ip(self.session)
+        except Exception as e:  # noqa: BLE001
+            raise WrongIP(f"could not confirm this machine's public IP, so no live order was sent ({e})") from e
+        self._ip_seen = (now, ip)
+        return ip
 
     # -- read ----------------------------------------------------------------
     def holdings(self) -> list[dict[str, Any]]:

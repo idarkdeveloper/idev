@@ -20,6 +20,21 @@ from .state import State
 
 log = logging.getLogger(__name__)
 
+
+def keep_awake(on: bool) -> bool:
+    """Ask Windows not to sleep while watch mode is in the market window (a laptop used as the
+    trading machine). Returns True when the request was made; does nothing elsewhere."""
+    import sys
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0))
+        return True
+    except Exception:  # noqa: BLE001 - a convenience, never a failure
+        return False
+
 IST = ZoneInfo("Asia/Kolkata")
 
 
@@ -28,7 +43,7 @@ class Watcher:
                  tz: ZoneInfo = IST, check_fn: Callable[[], Any] | None = None,
                  data: Any | None = None, broker: Any | None = None, notifier: Any | None = None,
                  weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False,
-                 holidays: Any | None = None):
+                 holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake):
         self.settings = settings
         self._prices = prices  # object with .history(symbol, range) for ATR-based stops
         self.auto_exit = auto_exit  # sell paper positions that hit their trailing stop
@@ -37,6 +52,8 @@ class Watcher:
         self.tz = tz
         self.weekdays_only = weekdays_only
         self.holidays = holidays  # NSEHolidays: no polling on exchange holidays
+        self._awake = awake  # keeps a Windows laptop awake in the market window
+        self._awake_on: bool | None = None
         self._check_fn = check_fn
         self._data = data
         self._broker = broker
@@ -147,6 +164,9 @@ class Watcher:
     def tick(self, force: bool = False) -> dict[str, Any]:
         now = datetime.now(self.tz)
         info: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "in_window": self.market_window_open(now)}
+        if self._awake is not None and info["in_window"] != self._awake_on:
+            self._awake(info["in_window"])
+            self._awake_on = info["in_window"]
         if not info["in_window"] and not force:
             info["skipped"] = True
             self.last_tick = info
@@ -186,6 +206,9 @@ class Watcher:
 
     def stop(self) -> None:
         self._stop.set()
+        if self._awake is not None and self._awake_on:
+            self._awake(False)
+            self._awake_on = False
 
     @property
     def running(self) -> bool:
