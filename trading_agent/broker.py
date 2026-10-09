@@ -186,6 +186,11 @@ class LocalPaperBroker:
         self.path.write_text(json.dumps(self._state, indent=2))
 
     @property
+    def is_untouched_mirror(self) -> bool:
+        """A copy of a real account (see ``seed``) with no paper orders placed in it."""
+        return bool(self._state.get("mirrors")) and not self._state.get("orders")
+
+    @property
     def is_fresh(self) -> bool:
         """True until the first order or seed is persisted."""
         return not self.path.exists()

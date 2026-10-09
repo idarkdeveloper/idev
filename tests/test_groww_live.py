@@ -466,6 +466,28 @@ def test_make_broker_stays_paper_and_agent_has_no_order_tool(settings, monkeypat
     assert "place_paper_order" not in [t.name for t in build_tools(ctx)]  # AUTO_TRADE=false
 
 
+def test_paper_account_is_separate_practice_money_not_a_copy(settings, monkeypatch):
+    settings.broker, settings.market, settings.groww_access_token = "groww", "in", "tok"
+    settings.paper_starting_cash = 100_000.0
+    from trading_agent import groww
+    monkeypatch.setattr(groww.requests, "Session", lambda: FakeSession(routes()))
+    b = make_broker(settings, price_fn=lambda s: 100.0)
+    assert b.positions() == [] and b.account().cash == 100_000.0  # real holdings not copied in
+
+    # An untouched copy made by an older version is replaced with fresh practice money ...
+    path = settings.state_dir / "paper_broker.json"
+    old = LocalPaperBroker(path, starting_cash=0)
+    old.seed([Position("INFY", 10, 1285.0, 1023.4)], cash=0.0, label="groww")
+    b = make_broker(settings, price_fn=lambda s: 100.0)
+    assert b.positions() == [] and b.account().cash == 100_000.0
+    # ... but a copy someone has traded in is kept.
+    old = LocalPaperBroker(path, starting_cash=0, price_fn=lambda s: 1000.0)
+    old.seed([Position("INFY", 10, 1285.0, 1023.4)], cash=0.0, label="groww")
+    old.submit_order("INFY", "sell", qty=1)
+    b = make_broker(settings, price_fn=lambda s: 100.0)
+    assert [p.symbol for p in b.positions()] == ["INFY"]
+
+
 def _isolated_env(tmp_path, monkeypatch, **env):
     monkeypatch.chdir(tmp_path)  # no real .env is read
     for k in ("GROWW_ACCESS_TOKEN", "GROWW_API_KEY", "GROWW_API_SECRET", "GROWW_TOTP_SECRET",

@@ -546,7 +546,7 @@
         <td><span class="pill ${d.status==="new"?"ok":""}">${d.status==="new"?"New":"Analysed"}</span></td></tr>`).join("")
       : `<tr><td colspan="7" class="empty">No disclosed deals by ${esc(s.watch_investor)} in the window.</td></tr>`;
 
-    $("pricesrc").textContent = c.prices === "groww" ? "prices from Groww" : "prices via Yahoo Finance, delayed";
+    $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
     $("positions").innerHTML = S.positions.length ? S.positions.map(p => `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
         <td class="num">${money(p.market_value)}</td><td class="num ${p.unrealized_pl>0?"up":p.unrealized_pl<0?"down":""}">${signed(p.unrealized_pl)}</td>
