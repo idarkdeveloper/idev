@@ -264,6 +264,8 @@ class App:
 
     # -- snapshot for the page -----------------------------------------------
     def snapshot(self) -> dict[str, Any]:
+        # Read "busy" before the state file: a reply saying a job has finished then always carries that job's results.
+        busy = self.busy
         st = State(self.settings.state_dir / "state.json")
         s = self.settings
         deals = []
@@ -352,7 +354,7 @@ class App:
             "account": acct, "positions": positions, "performance": perf,
             "broker_error": broker_error, "deals": deals, "deals_error": self._deals_error,
             "recommendations": recs, "runs": list(reversed(st.data["runs"][-20:])),
-            "seen_count": st.seen_count, "busy": self.busy,
+            "seen_count": st.seen_count, "busy": busy,
             "running": ({"kind": self.running.kind, "label": self.JOB_LABELS.get(self.running.kind, self.running.kind),
                          "started_at": self.running.started_at} if self.busy and self.running else None),
             "jobs": [j.to_dict() for j in self.jobs[-5:]],

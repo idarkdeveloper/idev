@@ -262,21 +262,22 @@ class LocalPaperBroker:
         raise LookupError(f"No price known for {symbol}; set one with set_price() or a price_fn")
 
     def positions(self) -> list[Position]:
-        out = []
-        dirty = False
-        for sym, p in self._state["positions"].items():
-            try:
-                px: float | None = self.latest_price(sym)
-            except LookupError:
-                px = None
-            if px is not None and px > (p.get("high_water") or 0):
-                p["high_water"] = px
-                dirty = True
-            out.append(Position(symbol=sym, qty=p["qty"], avg_entry_price=p["avg_entry_price"],
-                                current_price=px, high_water=p.get("high_water")))
-        if dirty:
-            self._save()
-        return out
+        with self._lock:  # the watch thread's auto-exit orders change the same dict
+            out = []
+            dirty = False
+            for sym, p in self._state["positions"].items():
+                try:
+                    px: float | None = self.latest_price(sym)
+                except LookupError:
+                    px = None
+                if px is not None and px > (p.get("high_water") or 0):
+                    p["high_water"] = px
+                    dirty = True
+                out.append(Position(symbol=sym, qty=p["qty"], avg_entry_price=p["avg_entry_price"],
+                                    current_price=px, high_water=p.get("high_water")))
+            if dirty:
+                self._save()
+            return out
 
     def account(self) -> Account:
         equity = self._state["cash"] + sum(

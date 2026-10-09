@@ -905,16 +905,18 @@ const strong={ticker:'MCX',momentum:{verdict:'strong',ret_6m:0.2,ret_12_1:0.3,ab
 const weak={ticker:'XYZ',momentum:{verdict:'weak',ret_6m:-0.2,ret_12_1:-0.3,above_200dma:false}};
 const off={regime:'risk_off',markets:{nifty50:{above_200dma:false}}}, neutral={regime:'neutral',markets:{nifty50:{above_200dma:true}}};
 const scr={top:[{symbol:'A'},{symbol:'B'},{symbol:'C<'},{symbol:'D'},{symbol:'E'},{symbol:'F'}]};
+const offOnly={regime:'risk_off',markets:{nifty50:{above_200dma:true}}}, oldScr={...scr, at:'2026-01-02T10:00:00+00:00'};
 console.log(JSON.stringify({
  off:L(strong,undefined,{regime:off,screen:scr}), offNoScreen:L(strong,undefined,{regime:off,screen:null}),
  neutral:L(strong,undefined,{regime:neutral,screen:scr}), replay:L(strong), weakNeutral:L(weak,undefined,{regime:neutral,screen:scr}),
- replayWeak:L(weak)}));
+ replayWeak:L(weak), offOnly:L(strong,undefined,{regime:offOnly,screen:scr}), oldScreen:L(weak,undefined,{regime:neutral,screen:oldScr})}));
 """
     common = Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "common.js"
     r = subprocess.run([node, "-e", js, str(common)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     o = json.loads(r.stdout)
-    hold = "The market is risk-off (Nifty below its 200-day average), so the agent's rules hold off new buys until it recovers; if you buy anyway, keep the position small."
+    hold = ("The market is risk-off and the Nifty is below its 200-day average, so the agent's rules hold off new buys "
+            "until it recovers; if you buy anyway, keep the position small.")
     assert hold in o["off"] and "trend-wise it passes, but the market filter says wait." in o["off"]
     assert o["off"].index(hold) < o["off"].index("Bottom line") and "kind of stock the screen buys" not in o["off"]
     assert o["off"].endswith("Stocks passing the screen today: A, B, C&lt;, D, E.")
@@ -922,3 +924,6 @@ console.log(JSON.stringify({
     assert "kind of stock the screen buys" in o["neutral"] and hold not in o["neutral"] and "Stocks passing" not in o["neutral"]
     assert o["replay"] == o["neutral"] and "Stocks passing" not in o["replayWeak"] and "Run Screen" not in o["replayWeak"]
     assert o["weakNeutral"].endswith("Stocks passing the screen today: A, B, C&lt;, D, E.")
+    assert o["offOnly"].startswith(o["offOnly"].split("The market is risk-off,")[0]) and "The market is risk-off, so" in o["offOnly"]
+    assert "200-day average, so" not in o["offOnly"]  # the reason names only what is true
+    assert o["oldScreen"].endswith("Stocks passing the screen as of 2026-01-02: A, B, C&lt;, D, E.")

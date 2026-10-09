@@ -141,7 +141,12 @@ window.TA = (function(){
     const rg = ctx && ctx.regime && !ctx.regime.error ? ctx.regime : null;
     const nifty = rg && rg.markets && rg.markets.nifty50;
     const marketWait = !!rg && (rg.regime === "risk_off" || (nifty && nifty.above_200dma === false));
-    if(marketWait) out.push("The market is risk-off (Nifty below its 200-day average), so the agent's rules hold off new buys until it recovers; if you buy anyway, keep the position small.");
+    if(marketWait){
+      const riskOff = rg.regime === "risk_off", below = !!(nifty && nifty.above_200dma === false);
+      const why = riskOff && below ? "The market is risk-off and the Nifty is below its 200-day average"
+                : riskOff ? "The market is risk-off" : "The Nifty is below its 200-day average";
+      out.push(`${why}, so the agent's rules hold off new buys until it recovers; if you buy anyway, keep the position small.`);
+    }
     const strong = m.verdict === "strong" && m.above_200dma !== false;
     const stockWait = m.verdict === "weak" || m.above_200dma === false;
     const risk = `${tw || res || deal ? ", but there is event risk ahead, so keep any position small" : ""}${p6 != null && p6 > 0.5 ? " and expect big swings" : ""}`;
@@ -150,7 +155,8 @@ window.TA = (function(){
                     : "Bottom line: nothing decisive either way; it needs a reason beyond the price trend.");
     if(ctx && (marketWait || stockWait)){
       const top = ctx.screen && ctx.screen.top ? ctx.screen.top.slice(0, 5).map(x => esc(x.symbol)) : null;
-      out.push(top && top.length ? `Stocks passing the screen today: ${top.join(", ")}.` : "Run Screen to see which stocks pass today.");
+      const at = ctx.screen && ctx.screen.at ? String(ctx.screen.at).slice(0, 10) : null, today = new Date().toISOString().slice(0, 10);
+      out.push(top && top.length ? `Stocks passing the screen ${at && at !== today ? "as of " + esc(at) : "today"}: ${top.join(", ")}.` : "Run Screen to see which stocks pass today.");
     }
     return out.join(" ");
   }
