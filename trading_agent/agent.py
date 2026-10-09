@@ -15,6 +15,7 @@ from .config import Settings
 from .investors import classify_client, describe
 from .momentum import momentum_summary
 from .notify import Notifier
+from .risk import atr, position_size
 from .quiver import DisclosedTrade
 from .state import State
 
@@ -44,9 +45,13 @@ Your job each run:
 6. Call send_recommendation exactly once per ticker that deserves a recommendation
    (buy / sell / hold / watch). If nothing deserves action, call send_recommendation once
    with action "hold" summarising why.
-7. If and only if place_paper_order is available AND your confidence is "high", you may
-   execute the recommendation with paper money. Never exceed 10% of equity on a single
-   order, never buy a ticker already above 20% of equity, and never sell more than is held.
+7. Size every buy with suggest_position_size (risk 1% of equity on a 2x ATR move, capped
+   at 10% of equity) and quote its stop level in the rationale. If the global context says
+   the Nifty trend is "down", recommend no new buys at all.
+8. If and only if place_paper_order is available AND your confidence is "high", you may
+   execute the recommendation with paper money, using the quantity from
+   suggest_position_size. Never buy a ticker already above 20% of equity, and never sell
+   more than is held.
 
 Rules:
 - Be decisive but explain the risk in plain language.
@@ -231,8 +236,34 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             return json.dumps({"error": str(e)})
         return json.dumps({"ticker": ticker.upper(), "announcements": rows}, default=str)
 
+    @beta_tool
+    def suggest_position_size(ticker: str) -> str:
+        """Volatility-based position size for a new buy: shares and rupee amount such that a
+        2x ATR(14) adverse move costs 1% of equity, capped at 10% of equity, plus a stop level.
+
+        Args:
+            ticker: Stock ticker symbol.
+        """
+        try:
+            equity = ctx.broker.account().equity
+            price = ctx.broker.latest_price(ticker)
+        except Exception as e:  # noqa: BLE001
+            return json.dumps({"error": str(e)})
+        a = None
+        src = getattr(ctx.momentum, "source", None)
+        if src is not None and hasattr(src, "history"):
+            try:
+                a = atr(src.history(ticker, "1y"))
+            except Exception:  # noqa: BLE001
+                a = None
+        out = position_size(equity, price, a, whole_shares=ctx.settings.market == "in")
+        out["ticker"] = ticker.upper()
+        out["equity"] = equity
+        return json.dumps(out, default=str)
+
     tools: list[Any] = [get_portfolio, get_latest_price, get_investor_trade_history,
-                        get_momentum, get_global_context, get_announcements, send_recommendation]
+                        get_momentum, get_global_context, get_announcements,
+                        suggest_position_size, send_recommendation]
 
     if ctx.settings.auto_trade:
         @beta_tool

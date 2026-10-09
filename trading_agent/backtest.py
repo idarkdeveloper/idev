@@ -16,8 +16,11 @@ from typing import Any, Iterable
 from .investors import classify_client
 from .quiver import DisclosedTrade
 
+from .costs import IndianDeliveryCosts
+
 DEFAULT_HORIZONS = (5, 20, 60)
-DEFAULT_COST_BPS = 50.0  # round trip, delivery; refine with the cost model research
+DEFAULT_TRADE_SIZE = 25_000.0  # rupees; the cost model is size-dependent (flat DP charge, brokerage cap)
+DEFAULT_COST_BPS = round(IndianDeliveryCosts().round_trip_bps(DEFAULT_TRADE_SIZE), 1)  # ~55 bps incl. slippage
 BENCHMARK = "^NSEI"
 
 
