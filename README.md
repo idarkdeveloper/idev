@@ -167,13 +167,27 @@ these only ever touch the local paper account.
   more than its round-trip trading cost; a sell if the stock then lagged. Watch and hold
   calls are shown but not scored.
 - **Account value over time**: every check and every paper order records the paper
-  account's value (at most one point per 10 minutes), drawn as a curve in the dashboard.
-- **Factor portfolio backtest** (`python -m trading_agent factor-backtest --universe NIFTY200 --top 20 --years 4`):
+  account's value (at most one point per 10 minutes), drawn as a curve in the dashboard,
+  with the current and worst fall from peak (also printed by `portfolio`).
+- **Factor portfolio backtest** (`python -m trading_agent factor-backtest --universe NIFTY50 --top 10 --years 4`):
   each month, rank the universe exactly as `screen` does on data available that day,
   hold the top N equal-weight, pay Indian delivery charges on every trade, and compare
-  with NIFTY 50 and an equal-weight hold of the universe. Read the caveat it prints: the
-  universe is today's constituents (survivorship bias flatters every curve) and the
-  NIFTY 50 line excludes dividends.
+  with NIFTY 50 and an equal-weight hold of the index members. Two things keep it honest:
+  - **Past members, not today's.** For NIFTY 50, every change since March 2021 is built in
+    (`trading_agent/membership.py`), so each month ranks only the stocks in the index that
+    day, including the ones later dropped (UPL, IndusInd Bank, Wipro, ...). Using today's
+    list instead lets the screen "buy" BSE, Trent or BEL years before they joined, on
+    momentum it could not have seen as an index stock. For other indices, pass a change
+    log with `--changes changes.csv` (`date,added,removed`); without one the printout warns
+    that the result is survivorship-biased.
+  - **A benchmark with dividends.** NIFTY 50 is the NIFTYBEES ETF, which reinvests
+    dividends, like the stock returns do. The price-only index (`^NSEI`), which lags by
+    about 1.2% a year, is still shown for reference.
+
+  On NIFTY 50, top 10, Dec 2022 to Oct 2026, testing on past members took the factor
+  portfolio from +68.8% to +20.8% after charges, against +24.8% for NIFTY 50 with
+  dividends, with a worst fall of 26.7% against 14.0%. Treat any screen result on today's
+  members as an upper bound.
 
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the

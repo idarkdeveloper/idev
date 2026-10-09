@@ -6,10 +6,15 @@ MA, liquidity floor) on data available up to that day, hold the top N equal-weig
 the next month, and pay Indian delivery charges on every buy and sell. If fewer than N
 stocks qualify, the rest stays in cash, which is how the trend filter shows up.
 
-Compared with NIFTY 50 and an equal-weight hold of the whole universe (no costs).
+Compared with NIFTY 50 and an equal-weight hold of the universe (no costs). The NIFTY 50
+line is the NIFTYBEES ETF by default: it reinvests dividends, net of its small fee, so it
+is the return an index fund actually delivered, unlike the price-only index
+(^NSEI), which trails by roughly 1.2% a year. The price index is still reported.
 
-Caveat built into the output: the universe is today's constituents, so stocks that
-were dropped or delisted are missing. That survivorship bias flatters every curve.
+Given a `Membership`, each month ranks only the stocks that were in the index that day,
+including ones later dropped, so the test is free of survivorship bias for as far back
+as the change log reaches. Without one, the universe is today's constituents and the
+caveat says so.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable
 
+from .membership import DELISTED, Membership
 from .momentum import momentum_stats
 from .screen import _vol, score_universe
 
@@ -62,13 +68,16 @@ def _stats(values: list[float], dates: list[str]) -> dict[str, Any]:
 
 
 def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20, years: int = 4,
-                        benchmark: str = "^NSEI", cost_model: Any | None = None, capital: float = 500_000.0,
-                        workers: int = 8, min_turnover: float = 1e7, require_above_200dma: bool = True
-                        ) -> dict[str, Any]:
-    members = [m["symbol"] for m in universe]
+                        benchmark: str = "NIFTYBEES", price_index: str | None = "^NSEI",
+                        cost_model: Any | None = None, capital: float = 500_000.0,
+                        workers: int = 8, min_turnover: float = 1e7, require_above_200dma: bool = True,
+                        membership: Membership | None = None) -> dict[str, Any]:
+    current = [m["symbol"] for m in universe]
     rng = _yahoo_range(years)
     bench = prices.history(benchmark, rng)
     bench_dates = [b["date"] for b in bench]
+    # all stocks that were members at any time in the window (including the lookback year)
+    members = sorted(membership.ever_members(bench_dates[0])) if membership and bench_dates else current
 
     def load(sym: str) -> tuple[str, list[dict[str, Any]] | None]:
         try:
@@ -87,6 +96,9 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
         rebal = rebal[-(years * 12 + 1):]
     if len(rebal) < 2:
         raise ValueError("not enough price history for a backtest; try fewer years")
+    in_index = (lambda day: membership.members_on(day)) if membership else (lambda day: set(current))
+    window_members = set().union(*(in_index(d) for d in rebal[:-1]))
+    missing = sorted(window_members - set(hist))
 
     value, holdings = capital, {}  # holdings: sym -> rupee value at last rebalance
     holdings_prev: dict[str, float] = {}
@@ -108,7 +120,7 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
             value = cash + sum(holdings.values())
             # equal-weight universe, rebalanced monthly, no costs
             rets = []
-            for sym in hist:
+            for sym in in_index(prev) & set(hist):
                 p0 = _price_at(hist[sym], dates_of[sym], prev)
                 p1 = _price_at(hist[sym], dates_of[sym], day)
                 if p0 and p1:  # listed before the previous rebalance
@@ -125,7 +137,10 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
 
         # 2. rank on data up to this day only
         stats: dict[str, dict[str, Any]] = {}
+        eligible_now = in_index(day)
         for sym, bars in hist.items():
+            if sym not in eligible_now:
+                continue
             i = bisect_right(dates_of[sym], day)
             if i < MIN_BARS:
                 continue
@@ -164,31 +179,75 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
     s_stats, b_stats, e_stats = (_stats(curve, rebal), _stats([v for v in bench_curve if v], rebal),
                                  _stats(ew_curve, rebal))
     avg_names = statistics.fmean(len(p["picks"]) for p in picks_log) if picks_log else 0
+    stats = {"strategy": s_stats, "benchmark": b_stats, "equal_weight": e_stats}
+    if price_index:
+        try:
+            px = prices.history(price_index, rng)
+            px_dates = [b["date"] for b in px]
+            p0 = _price_at(px, px_dates, rebal[0])
+            stats["price_index"] = _stats([capital * (_price_at(px, px_dates, d) or p0) / p0 for d in rebal], rebal)
+        except Exception:  # noqa: BLE001 - informational row only
+            pass
+    point_in_time = membership is not None and membership.known_since <= rebal[0]
+    dropped = sorted(window_members - set(current))
     return {
         "dates": rebal, "strategy": curve, "benchmark": bench_curve, "equal_weight": ew_curve,
-        "stats": {"strategy": s_stats, "benchmark": b_stats, "equal_weight": e_stats},
+        "stats": stats,
         "costs_paid": round(costs_paid, 2), "trades": trades, "months": len(rebal) - 1,
         "avg_names_held": round(avg_names, 1), "months_all_cash": cash_months,
-        "universe_size": len(members), "with_history": len(hist), "top": top, "capital": capital,
-        "benchmark_symbol": benchmark, "picks": picks_log[-3:],
-        "caveat": "Universe is today's constituents: stocks that left the index or delisted are missing, "
-                  "which flatters both the strategy and the equal-weight curve. The NIFTY 50 line is the "
-                  "price index without dividends, while stock returns include them, so it trails by roughly "
-                  "1 to 1.5% a year.",
+        "universe_size": len(window_members), "with_history": len(set(hist) & window_members),
+        "top": top, "capital": capital, "benchmark_symbol": benchmark, "price_index_symbol": price_index,
+        "picks": picks_log[-3:],
+        "point_in_time": point_in_time,
+        "former_members": dropped,
+        "missing_history": [{"symbol": m, "why": DELISTED.get(m, "no price history found")} for m in missing],
+        "index_changes": membership.changes_between(rebal[0], rebal[-1]) if membership else [],
+        "caveat": _caveat(benchmark, membership, point_in_time, dropped, missing),
     }
+
+
+def _caveat(benchmark: str, membership: Membership | None, point_in_time: bool,
+            dropped: list[str], missing: list[str]) -> str:
+    parts = []
+    if membership is None:
+        parts.append("Universe is today's constituents: stocks that left the index are missing, which "
+                     "flatters both the strategy and the equal-weight curve. Point-in-time membership is "
+                     "built in for NIFTY 50; for other indices pass a change log.")
+    elif not point_in_time:
+        parts.append(f"Index membership is known from {membership.known_since}; months before that use "
+                     "the earliest known list, so they still carry some survivorship bias.")
+    else:
+        parts.append(f"Each month ranks only that month's index members ({len(dropped)} later dropped "
+                     "are included), so there is no survivorship bias.")
+    if missing:
+        parts.append(f"No price history for {', '.join(missing)}, so "
+                     f"{'it is' if len(missing) == 1 else 'they are'} left out of the months "
+                     f"{'it was' if len(missing) == 1 else 'they were'} in the index.")
+    if benchmark.upper().startswith("NIFTYBEES"):
+        parts.append("NIFTY 50 is the NIFTYBEES ETF, which includes dividends, like the stock returns.")
+    elif benchmark.startswith("^"):
+        parts.append("The benchmark is a price index without dividends, so it trails a real index fund "
+                     "by about 1.2% a year.")
+    return " ".join(parts)
 
 
 def format_factor_backtest(r: dict[str, Any]) -> str:
     pct = lambda v: "  n/a " if v is None else f"{v*100:+6.1f}%"  # noqa: E731
     lines = [f"Factor portfolio: top {r['top']} of {r['with_history']}/{r['universe_size']} stocks, "
-             f"{r['months']} monthly rebalances {r['dates'][0]} to {r['dates'][-1]}",
+             f"{r['months']} monthly rebalances {r['dates'][0]} to {r['dates'][-1]}"
+             + (" (point-in-time members)" if r.get("point_in_time") else ""),
              f"{'':<16}{'total':>9}{'CAGR':>9}{'max DD':>9}{'vol':>8}"]
-    for key, label in (("strategy", "Strategy"), ("benchmark", r["benchmark_symbol"]), ("equal_weight", "Equal weight*")):
+    rows = [("strategy", "Strategy"), ("benchmark", r["benchmark_symbol"]), ("equal_weight", "Equal weight*")]
+    if "price_index" in r["stats"]:
+        rows.append(("price_index", f"{r.get('price_index_symbol')} (no div)"))
+    for key, label in rows:
         s = r["stats"][key]
         lines.append(f"{label:<16}{pct(s['total_return'])}{pct(s['cagr'])}{pct(s['max_drawdown'])}"
                      f"{pct(s['volatility'])}")
     lines.append(f"Charges paid ₹{r['costs_paid']:,.0f} over {r['trades']} trades; "
                  f"avg {r['avg_names_held']} names held; {r['months_all_cash']} months fully in cash.")
-    lines.append("* equal weight of the whole universe, rebalanced monthly, no costs.")
+    for c in r.get("index_changes", []):
+        lines.append(f"  {c['date']}: +{' +'.join(c['added'])}  -{' -'.join(c['removed'])}")
+    lines.append("* equal weight of that month's index members, rebalanced monthly, no costs.")
     lines.append("Caveat: " + r["caveat"])
     return "\n".join(lines)

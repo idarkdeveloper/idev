@@ -226,6 +226,7 @@ def test_equity_history_scorecard_and_factor_endpoints(server):
     _post(base + "/api/order", {"symbol": "NVDA", "side": "buy", "qty": 2})
     _, st = _get(base + "/api/state")
     assert len(st["equity_history"]) == 1 and st["equity_history"][0]["positions"] == 1
+    assert st["equity_stats"]["points"] == 1 and st["equity_stats"]["max_drawdown"] == 0
     status, sc = _get(base + "/api/scorecard")
     assert status == 200 and sc["summary"]["recommendations"] == 0
     status, fb = _get(base + "/api/factor-backtest")
