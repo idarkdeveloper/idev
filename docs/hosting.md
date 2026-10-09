@@ -8,6 +8,19 @@ public IP**. Pick one of the three routes below.
 Nothing here turns live trading on. Real orders still need both `AUTO_TRADE=true` and
 `GROWW_LIVE_ORDERS=true`, exactly as before.
 
+## Trading NSE from outside India (e.g. Germany)
+
+- **Account first.** If you are a non-resident Indian under FEMA, trading from a regular
+  resident account isn't allowed; NRIs use NRE/NRO accounts with PIS permission through a
+  broker that supports them. Confirm with Groww which account you hold. (Not legal advice.)
+- **Prefer a server in India (route B, Mumbai or Bangalore region).** Groww then sees a
+  fixed Indian IP; home connections abroad usually change IP, and Groww may not accept a
+  foreign IP for API orders at all — check in Groww's API settings before using route A.
+- **Market hours in Germany:** 09:15–15:30 IST is 05:45–12:00 in German summer time and
+  04:45–11:00 in winter time (from the last Sunday of October). The agent keeps India time.
+- **Taxes:** India taxes the gains; Germany may too if you are tax-resident there. The
+  India–Germany tax treaty decides; ask a tax adviser.
+
 ## Step 1 – find out whether your IP is fixed
 
 On the machine you want to use:
@@ -37,11 +50,11 @@ Works when your home connection has a static IP.
 
 To remove the task: `.\deploy\windows\install-autostart.ps1 -Remove`.
 
-## Route B – a small rented server (recommended if your IP isn't fixed)
+## Route B – a small rented server (recommended if your IP isn't fixed, or you live abroad)
 
-Any provider that gives a static/reserved public IP works. Rough prices (October 2026):
-DigitalOcean, AWS Lightsail and Hetzner start around ₹400–600 a month; Oracle Cloud's
-always-free tier may also work. 1 GB of memory is enough.
+Any provider that gives a static/reserved public IP works; choose an **Indian region**
+(AWS Lightsail or EC2 in Mumbai, DigitalOcean in Bangalore) so Groww sees an Indian IP.
+Rough prices (October 2026): about ₹400–600 a month; 1 GB of memory is enough.
 
 1. Create an Ubuntu server with a reserved/static IP. Note the IP.
 2. Register that IP in Groww's API settings.
