@@ -80,6 +80,7 @@ class App:
         self.last_backtest: dict[str, Any] | None = None
         self.last_screen: dict[str, Any] | None = None
         self.last_factor_bt: dict[str, Any] | None = None
+        self.last_signal_lab: dict[str, Any] | None = None
         self.demo_trades = demo_trades
         self._deals: list[DisclosedTrade] | None = demo_trades
         self._deals_at = time.time() if demo_trades else 0.0
@@ -174,6 +175,7 @@ class App:
             "backtest": self.last_backtest,
             "screen": self.last_screen,
             "factor_backtest": self.last_factor_bt,
+            "signal_lab": self.last_signal_lab,
             "equity_history": st.data.get("equity_history", [])[-1000:],
             "equity_stats": st.equity_stats(),
             "costs": _cost_table(self.settings.market),
@@ -559,6 +561,40 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
+    def start_signal_lab(self, universe: str, years: int, horizons: list[int]) -> Job:
+        from .costs import cost_model_for
+        from .membership import membership_for
+        from .screen import load_universe
+        from .signal_lab import run_signal_lab
+
+        job = Job(id=len(self.jobs) + 1, kind="signal_lab")
+        self.jobs.append(job)
+        if self.busy:
+            job.ok, job.message, job.finished_at = False, "another job is running", _now()
+            return job
+        if self.settings.market != "in":
+            job.ok, job.message, job.finished_at = False, "the signal lab uses NSE indices; switch market to India", _now()
+            return job
+        self.busy = True
+
+        def run() -> None:
+            try:
+                members = load_universe(universe)
+                r = run_signal_lab(members, self.prices, horizons=horizons, years=years,
+                                   membership=membership_for(universe, [m["symbol"] for m in members]),
+                                   cost_model=cost_model_for("in"))
+                self.last_signal_lab = {"at": _now(), "universe": universe.upper(), "years": years, **r}
+                job.ok, job.message = True, r["summary"]
+            except Exception as e:  # noqa: BLE001
+                log.exception("signal lab failed")
+                job.ok, job.message = False, f"{type(e).__name__}: {e}"
+            finally:
+                job.finished_at = _now()
+                self.busy = False
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
     def groww_test(self) -> dict[str, Any]:
         """Check Groww credentials end to end without ever returning the token."""
         from .groww import GrowwBroker
@@ -676,6 +712,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.scorecard())
             elif path == "/api/factor-backtest":
                 self._json(app.last_factor_bt or {})
+            elif path == "/api/signal-lab":
+                self._json(app.last_signal_lab or {})
             elif path in ("/api/costs", "/api/size", "/api/orders"):
                 from urllib.parse import parse_qs
                 q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
@@ -713,6 +751,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 elif path == "/api/factor-backtest":
                     job = app.start_factor_backtest(str(body.get("universe") or "NIFTY200"),
                                                     int(body.get("top", 20)), int(body.get("years", 4)))
+                    self._json(job.to_dict(), HTTPStatus.ACCEPTED)
+                elif path == "/api/signal-lab":
+                    hs = [int(h) for h in str(body.get("horizons") or "5,20,60").split(",") if h.strip()]
+                    if not hs or any(h < 1 or h > 250 for h in hs):
+                        raise ValueError("horizons must be trading days between 1 and 250")
+                    job = app.start_signal_lab(str(body.get("universe") or "NIFTY50"),
+                                               int(body.get("years", 5)), hs)
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/dismiss":
                     self._json({"ok": app.dismiss(int(body["index"]))})
