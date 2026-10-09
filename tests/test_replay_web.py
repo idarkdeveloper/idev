@@ -207,3 +207,20 @@ def test_quickly_failing_step_leaves_lock_free(rapp):
     assert app.jobs[-1].ok is False
     st, _ = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
     assert st == 200
+
+
+def test_replay_page_is_served_with_the_shared_assets(settings):
+    import threading
+    import urllib.request
+    from trading_agent.ui import App, make_server
+
+    srv = make_server(App(settings, dotenv=None), port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        page = urllib.request.urlopen(base + "/replay").read().decode()
+        assert "/static/common.js" in page and "/static/replay.js" in page and 'id="race-chart"' in page
+        js = urllib.request.urlopen(base + "/static/replay.js").read().decode()
+        assert "/replay/api/trials" in js
+    finally:
+        srv.shutdown()

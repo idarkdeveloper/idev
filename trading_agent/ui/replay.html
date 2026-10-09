@@ -1,1 +1,120 @@
-<!doctype html><title>Replay</title><p>Replay page coming.</p>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replay · Trading Agent</title>
+<meta name="description" content="Start a practice portfolio on a past date, step forward in time and race the agent's rules and the Nifty.">
+<link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/nocturne.css">
+</head>
+<body data-mode="replay">
+<header>
+  <div class="wrap row">
+    <div class="brand">
+      <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 17 9 11 13 15 21 7"></polyline><polyline points="15 7 21 7 21 13"></polyline></svg></div>
+      <div><div class="brand-name">Trading Agent</div><div class="sub">Replay: practise on a past date</div></div>
+    </div>
+    <nav class="tabs" aria-label="Pages"><a href="/" data-tab="live">Live</a><a href="/replay" data-tab="replay" aria-current="page">Replay</a><a href="/demo" data-tab="demo">Demo</a></nav>
+  </div>
+</header>
+<main>
+  <div class="mode-banner replay" id="banner" hidden></div>
+
+  <section id="home" style="display:flex;flex-direction:column;gap:32px">
+    <div class="card">
+      <div class="cardhead"><h2>Your replays</h2><span class="sub">practice money only; nothing here touches Groww</span></div>
+      <div class="scroll"><table><thead><tr><th>Name</th><th>Started</th><th>Replay date</th><th class="num">You</th><th class="num">Agent</th><th class="num">Nifty</th><th><span class="sr-only">Open</span></th></tr></thead><tbody id="trials"></tbody></table></div>
+    </div>
+    <form class="card" id="new-form">
+      <div class="cardhead"><h2>New replay</h2></div>
+      <div class="cardbody">
+        <div class="grid2">
+          <div class="field"><label for="n-name">Name</label><input id="n-name" name="name" required maxlength="40" placeholder="e.g. March 2021 run"></div>
+          <div class="field"><label for="n-start">Start date</label><input id="n-start" name="start" type="date" required></div>
+          <div class="field"><label for="n-cash">Practice money (₹)</label><input id="n-cash" name="cash" type="number" min="10000" step="1000" value="100000"></div>
+          <div class="field"><label for="n-universe">Agent picks from</label><select id="n-universe" name="universe"></select></div>
+          <div class="field"><label for="n-top">Agent holds (stocks)</label><input id="n-top" name="top" type="number" min="1" max="30" value="10"></div>
+          <div class="field"><label for="n-div">Dividends</label><select id="n-div" name="dividends"><option value="reinvest">Reinvest (prices include dividends)</option><option value="cash">Take as cash</option></select></div>
+        </div>
+        <div class="row"><button type="submit" class="primary" id="n-submit">Start replay</button><span class="sub" id="n-status"></span></div>
+        <div class="sub">On the start date, all three get the same money: <b>you</b> pick stocks, <b>the agent</b> buys the momentum screen's top picks and rebalances monthly, and <b>the Nifty</b> line buys the index fund and holds. Nothing after the replay date is shown until you end the replay. Earliest start: <span id="n-earliest"></span>, where the record of index members begins.</div>
+      </div>
+    </form>
+  </section>
+
+  <section id="trial" hidden style="display:flex;flex-direction:column;gap:32px">
+    <div class="card">
+      <div class="cardbody row" style="gap:8px">
+        <button type="button" class="small" id="b-home">← All replays</button>
+        <button type="button" class="primary small" data-step="week">+1 week</button>
+        <button type="button" class="primary small" data-step="month">+1 month</button>
+        <button type="button" class="primary small" data-step="year">+1 year</button>
+        <button type="button" class="small" id="b-end">End replay</button>
+        <span class="sub" id="step-status" style="margin-left:auto"></span>
+      </div>
+    </div>
+    <section class="tiles" id="race-tiles"></section>
+    <div class="card">
+      <div class="cardhead"><h2>The race</h2><span class="sub" id="race-sub"></span></div>
+      <div class="cardbody"><div class="chart" id="race-chart"></div></div>
+    </div>
+    <div id="scorecard"></div>
+    <section class="cols">
+      <div class="main">
+        <div class="card">
+          <div class="cardhead"><h2>Your portfolio</h2><span class="sub" id="yp-sub"></span></div>
+          <div class="cardbody" style="padding-top:0;border-top:none;border-bottom:1px solid var(--line)"><div class="stats" id="yp-stats"></div></div>
+          <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Price</th><th class="num">Invested</th><th class="num">Value</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th class="num">Trailing stop</th><th><span class="sr-only">Sell</span></th></tr></thead><tbody id="yp-rows"></tbody><tfoot id="yp-foot"></tfoot></table></div>
+          <form class="cardbody" id="ro-form" style="border-top:1px solid var(--line)">
+            <h3>Order on <span id="ro-date"></span></h3>
+            <div class="row">
+              <input id="ro-symbol" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 160px;text-transform:uppercase" required>
+              <div class="seg" role="group" aria-label="Side"><button type="button" class="on" data-side="buy">Buy</button><button type="button" data-side="sell">Sell</button></div>
+              <input id="ro-amount" type="number" min="0" step="any" placeholder="Amount" style="flex:1 1 110px">
+              <span class="sub">or</span>
+              <input id="ro-qty" type="number" min="0" step="1" placeholder="Shares" style="flex:1 1 90px">
+              <button type="submit" class="primary small">Place</button>
+            </div>
+            <label class="row sub" style="gap:6px"><input type="checkbox" id="ro-autostop"> Auto-sell at my trailing stops (checked every trading day of a step)</label>
+            <div class="sub">Fills at the replay day's closing price, whole shares, Indian delivery charges deducted.</div>
+          </form>
+        </div>
+        <div class="card">
+          <div class="cardhead"><h2>Agent's picks as of today</h2><span class="sub" id="pk-sub"></span></div>
+          <div class="cardbody" id="picks"></div>
+        </div>
+        <div class="card">
+          <div class="cardhead"><h2>Tools as of today</h2><span class="sub">using only data up to the replay date</span></div>
+          <div class="cardbody">
+            <div class="row"><label class="sub" for="tl-years">Years of history</label><input id="tl-years" type="number" min="1" max="5" value="3" style="width:70px">
+              <button type="button" class="small" data-tool="signal_lab">Run signal lab</button>
+              <button type="button" class="small" data-tool="factor_backtest">Run factor backtest</button></div>
+            <div id="tools"></div>
+          </div>
+        </div>
+      </div>
+      <aside class="side">
+        <div class="card">
+          <div class="cardhead"><h2>Look up a stock</h2></div>
+          <form class="cardbody" id="rl-form"><div class="row"><input id="rl-ticker" autocomplete="off" placeholder="Ticker or company name" style="flex:1;text-transform:uppercase"><button type="submit" class="small">Check</button></div>
+            <div id="rl-result" class="sub">Momentum, price and NSE announcements as they stood on the replay date.</div></form>
+        </div>
+        <div class="card">
+          <div class="cardhead"><h2>Ask Claude about this day</h2></div>
+          <div class="cardbody">
+            <div class="row"><button type="button" class="primary small" id="ask-btn">Ask Claude</button><span class="sub" id="ask-note"></span></div>
+            <div class="callout sub">Claude was trained on data after most replay dates, so an answer here may use hindsight. Its replay record is shown for interest only and is never a reason to trust it with real money.</div>
+            <div id="ask-result"></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </section>
+</main>
+<div class="suggest" id="suggest" role="listbox" aria-label="Matching companies"></div>
+<div class="toast" id="toast"></div>
+<script src="/static/common.js"></script>
+<script src="/static/replay.js"></script>
+</body>
+</html>
