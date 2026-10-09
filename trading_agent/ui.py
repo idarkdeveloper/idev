@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import threading
 import time
 import webbrowser
@@ -958,8 +959,18 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # The browser gave up on a request (page reloaded or closed mid-reply): nothing is
+        # wrong, so don't print a traceback. Anything else is still reported.
+        if isinstance(sys.exc_info()[1], (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            log.debug("client %s closed the connection early", client_address)
+            return
+        super().handle_error(request, client_address)
+
+
 def make_server(app: App, host: str = "127.0.0.1", port: int = 8787) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((host, port), make_handler(app))
+    server = _Server((host, port), make_handler(app))
     server.daemon_threads = True
     return server
 

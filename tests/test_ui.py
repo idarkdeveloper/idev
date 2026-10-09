@@ -407,3 +407,20 @@ def test_search_endpoint_is_offline_in_demo(server):
     assert status == 200 and hits == []
     _, lk = _get(base + "/api/lookup?ticker=senco")
     assert lk["ticker"] == "SENCO" and lk["matched_from"] is None
+
+
+def test_server_ignores_browser_closing_connection_early(capsys):
+    import sys as _sys
+    from trading_agent.ui import _Server
+
+    srv = _Server.__new__(_Server)  # no socket needed to test the error hook
+    try:
+        raise ConnectionAbortedError(10053, "aborted by the host")
+    except ConnectionAbortedError:
+        srv.handle_error(None, ("127.0.0.1", 1))
+    assert "Traceback" not in capsys.readouterr().err
+    try:
+        raise ValueError("real bug")
+    except ValueError:
+        srv.handle_error(None, ("127.0.0.1", 1))
+    assert "real bug" in capsys.readouterr().err
