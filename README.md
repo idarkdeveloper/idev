@@ -63,6 +63,33 @@ edits the investor, disclosure source, order mode and notification targets and w
 them to `.env`; API keys stay in `.env` by hand, and live Groww orders can never be
 switched on from the page.
 
+## Replay and Demo
+
+The dashboard has three tabs: **Live** (today), **Replay** and **Demo**.
+
+**Replay** (`/replay`) starts a practice portfolio on a past date, from 4 January 2021 (where the record of
+index members begins). You, the agent's rules and the index fund each get the same practice money:
+
+- **You** buy and sell at the replay day's closing price, in whole shares, with Indian delivery charges.
+- **The agent** buys the momentum screen's top N from the index members of that day and rebalances on the first
+  trading day of each month (the forward-test rules), selling at a 3×ATR trailing stop. When it sells a holding at
+  its trailing stop, it keeps the cash until the next monthly rebalance.
+- **The Nifty** line buys the index fund (MID150BEES for the Midcap 150, NIFTYBEES for Nifty 50/100/200/500) and holds.
+
+Step forward a week, a month or a year; every trading day in between is simulated. Prices, the screen, the signal
+lab, the factor backtest and NSE announcements only ever see data up to the replay date; asking for anything later
+raises an error in the code, and tests check this. **End replay** shows the scorecard and what each portfolio did
+from then to today. Dividends are reinvested or taken as cash, chosen when you start.
+
+**Ask Claude about this day** sends Claude only the data available that day and charges your Anthropic account per
+press. Claude's training data runs past most replay dates, so its replay answers may use hindsight; they are
+labelled so and are never a reason to trust it with real money.
+
+Replays are saved in `state/replay/<name>/`. Nothing on the Replay or Demo pages can place a real order.
+
+**Demo** (`/demo`, or `python -m trading_agent ui --demo`) is the dashboard on bundled sample deals and prices,
+with its own practice account in `state/demo/`. It never contacts Groww; **Reset demo** starts it over.
+
 ## Linking Groww
 
 **Which plan?** The **Free Trial** (₹0) is enough. It includes holdings, positions, margin
