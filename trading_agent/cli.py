@@ -127,6 +127,40 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_holdings(args: argparse.Namespace) -> int:
+    """Your real Groww holdings: buy price, current price, profit or loss. Read-only."""
+    from .groww import GrowwBroker
+    from .runner import free_prices, resolve_groww_token
+    settings = _settings(args)
+    if not settings.has_groww_credentials:
+        print("Groww isn't linked: add GROWW_API_KEY + GROWW_API_SECRET / GROWW_TOTP_SECRET to .env.")
+        return 1
+    g = GrowwBroker(resolve_groww_token(settings), live_orders=False, exchange=settings.groww_exchange,
+                    price_fallback=free_prices(settings))
+    rows = sorted(g.positions(), key=lambda p: -(p.market_value or p.qty * p.avg_entry_price))
+    if not rows:
+        print("No holdings in your Groww account.")
+        return 0
+    print(f"{'Stock':<12} {'Qty':>6} {'Buy price':>11} {'Current':>11} {'Invested':>12} {'Value':>12} {'P&L':>12} {'P&L %':>8}")
+    inv_all = inv_priced = value = 0.0
+    for p in rows:
+        invested = p.qty * p.avg_entry_price
+        inv_all += invested
+        if p.current_price is None:
+            print(f"{p.symbol:<12} {p.qty:>6g} {p.avg_entry_price:>11,.2f} {'no price':>11} {invested:>12,.0f}")
+            continue
+        v = p.qty * p.current_price
+        inv_priced += invested
+        value += v
+        pct = (p.current_price / p.avg_entry_price - 1) * 100 if p.avg_entry_price else 0.0
+        print(f"{p.symbol:<12} {p.qty:>6g} {p.avg_entry_price:>11,.2f} {p.current_price:>11,.2f} {invested:>12,.0f} "
+              f"{v:>12,.0f} {v - invested:>+12,.0f} {pct:>+7.2f}%")
+    pl = value - inv_priced
+    print(f"\nInvested ₹{inv_all:,.0f} · value now ₹{value:,.0f} · P&L ₹{pl:+,.0f} "
+          f"({(value / inv_priced - 1) * 100 if inv_priced else 0:+.2f}%) on holdings with a price")
+    return 0
+
+
 def cmd_groww_token(args: argparse.Namespace) -> int:
     """Print a Groww access token (valid until 06:00 IST); reuses the cached one."""
     from .runner import resolve_groww_token
@@ -615,6 +649,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("groww-token", help="print a Groww access token (cached until 06:00 IST)")
     sp.add_argument("--fresh", action="store_true", help="generate a new one even if the cached token is valid")
     sp.set_defaults(func=cmd_groww_token)
+    sp = sub.add_parser("holdings", help="your real Groww holdings: buy price, current price, P&L (read-only)")
+    sp.set_defaults(func=cmd_holdings)
     sp = sub.add_parser("orders", help="list live Groww orders; --refresh re-checks open ones")
     sp.add_argument("--refresh", action="store_true")
     sp.add_argument("--limit", type=int, default=30)

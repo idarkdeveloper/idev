@@ -593,3 +593,15 @@ def test_anthropic_client_sends_workspace_header(settings):
     assert "anthropic-workspace-id" not in make_client(settings).default_headers
     settings.anthropic_workspace_id = "wrkspc_test"
     assert make_client(settings).default_headers["anthropic-workspace-id"] == "wrkspc_test"
+
+
+def test_cli_holdings_prints_buy_current_and_pl(tmp_path, monkeypatch, capsys):
+    from trading_agent import cli, groww
+    _isolated_env(tmp_path, monkeypatch, GROWW_ACCESS_TOKEN="tok")
+    monkeypatch.setattr(groww.requests, "Session", lambda: FakeSession(routes()))
+    assert cli.main(["holdings"]) == 0
+    out = capsys.readouterr().out
+    # RELIANCE: 10 @ 2,500 bought, 2,862 now -> +3,620 (+14.48%)
+    assert "RELIANCE" in out and "2,500.00" in out and "2,862.00" in out and "+3,620" in out and "+14.48%" in out
+    _isolated_env(tmp_path, monkeypatch)
+    assert cli.main(["holdings"]) == 1

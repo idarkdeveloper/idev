@@ -181,6 +181,7 @@ Everything the CLI does is also in the dashboard:
 | `scorecard` | *Claude's track record* panel |
 | `groww-token` | *Test Groww connection* in Settings (the token itself is never shown) |
 | `groww-check` | CLI only: verifies live-trading assumptions on your account |
+| `holdings` | *My Groww portfolio*: your real holdings with buy price, current price and P&L in ₹ and % (read-only) |
 | `orders`, `orders --refresh` | Order history (live orders show their Groww status) |
 | `gtt`, `gtt --sync` | *GTT stop* column in the portfolio, toggle in Settings |
 | `--market`, `.env` strategy keys | Settings: investor, disclosures, market, starting cash, order mode, notifications |
