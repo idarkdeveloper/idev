@@ -263,6 +263,7 @@
     });
   }
   let MP = null;  // the last My Groww portfolio answer: it fills the Live tiles
+  if(MODE !== "demo") $("tiles").innerHTML = ["Holdings value", "Profit / loss", "Holdings"].map(l => tile(l, "\u2026", "Loading your holdings\u2026")).join("");
   const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"]],
                    us:[["congress","Congress trades"],["insider","Insider filings"]]};
   const WHO = {promoter_insider:"Promoter", institution:"Institution", individual:"Individual", broker_desk:"Broker desk", corporate:"Corporate", unknown:"?"};
@@ -378,10 +379,10 @@
         tile("Open positions", String(S.positions.length), biggest && a ? `largest: ${esc(biggest.symbol)} ${Math.round(100*(biggest.market_value||0)/a.equity)}% of equity` : "none yet"),
       ];
     } else {
-      const na = (why) => [tile("Holdings value","n/a",why), tile("Profit / loss","n/a",why), tile("Holdings","n/a",why)];
-      if(!MP) t = na("loading\u2026");
+      const na = (why, v) => ["Holdings value", "Profit / loss", "Holdings"].map(l => tile(l, v || "n/a", why));
+      if(!MP) t = na("Loading your holdings\u2026", "\u2026");
       else if(!MP.linked) t = na("Groww isn't linked");
-      else if(MP.error) t = na("Groww didn't answer");
+      else if(MP.error) t = na("Couldn't load: " + esc(MP.error));
       else {
         const cls = MP.pl == null ? "" : MP.pl >= 0 ? "up" : "down";
         t = [tile("Holdings value", inr(MP.value), `invested ${inr(MP.invested)}`),
@@ -429,7 +430,7 @@
   async function loadMyPortfolio(refresh){
     const btn = $("mp-refresh"); btn.disabled = true;
     try { renderMyPortfolio(await api("/api/my-portfolio" + (refresh ? "?refresh=1" : ""))); }
-    catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; }
+    catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; MP = {linked: true, error: e.message}; if(S) renderTiles(); }
     finally { btn.disabled = false; }
   }
   function renderMyPortfolio(m){
@@ -836,12 +837,26 @@
       return `<div class="ann"><div class="meta">${esc(istStamp(i.published))} · ${esc(i.source)}${i.event ? " · " + esc(i.event.replace(/_/g, " ")) : ""}</div><div>${chip}${href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}</div></div>`; }).join("");
     const errs = (n.errors || []).length ? `<div class="sub" style="font-size:12px">Some sources failed: ${esc(n.errors.join("; "))}</div>` : "";
     const note = !items.length ? "" : n.tagger === "none" ? "Headlines are not labelled: start Ollama or set NEWS_TAGGER (see the README)."
-      : items.some(i => i.sentiment) ? "Labels come from a language model and can be wrong." : "Labels appear on the next look-up.";
+      : TA.newsNeedsLabels(n) ? (n.tagger && n.tagger !== "pending" ? `Labelling with ${n.tagger}\u2026` : "Labelling headlines\u2026")
+      : "Labels come from a language model and can be wrong.";
     return `<h3 style="margin-top:6px">News, last 7 days</h3>${rows || `<div class="sub">none found</div>`}${errs}${note ? `<div class="sub" style="font-size:12px">${esc(note)}</div>` : ""}`;
   }
-  const takeawayHtml = (r) => { const t = lookupTakeaway(r); return t ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${t}</div>` : ""; };
+  const takeawayHtml = (r) => { const t = lookupTakeaway(r, undefined, {regime: S && S.regime, screen: S && S.screen}); return t ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${t}</div>` : ""; };
   let lookupSeq = 0;
 
+  // Labels land a few seconds after the headlines: ask again every 5 s (at most 2 minutes) and update in place.
+  function pollNews(r, seq, startedAt){
+    if(TA.newsPollNext(r.news, startedAt, Date.now(), seq === lookupSeq && !!$("lk-news")) !== "poll") return;
+    setTimeout(async () => {
+      if(seq !== lookupSeq || !$("lk-news")) return;
+      try {
+        const n = await api("/api/news?ticker=" + encodeURIComponent(r.ticker));
+        if(seq !== lookupSeq || !$("lk-news")) return;
+        r.news = n; $("lk-news").innerHTML = newsHtml(n); $("lk-take").innerHTML = takeawayHtml(r);
+      } catch(e){ return; }
+      pollNews(r, seq, startedAt);
+    }, TA.NEWS_POLL_MS);
+  }
   async function lookup(t){
     const seq = ++lookupSeq;
     $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
@@ -858,6 +873,7 @@
       api("/api/news?ticker=" + encodeURIComponent(r.ticker)).then(n => {
         if(seq !== lookupSeq || !$("lk-news")) return;  // the user looked up another stock meanwhile
         r.news = n; $("lk-news").innerHTML = newsHtml(n); $("lk-take").innerHTML = takeawayHtml(r);
+        pollNews(r, seq, Date.now());
       }).catch(e => { if(seq === lookupSeq && $("lk-news")) $("lk-news").innerHTML = `<div class="sub">News unavailable: ${esc(e.message)}</div>`; });
       const hist = r.history || [], pos = r.position, refs = [];
       if(pos){ refs.push({y: pos.avg_entry_price, label: "Your cost"}); refs.push({y: pos.stop, label: "Stop", color: C.neg}); }
@@ -948,7 +964,7 @@
       $("dlg").close(); toast(marketChanged ? "Saved; market switched" : "Saved to .env"); $("bt-investor").value = body.watch_investor || ""; await refresh(); } catch(e){ toast(e.message); }
   });
   $("btn-reset").addEventListener("click", async () => {
-    if(!confirm("Forget seen deals and recommendations? Your practice account is not touched.")) return;
+    if(!confirm("Forget seen deals? This clears the seen deals, the recommendations history and the Live account curve. The practice account and its curve are not touched.")) return;
     try { await api("/api/reset", {}); $("dlg").close(); toast("Seen deals forgotten"); await refresh(); } catch(e){ toast(e.message); }
   });
 

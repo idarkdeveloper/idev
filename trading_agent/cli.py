@@ -134,7 +134,7 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
         perf = broker.performance()
         print(f"\nPaper performance: {perf['pnl']:+,.2f} ({perf['pnl_pct']:+.2f}%) "
               f"over {perf['orders']} orders from {cur}{perf['starting_cash']:,.0f}")
-        eq = State(settings.state_dir / "state.json").equity_stats()
+        eq = State(settings.state_dir / "state.json").equity_stats(key="practice_equity")
         if eq:
             print(f"Peak {cur}{eq['peak']:,.0f}; now {eq['drawdown_now']*100:+.1f}% from peak; "
                   f"worst fall {eq['max_drawdown']*100:+.1f}% over {eq['points']} recorded points")

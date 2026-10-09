@@ -13,6 +13,11 @@ from typing import Any, Iterable
 from .quiver import DisclosedTrade
 
 
+# One lock for every State save in this process (dashboard requests, the watch thread, checks), so two writers
+# never interleave; read-modify-write sequences that must not lose an update hold it across load and save.
+STATE_LOCK = threading.RLock()
+
+
 def atomic_write(path: Path, text: str) -> None:
     """Write beside the file, then swap it in, so a reader never sees half a file."""
     path = Path(path)
@@ -39,7 +44,8 @@ class State:
             self.data = {"seen": {}, "runs": [], "recommendations": []}
 
     def save(self) -> None:
-        atomic_write(self.path, json.dumps(self.data, indent=2))
+        with STATE_LOCK:
+            atomic_write(self.path, json.dumps(self.data, indent=2))
 
     def new_trades(self, trades: Iterable[DisclosedTrade]) -> list[DisclosedTrade]:
         return [t for t in trades if t.key not in self.data["seen"]]
@@ -54,14 +60,14 @@ class State:
         self.data["runs"] = (self.data["runs"] + [info])[-200:]
 
     def record_equity(self, equity: float, cash: float, positions: int, min_gap_s: int = 600,
-                      since: str | None = None) -> bool:
+                      since: str | None = None, key: str = "equity_history") -> bool:
         """Append an equity point for the paper-account curve.
 
         Points closer than ``min_gap_s`` to the previous one replace it, so frequent
         checks don't bloat the history while the latest value stays current.
         """
         now = datetime.now(timezone.utc)
-        hist = self.equity_history(since)
+        hist = self.equity_history(since, key)
         point = {"at": now.isoformat(timespec="seconds"), "equity": round(float(equity), 2),
                  "cash": round(float(cash), 2), "positions": int(positions)}
         if hist:
@@ -73,20 +79,21 @@ class State:
             except (KeyError, ValueError):
                 pass
         hist.append(point)
-        self.data["equity_history"] = hist[-5000:]
+        self.data[key] = hist[-5000:]
         return True
 
-    def equity_history(self, since: str | None = None) -> list[dict[str, Any]]:
-        """The curve, dropping points from before ``since`` (a reset or replaced paper account)."""
-        hist = self.data.setdefault("equity_history", [])
+    def equity_history(self, since: str | None = None, key: str = "equity_history") -> list[dict[str, Any]]:
+        """One curve (``key``: "equity_history" for a real account, "practice_equity" for the practice account),
+        dropping its points from before ``since`` (a reset or replaced paper account). Other curves are untouched."""
+        hist = self.data.setdefault(key, [])
         if since:
             kept = [p for p in hist if _parse(p.get("at")) >= _parse(since)]
             if len(kept) != len(hist):
-                hist = self.data["equity_history"] = kept
+                hist = self.data[key] = kept
         return hist
 
-    def equity_stats(self, since: str | None = None) -> dict[str, Any] | None:
-        return equity_stats(self.equity_history(since))
+    def equity_stats(self, since: str | None = None, key: str = "equity_history") -> dict[str, Any] | None:
+        return equity_stats(self.equity_history(since, key))
 
     def record_recommendation(self, rec: dict[str, Any]) -> None:
         rec = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **rec}

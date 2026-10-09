@@ -30,8 +30,8 @@ from .config import Settings, load_settings
 from .investors import classify_client
 from .quiver import DisclosedTrade
 from .momentum import MomentumScreen, momentum_summary
-from .runner import check, free_prices, make_broker, make_data_source, make_notifier, make_practice_broker
-from .state import State
+from .runner import check, free_prices, make_broker, equity_key, make_data_source, make_notifier, make_practice_broker
+from .state import STATE_LOCK, State
 from .watch import Watcher
 
 log = logging.getLogger(__name__)
@@ -108,10 +108,11 @@ class App:
         self._replay: Any | None = None  # ReplayApp, built on first use
         self._holidays: Any | None = None
         self._demo: "App | None" = None
-        self._demo_src: dict[str, Any] | None = None
+        self._settings_version = 0  # bumped when settings change, so the Demo child is rebuilt only then
+        self._demo_ver = -1
         self._practice: LocalPaperBroker | None = practice  # the practice account the Demo page uses
         self._parent: "App | None" = None  # set on the Demo page's app: it shares this app's data sources
-        self._lazy_lock = threading.Lock()
+        self._lazy_lock = threading.RLock()  # one lock builds both the broker and the practice account
 
     @property
     def demo(self) -> "App":
@@ -121,13 +122,12 @@ class App:
         if self.demo_trades is not None or self._parent is not None:
             return self
         with self._lazy_lock:
-            src = dataclasses.asdict(self.settings)
-            if self._demo is None or self._demo_src != src:
+            if self._demo is None or self._demo_ver != self._settings_version:
                 settings = dataclasses.replace(self.settings, groww_live_orders=False, resend_api_key=None,
                                                notify_email_to=None, notify_webhook_url=None)
                 child = App(settings, dotenv=None, context=self.context, prices=self.prices)
                 child.momentum, child._parent = self.momentum, self
-                self._demo, self._demo_src = child, src
+                self._demo, self._demo_ver = child, self._settings_version
             return self._demo
 
     @property
@@ -148,7 +148,10 @@ class App:
             return self.broker  # type: ignore[return-value]
         with self._lazy_lock:
             if self._practice is None:
-                b = self._broker
+                try:
+                    b = self.broker  # paper mode: the same object, so there is one writer
+                except Exception:  # noqa: BLE001 - e.g. Groww unreachable: the practice account still works
+                    b = None
                 self._practice = b if isinstance(b, LocalPaperBroker) else make_practice_broker(
                     self.settings, price_fn=self.prices)
             return self._practice
@@ -159,12 +162,14 @@ class App:
         if self._parent is not None:
             return self._parent.practice_broker
         if self._broker is None:
-            b = make_broker(self.settings)
-            if isinstance(b, LocalPaperBroker) and self._practice is not None:
-                b = self._practice  # the practice account is already open: keep one writer
-            elif isinstance(b, LocalPaperBroker):
-                self._practice = b
-            self._broker = b
+            with self._lazy_lock:
+                if self._broker is None:
+                    b = make_broker(self.settings)
+                    if isinstance(b, LocalPaperBroker) and self._practice is not None:
+                        b = self._practice  # the practice account is already open: keep one writer
+                    elif isinstance(b, LocalPaperBroker):
+                        self._practice = b
+                    self._broker = b
         return self._broker
 
     @property
@@ -276,6 +281,7 @@ class App:
             acct, positions, broker_error = None, [], str(e)
         perf = self.broker.performance() if isinstance(self.broker, LocalPaperBroker) else None
         since = self.broker.created_at if isinstance(self.broker, LocalPaperBroker) else None
+        ekey = equity_key(self.broker)  # the practice account and a real account keep separate curves
         gtt = st.data.get("gtt_stops", {})
         for pos in positions:  # trailing-stop level and GTT status for the table
             g = gtt.get(pos["symbol"].upper())
@@ -318,8 +324,8 @@ class App:
             "screen": self.last_screen,
             "factor_backtest": self.last_factor_bt,
             "signal_lab": self.last_signal_lab,
-            "equity_history": st.equity_history(since)[-1000:],
-            "equity_stats": st.equity_stats(since),
+            "equity_history": st.equity_history(since, ekey)[-1000:],
+            "equity_stats": st.equity_stats(since, ekey),
             "costs": _cost_table(self.settings.market),
             "settings": {
                 "market": s.market, "currency": s.currency, "watch_investor": s.watch_investor,
@@ -601,10 +607,19 @@ class App:
         return order
 
     def _record_equity(self) -> None:
-        from .runner import record_equity
-        st = State(self.settings.state_dir / "state.json")
-        record_equity(st, self.broker)
-        st.save()
+        """Read the account first (slow, may be a network call), then load, merge and save state.json in one
+        short step under the state lock, so a write made meanwhile (a new seen deal) is not overwritten."""
+        broker = self.broker
+        try:
+            acct, n = broker.account(), len(broker.positions())
+        except Exception as e:  # noqa: BLE001
+            log.debug("equity point skipped: %s", e)
+            return
+        with STATE_LOCK:
+            st = State(self.settings.state_dir / "state.json")
+            st.record_equity(acct.equity, acct.cash, n, since=getattr(broker, "created_at", None),
+                             key=equity_key(broker))
+            st.save()
 
     def close_position(self, symbol: str) -> dict[str, Any]:
         symbol = symbol.upper()
@@ -614,10 +629,11 @@ class App:
         return self.paper_order(symbol, "sell", qty=pos.qty)
 
     def dismiss(self, index: int) -> bool:
-        st = State(self.settings.state_dir / "state.json")
-        ok = st.dismiss_recommendation(index)
-        if ok:
-            st.save()
+        with STATE_LOCK:
+            st = State(self.settings.state_dir / "state.json")
+            ok = st.dismiss_recommendation(index)
+            if ok:
+                st.save()
         return ok
 
     def reset(self) -> list[str]:
@@ -629,10 +645,18 @@ class App:
         paths = [self.settings.state_dir / "state.json"]
         if self.demo_trades is not None:
             paths.append(self.practice_broker.path)
-        for p in paths:
-            if p.exists() and p.name not in removed:
-                p.unlink()
-                removed.append(p.name)
+        with STATE_LOCK:
+            keep = None
+            if self.demo_trades is None and paths[0].exists():  # Live: the practice account's curve is not Live's to forget
+                keep = State(paths[0]).data.get("practice_equity")
+            for p in paths:
+                if p.exists() and p.name not in removed:
+                    p.unlink()
+                    removed.append(p.name)
+            if keep:
+                fresh = State(paths[0])
+                fresh.data["practice_equity"] = keep
+                fresh.save()
         if self.demo_trades is not None:
             self.practice_broker.reset(self.settings.paper_starting_cash)
         return removed
@@ -674,6 +698,8 @@ class App:
             applied[env_key] = value
         if "watch_investor" in changes or "watch_source" in changes:
             self._deals, self._deals_at = None, 0.0
+        if applied:
+            self._settings_version += 1
         if applied and self.dotenv is not None:
             _write_env(self.dotenv, applied)
         return applied
@@ -684,6 +710,7 @@ class App:
         if self.watcher:
             self.watcher.stop()
             self.watcher = None
+        self._settings_version += 1
         s.market = market
         s.data_source = "nse" if market == "in" else "quiver"
         s.watch_source = "deals" if market == "in" else "congress"
@@ -919,21 +946,20 @@ class App:
         return s
 
     def orders(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Paper fills plus live Groww orders (from state.json), newest first."""
+        """Live page: real Groww orders (state.json). Demo page: practice fills. Offline sample: both. Newest first."""
         out: list[dict[str, Any]] = []
-        b = self.broker
-        if isinstance(b, LocalPaperBroker):
-            # newest first already, so the (stable) sort below keeps same-second fills in order
-            out += [{**o, "at": o.get("filled_at")} for o in reversed(b.orders())]
-        if self._parent is not None:  # practice fills only: real Groww orders are on the Live page
-            out.sort(key=lambda o: str(o.get("at")), reverse=True)
-            return out[:limit]
-        st = State(self.settings.state_dir / "state.json")
-        for o in reversed(st.data.get("live_orders", [])):
-            out.append({**o, "live": True, "at": o.get("placed_at"),
-                        "filled_avg_price": o.get("average_fill_price") or o.get("limit_price"),
-                        "notional": round((o.get("average_fill_price") or o.get("limit_price") or 0)
-                                          * float(o.get("filled_quantity") or o.get("qty") or 0), 2)})
+        if self.page == "demo":
+            b = self.broker
+            if isinstance(b, LocalPaperBroker):
+                # newest first already, so the (stable) sort below keeps same-second fills in order
+                out += [{**o, "at": o.get("filled_at")} for o in reversed(b.orders())]
+        if self._parent is None:  # the Demo page never shows real orders; the offline sample app shows both
+            st = State(self.settings.state_dir / "state.json")
+            for o in reversed(st.data.get("live_orders", [])):
+                out.append({**o, "live": True, "at": o.get("placed_at"),
+                            "filled_avg_price": o.get("average_fill_price") or o.get("limit_price"),
+                            "notional": round((o.get("average_fill_price") or o.get("limit_price") or 0)
+                                              * float(o.get("filled_quantity") or o.get("qty") or 0), 2)})
         def when(o: dict[str, Any]) -> datetime:
             try:
                 dt = datetime.fromisoformat(str(o.get("at")))

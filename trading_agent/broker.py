@@ -13,6 +13,7 @@ that is not the paper endpoint.
 from __future__ import annotations
 
 import json
+import threading
 import math
 import uuid
 from dataclasses import dataclass
@@ -171,6 +172,7 @@ class LocalPaperBroker:
                  whole_shares: bool = False, cost_model: Any | None = None,
                  now_fn: Any | None = None):
         self.path = Path(path)
+        self._lock = threading.RLock()  # the watch thread and the dashboard share this object
         self.price_fn = price_fn
         self.currency = currency
         self.whole_shares = whole_shares  # Indian equities trade in whole shares
@@ -193,7 +195,8 @@ class LocalPaperBroker:
 
     def _save(self) -> None:
         from .state import atomic_write
-        atomic_write(self.path, json.dumps(self._state, indent=2))
+        with self._lock:
+            atomic_write(self.path, json.dumps(self._state, indent=2))
 
     @property
     def created_at(self) -> str:
@@ -208,13 +211,14 @@ class LocalPaperBroker:
     def reset(self, starting_cash: float) -> bool:
         """Start the account over in place (same object, so every holder of it sees the fresh account).
         Removes the file; it is written again by the next order. True if a file was removed."""
-        existed = self.path.exists()
-        if existed:
-            self.path.unlink()
-        self._state = {"cash": float(starting_cash), "starting_cash": float(starting_cash), "positions": {},
-                       "orders": [], "prices": {}, "created_at": _utc_now(), "fees_paid": 0.0}
-        self.__dict__.pop("name", None)
-        return existed
+        with self._lock:
+            existed = self.path.exists()
+            if existed:
+                self.path.unlink()
+            self._state = {"cash": float(starting_cash), "starting_cash": float(starting_cash), "positions": {},
+                           "orders": [], "prices": {}, "created_at": _utc_now(), "fees_paid": 0.0}
+            self.__dict__.pop("name", None)
+            return existed
 
     @property
     def is_fresh(self) -> bool:
@@ -281,7 +285,11 @@ class LocalPaperBroker:
         return Account(cash=round(self._state["cash"], 2), equity=round(equity, 2),
                        currency=self.currency)
 
-    def submit_order(self, symbol: str, side: str, notional: float | None = None,
+    def submit_order(self, *args: Any, **kw: Any) -> dict[str, Any]:
+        with self._lock:
+            return self._submit_order(*args, **kw)
+
+    def _submit_order(self, symbol: str, side: str, notional: float | None = None,
                      qty: float | None = None) -> dict[str, Any]:
         symbol = symbol.upper()
         if side not in {"buy", "sell"}:

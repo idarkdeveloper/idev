@@ -107,7 +107,7 @@ window.TA = (function(){
   const shortDay = (at) => { const d = new Date(String(at).replace(" ", "T")); return isNaN(d) ? String(at).slice(0, 10) : d.toLocaleDateString("en-IN", {day: "numeric", month: "short"}); };
   const istDay = (at) => { const d = new Date(String(at)); return isNaN(d) ? String(at).slice(0, 10) : d.toLocaleDateString("en-IN", {timeZone: "Asia/Kolkata", day: "numeric", month: "short"}); };
   const clip = (t, n) => t.length <= n ? t : t.slice(0, t.lastIndexOf(" ", n) > n * 0.6 ? t.lastIndexOf(" ", n) : n).replace(/[,;:.]$/, "") + "…";
-  function lookupTakeaway(r, now){
+  function lookupTakeaway(r, now, ctx){
     const m = r.momentum || {}, out = [], name = r.name ? r.name.replace(/ Limited$/, "") : r.ticker;
     if(m.error) return "";
     const p6 = m.ret_6m, p12 = m.ret_12_1, hi = m.pct_from_52w_high;
@@ -137,10 +137,21 @@ window.TA = (function(){
       const pl = r.price / pos.avg_entry_price - 1, room = pos.stop ? r.price / pos.stop - 1 : null;
       out.push(`You hold ${pos.qty} at ${money(pos.avg_entry_price, 2)} (${pl >= 0 ? "+" : ""}${(pl * 100).toFixed(1)}%)${room != null ? `; its trailing stop at ${money(pos.stop, 2)} is ${(room * 100).toFixed(1)}% below the price` : ""}.`);
     }
+    // The market filter (live page only; Replay passes no ctx): risk-off, or the Nifty under its 200-day average, means no new buys.
+    const rg = ctx && ctx.regime && !ctx.regime.error ? ctx.regime : null;
+    const nifty = rg && rg.markets && rg.markets.nifty50;
+    const marketWait = !!rg && (rg.regime === "risk_off" || (nifty && nifty.above_200dma === false));
+    if(marketWait) out.push("The market is risk-off (Nifty below its 200-day average), so the agent's rules hold off new buys until it recovers; if you buy anyway, keep the position small.");
     const strong = m.verdict === "strong" && m.above_200dma !== false;
-    out.push(strong ? `Bottom line: trend-wise it is the kind of stock the screen buys${tw || res || deal ? ", but there is event risk ahead, so keep any position small" : ""}${p6 != null && p6 > 0.5 ? " and expect big swings" : ""}.`
-                    : m.verdict === "weak" || m.above_200dma === false ? "Bottom line: the momentum rules say wait; a disclosed buy here would be a watch, not a buy."
+    const stockWait = m.verdict === "weak" || m.above_200dma === false;
+    const risk = `${tw || res || deal ? ", but there is event risk ahead, so keep any position small" : ""}${p6 != null && p6 > 0.5 ? " and expect big swings" : ""}`;
+    out.push(strong ? (marketWait ? `Bottom line: trend-wise it passes, but the market filter says wait${risk}.` : `Bottom line: trend-wise it is the kind of stock the screen buys${risk}.`)
+                    : stockWait ? "Bottom line: the momentum rules say wait; a disclosed buy here would be a watch, not a buy."
                     : "Bottom line: nothing decisive either way; it needs a reason beyond the price trend.");
+    if(ctx && (marketWait || stockWait)){
+      const top = ctx.screen && ctx.screen.top ? ctx.screen.top.slice(0, 5).map(x => esc(x.symbol)) : null;
+      out.push(top && top.length ? `Stocks passing the screen today: ${top.join(", ")}.` : "Run Screen to see which stocks pass today.");
+    }
     return out.join(" ");
   }
 
@@ -230,7 +241,15 @@ window.TA = (function(){
     window.addEventListener("scroll", () => { if(sug.classList.contains("open")) placeSuggest(); }, {passive: true});
   }
 
+  // News labels arrive a little after the headlines (a background tagger). A headline list still needs labels when
+  // some items are untagged while a tagger is working ("pending" or a named one; "none" means nobody will label them).
+  const NEWS_POLL_MS = 5000, NEWS_POLL_MAX_MS = 120000;
+  const newsNeedsLabels = (n) => !!n && !n.demo && n.tagger !== "none" && (n.items || []).some(i => !i.sentiment);
+  // "poll" = ask again in NEWS_POLL_MS; "stop" = all tagged, no tagger, two minutes passed, or another stock was looked up.
+  const newsPollNext = (n, startedAt, now, stillCurrent) =>
+    (!stillCurrent || now - startedAt >= NEWS_POLL_MAX_MS || !newsNeedsLabels(n)) ? "stop" : "poll";
+
   return {$, esc, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct,
-          daysAgo, shortDay, clip, lookupTakeaway, attachSuggest};
+          daysAgo, shortDay, clip, lookupTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS};
 })();

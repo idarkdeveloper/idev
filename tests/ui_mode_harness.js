@@ -6,6 +6,7 @@ const vm = require("vm");
 
 const mode = process.argv[2] || "live";
 const sample = process.argv[3] === "sample";
+const mpFail = process.argv[3] === "mpfail";
 const ui = path.join(__dirname, "..", "trading_agent", "ui");
 const html = fs.readFileSync(path.join(ui, "index.html"), "utf8");
 const common = fs.readFileSync(path.join(ui, "common.js"), "utf8");
@@ -57,7 +58,9 @@ const document = {
 };
 const ctx = {document, console, setTimeout, clearTimeout, setInterval: () => 0, Intl, Date, Math, JSON, Number, String, Object, Array,
   Set, Map, Promise, URLSearchParams, encodeURIComponent, isNaN, isFinite, parseFloat, parseInt,
-  fetch: async (url) => ({ok: true, status: 200, statusText: "OK", json: async () => JSON.parse(JSON.stringify(answers(String(url))))}),
+  fetch: async (url) => String(url).includes("/api/my-portfolio") && mpFail
+    ? ({ok: false, status: 500, statusText: "err", json: async () => ({error: "Groww didn't answer"})})
+    : ({ok: true, status: 200, statusText: "OK", json: async () => JSON.parse(JSON.stringify(answers(String(url))))}),
   confirm: () => { throw new Error("window.confirm must not be used for the reset"); }};
 ctx.window = ctx;
 ctx.addEventListener = () => {};

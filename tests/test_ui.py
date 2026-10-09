@@ -247,7 +247,7 @@ def test_check_records_equity(settings, sample_rows):
     broker = LocalPaperBroker(settings.state_dir / "pb.json", starting_cash=1000)
     check(settings, trades=trades, broker=broker, notifier=Notifier(), dry_run=True)
     check(settings, trades=[], broker=broker, notifier=Notifier())  # nothing new: still records
-    hist = State(settings.state_dir / "state.json").data.get("equity_history", [])
+    hist = State(settings.state_dir / "state.json").data.get("practice_equity", [])
     assert len(hist) == 1 and hist[0]["equity"] == 1000
 
 
@@ -745,3 +745,180 @@ def test_factor_backtest_job_keeps_result_when_validation_fails(server, monkeypa
         time.sleep(0.02)
     assert job.ok is True
     assert app.last_factor_bt["validation"] is None and app.last_factor_bt["strategy"] == [100.0, 101.0]
+
+
+def test_practice_and_real_equity_curves_are_separate(two_pages):
+    base, app, fake, settings = two_pages
+    sp = settings.state_dir / "state.json"
+    st = json.loads(sp.read_text())
+    st["equity_history"] = [{"at": "2026-01-01T00:00:00+00:00", "equity": 500000.0, "cash": 1.0, "positions": 3}]
+    sp.write_text(json.dumps(st))
+    _post(base + "/demo/api/reset", {})
+    status, _ = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 2})
+    assert status == 200
+    saved = json.loads(sp.read_text())
+    assert saved["equity_history"] == st["equity_history"]  # the real account's curve is intact
+    assert len(saved["practice_equity"]) == 1
+    _, demo = _get(base + "/demo/api/state")
+    _, live = _get(base + "/api/state")
+    assert [p["equity"] for p in demo["equity_history"]] == [saved["practice_equity"][0]["equity"]]
+    assert [p["equity"] for p in live["equity_history"]] == [500000.0]  # Live's own points never show on Demo, nor Demo's on Live
+
+
+def test_state_write_during_a_slow_account_read_survives(two_pages):
+    base, app, fake, settings = two_pages
+    from trading_agent.state import State
+    entered, release = threading.Event(), threading.Event()
+    pb = app.practice_broker
+    real = pb.account
+
+    def slow_account():
+        entered.set()
+        release.wait(5)
+        return real()
+    t = threading.Thread(target=lambda: app.demo.paper_order("SENCO", "buy", qty=1))
+    pb.account = slow_account
+    t.start()
+    assert entered.wait(5)
+    st = State(settings.state_dir / "state.json")
+    st.data["seen"] = {"new-deal": {"at": "now", "summary": "s"}}
+    st.save()
+    release.set()
+    t.join(5)
+    pb.account = real
+    after = json.loads((settings.state_dir / "state.json").read_text())
+    assert "new-deal" in after["seen"] and len(after["practice_equity"]) == 1
+
+
+def test_one_broker_build_and_one_writer_under_threads(settings, monkeypatch):
+    import trading_agent.ui as ui
+    settings.market = "in"
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    builds = []
+
+    def slow_make_broker(s):
+        builds.append(1)
+        time.sleep(0.1)
+        return LocalPaperBroker(s.state_dir / "paper_broker.json", starting_cash=1_000_000, price_fn=lambda x: 10.0,
+                                currency="INR", whole_shares=True)
+    monkeypatch.setattr(ui, "make_broker", slow_make_broker)
+    app = App(settings, data=_FakeData([]), dotenv=None)
+    got = []
+    ts = [threading.Thread(target=lambda f=f: got.append(f())) for f in
+          (lambda: app.broker, lambda: app.practice_broker, lambda: app.demo.broker, lambda: app.broker)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(builds) == 1 and all(b is got[0] for b in got)
+    # concurrent orders (watch auto-exit vs Demo) never interleave: every fill is saved and counted once
+    b = got[0]
+    ots = [threading.Thread(target=lambda: b.submit_order("AAA", "buy", qty=1)) for _ in range(12)]
+    [t.start() for t in ots]
+    [t.join() for t in ots]
+    saved = json.loads(b.path.read_text())
+    assert saved["positions"]["AAA"]["qty"] == 12 and len(saved["orders"]) == 12
+
+
+def test_orders_table_is_real_orders_on_live_and_practice_fills_on_demo(two_pages):
+    base, app, fake, settings = two_pages
+    sp = settings.state_dir / "state.json"
+    st = json.loads(sp.read_text())
+    st["live_orders"] = [{"groww_order_id": "GMK1", "symbol": "TCS", "side": "buy", "qty": 1, "status": "FILLED",
+                          "placed_at": "2026-02-01T00:00:00+00:00", "average_fill_price": 10.0}]
+    sp.write_text(json.dumps(st))
+    _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 1})
+    _, live = _get(base + "/api/state")
+    _, demo = _get(base + "/demo/api/state")
+    assert [o.get("groww_order_id") for o in live["orders"]] == ["GMK1"]
+    assert demo["orders"] and all(not o.get("live") and not o.get("groww_order_id") for o in demo["orders"])
+
+
+def test_demo_child_is_rebuilt_only_when_settings_change(two_pages, monkeypatch):
+    base, app, fake, settings = two_pages
+    import dataclasses
+    d1 = app.demo
+    monkeypatch.setattr(dataclasses, "asdict", lambda *a, **k: (_ for _ in ()).throw(AssertionError("asdict")))
+    assert app.demo is d1 and app.demo is d1
+    app.update_settings({"watch_investor": "Someone Else"})
+    d2 = app.demo
+    assert d2 is not d1 and d2.settings.watch_investor == "Someone Else"
+
+
+def test_live_tiles_show_a_reason_when_holdings_fail_and_a_placeholder_first():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    harness = Path(__file__).resolve().parent / "ui_mode_harness.js"
+    r = subprocess.run([node, str(harness), "live", "mpfail"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert "Couldn't load" in out["tiles"] and "n/a" in out["tiles"] and "Loading" not in out["tiles"]
+    html = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "index.html").read_text(encoding="utf-8")
+    assert "Loading your holdings" in html
+
+
+def test_news_poll_decision_logic():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    js = """
+const fs=require('fs'),vm=require('vm');
+const ctx={document:{getElementById:()=>null,body:{dataset:{}}},console,Intl,Date,Math,JSON};ctx.window=ctx;
+vm.createContext(ctx);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),ctx);
+const T=ctx.TA, pend={items:[{sentiment:'positive'},{}],tagger:'pending'}, done={items:[{sentiment:'positive'}],tagger:'ollama'};
+console.log(JSON.stringify([
+ T.newsPollNext(pend,0,1000,true), T.newsPollNext({items:[{}],tagger:'ollama:qwen'},0,1000,true),
+ T.newsPollNext(done,0,1000,true), T.newsPollNext({items:[{}],tagger:'none'},0,1000,true),
+ T.newsPollNext(pend,0,1000,false), T.newsPollNext(pend,0,119999,true), T.newsPollNext(pend,0,120000,true),
+ T.newsPollNext({items:[],tagger:'pending'},0,1,true), T.newsPollNext({demo:true,items:[{}],tagger:'none'},0,1,true), T.NEWS_POLL_MS]));
+"""
+    common = Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "common.js"
+    r = subprocess.run([node, "-e", js, str(common)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == ["poll", "poll", "stop", "stop", "stop", "poll", "stop", "stop", "stop", 5000]
+
+
+def test_live_reset_keeps_the_practice_curve(two_pages):
+    base, app, fake, settings = two_pages
+    _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 1})
+    before = json.loads((settings.state_dir / "state.json").read_text())["practice_equity"]
+    _post(base + "/api/reset", {})
+    after = json.loads((settings.state_dir / "state.json").read_text())
+    assert after["practice_equity"] == before and after.get("recommendations", []) == []
+
+
+def test_lookup_note_includes_the_market_filter():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    js = """
+const fs=require('fs'),vm=require('vm');
+const ctx={document:{getElementById:()=>null,body:{dataset:{}}},console,Intl,Date,Math,JSON};ctx.window=ctx;
+vm.createContext(ctx);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),ctx);
+const L=ctx.TA.lookupTakeaway;
+const strong={ticker:'MCX',momentum:{verdict:'strong',ret_6m:0.2,ret_12_1:0.3,above_200dma:true}};
+const weak={ticker:'XYZ',momentum:{verdict:'weak',ret_6m:-0.2,ret_12_1:-0.3,above_200dma:false}};
+const off={regime:'risk_off',markets:{nifty50:{above_200dma:false}}}, neutral={regime:'neutral',markets:{nifty50:{above_200dma:true}}};
+const scr={top:[{symbol:'A'},{symbol:'B'},{symbol:'C<'},{symbol:'D'},{symbol:'E'},{symbol:'F'}]};
+console.log(JSON.stringify({
+ off:L(strong,undefined,{regime:off,screen:scr}), offNoScreen:L(strong,undefined,{regime:off,screen:null}),
+ neutral:L(strong,undefined,{regime:neutral,screen:scr}), replay:L(strong), weakNeutral:L(weak,undefined,{regime:neutral,screen:scr}),
+ replayWeak:L(weak)}));
+"""
+    common = Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "common.js"
+    r = subprocess.run([node, "-e", js, str(common)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    o = json.loads(r.stdout)
+    hold = "The market is risk-off (Nifty below its 200-day average), so the agent's rules hold off new buys until it recovers; if you buy anyway, keep the position small."
+    assert hold in o["off"] and "trend-wise it passes, but the market filter says wait." in o["off"]
+    assert o["off"].index(hold) < o["off"].index("Bottom line") and "kind of stock the screen buys" not in o["off"]
+    assert o["off"].endswith("Stocks passing the screen today: A, B, C&lt;, D, E.")
+    assert o["offNoScreen"].endswith("Run Screen to see which stocks pass today.")
+    assert "kind of stock the screen buys" in o["neutral"] and hold not in o["neutral"] and "Stocks passing" not in o["neutral"]
+    assert o["replay"] == o["neutral"] and "Stocks passing" not in o["replayWeak"] and "Run Screen" not in o["replayWeak"]
+    assert o["weakNeutral"].endswith("Stocks passing the screen today: A, B, C&lt;, D, E.")

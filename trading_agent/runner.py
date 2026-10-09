@@ -135,12 +135,18 @@ def make_notifier(settings: Settings) -> Notifier:
                     email_from=settings.notify_email_from, webhook_url=settings.notify_webhook_url)
 
 
+def equity_key(broker: Any) -> str:
+    """Which curve in state.json a broker's points belong to: the practice account has its own."""
+    return "practice_equity" if isinstance(broker, LocalPaperBroker) else "equity_history"
+
+
 def record_equity(state: State, broker: Any) -> None:
-    """Best-effort equity point for the paper-account curve."""
+    """Best-effort equity point for the broker's own curve."""
     try:
         acct = broker.account()
         n = len(broker.positions())
-        state.record_equity(acct.equity, acct.cash, n, since=getattr(broker, "created_at", None))
+        state.record_equity(acct.equity, acct.cash, n, since=getattr(broker, "created_at", None),
+                            key=equity_key(broker))
     except Exception as e:  # noqa: BLE001
         log.debug("equity point skipped: %s", e)
 
