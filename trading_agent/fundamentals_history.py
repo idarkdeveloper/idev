@@ -131,7 +131,7 @@ class ResultsHistory:
 
     def __init__(self, cache_dir: Path, *, session: requests.Session | None = None, pause: float = 0.25,
                  max_new_downloads: int = 400, listing_ttl: float = 20 * 3600, sleep: Any = time.sleep,
-                 timeout: float = 60.0):
+                 timeout: float = 20.0):
         self.dir = Path(cache_dir) / "nse_results"
         self.session = session or requests.Session()
         self.pause = pause
@@ -206,13 +206,19 @@ class ResultsHistory:
             r.raise_for_status()
             text = r.content.decode("utf-8-sig", errors="replace")
             rec = parse_results_xbrl(text, date.fromisoformat(filing["period_end"]))
-        except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code in (403, 429):
+        except (requests.HTTPError, requests.Timeout, requests.ConnectionError) as e:
+            # NSE's archive throttles by refusing (403/429) or by stalling the connection
+            # until it times out. Either way: not cached, retried on a later run; back off
+            # once with a fresh connection, and stop this run's downloads on a second refusal.
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status is None or status in (403, 429) or status >= 500:
                 self.refused += 1
                 if self.refused < 2:
-                    self.sleep(60)  # NSE's archive block lifts after about a minute
+                    self.sleep(60)
+                    self.session = requests.Session()
+                    self._warm = False
             return None
-        except Exception as e:  # noqa: BLE001 - an unreadable filing is recorded as empty
+        except Exception as e:  # noqa: BLE001 - an unparseable filing is recorded as empty
             log.debug("results filing %s unreadable: %s", filing["xbrl"], e)
             rec = {"period_end": filing["period_end"], "error": f"{type(e).__name__}: {e}"}
         path.parent.mkdir(parents=True, exist_ok=True)

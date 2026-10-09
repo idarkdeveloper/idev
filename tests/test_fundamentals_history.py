@@ -136,3 +136,28 @@ def test_backtest_drops_loss_makers_point_in_time():
     assert all("UP2" not in p["picks"] and "UP" in p["picks"] for p in q["picks"])
     assert q["fundamentals"]["quality"] == 1.0 and q["fundamentals"]["avg_coverage"] > 0.5
     assert "share count" in q["fundamentals"]["note"]
+
+
+def test_stalled_downloads_are_retried_later_not_cached(tmp_path):
+    import requests
+    listing = [{"toDate": f"{d}-2023", "broadCastDate": f"01-{n}-2024 10:00:00", "consolidated": "Consolidated",
+                "xbrl": f"https://nsearchives.nseindia.com/corporate/xbrl/F{i}.xml"}
+               for i, (d, n) in enumerate((("31-Mar", "May"), ("30-Jun", "Aug"), ("30-Sep", "Nov"), ("31-Dec", "Feb")))]
+    sess = FakeSession({("GET", "corporates-financial-results"): listing, ("GET", "integrated-filing-results"): {"data": []},
+                        ("GET", ".xml"): requests.Timeout("read timed out")})
+    sleeps = []
+    h = ResultsHistory(tmp_path, session=sess, sleep=sleeps.append)
+    h.session = sess  # keep the fake after the back-off swaps in a fresh connection
+    orig = requests.Session
+    requests.Session = lambda: sess
+    try:
+        assert h.history("X") == []
+    finally:
+        requests.Session = orig
+    assert h.refused == 2 and 60 in sleeps
+    assert len([u for _, u, _ in sess.calls if u.endswith(".xml")]) == 2  # stopped after the second stall
+    assert not (tmp_path / "nse_results" / "filings_v2").exists()  # nothing cached: retried next run
+    ok = ResultsHistory(tmp_path, session=FakeSession({("GET", "corporates-financial-results"): listing[:1],
+                                                       ("GET", "integrated-filing-results"): {"data": []},
+                                                       ("GET", ".xml"): COMPANY}), sleep=lambda s: None)
+    assert len(ok.history("X")) == 4  # the next run downloads them (listing reused from cache)

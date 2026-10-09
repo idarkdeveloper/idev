@@ -341,8 +341,9 @@ class NSEClient:
                     if downloads > 1 and self.pause:
                         self.sleep(self.pause)
                     cached = self._pit_fetch(url, f)
-            except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code in (403, 429):
+            except (requests.HTTPError, requests.Timeout, requests.ConnectionError) as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status is None or status in (403, 429) or status >= 500:  # refused, or stalled
                     refused += 1
                     if refused < 2:
                         self.sleep(60)  # NSE's archive block lifts after about a minute
