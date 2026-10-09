@@ -42,13 +42,25 @@ def moments(rets: list[float]) -> tuple[float, float]:
     return sum(x ** 3 for x in z) / n, sum(x ** 4 for x in z) / n
 
 
-def probabilistic_sharpe(sr: float, n_obs: int, skew: float, kurt: float, sr_benchmark: float = 0.0) -> float:
-    """Chance the true Sharpe exceeds ``sr_benchmark``, given the sample's length and shape."""
+def excess_returns(strategy: list[float | None], comparison: list[float | None] | None) -> list[float]:
+    """Strategy period return minus the comparison's, on the same dates; periods missing either are skipped."""
+    if not comparison:
+        return []
+    out = []
+    for i in range(1, min(len(strategy), len(comparison))):
+        a0, a1, b0, b1 = strategy[i - 1], strategy[i], comparison[i - 1], comparison[i]
+        if None in (a0, a1, b0, b1) or min(a0, a1, b0, b1) <= 0:
+            continue
+        out.append(a1 / a0 - b1 / b0)
+    return out
+
+
+def probabilistic_sharpe(sr: float, n_obs: int, skew: float, kurt: float, sr_benchmark: float = 0.0) -> float | None:
+    """Chance the true Sharpe exceeds ``sr_benchmark``, given the sample's length and shape.
+    None when the formula is undefined (too few observations or a non-positive variance term)."""
     denom = 1 - skew * sr + (kurt - 1) / 4 * sr * sr
-    if n_obs < 2:
-        return 0.5
-    if denom <= 0:
-        return 1.0 if sr > sr_benchmark else 0.0
+    if n_obs < 2 or denom <= 0:
+        return None
     return _N.cdf((sr - sr_benchmark) * math.sqrt(n_obs - 1) / math.sqrt(denom))
 
 
@@ -84,6 +96,8 @@ def monte_carlo(rets: list[float], n_paths: int = 5000, block: int = 3, seed: in
     finals, dds = [], []
     for _ in range(n_paths):
         path: list[float] = []
+        if block >= n:  # a block as long as the series is the series itself
+            path = list(rets)
         while len(path) < n:
             s = rng.randrange(n)
             path.extend(rets[(s + k) % n] for k in range(block))
@@ -101,45 +115,62 @@ def monte_carlo(rets: list[float], n_paths: int = 5000, block: int = 3, seed: in
             "loss_probability": sum(f < 0 for f in finals) / n_paths}
 
 
-def walk_forward(runs: dict[int, dict[str, Any] | list[float | None]], dates: list[str],
-                 fund_curve: list[float | None] | None) -> dict[str, Any]:
-    """Each year, pick the candidate that did best in all earlier years and record how it did this year.
-
-    ``runs`` maps a candidate (stocks held) to its strategy curve over the shared rebalance ``dates``.
-    The first year is in-sample only, so it is never reported."""
-    tops = sorted(runs)
+def _year_bounds(dates: list[str]) -> list[list[Any]]:
+    """[label, start index, end index, partial] per calendar year; a stub first year (under 6 months)
+    is folded into the next year."""
     first: dict[str, int] = {}
     for i, d in enumerate(dates):
         first.setdefault(d[:4], i)
     years = sorted(first)
     last = len(dates) - 1
-    bounds = [(y, first[y], first[years[k + 1]] if k + 1 < len(years) else last) for k, y in enumerate(years)]
+    bounds = [[y, first[y], first[years[k + 1]] if k + 1 < len(years) else last, k + 1 == len(years)]
+              for k, y in enumerate(years)]
     bounds = [b for b in bounds if b[2] > b[1]]
+    if len(bounds) > 1 and 12 - int(dates[bounds[0][1]][5:7]) + 1 < 6:
+        bounds[1][1] = bounds[0][1]
+        bounds = bounds[1:]
+    for b in bounds:
+        # only a year cut short by the end of the data can be partial
+        b[3] = b[3] and int(dates[b[2]][5:7]) - int(dates[b[1]][5:7]) < 11 and dates[b[2]][:4] == dates[b[1]][:4]
+    return bounds
+
+
+def walk_forward(runs: dict[int, list[float | None]], dates: list[str],
+                 fund_curve: list[float | None] | None) -> dict[str, Any]:
+    """Each year, pick the candidate that did best in all earlier years and record how it did this year.
+
+    ``runs`` maps a candidate (stocks held) to its strategy curve over the shared rebalance ``dates``.
+    The first year is in-sample only, so it is never reported. A year with no comparison return (or no
+    usable candidate) is marked ``missing`` and left out of both totals."""
+    tops = sorted(runs)
+    bounds = _year_bounds(dates)
 
     def ret(curve: list[float | None] | None, a: int, b: int) -> float | None:
         if not curve or curve[a] is None or curve[b] is None or curve[a] <= 0:
             return None
         return curve[b] / curve[a] - 1
 
-    rets = {t: [ret(runs[t], a, b) for _, a, b in bounds] for t in tops}
+    rets = {t: [ret(runs[t], b[1], b[2]) for b in bounds] for t in tops}
     out, oos, fund = [], 1.0, 1.0
-    have_fund, beat = fund_curve is not None, 0
+    beat = used = full = 0
     for k in range(1, len(bounds)):
-        def past(t: int) -> float:
-            g = 1.0
-            for r in rets[t][:k]:
-                g *= 1 + (r or 0.0)
-            return g
-        chosen = max(tops, key=lambda t: (past(t), t))
-        r = rets[chosen][k]
-        fr = ret(fund_curve, bounds[k][1], bounds[k][2]) if have_fund else None
-        oos *= 1 + (r or 0.0)
-        if fr is None:
-            have_fund = False
-        else:
+        usable = [t for t in tops if all(r is not None for r in rets[t][:k + 1])]
+        chosen = None
+        if usable:
+            chosen = max(usable, key=lambda t: (math.prod(1 + r for r in rets[t][:k]), t))
+        r = rets[chosen][k] if chosen is not None else None
+        fr = ret(fund_curve, bounds[k][1], bounds[k][2]) if fund_curve is not None else None
+        missing = r is None or (fund_curve is not None and fr is None)
+        out.append({"year": int(bounds[k][0]), "chosen_top": chosen, "return": r, "fund_return": fr,
+                    "missing": missing, "partial": bool(bounds[k][3])})
+        if missing:
+            continue
+        used += 1
+        full += 0 if bounds[k][3] else 1
+        oos *= 1 + r
+        if fr is not None:
             fund *= 1 + fr
-        if r is not None and fr is not None and r > fr:
-            beat += 1
-        out.append({"year": int(bounds[k][0]), "chosen_top": chosen, "return": r, "fund_return": fr})
-    return {"candidates": tops, "years": out, "oos_return": oos - 1 if out else None,
-            "fund_return": fund - 1 if out and have_fund else None, "beat_years": beat}
+            beat += r > fr
+    return {"candidates": tops, "years": out, "oos_return": oos - 1 if used else None,
+            "fund_return": fund - 1 if used and fund_curve is not None else None,
+            "beat_years": beat, "full_years": full}

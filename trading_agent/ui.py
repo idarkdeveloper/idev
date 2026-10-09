@@ -691,7 +691,7 @@ class App:
                 r = run_top(top)
                 try:  # the other portfolio sizes reuse the cached price histories
                     r["validation"] = validate_factor_backtest(
-                        run_top, top, base=r, progress=lambda m: setattr(job, "message", m))
+                        run_top, top, base=r, universe=universe, progress=lambda m: setattr(job, "message", m))
                 except Exception:  # noqa: BLE001 - the backtest itself still stands
                     log.exception("factor backtest validation failed")
                     r["validation"] = None

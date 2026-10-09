@@ -319,13 +319,33 @@ def format_factor_backtest(r: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _comparison(base: dict[str, Any], universe: str | None) -> tuple[list[float | None] | None, dict[str, Any]]:
+    """The curve the strategy has to beat, and an honest label for it."""
+    expected = INDEX_FUNDS.get((universe or "").upper())
+    if base.get("index_fund"):
+        return base["index_fund"], {"symbol": base.get("index_fund_symbol") or expected or "index fund",
+                                    "kind": "index fund", "note": ""}
+    bench = base.get("benchmark")
+    sym = base.get("benchmark_symbol") or "the benchmark"
+    if not bench or all(v is None for v in bench):
+        return None, {"symbol": None, "kind": None, "note": "no comparison curve was available"}
+    if sym.startswith("^"):
+        return bench, {"symbol": sym, "kind": "price index", "note": "a price index without dividends"}
+    if expected is None and (universe or "").upper() == "NIFTY50":
+        return bench, {"symbol": sym, "kind": "index fund", "note": ""}
+    why = (f"the {expected} fund didn't exist for the whole window" if expected
+           else "this universe has no index fund of its own")
+    return bench, {"symbol": sym, "kind": "other benchmark", "note": f"a different index; {why}"}
+
+
 def validate_factor_backtest(run_fn: Callable[[int], dict[str, Any]], top: int, candidates: Iterable[int] = (10, 20, 30),
-                             *, base: dict[str, Any] | None = None,
+                             *, base: dict[str, Any] | None = None, universe: str | None = None,
                              progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Is this result skill or luck? Re-run the neighbouring portfolio sizes, then walk forward
-    (pick the best size from earlier years, score it on the next), deflate the Sharpe for the number
-    of sizes tried, and reshuffle the returns for a range of possible falls."""
-    from .validation import deflated_sharpe, monte_carlo, period_returns, sharpe, walk_forward
+    (pick the best size from earlier years, score it on the next), deflate the Sharpe of the
+    EXCESS return over the comparison for the number of sizes tried, and resample the returns
+    for a range of possible falls."""
+    from .validation import deflated_sharpe, excess_returns, monte_carlo, period_returns, sharpe, walk_forward
 
     tops = sorted({top, *candidates})
     runs: dict[int, dict[str, Any]] = {}
@@ -337,36 +357,46 @@ def validate_factor_backtest(run_fn: Callable[[int], dict[str, Any]], top: int, 
             progress(f"validating: top {t} ({n} of {len(tops)})")
         runs[t] = run_fn(t)
     b = runs[top]
-    fund = b.get("index_fund") or b.get("benchmark")
-    wf = walk_forward({t: r["strategy"] for t, r in runs.items()}, b["dates"], fund)
-    rets = period_returns(b["strategy"])
-    srs = [s for s in (sharpe(period_returns(r["strategy"])) for r in runs.values()) if s is not None]
-    dsr = deflated_sharpe(rets, len(runs), srs)
-    mc = monte_carlo(rets)
-    verdict, summary = _verdict(wf, dsr, mc)
-    return {"walk_forward": wf, "deflated_sharpe": dsr, "monte_carlo": mc, "verdict": verdict, "summary": summary}
+    comp, label = _comparison(b, universe)
+    wf = walk_forward({t: r["strategy"] for t, r in runs.items()}, b["dates"], comp)
+    excess = excess_returns(b["strategy"], comp)
+    srs = [s for s in (sharpe(excess_returns(r["strategy"], comp)) for r in runs.values()) if s is not None]
+    dsr = deflated_sharpe(excess, len(runs), srs)
+    mc = monte_carlo(period_returns(b["strategy"]))
+    verdict, summary = _verdict(wf, dsr, label)
+    return {"walk_forward": wf, "deflated_sharpe": dsr, "monte_carlo": mc, "comparison": label,
+            "verdict": verdict, "summary": summary}
 
 
-def _verdict(wf: dict[str, Any], dsr: dict[str, Any], mc: dict[str, Any] | None) -> tuple[str, str]:
+def _verdict(wf: dict[str, Any], dsr: dict[str, Any], label: dict[str, Any]) -> tuple[str, str]:
     p, oos, fund = dsr["probability"], wf["oos_return"], wf["fund_return"]
-    if p is None:
-        return "could be luck", "There are too few monthly returns to tell skill from luck."
+    if label["kind"] is None or p is None:
+        return "could be luck", ("Could be luck: there is no comparison to measure against, or too few monthly "
+                                 "returns, to tell skill from luck.")
+    name = f"{label['symbol']}" + (f" ({label['note']})" if label["note"] else "")
     pct = f"{p * 100:.0f}%"
-    tries = f"after {dsr['trials']} portfolio sizes were tried"
+    head = f"odds it truly beats {name} are {pct} after {dsr['trials']} portfolio sizes were tried"
+    years = wf["full_years"]
     if oos is None:
         walk = "There were too few years to test picking the size in advance."
     elif fund is None:
         walk = f"Choosing the size from earlier years returned {oos * 100:+.1f}% on the years that followed."
     else:
-        walk = (f"Choosing the size from earlier years returned {oos * 100:+.1f}% on the years that followed, "
-                f"against {fund * 100:+.1f}% for the index fund.")
+        walk = (f"Choosing the size from earlier years returned {oos * 100:+.1f}% on the {len(wf['years'])} years "
+                f"that followed, against {fund * 100:+.1f}% for {label['symbol']}.")
     behind = oos is not None and fund is not None and oos < fund - 0.05
-    ahead = oos is not None and (fund is None or oos > fund)
     if p < 0.5 or behind:
-        return "no edge", f"No edge shown: odds the edge is real are {pct} {tries}. {walk}"
-    if p >= 0.95 and ahead:
-        return "likely skill", f"Likely skill: odds the edge is real are {pct} {tries}. {walk}"
-    return "could be luck", f"Could be luck: odds the edge is real are {pct} {tries}. {walk}"
+        return "no edge", f"No edge shown: {head}. {walk}"
+    if p >= 0.95 and label["kind"] == "index fund" and fund is not None and oos > fund and years >= 3:
+        return "likely skill", f"Likely skill: {head}. {walk}"
+    extra = ""
+    if label["kind"] != "index fund":
+        extra = " It is not compared with its own index fund, so it cannot be called skill."
+    elif years < 3:
+        extra = " Fewer than 3 full years were tested out of sample, which is too little to call skill."
+    elif fund is None or oos is None or oos <= fund:
+        extra = " The out-of-sample years did not beat the comparison."
+    return "could be luck", f"Could be luck: {head}. {walk}{extra}"
 
 
 def format_validation(v: dict[str, Any]) -> str:
@@ -376,16 +406,19 @@ def format_validation(v: dict[str, Any]) -> str:
              f"Walk-forward (best of {', '.join(map(str, wf['candidates']))} stocks, chosen from earlier years only):",
              f"  {'year':<6}{'stocks':>7}{'return':>10}{'fund':>10}"]
     for y in wf["years"]:
-        lines.append(f"  {y['year']:<6}{y['chosen_top']:>7}{pct(y['return'])}{pct(y['fund_return'])}")
+        flag = " (data missing, left out)" if y.get("missing") else " (partial year)" if y.get("partial") else ""
+        lines.append(f"  {y['year']:<6}{str(y['chosen_top'] or '-'):>7}{pct(y['return'])}{pct(y['fund_return'])}{flag}")
     if wf["years"]:
         lines.append(f"  {'all':<6}{'':>7}{pct(wf['oos_return'])}{pct(wf['fund_return'])}   "
                      f"(beat the fund in {wf['beat_years']} of {len(wf['years'])} years)")
+    c = v.get("comparison") or {}
     if d["probability"] is not None:
-        lines.append(f"Deflated Sharpe: {d['probability']*100:.0f}% odds the edge is real after "
-                     f"{d['trials']} tries ({d['periods']} monthly returns).")
+        lines.append(f"Odds it truly beats {c.get('symbol')} after {d['trials']} tries: {d['probability']*100:.0f}% "
+                     f"({d['periods']} monthly returns). Only the portfolio sizes are counted, not the factors "
+                     "and filters chosen with hindsight, so treat this as an upper bound.")
     if mc:
         dd, fr = mc["max_drawdown"], mc["final_return"]
-        lines.append(f"Monte Carlo ({mc['paths']} reshuffles): in 90% the worst fall was between "
+        lines.append(f"Monte Carlo ({mc['paths']} resamples): in 90% the worst fall was between "
                      f"{dd['p5']*100:.0f}% and {dd['p95']*100:.0f}%; final return between "
                      f"{fr['p5']*100:+.0f}% and {fr['p95']*100:+.0f}%; {mc['loss_probability']*100:.0f}% ended in a loss.")
     return "\n".join(lines)

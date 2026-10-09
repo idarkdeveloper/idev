@@ -564,3 +564,24 @@ def test_job_starters_claim_the_slot_under_the_lock(settings):
         held.clear()
         job = start()
         assert job.ok is False and held.is_set()
+
+
+def test_factor_backtest_job_keeps_result_when_validation_fails(server, monkeypatch):
+    base, app = server
+    result = {"dates": ["2024-01-02", "2024-02-01"], "strategy": [100.0, 101.0], "stats": {
+        "strategy": {"total_return": 0.01}, "benchmark": {"total_return": 0.0}}, "months": 1,
+        "index_fund_symbol": None}
+    monkeypatch.setattr("trading_agent.screen.load_universe", lambda u: [{"symbol": "AAA"}])
+    monkeypatch.setattr("trading_agent.index_history.point_in_time", lambda *a, **k: None)
+    monkeypatch.setattr("trading_agent.factor_backtest.run_factor_backtest", lambda *a, **k: dict(result))
+
+    def boom(*a, **k):
+        raise RuntimeError("validation exploded")
+    monkeypatch.setattr("trading_agent.factor_backtest.validate_factor_backtest", boom)
+    job = app.start_factor_backtest("NIFTY50", 10, 1)
+    for _ in range(200):
+        if job.finished_at:
+            break
+        time.sleep(0.02)
+    assert job.ok is True
+    assert app.last_factor_bt["validation"] is None and app.last_factor_bt["strategy"] == [100.0, 101.0]

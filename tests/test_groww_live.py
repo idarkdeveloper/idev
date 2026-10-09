@@ -627,3 +627,24 @@ def test_cli_holdings_prints_buy_current_and_pl(tmp_path, monkeypatch, capsys):
     assert "RELIANCE" in out and "2,500.00" in out and "2,862.00" in out and "+3,620" in out and "+14.48%" in out
     _isolated_env(tmp_path, monkeypatch)
     assert cli.main(["holdings"]) == 1
+
+
+def test_groww_check_ip_needs_no_credentials(monkeypatch, capsys, tmp_path):
+    from trading_agent import cli, netcheck
+    monkeypatch.setenv("TRADING_AGENT_STATE_DIR", str(tmp_path))
+    for k in ("GROWW_API_KEY", "GROWW_API_SECRET", "GROWW_ACCESS_TOKEN", "GROWW_ALLOWED_IP"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(netcheck, "public_ip", lambda session=None, **k: "203.0.113.9")
+    assert cli.main(["groww-check", "--ip"]) == 0  # no allowed IP set
+    assert "203.0.113.9" in capsys.readouterr().out
+    monkeypatch.setenv("GROWW_ALLOWED_IP", "203.0.113.9")
+    assert cli.main(["groww-check", "--ip"]) == 0
+    assert "Matches" in capsys.readouterr().out
+    monkeypatch.setenv("GROWW_ALLOWED_IP", "198.51.100.1")
+    assert cli.main(["groww-check", "--ip"]) == 1
+    assert "NOT match" in capsys.readouterr().out
+
+    def down(session=None, **k):
+        raise RuntimeError("offline")
+    monkeypatch.setattr(netcheck, "public_ip", down)
+    assert cli.main(["groww-check", "--ip"]) == 1

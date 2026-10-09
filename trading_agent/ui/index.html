@@ -543,14 +543,14 @@
   function validationBlock(v){
     if(!v || !v.verdict) return "";
     const k = SKILL[v.verdict] || ["", "", v.verdict], wf = v.walk_forward || {}, d = v.deflated_sharpe || {}, mc = v.monte_carlo;
-    const yrs = (wf.years || []).map(y => `<tr><td>${y.year}</td><td class="num">${y.chosen_top}</td><td class="num ${(y.return||0)>=0?"up":"down"}">${pct(y.return)}</td><td class="num">${pct(y.fund_return)}</td></tr>`).join("");
-    const p0 = x => (x * 100).toFixed(0) + "%";
+    const yrs = (wf.years || []).map(y => `<tr><td>${y.year}${y.partial ? " (partial)" : ""}${y.missing ? " (data missing, left out)" : ""}</td><td class="num">${y.chosen_top == null ? "n/a" : y.chosen_top}</td><td class="num ${(y.return||0)>=0?"up":"down"}">${pct(y.return)}</td><td class="num">${pct(y.fund_return)}</td></tr>`).join("");
+    const p0 = x => (x * 100).toFixed(0) + "%", z0 = x => Math.abs(x) < 0.005 ? "0%" : pct(x, 0);
     return `<div class="callout"><h3 style="margin:0 0 6px">Is it skill or luck?</h3>
       <div class="row" style="gap:8px"><span class="pill ${k[0]}" style="white-space:nowrap">${k[1]} ${esc(k[2])}</span></div>
       <p style="margin:6px 0">${esc(v.summary || "")}</p>
-      ${yrs ? `<div class="scroll"><table><thead><tr><th>Year</th><th class="num">Stocks held (chosen from earlier years)</th><th class="num">Return</th><th class="num">Index fund</th></tr></thead><tbody>${yrs}</tbody></table></div>` : ""}
-      ${d.probability != null ? `<div class="sub">Odds the edge is real after ${d.trials} tries: <b>${p0(d.probability)}</b></div>` : ""}
-      ${mc ? `<div class="sub">In 90% of reshuffles the worst fall was between ${pct(mc.max_drawdown.p5, 0)} and ${pct(mc.max_drawdown.p95, 0)}; final return between ${pct(mc.final_return.p5, 0)} and ${pct(mc.final_return.p95, 0)}.</div>` : ""}</div>`;
+      ${yrs ? `<div class="scroll"><table><thead><tr><th>Year</th><th class="num">Stocks held (chosen from earlier years)</th><th class="num">Return</th><th class="num">Comparison</th></tr></thead><tbody>${yrs}</tbody></table></div>` : ""}
+      ${d.probability != null ? `<div class="sub">Odds it truly beats ${esc((v.comparison || {}).symbol || "the comparison")} after ${d.trials} tries: <b>${p0(d.probability)}</b> (only the portfolio sizes are counted; the factors and filters chosen with hindsight aren't, so treat the odds as an upper bound)</div>` : ""}
+      ${mc ? `<div class="sub">In 90% of resamples the worst fall was between ${z0(mc.max_drawdown.p5)} and ${z0(mc.max_drawdown.p95)}; final return between ${pct(mc.final_return.p5, 0)} and ${pct(mc.final_return.p95, 0)}.</div>` : ""}</div>`;
   }
 
   function renderFactor(r){
@@ -625,8 +625,11 @@
     if(rev.length) out.push(`${names(rev)} came out reversed (t of −2 or below): doing the opposite would have worked, which may be real or chance.`);
     const model = rows.find(x => x.model);
     if(model && model.verdict !== "predictive") out.push(`The walk-forward model, which combines every signal and learns only from the past, did no better (t ${t2(model.t)}).`);
-    const odds = rows.filter(x => x.s.deflated_sharpe != null).sort((a, b) => b.s.deflated_sharpe - a.s.deflated_sharpe)[0];
-    if(odds && r.trials) out.push(`After allowing for the ${r.trials} signal-and-horizon combinations tried, the best odds of a real edge belong to ${odds.label} at ${Math.round(odds.s.deflated_sharpe * 100)}%, and that is the best of ${r.trials} tries, so some of it is just picking the winner.`);
+    const all = [];
+    Object.entries(r.results || {}).forEach(([hh, res]) => Object.entries(res).forEach(([k, s]) => { if(s.deflated_sharpe != null) all.push({k, hh, s}); }));
+    all.sort((a, b) => b.s.deflated_sharpe - a.s.deflated_sharpe);
+    const odds = all[0];
+    if(odds && r.trials) out.push(`After charges and allowing for the ${r.trials} signal-and-horizon combinations tried, the best odds of a real edge across all horizons belong to ${esc((r.signals[odds.k] || {}).label || odds.k)} (${odds.hh}d) at ${Math.round(odds.s.deflated_sharpe * 100)}%, and that is the best of ${r.trials} tries, so some of it is just picking the winner.`);
     out.push(pred.length ? "Bottom line: one possible edge worth watching, not yet a reason to trade."
                          : `Bottom line: don't buy or sell ${esc(r.universe)} stocks on these signals alone over a ${per}.`);
     return out.join(" ");

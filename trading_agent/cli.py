@@ -292,12 +292,34 @@ def cmd_forward(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_public_ip(settings: Any) -> int:
+    from .netcheck import public_ip
+    from .runner import groww_session
+    try:
+        ip = public_ip(groww_session(settings))
+    except Exception as e:  # noqa: BLE001
+        print(f"Could not find this machine's public IP: {e}")
+        return 1
+    print(f"Public IP seen from this machine: {ip}")
+    allowed = settings.groww_allowed_ip
+    if not allowed:
+        print("GROWW_ALLOWED_IP is not set, so live orders are not restricted to one IP.")
+        return 0
+    if ip == allowed.strip():
+        print(f"Matches GROWW_ALLOWED_IP ({allowed}).")
+        return 0
+    print(f"Does NOT match GROWW_ALLOWED_IP ({allowed}): Groww would reject live orders from here.")
+    return 1
+
+
 def cmd_groww_check(args: argparse.Namespace) -> int:
     """Check the live-trading assumptions against your Groww account (read-only by default)."""
     from .groww import InstrumentTicks
     from .groww_check import format_rows, live_test, read_only_checks, save
     from .runner import make_groww, token_cache
     settings = _settings(args)
+    if args.ip:  # needs no credentials: what IP does Groww see from this machine?
+        return _check_public_ip(settings)
     if not settings.has_groww_credentials:
         print("No Groww credentials in .env.")
         return 1
@@ -570,7 +592,8 @@ def cmd_factor_backtest(args: argparse.Namespace) -> int:
     r = run_top(args.top)
     print(format_factor_backtest(r))
     if args.validate:
-        r["validation"] = validate_factor_backtest(run_top, args.top, base=r, progress=print)
+        r["validation"] = validate_factor_backtest(run_top, args.top, base=r, universe=args.universe,
+                                                  progress=print)
         print("\n" + format_validation(r["validation"]))
     fx = r.get("fundamentals")
     if fx:
@@ -714,6 +737,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="also place a REAL 1-share limit buy below market (then cancel) and a test GTT")
     sp.add_argument("--offset-pct", type=float, default=3.0, help="how far below the last price to rest the buy")
     sp.add_argument("--i-understand-real-orders", action="store_true")
+    sp.add_argument("--ip", action="store_true",
+                    help="only print this machine's public IP and whether it matches GROWW_ALLOWED_IP (no credentials)")
     sp.set_defaults(func=cmd_groww_check)
     sp = sub.add_parser("gtt", help="show Groww GTT stop-losses; --sync updates them (live only)")
     sp.add_argument("--sync", action="store_true")
