@@ -147,6 +147,9 @@
   .label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-muted); }
   .big { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 30px; line-height: 34px; overflow-wrap: anywhere; }
   .sub { font-size: 13px; color: var(--color-muted); }
+  /* My Groww portfolio: profit in red, loss in green, as the user asked */
+  .pl-profit { color: #ff6b6b; font-weight: 600; } .pl-loss { color: #3ddc84; font-weight: 600; }
+  #mp-card tfoot td { font-weight: 700; border-top: 1px solid var(--color-divider); padding-top: 10px; }
   .up { color: var(--color-accent-300); font-weight: 600; } .down { color: var(--color-neutral-400); font-weight: 600; }
 
   /* tables: row rules fade out at both ends */
@@ -277,7 +280,7 @@
         <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
           <button type="button" class="small" id="mp-refresh" style="margin-left:auto">Refresh</button></div>
         <div class="cardbody" id="mp-body" style="padding-top:0;border-top:none"><div class="stats" id="mp-stats"></div></div>
-        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th></tr></thead><tbody id="mp-rows"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
@@ -684,6 +687,7 @@
   }
   function renderMyPortfolio(m){
     const rows = $("mp-rows"), stats = $("mp-stats");
+    $("mp-foot").innerHTML = "";
     if(!m.linked){
       $("mp-sub").textContent = "Groww isn't linked";
       stats.innerHTML = "";
@@ -696,7 +700,7 @@
       rows.innerHTML = `<tr><td colspan="8" class="empty">${esc(m.error)}</td></tr>`;
       return;
     }
-    const tone = v => v == null ? "" : v > 0 ? "up" : v < 0 ? "down" : "";
+    const tone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
     $("mp-sub").textContent = `${m.holdings.length} holdings · read-only from Groww · ${when(m.at)}`;
     const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
     stats.innerHTML = stat("Invested", inr(m.invested), "what you paid, all holdings")
@@ -711,6 +715,9 @@
         <td class="num">${inr(h.invested)}</td><td class="num">${inr(h.value)}</td>
         <td class="num ${tone(h.pl)}">${sinr(h.pl)}</td><td class="num ${tone(h.pl_pct)}">${spct(h.pl_pct)}</td></tr>`).join("")
       : `<tr><td colspan="8" class="empty">No holdings in your Groww account.</td></tr>`;
+    $("mp-foot").innerHTML = m.holdings.length ? `<tr><td>Total<div class="sub" style="font-weight:400;font-size:12px">${m.holdings.length} holdings${m.unpriced.length ? `, ${m.unpriced.length} without a price` : ""}</div></td>
+        <td></td><td></td><td></td><td class="num">${inr(m.invested)}</td><td class="num">${inr(m.value)}</td>
+        <td class="num ${tone(m.pl)}">${sinr(m.pl)}</td><td class="num ${tone(m.pl_pct)}">${spct(m.pl_pct)}</td></tr>` : "";
   }
   $("mp-refresh").addEventListener("click", () => loadMyPortfolio(true));
 
