@@ -219,3 +219,31 @@ def test_reset_keeps_cost_model(server, tmp_path):
     app._broker.cost_model = IndianDeliveryCosts()
     _post(base + "/api/reset", {})
     assert app._broker.cost_model is not None
+
+
+def test_equity_history_scorecard_and_factor_endpoints(server):
+    base, app = server
+    _post(base + "/api/order", {"symbol": "NVDA", "side": "buy", "qty": 2})
+    _, st = _get(base + "/api/state")
+    assert len(st["equity_history"]) == 1 and st["equity_history"][0]["positions"] == 1
+    status, sc = _get(base + "/api/scorecard")
+    assert status == 200 and sc["summary"]["recommendations"] == 0
+    status, fb = _get(base + "/api/factor-backtest")
+    assert status == 200 and fb == {}
+    app.settings.market = "us"
+    status, job = _post(base + "/api/factor-backtest", {"universe": "NIFTY50", "top": 10, "years": 2})
+    assert status == 202 and job["ok"] is False and "India" in job["message"]
+
+
+def test_check_records_equity(settings, sample_rows):
+    from trading_agent.broker import LocalPaperBroker
+    from trading_agent.notify import Notifier
+    from trading_agent.quiver import _norm_congress, filter_by_investor
+    from trading_agent.runner import check
+    from trading_agent.state import State
+    trades = filter_by_investor([_norm_congress(r) for r in sample_rows], "Nancy Pelosi")
+    broker = LocalPaperBroker(settings.state_dir / "pb.json", starting_cash=1000)
+    check(settings, trades=trades, broker=broker, notifier=Notifier(), dry_run=True)
+    check(settings, trades=[], broker=broker, notifier=Notifier())  # nothing new: still records
+    hist = State(settings.state_dir / "state.json").data.get("equity_history", [])
+    assert len(hist) == 1 and hist[0]["equity"] == 1000

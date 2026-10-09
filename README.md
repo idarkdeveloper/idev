@@ -130,6 +130,8 @@ Everything the CLI does is also in the dashboard:
 | `size` | Position size panel, and *Suggest size* in the paper order ticket |
 | `costs` | Trade cost panel with the full buy/sell breakdown |
 | `screen`, `backtest` (+ `--json`) | Factor screen and Backtest panels, each with *Export JSON* |
+| `factor-backtest` | *Backtest the screen as a portfolio* under the factor screen, with a growth-of-100 chart |
+| `scorecard` | *Claude's track record* panel |
 | `groww-token` | *Test Groww connection* in Settings (the token itself is never shown) |
 | `--market`, `.env` strategy keys | Settings: investor, disclosures, market, starting cash, order mode, notifications |
 
@@ -156,6 +158,26 @@ these only ever touch the local paper account.
   15 bps slippage each way. Round trip is about 69 bps on ₹10,000 and 29 bps on ₹1,00,000
   before slippage. The paper simulator deducts it on every fill and the backtest uses it
   as the default cost.
+
+## Keeping score
+
+- **Claude's track record** (`python -m trading_agent scorecard`, dashboard panel): every
+  stored recommendation is priced from the first close after it was made, over 5, 20 and
+  60 trading days, against NIFTY 50. A buy counts as right only if it beat the index by
+  more than its round-trip trading cost; a sell if the stock then lagged. Watch and hold
+  calls are shown but not scored.
+- **Account value over time**: every check and every paper order records the paper
+  account's value (at most one point per 10 minutes), drawn as a curve in the dashboard.
+- **Factor portfolio backtest** (`python -m trading_agent factor-backtest --universe NIFTY200 --top 20 --years 4`):
+  each month, rank the universe exactly as `screen` does on data available that day,
+  hold the top N equal-weight, pay Indian delivery charges on every trade, and compare
+  with NIFTY 50 and an equal-weight hold of the universe. Read the caveat it prints: the
+  universe is today's constituents (survivorship bias flatters every curve) and the
+  NIFTY 50 line excludes dividends.
+
+The dashboard draws all of it: account value, a one-year price chart with the 200-day
+average and your cost and stop for held stocks, the spread of backtest returns, and the
+factor portfolio against its benchmarks.
 
 ## Momentum and "who traded"
 

@@ -87,6 +87,16 @@ def make_notifier(settings: Settings) -> Notifier:
                     email_from=settings.notify_email_from, webhook_url=settings.notify_webhook_url)
 
 
+def record_equity(state: State, broker: Any) -> None:
+    """Best-effort equity point for the paper-account curve."""
+    try:
+        acct = broker.account()
+        n = len(broker.positions())
+        state.record_equity(acct.equity, acct.cash, n)
+    except Exception as e:  # noqa: BLE001
+        log.debug("equity point skipped: %s", e)
+
+
 def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
           trades: list[DisclosedTrade] | None = None, broker: Broker | None = None,
           data: Any | None = None, notifier: Notifier | None = None,
@@ -113,6 +123,7 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     if not new and not force:
         result.skipped = True
         state.record_run({"new_trades": 0, "skipped": True})
+        record_equity(state, broker)
         state.save()
         return result
 
@@ -133,6 +144,7 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     # Only remember trades once they were actually analysed, so a failed API call
     # (bad key, outage) is retried on the next run instead of silently dropped.
     state.mark_seen(new)
+    record_equity(state, broker)
     state.record_run({"new_trades": len(new), "recommendations": len(result.recommendations),
                       "orders": len(result.orders), "model": result.model,
                       "refusal": result.refusal})
