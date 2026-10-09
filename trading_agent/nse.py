@@ -105,6 +105,18 @@ def _parse_deals_csv(text: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _norm_announcement(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(row.get("seq_id") or row.get("dt") or ""),
+        "symbol": str(row.get("symbol") or "").upper(),
+        "company": str(row.get("sm_name") or ""),
+        "at": str(row.get("sort_date") or row.get("an_dt") or ""),
+        "category": str(row.get("desc") or ""),
+        "text": str(row.get("attchmntText") or "").strip(),
+        "file": row.get("attchmntFile") or "",
+    }
+
+
 def _norm_insider(row: dict[str, Any]) -> DisclosedTrade:
     ttype = str(row.get("tdpTransactionType") or row.get("transactionType") or "").strip()
     transaction = {"BUY": "Purchase", "SELL": "Sale"}.get(ttype.upper(), ttype or "Trade")
@@ -208,6 +220,19 @@ class NSEClient:
                          referer=f"{self.base_url}/companies-listing/corporate-filings-insider-trading")
         rows = data.get("data", []) if isinstance(data, dict) else data
         return [t for t in (_norm_insider(r) for r in rows) if t.investor]
+
+    # -- corporate announcements ---------------------------------------------
+    def announcements(self, symbol: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        """Recent NSE corporate announcements, newest first, for one symbol or all equities."""
+        params: dict[str, Any] = {"index": "equities"}
+        if symbol:
+            params["symbol"] = symbol.upper()
+        data = self._get("api/corporate-announcements", params=params,
+                         referer=f"{self.base_url}/companies-listing/corporate-filings-announcements")
+        rows = data if isinstance(data, list) else data.get("data", [])
+        out = [_norm_announcement(r) for r in rows]
+        out.sort(key=lambda a: a["at"], reverse=True)
+        return out[:limit]
 
     # -- public --------------------------------------------------------------
     def trades_for_investor(self, investor: str, source: str = "deals",

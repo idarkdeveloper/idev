@@ -107,3 +107,50 @@ def test_reset_clears_paper_account(server):
     assert status == 200 and "pb.json" in j["removed"]
     _, st = _get(base + "/api/state")
     assert st["positions"] == [] and st["account"]["cash"] == 80_000
+
+
+def test_lookup_and_regime_endpoints(server, monkeypatch):
+    base, app = server
+    from trading_agent import regime as rg
+
+    class Src:
+        def history(self, sym, range_):
+            n = 260
+            return [{"date": f"d{i}", "close": 100 + i * 0.1, "adj_close": 100 + i * 0.1, "volume": 10}
+                    for i in range(n)]
+    app.context = rg.GlobalContext(Src(), ttl=1000)
+    app.momentum = __import__("trading_agent.momentum", fromlist=["MomentumScreen"]).MomentumScreen(Src())
+
+    class Data:
+        def announcements(self, symbol, limit=8):
+            return [{"id": "1", "symbol": symbol, "company": "X", "at": "2026-10-09 09:00:00",
+                     "category": "Results", "text": "Q2 results", "file": ""}]
+    app._data = Data()
+    status, st = _get(base + "/api/state")
+    assert status == 200 and st["regime"]["regime"] in ("risk_on", "neutral", "risk_off")
+    status, r = _get(base + "/api/regime")
+    assert status == 200 and "summary" in r
+    status, lk = _get(base + "/api/lookup?ticker=senco")
+    assert status == 200 and lk["ticker"] == "SENCO" and lk["momentum"]["verdict"] == "strong"
+    assert lk["announcements"][0]["text"] == "Q2 results"
+    status, _ = _get(base + "/api/lookup")
+    assert status == 400
+
+
+def test_backtest_job_and_watch_toggle(server):
+    base, app = server
+    status, job = _post(base + "/api/backtest", {"investor": "Nancy Pelosi", "days": 365, "horizons": "5,20", "cost_bps": 50})
+    assert status == 202 and job["kind"] == "backtest"
+    for _ in range(100):
+        _, st = _get(base + "/api/state")
+        if not st["busy"]:
+            break
+        time.sleep(0.05)
+    assert st["jobs"][-1]["ok"] is True, st["jobs"][-1]
+    assert st["backtest"]["summary"]["deals"] == 3 and st["backtest"]["summary"]["priced"] == 3
+    status, w = _post(base + "/api/watch", {"on": True, "every": 30})
+    assert status == 200 and w["on"] is True and w["every"] == 30
+    _, st = _get(base + "/api/state")
+    assert st["watch"]["on"] is True
+    status, w = _post(base + "/api/watch", {"on": False})
+    assert w["on"] is False

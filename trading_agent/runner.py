@@ -11,6 +11,7 @@ from .config import Settings
 from .momentum import MomentumScreen
 from .notify import Notifier
 from .prices import YahooPrices
+from .regime import GlobalContext
 from .quiver import DisclosedTrade
 from .state import State
 
@@ -86,7 +87,8 @@ def make_notifier(settings: Settings) -> Notifier:
 def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
           trades: list[DisclosedTrade] | None = None, broker: Broker | None = None,
           data: Any | None = None, notifier: Notifier | None = None,
-          runner_factory: Any | None = None, momentum: Any | None = None) -> RunResult:
+          runner_factory: Any | None = None, momentum: Any | None = None,
+          context: Any | None = None) -> RunResult:
     """One pass of the routine.
 
     * ``trades`` overrides the data-source fetch (demo / tests).
@@ -117,10 +119,13 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
         state.save()
         return result
 
-    if momentum is None and trades is None:  # live run: screen with free price history
-        momentum = MomentumScreen(free_prices(settings))
+    if trades is None:  # live run: free price history for momentum and the global regime
+        prices = free_prices(settings)
+        momentum = momentum or MomentumScreen(prices)
+        context = context or GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache",
+                                                       cache_ttl=900))
     ctx = AgentContext(settings=settings, broker=broker, data=data, notifier=notifier,
-                       state=state, result=result, momentum=momentum)
+                       state=state, result=result, momentum=momentum, context=context)
     run_agent(ctx, runner_factory=runner_factory)
     # Only remember trades once they were actually analysed, so a failed API call
     # (bad key, outage) is retried on the next run instead of silently dropped.

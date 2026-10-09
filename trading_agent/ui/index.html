@@ -12,7 +12,7 @@
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;line-height:1.45}
   a{color:var(--teal)} a:hover{color:var(--teal2)}
-  h1,h2{margin:0} h1{font-size:24px;font-weight:700} h2{font-size:16px;font-weight:700}
+  h1,h2,h3{margin:0} h1{font-size:24px;font-weight:700} h2{font-size:16px;font-weight:700} h3{font-size:14px;font-weight:700}
   header{background:var(--card);border-bottom:1px solid var(--line)}
   .wrap{max-width:1280px;margin:0 auto;padding:16px 24px}
   .row{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
@@ -22,9 +22,9 @@
   .pill.ok{background:var(--tealbg);color:var(--teal2)} .pill.warn{background:var(--amberbg);color:var(--ambertx)} .pill.bad{background:var(--redbg);color:var(--red)}
   .dot{width:8px;height:8px;border-radius:50%;background:var(--teal)}
   button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 16px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;font-weight:600;cursor:pointer;text-decoration:none}
-  button.primary{background:var(--teal);border-color:var(--teal);color:#fff} button.primary:disabled{opacity:.6;cursor:wait}
+  button.primary{background:var(--teal);border-color:var(--teal);color:#fff} button:disabled{opacity:.6;cursor:wait}
   button.small{min-height:36px;padding:0 12px;font-size:13px} button.danger{border-color:var(--red);color:var(--red)}
-  button.toggle.on{background:var(--tealbg);border-color:var(--teal);color:var(--teal2)}
+  button.on{background:var(--tealbg);border-color:var(--teal);color:var(--teal2)}
   main{max-width:1280px;margin:0 auto;padding:24px;display:flex;flex-direction:column;gap:24px}
   .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px}
@@ -36,6 +36,7 @@
   .main{flex:999 1 640px;min-width:0;display:flex;flex-direction:column;gap:24px}
   .side{flex:1 1 360px;min-width:0;display:flex;flex-direction:column;gap:16px}
   .cardhead{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .cardbody{padding:16px 20px;display:flex;flex-direction:column;gap:12px}
   .scroll{overflow-x:auto}
   table{width:100%;border-collapse:collapse;min-width:560px}
   th{text-align:left;font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--mute);padding:10px 12px;border-bottom:1px solid var(--line)}
@@ -50,16 +51,22 @@
   .headline{font-size:15px;font-weight:600;line-height:22px} .rationale{margin:0;color:var(--ink2);line-height:21px}
   .runs{display:flex;flex-direction:column} .run{display:flex;flex-wrap:wrap;gap:16px;padding:10px 0;border-bottom:1px solid var(--line2)} .run:last-child{border-bottom:none}
   .empty{padding:24px 20px;color:var(--mute)}
-  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 16px;border-radius:10px;font-weight:600;display:none;max-width:90vw}
+  .regime{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:12px 20px}
+  .regime .sig{font-size:13px;color:var(--ink2)}
+  .mkts{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px}
+  .mkts span b{font-family:var(--mono);font-weight:500}
+  .ann{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-bottom:1px solid var(--line2)} .ann:last-child{border-bottom:none}
+  .ann .meta{font-size:12px;color:var(--mute)}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 16px;border-radius:10px;font-weight:600;display:none;max-width:90vw;z-index:9}
   dialog{border:1px solid var(--line);border-radius:14px;padding:0;max-width:720px;width:calc(100vw - 32px)} dialog::backdrop{background:rgba(22,24,29,.4)}
   .form{padding:20px;display:flex;flex-direction:column;gap:16px}
-  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px} .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
   .field{display:flex;flex-direction:column;gap:6px} label{font-size:13px;font-weight:600;color:var(--ink2)}
   input,select{font:inherit;color:var(--ink);min-height:44px;padding:0 12px;border:1px solid #D3D7DE;border-radius:10px;background:#fff;width:100%}
   .radio{display:flex;align-items:flex-start;gap:14px;padding:14px;border:1px solid #D3D7DE;border-radius:12px} .radio input{width:20px;height:20px;min-height:20px;margin:2px 0 0;padding:0}
   .conn{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px} .conn .dot.off{background:var(--amber)}
   footer{font-size:12px;color:var(--mute);padding:8px 0 24px}
-  @media (max-width:900px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap,main{padding:16px}.grid2{grid-template-columns:1fr}}
+  @media (max-width:900px){.tiles,.grid4{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap,main{padding:16px}.grid2{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -72,6 +79,7 @@
     <div class="row" id="pills"></div>
     <div class="row" style="margin-left:auto">
       <div class="sub" id="lastcheck"></div>
+      <button type="button" id="btn-watch" title="Poll deals and announcements every minute during market hours"><span>Start watch</span></button>
       <button type="button" id="btn-settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>Settings</button>
       <button type="button" class="primary" id="btn-check"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg><span>Run check now</span></button>
     </div>
@@ -79,6 +87,8 @@
 </header>
 
 <main>
+  <section class="card regime" id="regime"><span class="sub">Loading global context…</span></section>
+
   <section class="row" style="align-items:baseline">
     <h1>Following <span style="color:var(--teal)" id="investor"></span></h1>
     <div class="sub" id="summary"></div>
@@ -97,11 +107,31 @@
         <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th></tr></thead><tbody id="positions"></tbody></table></div>
       </div>
       <div class="card">
+        <div class="cardhead"><h2>Backtest</h2><span class="sub">replay disclosed deals: entry next close, excess return vs NIFTY 50 after cost</span></div>
+        <form class="cardbody" id="bt-form">
+          <div class="grid4">
+            <div class="field"><label for="bt-investor">Investor</label><input id="bt-investor" name="investor"></div>
+            <div class="field"><label for="bt-days">Days back</label><input id="bt-days" name="days" type="number" value="365" min="30" max="1500"></div>
+            <div class="field"><label for="bt-h">Horizons (days)</label><input id="bt-h" name="horizons" value="5,20,60"></div>
+            <div class="field"><label for="bt-cost">Round-trip cost (bps)</label><input id="bt-cost" name="cost_bps" type="number" value="50" min="0" max="500"></div>
+          </div>
+          <div class="row"><button type="submit" class="primary small" id="bt-run">Run backtest</button><span class="sub" id="bt-status"></span></div>
+          <div id="bt-result"></div>
+        </form>
+      </div>
+      <div class="card">
         <div class="cardhead"><h2>Recent runs</h2></div>
         <div class="runs" id="runs" style="padding:4px 20px"></div>
       </div>
     </div>
     <aside class="side">
+      <div class="card">
+        <div class="cardhead"><h2>Look up a stock</h2></div>
+        <form class="cardbody" id="lk-form">
+          <div class="row"><input id="lk-ticker" placeholder="Ticker, e.g. SENCO" style="flex:1 1 160px;text-transform:uppercase"><button type="submit" class="small">Check</button></div>
+          <div id="lk-result" class="sub">Momentum, latest price and NSE announcements.</div>
+        </form>
+      </div>
       <div class="row"><h2>Recommendations</h2><span class="sub">from Claude, newest first</span></div>
       <div id="recs" style="display:flex;flex-direction:column;gap:16px"></div>
     </aside>
@@ -113,7 +143,7 @@
   <form method="dialog" class="form" id="settings-form">
     <div class="row"><h2>Settings</h2><button type="button" class="small" style="margin-left:auto" id="btn-close">Close</button></div>
     <div class="grid2">
-      <div class="field"><label for="f-investor">Investor to follow</label><input id="f-investor" name="watch_investor"><div class="sub">Exactly as NSE prints the client name</div></div>
+      <div class="field"><label for="f-investor">Investor to follow</label><input id="f-investor" name="watch_investor"><div class="sub">Word order doesn't matter: NSE prints "KACHOLIA ASHISH"</div></div>
       <div class="field"><label for="f-source">Disclosures</label><select id="f-source" name="watch_source"></select></div>
       <div class="field"><label for="f-email">Email recommendations to</label><input id="f-email" name="notify_email_to" type="email" placeholder="you@example.com"><div class="sub">Needs RESEND_API_KEY in .env</div></div>
       <div class="field"><label for="f-webhook">Webhook (Slack, Discord, n8n)</label><input id="f-webhook" name="notify_webhook_url" type="url" placeholder="https://hooks.slack.com/…"></div>
@@ -140,38 +170,55 @@
   const sym = () => S && S.settings.currency === "INR" ? "₹" : "$";
   const money = (v, d=0) => v == null ? "n/a" : sym() + Number(v).toLocaleString(S.settings.currency === "INR" ? "en-IN" : "en-US", {maximumFractionDigits:d, minimumFractionDigits:d});
   const signed = (v, d=0) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + money(Math.abs(v), d);
+  const pct = (v, d=1) => v == null ? "n/a" : (v >= 0 ? "+" : "") + (v*100).toFixed(d) + "%";
   const when = (iso) => { if(!iso) return ""; const dt = new Date(iso); return dt.toLocaleString(undefined,{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); };
-  const toast = (m) => { const t=$("toast"); t.textContent=m; t.style.display="block"; clearTimeout(t._t); t._t=setTimeout(()=>t.style.display="none",4000); };
+  const cap = (s) => s ? s[0].toUpperCase()+s.slice(1) : "";
+  const toast = (m) => { const t=$("toast"); t.textContent=m; t.style.display="block"; clearTimeout(t._t); t._t=setTimeout(()=>t.style.display="none",4500); };
   const api = async (path, body) => {
     const r = await fetch(path, body ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)} : {});
     const j = await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.error || r.statusText);
     return j;
   };
+  const tile = (l, v, s) => `<div class="card tile"><div class="label">${l}</div><div class="big">${v}</div><div class="sub">${s}</div></div>`;
+
+  function renderRegime(){
+    const r = S.regime, el = $("regime");
+    if(!r){ el.innerHTML = '<span class="sub">Global context not configured.</span>'; return; }
+    if(r.error){ el.innerHTML = `<span class="pill warn">Global context unavailable</span><span class="sub">${esc(r.error)}</span>`; return; }
+    const cls = r.regime === "risk_off" ? "bad" : r.regime === "risk_on" ? "ok" : "";
+    const m = r.markets || {};
+    const mk = (k) => m[k] && m[k].last != null ? `<span>${esc(m[k].label)} <b>${k==="india_vix"?m[k].last.toFixed(1):k==="usdinr"?m[k].last.toFixed(2):Math.round(m[k].last).toLocaleString()}</b> <span class="${(m[k].ret_1d||0)>=0?"up":"down"}">${pct(m[k].ret_1d)}</span></span>` : "";
+    el.innerHTML = `<span class="pill ${cls}">${esc(r.regime.replace("_","-"))} · score ${r.score>=0?"+":""}${r.score}</span>
+      <div class="mkts">${["nifty50","sp500","nasdaq_fut","nikkei","india_vix","usdinr","brent"].map(mk).join("")}</div>
+      <span class="sig" style="flex-basis:100%">${esc((r.signals||[]).join(" · "))}${r.guidance ? " — " + esc(r.guidance) : ""}</span>`;
+  }
 
   function render(){
-    const s = S.settings, a = S.account, c = S.connections;
+    const s = S.settings, a = S.account, c = S.connections, w = S.watch || {};
     $("subtitle").textContent = s.market === "in" ? "Groww · NSE bulk & block deals" : "Alpaca · QuiverQuant disclosures";
     $("investor").textContent = s.watch_investor;
     const modePill = s.mode === "live" ? '<span class="pill bad"><span class="dot" style="background:var(--red)"></span>LIVE orders</span>'
                    : s.mode === "paper" ? '<span class="pill ok"><span class="dot"></span>Paper trading</span>'
                    : '<span class="pill ok"><span class="dot"></span>Recommendations only</span>';
-    $("pills").innerHTML = modePill
-      + `<span class="pill">${esc(S.settings.broker)}</span>`
+    $("pills").innerHTML = modePill + `<span class="pill">${esc(s.broker)}</span>`
       + (c.claude ? '<span class="pill">Claude ready</span>' : '<span class="pill warn">No ANTHROPIC_API_KEY</span>')
+      + (w.on ? `<span class="pill ok">Watching every ${w.every}s${w.in_window?"":" (outside market window)"}</span>` : "")
       + (s.demo ? '<span class="pill warn">Demo data</span>' : '');
     const lastRun = S.runs[0];
     $("lastcheck").textContent = lastRun ? "Last check " + when(lastRun.at) : "No checks yet";
+    const wb = $("btn-watch"); wb.className = w.on ? "on" : ""; wb.querySelector("span").textContent = w.on ? `Stop watch (${w.ticks||0} ticks)` : "Start watch";
+    renderRegime();
+
     const newDeals = S.deals.filter(d => d.status === "new").length;
     $("summary").textContent = `${newDeals} new disclosure${newDeals===1?"":"s"} · ${S.recommendations.length} recommendation${S.recommendations.length===1?"":"s"} so far · ${S.deals.length} deals in window`;
-
     const perf = S.performance;
     const biggest = S.positions.slice().sort((x,y)=>(y.market_value||0)-(x.market_value||0))[0];
     $("tiles").innerHTML = [
       a ? tile("Paper equity", money(a.equity), perf ? `<span class="${perf.pnl>=0?"up":"down"}">${signed(perf.pnl)} (${perf.pnl_pct>=0?"+":""}${perf.pnl_pct}%) since start</span>` : "") : tile("Paper equity","n/a",esc(S.broker_error||"")),
-      a ? tile("Cash available", money(a.cash), `${esc(S.settings.broker)}`) : tile("Cash","n/a",""),
+      a ? tile("Cash available", money(a.cash), esc(s.broker)) : tile("Cash","n/a",""),
       tile("Open positions", String(S.positions.length), biggest && a ? `largest: ${esc(biggest.symbol)} ${Math.round(100*(biggest.market_value||0)/a.equity)}% of equity` : "none yet"),
-      tile("Model", esc(s.claude_model.replace("claude-","")), S.busy ? "check running…" : (S.jobs.length ? esc(S.jobs[S.jobs.length-1].message||"") : "idle")),
+      tile("Model", esc(s.claude_model.replace("claude-","")), S.busy ? "job running…" : (S.jobs.length ? esc(S.jobs[S.jobs.length-1].message||"") : "idle")),
     ].join("");
 
     $("newcount").textContent = `${newDeals} new`;
@@ -179,14 +226,14 @@
     $("deals").innerHTML = S.deals.length ? S.deals.map(d => `<tr>
         <td class="mono" style="white-space:nowrap">${esc(d.transaction_date)}</td>
         <td><span class="side-chip ${d.transaction==="Sale"?"sell":"buy"}">${d.transaction==="Sale"?"SELL":d.transaction==="Purchase"?"BUY":esc(d.transaction)}</span></td>
-        <td><div style="font-weight:600">${esc(d.ticker)}</div><div class="sub">${esc(d.raw_name||d.investor)}</div></td>
+        <td><div style="font-weight:600"><a href="#" data-lookup="${esc(d.ticker)}" style="text-decoration:none">${esc(d.ticker)}</a></div><div class="sub">${esc(d.investor)}</div></td>
         <td class="num">${esc(d.size)}</td><td>${esc(d.source)}</td>
         <td><span class="pill" style="padding:3px 8px">${esc(WHO[d.client_type]||d.client_type||"")}</span></td>
         <td><span class="pill ${d.status==="new"?"warn":""}" style="padding:3px 8px">${d.status==="new"?"New":"Analysed"}</span></td></tr>`).join("")
       : `<tr><td colspan="7" class="empty">No disclosed deals by ${esc(s.watch_investor)} in the window.</td></tr>`;
 
     $("pricesrc").textContent = c.prices === "groww" ? "prices from Groww" : "prices via Yahoo Finance, delayed";
-    $("positions").innerHTML = S.positions.length ? S.positions.map(p => `<tr><td style="font-weight:600">${esc(p.symbol)}</td>
+    $("positions").innerHTML = S.positions.length ? S.positions.map(p => `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
         <td class="num">${money(p.market_value)}</td><td class="num ${p.unrealized_pl>0?"up":p.unrealized_pl<0?"down":""}">${signed(p.unrealized_pl)}</td></tr>`).join("")
       : `<tr><td colspan="6" class="empty">No open positions. ${s.auto_trade ? "" : "Use a recommendation's paper-buy button, or switch to paper trading in Settings."}</td></tr>`;
@@ -196,7 +243,7 @@
           <span class="pill" style="padding:3px 8px">${esc(cap(r.confidence))} confidence</span><span class="sub" style="margin-left:auto">${when(r.at)}</span></div>
         <div class="headline">${esc(r.headline)}</div><p class="rationale">${esc(r.rationale)}</p>
         <div class="row" style="gap:8px">
-          ${(r.action==="buy"||r.action==="sell") && r.suggested_notional_usd>0 && !r.dismissed && S.settings.broker.startsWith("local-paper") ? `<button type="button" class="small primary" data-order="${r.index}">Paper ${esc(r.action)} ${money(r.suggested_notional_usd)}</button>` : ""}
+          ${(r.action==="buy"||r.action==="sell") && r.suggested_notional_usd>0 && !r.dismissed && s.broker.startsWith("local-paper") ? `<button type="button" class="small primary" data-order="${r.index}">Paper ${esc(r.action)} ${money(r.suggested_notional_usd)}</button>` : ""}
           ${r.dismissed ? '<span class="sub">dismissed</span>' : `<button type="button" class="small" data-dismiss="${r.index}">Dismiss</button>`}
         </div></article>`).join("")
       : `<div class="card empty">No recommendations yet. Run a check when there are new deals${c.claude?"":" (needs ANTHROPIC_API_KEY)"}.</div>`;
@@ -206,19 +253,55 @@
         <span style="color:var(--ink2)">${r.skipped ? "skipped, Claude not called" : r.dry_run ? "dry run" : `${r.recommendations??0} recommendations · ${r.orders??0} orders · ${esc(r.model||"")}${r.refusal?" · refused":""}`}</span></div>`).join("")
       : '<div class="empty">No runs recorded yet.</div>';
 
+    if(!$("bt-investor").value) $("bt-investor").value = s.watch_investor;
+    if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
     $("btn-check").disabled = S.busy; $("btn-check").querySelector("span").textContent = S.busy ? "Running…" : "Run check now";
+    $("bt-run").disabled = S.busy;
   }
-  const tile = (l, v, s) => `<div class="card tile"><div class="label">${l}</div><div class="big">${v}</div><div class="sub">${s}</div></div>`;
-  const cap = (s) => s ? s[0].toUpperCase()+s.slice(1) : "";
+
+  function renderBacktest(b){
+    const sm = b.summary, rows = [];
+    for(const [side, perH] of Object.entries(sm.by_side||{})){
+      for(const [h, r] of Object.entries(perH)) rows.push(`<tr><td>${side==="Purchase"?"Buys (after cost)":"Sells (stock vs index)"}</td><td class="num">${h}d</td><td class="num">${r.n}</td><td class="num ${r.mean_excess>=0?"up":"down"}">${pct(r.mean_excess,2)}</td><td class="num">${pct(r.median_excess,2)}</td><td class="num">${Math.round(r.hit_rate*100)}%</td></tr>`);
+    }
+    const types = Object.entries(sm.by_client_type||{}).map(([t,r]) => `<span class="pill">${esc(WHO[t]||t)} n=${r.n} ${pct(r.mean_excess,2)}</span>`).join(" ");
+    $("bt-result").innerHTML = rows.length ? `<div class="sub">${esc(sm.investor)} vs ${esc(sm.benchmark)} · ${sm.priced}/${sm.deals} deals priced · ${b.days} days · cost ${sm.cost_bps} bps · ${when(b.at)}</div>
+      <div class="scroll"><table><thead><tr><th>Side</th><th class="num">Hold</th><th class="num">N</th><th class="num">Mean excess</th><th class="num">Median</th><th class="num">Hit rate</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
+      ${types ? `<div class="row" style="gap:6px"><span class="sub">Buys by who traded (longest horizon):</span>${types}</div>` : ""}`
+      : `<div class="sub">No priced deals for ${esc(sm.investor)} in that window. Famous names rarely cross the 0.5% bulk-deal threshold; try more days or another name.</div>`;
+  }
 
   async function refresh(){ try { S = await api("/api/state"); render(); } catch(e){ toast("Could not load: "+e.message); } }
-  function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Check failed: ":"Check done: ")+j.message); } }, 2500); }
+  function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Failed: ":"Done: ")+j.message); $("bt-status").textContent=""; } }, 2500); }
 
   $("btn-check").addEventListener("click", async () => {
     try { const j = await api("/api/check", {force:false, dry_run:!S.connections.claude}); toast(j.ok===false ? j.message : "Check started"); await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
+  $("btn-watch").addEventListener("click", async () => {
+    try { const on = !(S.watch && S.watch.on); const w = await api("/api/watch", {on, every:60}); toast(w.on ? "Watching deals and announcements every 60s in market hours" : "Watch stopped"); await refresh(); }
+    catch(e){ toast(e.message); }
+  });
+  $("bt-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = Object.fromEntries(new FormData(ev.target).entries());
+    try { const j = await api("/api/backtest", f); if(j.ok===false){ toast(j.message); return; } $("bt-status").textContent = "Replaying deals and fetching price history…"; await refresh(); pollWhileBusy(); }
+    catch(e){ toast(e.message); }
+  });
+  async function lookup(t){
+    $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
+    try {
+      const r = await api("/api/lookup?ticker=" + encodeURIComponent(t));
+      const m = r.momentum || {}; const v = m.verdict || "n/a";
+      const cls = v==="strong"?"ok":v==="weak"?"bad":"";
+      $("lk-result").innerHTML = `<div class="row" style="gap:8px"><span style="font-size:16px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div>
+        <div class="sub">${esc(r.momentum_summary)}</div>
+        <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div>`;
+    } catch(e){ $("lk-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
+  }
+  $("lk-form").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("lk-ticker").value.trim().toUpperCase(); if(t) lookup(t); });
   document.addEventListener("click", async (ev) => {
+    const l = ev.target.closest("a[data-lookup]"); if(l){ ev.preventDefault(); lookup(l.dataset.lookup); $("lk-form").scrollIntoView({behavior:"smooth", block:"center"}); return; }
     const b = ev.target.closest("button"); if(!b) return;
     if(b.dataset.order !== undefined){
       const r = S.recommendations.find(x => String(x.index) === b.dataset.order);
@@ -230,6 +313,7 @@
   });
 
   // settings dialog
+  const conn = (ok, name, sub) => `<div class="conn"><span class="dot ${ok?"":"off"}"></span><div><div style="font-weight:600">${name}</div><div class="sub">${esc(sub)}</div></div></div>`;
   $("btn-settings").addEventListener("click", () => {
     const s = S.settings, c = S.connections;
     $("f-investor").value = s.watch_investor;
@@ -239,17 +323,17 @@
     $("conns").innerHTML = [
       conn(c.claude, "Claude", c.claude ? s.claude_model + " · key set" : "ANTHROPIC_API_KEY missing in .env"),
       conn(c.groww, "Groww", c.groww ? (c.groww_live_orders ? "linked · LIVE orders enabled" : "linked · holdings mirrored, paper fills") : "not linked · local paper account"),
-      conn(true, s.data_source === "nse" ? "NSE deals" : "QuiverQuant", s.data_source === "nse" ? "public, no key" : "API key"),
+      conn(true, s.data_source === "nse" ? "NSE deals + announcements" : "QuiverQuant", s.data_source === "nse" ? "public, no key" : "API key"),
       conn(c.prices === "groww", "Prices", c.prices === "groww" ? "Groww live data" : "Yahoo Finance fallback, delayed"),
+      conn(!!S.regime && !S.regime.error, "Global context", S.regime && !S.regime.error ? "Nifty, S&P 500, Nasdaq, Nikkei, VIX, USD/INR, Brent via Yahoo" : "unavailable"),
     ].join("");
     $("dlg").showModal();
   });
-  const conn = (ok, name, sub) => `<div class="conn"><span class="dot ${ok?"":"off"}"></span><div><div style="font-weight:600">${name}</div><div class="sub">${esc(sub)}</div></div></div>`;
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true";
-    try { await api("/api/settings", body); $("dlg").close(); toast("Saved to .env"); await refresh(); } catch(e){ toast(e.message); }
+    try { await api("/api/settings", body); $("dlg").close(); toast("Saved to .env"); $("bt-investor").value = body.watch_investor || ""; await refresh(); } catch(e){ toast(e.message); }
   });
   $("btn-reset").addEventListener("click", async () => {
     if(!confirm("Forget seen deals and reset the paper account?")) return;

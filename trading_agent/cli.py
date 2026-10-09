@@ -221,6 +221,29 @@ def cmd_momentum(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Always-on local mode: poll deals and announcements during market hours."""
+    from .runner import make_broker, make_data_source, make_notifier
+    from .watch import Watcher
+
+    settings = _settings(args)
+    if args.auto_trade:
+        settings.auto_trade = True
+    data = make_data_source(settings)
+    broker = make_broker(settings)
+    notifier = make_notifier(settings)
+    w = Watcher(settings, every=args.every, window=(args.window_start, args.window_end),
+                data=data, broker=broker, notifier=notifier,
+                check_fn=lambda: check(settings, broker=broker, data=data, notifier=notifier))
+    print(f"Watching {settings.watch_investor} every {w.every}s, {args.window_start}-{args.window_end} IST, "
+          f"weekdays. Ctrl+C to stop.")
+    try:
+        w.run_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def cmd_ui(args: argparse.Namespace) -> int:
     """Serve the local dashboard."""
     from .ui import serve
@@ -268,6 +291,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("momentum", help="momentum stats for one or more tickers")
     sp.add_argument("tickers", nargs="+")
     sp.set_defaults(func=cmd_momentum)
+    sp = sub.add_parser("watch", help="always-on local mode: poll deals + announcements in market hours")
+    sp.add_argument("--every", type=int, default=60, help="seconds between polls")
+    sp.add_argument("--window-start", default="08:45", help="IST, HH:MM")
+    sp.add_argument("--window-end", default="18:30", help="IST, HH:MM")
+    sp.add_argument("--auto-trade", action="store_true", help="allow paper orders")
+    sp.set_defaults(func=cmd_watch)
     sp = sub.add_parser("ui", help="open the local web dashboard")
     sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--port", type=int, default=8787)

@@ -25,8 +25,10 @@ from .broker import Broker, LocalPaperBroker
 from .config import Settings, load_settings
 from .investors import classify_client
 from .quiver import DisclosedTrade
-from .runner import check, make_broker, make_data_source, make_notifier
+from .momentum import MomentumScreen, momentum_summary
+from .runner import check, free_prices, make_broker, make_data_source, make_notifier
 from .state import State
+from .watch import Watcher
 
 log = logging.getLogger(__name__)
 
@@ -63,11 +65,17 @@ class App:
 
     def __init__(self, settings: Settings, *, broker: Broker | None = None,
                  data: Any | None = None, demo_trades: list[DisclosedTrade] | None = None,
-                 dotenv: Path | None = Path(".env")):
+                 dotenv: Path | None = Path(".env"), context: Any | None = None,
+                 prices: Any | None = None):
         self.settings = settings
         self.dotenv = dotenv
         self._broker = broker
         self._data = data
+        self.context = context  # GlobalContext or None
+        self.prices = prices or free_prices(settings)
+        self.momentum = MomentumScreen(self.prices)
+        self.watcher: Watcher | None = None
+        self.last_backtest: dict[str, Any] | None = None
         self.demo_trades = demo_trades
         self._deals: list[DisclosedTrade] | None = demo_trades
         self._deals_at = time.time() if demo_trades else 0.0
@@ -137,8 +145,18 @@ class App:
             mode = "paper"
         else:
             mode = "recommend"
+        regime = None
+        if self.context is not None:
+            try:
+                r = self.context.fetch()
+                regime = {k: r[k] for k in ("regime", "score", "signals", "guidance", "summary", "markets")}
+            except Exception as e:  # noqa: BLE001
+                regime = {"error": str(e)}
         return {
             "now": _now(),
+            "regime": regime,
+            "watch": self.watcher.status() if self.watcher else {"on": False, "every": 60},
+            "backtest": self.last_backtest,
             "settings": {
                 "market": s.market, "currency": s.currency, "watch_investor": s.watch_investor,
                 "watch_source": s.watch_source, "data_source": s.data_source,
@@ -197,6 +215,80 @@ class App:
 
         threading.Thread(target=run, daemon=True).start()
         return job
+
+    def lookup(self, ticker: str) -> dict[str, Any]:
+        stats = self.momentum.stats(ticker)
+        out: dict[str, Any] = {"ticker": ticker.upper(), "momentum": stats,
+                               "momentum_summary": stats.get("error") or momentum_summary(stats),
+                               "announcements": [], "announcements_error": None}
+        data = self.data
+        if data is not None and hasattr(data, "announcements"):
+            try:
+                out["announcements"] = data.announcements(ticker, limit=8)
+            except Exception as e:  # noqa: BLE001
+                out["announcements_error"] = str(e)
+        try:
+            out["price"] = self.broker.latest_price(ticker)
+        except Exception:  # noqa: BLE001
+            out["price"] = None
+        return out
+
+    def start_backtest(self, investor: str, days: int, horizons: tuple[int, ...], cost_bps: float) -> Job:
+        from .backtest import run_backtest
+
+        job = Job(id=len(self.jobs) + 1, kind="backtest")
+        self.jobs.append(job)
+        if self.busy:
+            job.ok, job.message, job.finished_at = False, "another job is running", _now()
+            return job
+        self.busy = True
+
+        def run() -> None:
+            try:
+                if self.demo_trades is not None:
+                    import dataclasses
+                    import datetime as dt
+                    from .cli import _DemoHistory
+                    back = (dt.date.today() - dt.timedelta(days=100)).isoformat()
+                    deals = [dataclasses.replace(d, transaction_date=back, report_date=back)
+                             for d in self.demo_trades]
+                    prices: Any = _DemoHistory(getattr(self.broker, "price_fn", None) or (lambda s: 100.0))
+                else:
+                    data = self.data
+                    deals = data.trades_for_investor(investor, self.settings.watch_source, days=days) \
+                        if self.settings.data_source == "nse" else data.trades_for_investor(investor, self.settings.watch_source)
+                    prices = self.prices
+                result = run_backtest(investor, deals, prices, horizons=horizons, cost_bps=cost_bps)
+                self.last_backtest = {"at": _now(), "days": days, **result.to_dict()}
+                job.result = self.last_backtest["summary"]
+                job.ok = True
+                job.message = f"{len(deals)} deals replayed for {investor}"
+            except Exception as e:  # noqa: BLE001
+                log.exception("backtest failed")
+                job.ok, job.message = False, f"{type(e).__name__}: {e}"
+            finally:
+                job.finished_at = _now()
+                self.busy = False
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
+    def set_watch(self, on: bool, every: int | None = None) -> dict[str, Any]:
+        if on:
+            if self.watcher is None or (every and every != self.watcher.every):
+                if self.watcher:
+                    self.watcher.stop()
+                self.watcher = Watcher(
+                    self.settings, every=every or 60, data=self.data, broker=self.broker,
+                    notifier=make_notifier(self.settings),
+                    check_fn=lambda: check(self.settings, trades=self.deals(refresh=True), broker=self.broker,
+                                           data=self.data, notifier=make_notifier(self.settings),
+                                           momentum=self.momentum, context=self.context),
+                )
+            self.watcher.start()
+        elif self.watcher:
+            self.watcher.stop()
+        return self.watcher.status() if self.watcher else {"on": False, "every": every or 60}
 
     def paper_order(self, symbol: str, side: str, notional: float) -> dict[str, Any]:
         if not self.paper_only:
@@ -307,6 +399,17 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.snapshot())
             elif path == "/api/jobs":
                 self._json([j.to_dict() for j in app.jobs])
+            elif path == "/api/regime":
+                self._json(app.context.fetch() if app.context else {"error": "not configured"})
+            elif path == "/api/lookup":
+                from urllib.parse import parse_qs
+                ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()
+                if not ticker:
+                    self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
+                else:
+                    self._json(app.lookup(ticker))
+            elif path == "/api/backtest":
+                self._json(app.last_backtest or {})
             else:
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -326,6 +429,14 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"ok": True, "applied": app.update_settings(body)})
                 elif path == "/api/reset":
                     self._json({"ok": True, "removed": app.reset()})
+                elif path == "/api/backtest":
+                    horizons = tuple(int(h) for h in str(body.get("horizons", "5,20,60")).split(",") if h.strip())
+                    job = app.start_backtest(str(body.get("investor") or app.settings.watch_investor),
+                                             int(body.get("days", 365)), horizons or (5, 20, 60),
+                                             float(body.get("cost_bps", 50)))
+                    self._json(job.to_dict(), HTTPStatus.ACCEPTED)
+                elif path == "/api/watch":
+                    self._json(app.set_watch(bool(body.get("on")), int(body["every"]) if body.get("every") else None))
                 else:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             except PermissionError as e:
@@ -354,6 +465,10 @@ def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: in
 
         trades, broker = _demo_inputs(settings)
         kwargs.update(demo_trades=trades, broker=broker)
+    from .regime import GlobalContext
+    from .prices import YahooPrices
+
+    kwargs["context"] = GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache", cache_ttl=900))
     app = App(settings, **kwargs)
     server = make_server(app, host, port)
     url = f"http://{host}:{server.server_address[1]}/"

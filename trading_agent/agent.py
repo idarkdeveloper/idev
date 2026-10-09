@@ -29,17 +29,22 @@ Your job each run:
 3. For each new trade, decide whether the user should act. Consider: how recent the trade is
    (disclosures lag the actual trade, sometimes by weeks), the size bucket, whether the user
    already holds the ticker, position concentration, and available cash.
-4. Weigh WHO traded (client_type): promoter/insider and institutional deals carry
+4. Read the GLOBAL CONTEXT line (or call get_global_context): in a risk-off regime make no
+   new buy recommendations and suggest at most half size for anything else; in neutral,
+   require strong momentum for a buy. Before any buy, call get_announcements for the
+   ticker and look for event risk: results due, pledge of promoter shares, regulatory
+   orders, auditor resignation, large sell by a promoter. Mention anything material.
+5. Weigh WHO traded (client_type): promoter/insider and institutional deals carry
    information; broker/prop desks and corporate treasuries usually do not. Check the
    stock's momentum with get_momentum (or the momentum given with the trade): only
    recommend "buy" when momentum is strong or neutral with a positive 6-month return;
    a disclosed buy in a weak-momentum stock is a "watch", not a buy. Evidence from NSE
    event studies: front-runners take most of the bulk-deal edge before disclosure, so a
    disclosure alone is a screen, never a signal.
-5. Call send_recommendation exactly once per ticker that deserves a recommendation
+6. Call send_recommendation exactly once per ticker that deserves a recommendation
    (buy / sell / hold / watch). If nothing deserves action, call send_recommendation once
    with action "hold" summarising why.
-6. If and only if place_paper_order is available AND your confidence is "high", you may
+7. If and only if place_paper_order is available AND your confidence is "high", you may
    execute the recommendation with paper money. Never exceed 10% of equity on a single
    order, never buy a ticker already above 20% of equity, and never sell more than is held.
 
@@ -99,6 +104,7 @@ class AgentContext:
     state: State
     result: RunResult
     momentum: Any | None = None  # MomentumScreen
+    context: Any | None = None  # GlobalContext
 
     @property
     def live_money(self) -> bool:
@@ -198,8 +204,35 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             stats["summary"] = momentum_summary(stats)
         return json.dumps(stats, default=str)
 
+    @beta_tool
+    def get_global_context() -> str:
+        """Global market regime (risk_on / neutral / risk_off) from Nifty vs its 200-day MA,
+        S&P 500 and Nasdaq futures, Nikkei, India VIX, USD/INR and Brent, with sizing guidance."""
+        if ctx.context is None:
+            return json.dumps({"error": "global context not configured"})
+        r = ctx.context.fetch()
+        return json.dumps({k: r[k] for k in ("regime", "score", "signals", "guidance", "summary", "markets")},
+                          default=str)
+
+    @beta_tool
+    def get_announcements(ticker: str, limit: int = 10) -> str:
+        """Recent NSE corporate announcements for a stock (results, board meetings, pledges,
+        regulatory orders, business updates), newest first, with a one-line text each.
+
+        Args:
+            ticker: Stock ticker symbol.
+            limit: Max number of announcements (default 10).
+        """
+        if ctx.data is None or not hasattr(ctx.data, "announcements"):
+            return json.dumps({"error": "announcements not available for this market"})
+        try:
+            rows = ctx.data.announcements(ticker, limit=int(limit))
+        except Exception as e:  # noqa: BLE001
+            return json.dumps({"error": str(e)})
+        return json.dumps({"ticker": ticker.upper(), "announcements": rows}, default=str)
+
     tools: list[Any] = [get_portfolio, get_latest_price, get_investor_trade_history,
-                        get_momentum, send_recommendation]
+                        get_momentum, get_global_context, get_announcements, send_recommendation]
 
     if ctx.settings.auto_trade:
         @beta_tool
@@ -254,9 +287,16 @@ def build_user_message(ctx: AgentContext) -> str:
         mode = "LIVE - orders use real money, be conservative"
     else:
         mode = "paper - you may place simulated orders"
+    context_line = ""
+    if ctx.context is not None:
+        try:
+            r = ctx.context.fetch()
+            context_line = f"GLOBAL CONTEXT: {r['summary']}. Guidance: {r['guidance']}\n"
+        except Exception as e:  # noqa: BLE001
+            context_line = f"GLOBAL CONTEXT: unavailable ({e})\n"
     return (
-        MARKET_NOTES.get(ctx.settings.market, "") + "\n"
-        f"Watched investor: {ctx.settings.watch_investor} (source: {ctx.settings.watch_source}).\n"
+        MARKET_NOTES.get(ctx.settings.market, "") + "\n" + context_line
+        + f"Watched investor: {ctx.settings.watch_investor} (source: {ctx.settings.watch_source}).\n"
         f"Order mode: {mode}.\n\n"
         f"NEW disclosed trades since the last check ({len(trades)}):\n"
         f"{json.dumps(trades, indent=2)}\n\n"

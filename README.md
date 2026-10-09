@@ -104,6 +104,24 @@ publishes that evening), hold 5 / 20 / 60 trading days, excess return over NIFTY
 (`^NSEI`) after a round-trip cost (`--cost-bps`, default 50), hit rate, and a split by
 who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
 
+## Global context, announcements and watch mode
+
+- **Global regime** (`trading_agent/regime.py`): Nifty vs its 200-day MA and 20-day move,
+  S&P 500 and Nasdaq futures overnight, Nikkei, India VIX, USD/INR and Brent, all free from
+  Yahoo, condensed into `risk_on` / `neutral` / `risk_off` with sizing guidance. It heads
+  every prompt and is a tool (`get_global_context`). Cross-market moves are priced at the
+  Indian open, so this is used for sizing and drawdown control, never for direction.
+- **NSE announcements** (`NSEClient.announcements`): results, board meetings, pledges,
+  regulatory orders, business updates, with text and PDF link. Claude must check them
+  before a buy (`get_announcements`); the dashboard shows them in the stock lookup.
+- **Watch mode**: `python -m trading_agent watch --every 60` (or the *Start watch* button)
+  polls deals and announcements for your positions and recent recommendations every
+  minute between 08:45 and 18:30 IST on weekdays, notifying on anything new. Meant for a
+  machine with a fixed IP, which the April 2026 SEBI rules require for live orders.
+
+The dashboard surfaces all of it: regime strip, stock lookup (momentum, price,
+announcements), backtest form with results table, and the watch toggle.
+
 ## Momentum and "who traded"
 
 Two filters sit between a disclosure and a recommendation, based on what the evidence
