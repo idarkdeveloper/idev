@@ -148,6 +148,9 @@ def cmd_history(args: argparse.Namespace) -> int:
         print(f"{r['at']}  {r['action'].upper():<5} {r['ticker']:<8} [{r['confidence']}] {r['headline']}")
     runs = data.get("runs", [])
     print(f"\nRuns recorded: {len(runs)}  (trades remembered: {len(data.get('seen', {}))})")
+    costs = [r["usage"]["cost_usd"] for r in runs if (r.get("usage") or {}).get("cost_usd") is not None]
+    if costs:
+        print(f"Claude API spend over {len(costs)} runs: about ${sum(costs):.2f} (avg ${sum(costs)/len(costs):.3f} a run)")
     return 0
 
 

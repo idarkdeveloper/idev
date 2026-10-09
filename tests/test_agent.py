@@ -118,3 +118,49 @@ def test_refusal_is_reported(settings, sample_rows):
     result = check(settings, trades=trades, broker=broker, notifier=notifier,
                    runner_factory=lambda **kw: RefusingRunner([], **kw))
     assert result.refusal and "declined" in result.final_text
+
+
+def _usage(inp, out, read=0, write=0, iterations=None):
+    return SimpleNamespace(input_tokens=inp, output_tokens=out, cache_read_input_tokens=read,
+                           cache_creation_input_tokens=write, iterations=iterations)
+
+
+def test_usage_cost_caching_and_step_limit(settings, sample_rows):
+    trades, broker, notifier = _make(settings, sample_rows)
+    seen = {}
+
+    class MeteredRunner(FakeRunner):
+        def __iter__(self):
+            seen.update(self.kwargs)
+            yield SimpleNamespace(model="claude-opus-5-5", stop_reason="tool_use", content=[],
+                                  usage=_usage(2000, 300, write=8000))
+            yield SimpleNamespace(model="claude-opus-5-5", stop_reason="tool_use",
+                                  content=[SimpleNamespace(type="text", text="Still checking.")],
+                                  usage=_usage(500, 200, read=9000))
+
+    result = check(settings, trades=trades, broker=broker, notifier=notifier,
+                   runner_factory=lambda **kw: MeteredRunner([], **kw))
+    assert seen["cache_control"] == {"type": "ephemeral"} and seen["max_iterations"] == 20
+    assert seen["output_config"] == {"effort": "high"} and seen["fallbacks"] == "default"
+    u = result.usage.to_dict()
+    assert u["requests"] == 2 and u["input_tokens"] == 2500 and u["cache_read_tokens"] == 9000
+    # 2500*4 + 500*20 + 9000*0.2 + 8000*4*1.25 = 10000 + 10000 + 1800 + 40000 per million
+    assert abs(u["cost_usd"] - 0.0618) < 1e-9
+    assert result.stop == "step_limit" and "Stopped after 20 steps" in result.final_text
+    run = State(settings.state_dir / "state.json").data["runs"][-1]
+    assert run["usage"]["cost_usd"] == u["cost_usd"] and run["stop"] == "step_limit"
+
+
+def test_fallback_and_unknown_model_cost(settings, sample_rows):
+    trades, broker, notifier = _make(settings, sample_rows)
+
+    class FallbackRunner(FakeRunner):
+        def __iter__(self):
+            its = [SimpleNamespace(type="message"), SimpleNamespace(type="fallback_message")]
+            yield SimpleNamespace(model="claude-some-future-model", stop_reason="max_tokens",
+                                  content=[SimpleNamespace(type="text", text="Partial")], usage=_usage(10, 10, iterations=its))
+
+    result = check(settings, trades=trades, broker=broker, notifier=notifier,
+                   runner_factory=lambda **kw: FallbackRunner([], **kw))
+    assert result.fallback_used and result.stop == "max_tokens" and "cut short" in result.final_text
+    assert result.usage.to_dict()["cost_usd"] is None and result.usage.output_tokens == 10

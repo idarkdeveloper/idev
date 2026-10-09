@@ -286,6 +286,13 @@ Safety rails: paper fills by default, Groww live orders behind a double opt-in, 
 size cap, concentration rule in the prompt, whole-share rounding, and server-side refusal
 fallback on the Claude request.
 
+Cost control: each check runs Claude at `effort: high` (Opus 5.5 would otherwise default
+to medium) for at most 20 tool steps, with prompt caching on, so the conversation resent
+at every step bills at the cache-read rate. Every run records its tokens and an estimated
+cost at list prices. The dashboard's *Recent runs* card and `history` show the total.
+If a run hits the step limit or the output limit, or a fallback model answered, the run
+log says so instead of ending with a blank summary.
+
 ## Notes on the data
 
 NSE's JSON endpoints are public but undocumented; the client sends browser-like headers.

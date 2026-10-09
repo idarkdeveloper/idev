@@ -147,6 +147,7 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     record_equity(state, broker)
     state.record_run({"new_trades": len(new), "recommendations": len(result.recommendations),
                       "orders": len(result.orders), "model": result.model,
-                      "refusal": result.refusal})
+                      "refusal": result.refusal, "fallback_used": result.fallback_used,
+                      "stop": result.stop, "usage": result.usage.to_dict()})
     state.save()
     return result
