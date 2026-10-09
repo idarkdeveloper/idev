@@ -27,7 +27,8 @@ class Watcher:
     def __init__(self, settings: Settings, *, every: int = 60, window: tuple[str, str] = ("08:45", "18:30"),
                  tz: ZoneInfo = IST, check_fn: Callable[[], Any] | None = None,
                  data: Any | None = None, broker: Any | None = None, notifier: Any | None = None,
-                 weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False):
+                 weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False,
+                 holidays: Any | None = None):
         self.settings = settings
         self._prices = prices  # object with .history(symbol, range) for ATR-based stops
         self.auto_exit = auto_exit  # sell paper positions that hit their trailing stop
@@ -35,6 +36,7 @@ class Watcher:
         self.window = (dtime.fromisoformat(window[0]), dtime.fromisoformat(window[1]))
         self.tz = tz
         self.weekdays_only = weekdays_only
+        self.holidays = holidays  # NSEHolidays: no polling on exchange holidays
         self._check_fn = check_fn
         self._data = data
         self._broker = broker
@@ -49,6 +51,8 @@ class Watcher:
     def market_window_open(self, now: datetime | None = None) -> bool:
         now = now or datetime.now(self.tz)
         if self.weekdays_only and now.weekday() >= 5:
+            return False
+        if self.holidays is not None and not self.holidays.is_trading_day(now.date()):
             return False
         return self.window[0] <= now.time() <= self.window[1]
 

@@ -71,8 +71,22 @@ def _settings(args: argparse.Namespace):
     return load_settings()
 
 
+def _holiday_today(settings: Any) -> str | None:
+    """The NSE holiday's name when Indian equities are closed today for one, else None."""
+    if settings.market != "in":
+        return None
+    from datetime import datetime
+    from .holidays import IST, NSEHolidays
+    return NSEHolidays(cache_dir=settings.state_dir / "cache").holiday(datetime.now(IST).date())
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     settings = _settings(args)
+    if getattr(args, "skip_holidays", False):
+        name = _holiday_today(settings)
+        if name:
+            print(f"NSE is closed today ({name}): nothing to check.")
+            return 0
     if args.investor:
         settings.watch_investor = args.investor
     if args.auto_trade:
@@ -258,9 +272,10 @@ def cmd_forward(args: argparse.Namespace) -> int:
 
     settings = _settings(args)
     prices = free_prices(settings)
+    from .holidays import NSEHolidays
     ft = ForwardTest(settings.state_dir, universe=args.universe, top=args.top,
                      capital=args.capital or settings.paper_starting_cash, price_fn=prices.latest_price,
-                     cost_model=cost_model_for("in"))
+                     cost_model=cost_model_for("in"), holidays=NSEHolidays(cache_dir=settings.state_dir / "cache"))
     if args.status:
         print(format_forward(ft.summary()))
         return 0
@@ -596,6 +611,13 @@ def cmd_size(args: argparse.Namespace) -> int:
     return 0
 
 
+def _market_holidays(settings: Any) -> Any | None:
+    if settings.market != "in":
+        return None
+    from .holidays import NSEHolidays
+    return NSEHolidays(cache_dir=settings.state_dir / "cache")
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """Always-on local mode: poll deals and announcements during market hours."""
     from .runner import make_broker, make_data_source, make_notifier
@@ -611,10 +633,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
     w = Watcher(settings, every=args.every, window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
                 auto_exit=settings.auto_trade,
+                holidays=_market_holidays(settings),
                 check_fn=lambda: check(settings, broker=broker, data=data, notifier=notifier,
                                        dry_run=not settings.anthropic_api_key))
     print(f"Watching {settings.watch_investor} every {w.every}s, {args.window_start}-{args.window_end} IST, "
-          f"weekdays. Ctrl+C to stop.")
+          f"NSE trading days. Ctrl+C to stop.")
     try:
         w.run_forever()
     except KeyboardInterrupt:
@@ -644,6 +667,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--demo", action="store_true", help="use bundled sample trades/prices")
         sp.add_argument("--auto-trade", action="store_true", help="allow PAPER orders this run")
         sp.add_argument("--json", action="store_true", help="also print the result as JSON")
+        sp.add_argument("--skip-holidays", action="store_true",
+                        help="do nothing on NSE trading holidays (used by the scheduled routine)")
         sp.add_argument("--baseline", action="store_true",
                         help="record current trades as seen without calling Claude (after lost state)")
 

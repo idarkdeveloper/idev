@@ -274,6 +274,7 @@
       + (c.claude ? '<span class="pill">Claude ready</span>' : '<span class="pill warn">No ANTHROPIC_API_KEY</span>')
       + (w.on ? `<span class="pill ok">Watching every ${w.every}s${w.in_window?"":" (outside market window)"}</span>` : "")
       + (s.demo ? '<span class="pill warn">Demo data</span>' : '')
+      + (S.market_day && !S.market_day.open ? `<span class="pill">NSE closed today${S.market_day.holiday ? ": " + esc(S.market_day.holiday) : " (weekend)"}</span>` : '')
       + (S.running ? `<span class="pill warn"><span class="dot"></span>${esc(S.running.label)} running…</span>` : "");
     const lastRun = S.runs[0];
     $("lastcheck").textContent = lastRun ? "Last check " + when(lastRun.at) : "No checks yet";

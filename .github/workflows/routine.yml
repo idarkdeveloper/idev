@@ -75,6 +75,8 @@ jobs:
             echo "::warning::No saved state was restored; recording current deals as seen without calling Claude."
             FLAGS="--baseline"
           fi
+          # Scheduled runs skip NSE trading holidays; manual runs always go ahead.
+          if [ "${{ github.event_name }}" = "schedule" ]; then FLAGS="$FLAGS --skip-holidays"; fi
           python -m trading_agent check $FLAGS
 
       # Forward test of the factor screen (paper only): once a weekday after the 15:30 close,

@@ -104,6 +104,7 @@ class App:
         self.busy = False
         self.running: Job | None = None  # the job holding the one slot
         self._replay: Any | None = None  # ReplayApp, built on first use
+        self._holidays: Any | None = None
         self._demo: "App | None" = None
         self._lazy_lock = threading.Lock()
 
@@ -176,6 +177,16 @@ class App:
 
         threading.Thread(target=run, daemon=True).start()
         return job
+
+    @property
+    def holidays(self) -> Any | None:
+        """NSE trading holidays (India only; not fetched in demo mode)."""
+        if self.settings.market != "in" or self.demo_trades is not None:
+            return None
+        if self._holidays is None:
+            from .holidays import NSEHolidays
+            self._holidays = NSEHolidays(cache_dir=self.settings.state_dir / "cache")
+        return self._holidays
 
     @property
     def replay(self) -> Any:
@@ -276,6 +287,7 @@ class App:
                 "max_slippage_pct": s.max_slippage_pct,
                 "demo": self.demo_trades is not None,
             },
+            "market_day": self.holidays.today() if self.holidays is not None else None,
             "connections": {
                 "claude": bool(s.anthropic_api_key),
                 "groww": s.use_groww,
@@ -478,7 +490,7 @@ class App:
                 self.watcher = Watcher(
                     self.settings, every=every or 60, data=self.data, broker=self.broker,
                     notifier=make_notifier(self.settings), prices=self.prices,
-                    auto_exit=want_exit,
+                    auto_exit=want_exit, holidays=self.holidays,
                     # No Claude key: compare deals only, instead of failing every tick.
                     check_fn=lambda: check(self.settings, trades=self.deals(refresh=True), broker=self.broker,
                                            data=self.data, notifier=make_notifier(self.settings),

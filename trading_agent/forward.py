@@ -93,13 +93,14 @@ class ForwardTest:
     def __init__(self, state_dir: Path, *, universe: str = "NIFTYMIDCAP150", top: int = 20,
                  capital: float = 500_000.0, benchmark: str | None = None,
                  price_fn: Callable[[str], float] | None, cost_model: Any | None = None,
-                 now: Callable[[], datetime] | None = None):
+                 now: Callable[[], datetime] | None = None, holidays: Any | None = None):
         self.universe = universe.upper()
         self.dir = Path(state_dir) / "forward"
         self.path = self.dir / f"{self.universe.lower()}.json"
         self.price_fn = price_fn
         self.cost_model = cost_model
         self.now = now or (lambda: _now())  # looked up at call time, so tests can patch it
+        self.holidays = holidays  # NSEHolidays: nothing is due on an exchange holiday
         self.data: dict[str, Any] = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
         if not self.data:
             self.data = {"universe": self.universe, "top": int(top), "capital": float(capital),
@@ -130,6 +131,8 @@ class ForwardTest:
         when a rebalance is due or today's point is missing."""
         now = self.now()
         if now.weekday() >= 5 or now.time() < CLOSE_DONE:
+            return False
+        if self.holidays is not None and not self.holidays.is_trading_day(now.date()):
             return False
         today = now.date().isoformat()
         has_today = any(p["date"] == today for p in self.data["history"])
