@@ -10,9 +10,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta, timezone, tzinfo
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import Settings
 from .risk import check_stops
@@ -20,12 +20,23 @@ from .state import State
 
 log = logging.getLogger(__name__)
 
-IST = ZoneInfo("Asia/Kolkata")
+
+
+def india_tz() -> tzinfo:
+    """Asia/Kolkata, or a fixed UTC+05:30 when the OS has no time-zone database (Windows
+    without the `tzdata` package). India has no daylight saving, so the two are identical."""
+    try:
+        return ZoneInfo("Asia/Kolkata")
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=5, minutes=30), "IST")
+
+
+IST = india_tz()
 
 
 class Watcher:
     def __init__(self, settings: Settings, *, every: int = 60, window: tuple[str, str] = ("08:45", "18:30"),
-                 tz: ZoneInfo = IST, check_fn: Callable[[], Any] | None = None,
+                 tz: tzinfo = IST, check_fn: Callable[[], Any] | None = None,
                  data: Any | None = None, broker: Any | None = None, notifier: Any | None = None,
                  weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False):
         self.settings = settings

@@ -72,3 +72,17 @@ def test_stop_hits_notify_once_and_auto_exit(settings):
     assert len(hits) == 1 and hits[0]["symbol"] == "X" and hits[0]["order"]["side"] == "sell"
     assert broker.positions() == [] and notifier.sent[0]["subject"].startswith("[STOP]")
     assert w.check_trailing_stops() == []  # position gone, nothing to alert
+
+
+def test_india_tz_falls_back_without_tz_database(monkeypatch):
+    from datetime import datetime, timedelta
+
+    from trading_agent import watch
+    from zoneinfo import ZoneInfoNotFoundError
+
+    def missing(key):
+        raise ZoneInfoNotFoundError(key)
+
+    monkeypatch.setattr(watch, "ZoneInfo", missing)
+    tz = watch.india_tz()
+    assert tz.utcoffset(datetime(2026, 10, 9)) == timedelta(hours=5, minutes=30)
