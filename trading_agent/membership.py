@@ -20,7 +20,7 @@ ETERNAL, because that is where their full price history lives.
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -55,6 +55,7 @@ class Membership:
     current: frozenset[str]
     changes: list[tuple[str, tuple[str, ...], tuple[str, ...]]]
     source: str = "built-in"
+    warnings: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.current = frozenset(_norm(s) for s in self.current)
@@ -98,10 +99,29 @@ def load_changes_csv(path: str | Path) -> list[tuple[str, tuple[str, ...], tuple
     return out
 
 
-def membership_for(universe: str, current: Iterable[str], changes_csv: str | Path | None = None
-                   ) -> Membership | None:
-    """Point-in-time membership for a universe, or None when its history is unknown."""
+def membership_for(universe: str, current: Iterable[str], changes_csv: str | Path | None = None,
+                   state_dir: str | Path | None = None) -> Membership | None:
+    """Point-in-time membership for a universe, or None when its history is unknown.
+
+    Looks, in order, for an explicit change-log CSV, the built-in NIFTY 50 history, and a
+    history built from NSE press releases (``index-history``) under ``state_dir``."""
     if changes_csv:
         return Membership(frozenset(current), load_changes_csv(changes_csv), source=str(changes_csv))
     changes = BUILT_IN.get(universe.upper().replace(" ", ""))
-    return Membership(frozenset(current), list(changes)) if changes else None
+    if changes:
+        return Membership(frozenset(current), list(changes))
+    if state_dir is not None:
+        from .index_history import history_path
+        path = history_path(Path(state_dir), universe)
+        if path.exists():
+            warnings = []
+            meta = path.with_suffix(".json")
+            if meta.exists():
+                import json
+                problems = json.loads(meta.read_text()).get("problems", [])
+                if problems:
+                    warnings.append(f"{len(problems)} inconsistencies remain in the rebuilt history, "
+                                    f"the latest at {max(p['date'] for p in problems)}.")
+            return Membership(frozenset(current), load_changes_csv(path), source="NSE press releases",
+                              warnings=warnings)
+    return None

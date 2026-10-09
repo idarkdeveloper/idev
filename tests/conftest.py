@@ -34,6 +34,7 @@ class FakeResponse:
         self._payload = payload
         self.status_code = status
         self.content = payload.encode() if isinstance(payload, str) else json.dumps(payload).encode()
+        self.text = self.content.decode()
 
     def json(self):
         return self._payload

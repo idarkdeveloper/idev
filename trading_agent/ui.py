@@ -525,8 +525,8 @@ class App:
 
     def start_factor_backtest(self, universe: str, top: int, years: int) -> Job:
         from .costs import cost_model_for
-        from .factor_backtest import run_factor_backtest
-        from .membership import membership_for
+        from .factor_backtest import INDEX_FUNDS, run_factor_backtest
+        from .index_history import point_in_time
         from .screen import load_universe
 
         job = Job(id=len(self.jobs) + 1, kind="factor_backtest")
@@ -545,12 +545,16 @@ class App:
                 r = run_factor_backtest(members, self.prices, top=top, years=years,
                                         cost_model=cost_model_for("in"),
                                         capital=self.settings.paper_starting_cash,
-                                        membership=membership_for(universe, [m["symbol"] for m in members]))
+                                        membership=point_in_time(universe, [m["symbol"] for m in members],
+                                                                 self.settings.state_dir),
+                                        index_fund=INDEX_FUNDS.get(universe.upper()))
                 self.last_factor_bt = {"at": _now(), "universe": universe.upper(), **r}
                 s_ = r["stats"]
                 job.ok = True
+                vs = (f"index fund {r['index_fund_symbol']} {s_['index_fund']['total_return']*100:+.1f}%"
+                      if "index_fund" in s_ else f"NIFTY 50 {s_['benchmark']['total_return']*100:+.1f}%")
                 job.message = (f"{universe.upper()} top {top}: strategy {s_['strategy']['total_return']*100:+.1f}% vs "
-                               f"NIFTY 50 {s_['benchmark']['total_return']*100:+.1f}% over {r['months']} months")
+                               f"{vs} over {r['months']} months")
             except Exception as e:  # noqa: BLE001
                 log.exception("factor backtest failed")
                 job.ok, job.message = False, f"{type(e).__name__}: {e}"
@@ -563,7 +567,7 @@ class App:
 
     def start_signal_lab(self, universe: str, years: int, horizons: list[int]) -> Job:
         from .costs import cost_model_for
-        from .membership import membership_for
+        from .index_history import point_in_time
         from .screen import load_universe
         from .signal_lab import run_signal_lab
 
@@ -581,7 +585,8 @@ class App:
             try:
                 members = load_universe(universe)
                 r = run_signal_lab(members, self.prices, horizons=horizons, years=years,
-                                   membership=membership_for(universe, [m["symbol"] for m in members]),
+                                   membership=point_in_time(universe, [m["symbol"] for m in members],
+                                                            self.settings.state_dir),
                                    cost_model=cost_model_for("in"))
                 self.last_signal_lab = {"at": _now(), "universe": universe.upper(), "years": years, **r}
                 job.ok, job.message = True, r["summary"]

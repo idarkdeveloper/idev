@@ -400,7 +400,7 @@
       <div class="scroll"><table><thead><tr><th class="num">#</th><th>Stock</th><th class="num">12-1</th><th class="num">6m</th><th class="num">1m</th><th class="num">Vol</th><th class="num">vs 52w high</th><th class="num">Score</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   // ---- charts: plain SVG, one y-axis, hairline grid, crosshair tooltip ----
-  const C = {s1:"#2a78d6", s2:"#eb6834", ctx:"#898781", grid:"#ECEEF1", base:"#c3c2b7", pos:"#2a78d6", neg:"#e34948", ring:"#ffffff"};
+  const C = {s1:"#2a78d6", s2:"#eb6834", s3:"#1baf7a", ctx:"#898781", grid:"#ECEEF1", base:"#c3c2b7", pos:"#2a78d6", neg:"#e34948", ring:"#ffffff"};
   const NS = "http://www.w3.org/2000/svg";
   function niceTicks(min, max, n){
     n = n || 4; let span = max - min; if(!(span > 0)) span = Math.abs(max) || 1;
@@ -515,16 +515,18 @@
     $("fb-result").innerHTML = `<div class="sub">${esc(r.universe)} · top ${r.top} · ${r.months} monthly rebalances · ${shortDate(r.dates[0])} to ${shortDate(r.dates[r.dates.length-1])} · ${when(r.at)}</div>
       <div class="chart" id="fb-chart"></div>
       <div class="scroll"><table><thead><tr><th></th><th class="num">Total</th><th class="num">CAGR</th><th class="num">Max drawdown</th><th class="num">Volatility</th></tr></thead><tbody>
-      ${row("Factor portfolio (after charges)", st.strategy)}${row(benchName, st.benchmark)}${row("Equal weight of members, no charges", st.equal_weight)}${st.price_index ? row("NIFTY 50 price index (no dividends)", st.price_index) : ""}</tbody></table></div>
-      <div class="row" style="gap:6px">${r.point_in_time ? `<span class="pill">Point-in-time members</span>` : `<span class="pill">Today's members only</span>`}${(r.former_members||[]).length ? `<span class="sub">Includes ${r.former_members.length} later dropped: ${esc(r.former_members.join(", "))}</span>` : ""}</div>
-      ${(r.index_changes||[]).length ? `<div class="sub">Index changes in the window: ${r.index_changes.map(c => `${shortDate(c.date)} +${esc(c.added.join(" +"))} −${esc(c.removed.join(" −"))}`).join(" · ")}</div>` : ""}
+      ${row("Factor portfolio (after charges)", st.strategy)}${row(benchName, st.benchmark)}${row("Equal weight of members, no charges", st.equal_weight)}${st.index_fund ? row(`Index fund for this universe (${esc(r.index_fund_symbol)})`, st.index_fund) : ""}${st.price_index ? row("NIFTY 50 price index (no dividends)", st.price_index) : ""}</tbody></table></div>
+      <div class="row" style="gap:6px">${r.point_in_time ? `<span class="pill">Point-in-time members</span>` : `<span class="pill">Today's members only</span>`}</div>
+      ${(r.former_members||[]).length ? `<details class="sub"><summary>Includes ${r.former_members.length} stocks later dropped from the index</summary>${esc(r.former_members.join(", "))}</details>` : ""}
+      ${(r.index_changes||[]).length ? `<details class="sub"><summary>${r.index_changes.length} index change date${r.index_changes.length === 1 ? "" : "s"} in the window</summary>${r.index_changes.map(c => `${shortDate(c.date)}: +${esc(c.added.join(" +"))} −${esc(c.removed.join(" −"))}`).join("<br>")}</details>` : ""}
       <div class="sub">Charges paid ${money(r.costs_paid)} over ${r.trades} trades · ${r.avg_names_held} names held on average · ${r.months_all_cash} months fully in cash. ${esc(r.caveat)}</div>`;
     lineChart($("fb-chart"), {x: r.dates, legend: true, endLabels: true, height: 220, left: 44,
       yFmt: v => Math.round(v).toString(), label: "Growth of 100: factor portfolio vs NIFTY 50 vs equal weight",
       refs: [{y: 100, label: "Start"}],
       series: [{name:"Factor portfolio", label:"Factor", color:C.s1, values: idx(r.strategy)},
                {name: benchName, label:"NIFTY 50", color:C.s2, values: idx(r.benchmark)},
-               {name:"Equal weight", label:"Equal wt", color:C.ctx, width:1.5, values: idx(r.equal_weight)}]});
+               {name:"Equal weight", label:"Equal wt", color:C.ctx, width:1.5, values: idx(r.equal_weight)}]
+               .concat(r.index_fund ? [{name: `Index fund (${r.index_fund_symbol})`, label: "Fund", color: C.s3, width: 1.5, values: idx(r.index_fund)}] : [])});
   }
 
   async function refresh(){ try { S = await api("/api/state"); render(); } catch(e){ toast("Could not load: "+e.message); } }
