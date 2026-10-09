@@ -528,10 +528,29 @@
       if(b12 != null) out.push(`Over the last 12 months it returned ${pct(last12)} against ${pct(b12)} for ${benchName}${last12 < b12 ? ", so it has been lagging lately" : ""}.`);
     }
     if(!r.point_in_time) out.push("It ranks today's index members only, which flatters it: stocks that fell out of the index are missing.");
+    const vd = r.validation;
+    if(vd && vd.verdict) out.push(vd.verdict === "likely skill" ? "The luck checks below say this looks like skill rather than chance."
+      : vd.verdict === "no edge" ? "The luck checks below found no edge: treat the result above as luck."
+      : "The luck checks below say this could easily be luck.");
     out.push(beat
       ? `Bottom line: it beat ${benchName} in this one window, but with far bigger drops${ew && sg.cagr - ew.cagr < 0.03 && !fund ? ", much of the edge was the universe rather than the picks," : ""} and past results like this often fade. Worth forward-testing in paper money, not betting big on.`
       : `Bottom line: after charges it did not beat ${benchName}; owning the index fund was simpler and better here.`);
     return out.join(" ");
+  }
+
+  const SKILL = {"likely skill": ["ok", "✓", "Likely skill"], "could be luck": ["warn", "⚠", "Could be luck"], "no edge": ["bad", "✕", "No edge"]};
+  // "Is it skill or luck?": walk-forward years, deflated Sharpe odds and Monte Carlo ranges.
+  function validationBlock(v){
+    if(!v || !v.verdict) return "";
+    const k = SKILL[v.verdict] || ["", "", v.verdict], wf = v.walk_forward || {}, d = v.deflated_sharpe || {}, mc = v.monte_carlo;
+    const yrs = (wf.years || []).map(y => `<tr><td>${y.year}</td><td class="num">${y.chosen_top}</td><td class="num ${(y.return||0)>=0?"up":"down"}">${pct(y.return)}</td><td class="num">${pct(y.fund_return)}</td></tr>`).join("");
+    const p0 = x => (x * 100).toFixed(0) + "%";
+    return `<div class="callout"><h3 style="margin:0 0 6px">Is it skill or luck?</h3>
+      <div class="row" style="gap:8px"><span class="pill ${k[0]}" style="white-space:nowrap">${k[1]} ${esc(k[2])}</span></div>
+      <p style="margin:6px 0">${esc(v.summary || "")}</p>
+      ${yrs ? `<div class="scroll"><table><thead><tr><th>Year</th><th class="num">Stocks held (chosen from earlier years)</th><th class="num">Return</th><th class="num">Index fund</th></tr></thead><tbody>${yrs}</tbody></table></div>` : ""}
+      ${d.probability != null ? `<div class="sub">Odds the edge is real after ${d.trials} tries: <b>${p0(d.probability)}</b></div>` : ""}
+      ${mc ? `<div class="sub">In 90% of reshuffles the worst fall was between ${pct(mc.max_drawdown.p5, 0)} and ${pct(mc.max_drawdown.p95, 0)}; final return between ${pct(mc.final_return.p5, 0)} and ${pct(mc.final_return.p95, 0)}.</div>` : ""}</div>`;
   }
 
   function renderFactor(r){
@@ -542,6 +561,7 @@
     $("fb-result").innerHTML = `<div class="sub">${esc(r.universe)} · top ${r.top} · ${r.months} monthly rebalances · ${shortDate(r.dates[0])} to ${shortDate(r.dates[r.dates.length-1])} · ${when(r.at)}</div>
       <div class="chart" id="fb-chart"></div>
       ${factorTakeaway(r) ? `<div class="callout"><b style="color:var(--color-accent)">What this means.</b> ${factorTakeaway(r)}</div>` : ""}
+      ${validationBlock(r.validation)}
       <div class="scroll"><table><thead><tr><th><span class="sr-only">Portfolio</span></th><th class="num">Total</th><th class="num">CAGR</th><th class="num">Max drawdown</th><th class="num">Volatility</th></tr></thead><tbody>
       ${row("Factor portfolio (after charges)", st.strategy)}${row(benchName, st.benchmark)}${row("Equal weight of members, no charges", st.equal_weight)}${st.index_fund ? row(`Index fund for this universe (${esc(r.index_fund_symbol)})`, st.index_fund) : ""}${st.price_index ? row("NIFTY 50 price index (no dividends)", st.price_index) : ""}</tbody></table></div>
       <div class="row" style="gap:6px">${r.point_in_time ? `<span class="pill">Point-in-time members</span>` : `<span class="pill">Today's members only</span>`}</div>
@@ -605,6 +625,8 @@
     if(rev.length) out.push(`${names(rev)} came out reversed (t of −2 or below): doing the opposite would have worked, which may be real or chance.`);
     const model = rows.find(x => x.model);
     if(model && model.verdict !== "predictive") out.push(`The walk-forward model, which combines every signal and learns only from the past, did no better (t ${t2(model.t)}).`);
+    const odds = rows.filter(x => x.s.deflated_sharpe != null).sort((a, b) => b.s.deflated_sharpe - a.s.deflated_sharpe)[0];
+    if(odds && r.trials) out.push(`After allowing for the ${r.trials} signal-and-horizon combinations tried, the best odds of a real edge belong to ${odds.label} at ${Math.round(odds.s.deflated_sharpe * 100)}%, and that is the best of ${r.trials} tries, so some of it is just picking the winner.`);
     out.push(pred.length ? "Bottom line: one possible edge worth watching, not yet a reason to trade."
                          : `Bottom line: don't buy or sell ${esc(r.universe)} stocks on these signals alone over a ${per}.`);
     return out.join(" ");
@@ -627,8 +649,8 @@
       <div class="callout"><b style="color:var(--color-accent)">What this means.</b> ${signalTakeaway(rows, r, h)}</div>
       <h3 style="margin-top:4px">How strongly each signal predicted ${h === "5" ? "the next week" : h === "20" ? "the next month" : h === "60" ? "the next quarter" : "the next " + h + " days"} (t-statistic)</h3>
       <div class="chart" id="sl-chart"></div>
-      <div class="scroll"><table><thead><tr><th>Signal</th><th class="num">Rank corr.</th><th class="num">t</th><th class="num">Top fifth − bottom fifth</th><th class="num">Top fifth beat index</th><th>Verdict</th></tr></thead><tbody>
-      ${rows.map(x => { const v = VERDICT[x.verdict] || ["", x.verdict]; return `<tr><td title="${esc((r.signals[x.k] || {}).about || "")}">${esc(x.label)}<div class="sub">${esc((r.signals[x.k] || {}).family || "")}</div></td><td class="num">${x.s.ic >= 0 ? "+" : ""}${x.s.ic.toFixed(3)}</td><td class="num">${x.t >= 0 ? "+" : ""}${x.t.toFixed(2)}</td><td class="num ${x.s.top_minus_bottom >= 0 ? "up" : "down"}">${pct(x.s.top_minus_bottom, 2)}</td><td class="num">${x.s.top_beats_index_share == null ? "n/a" : Math.round(x.s.top_beats_index_share * 100) + "%"}</td><td><span class="pill ${v[0]}" style="white-space:nowrap">${esc(v[1])}</span></td></tr>`; }).join("")}
+      <div class="scroll"><table><thead><tr><th>Signal</th><th class="num">Rank corr.</th><th class="num">t</th><th class="num">Top fifth − bottom fifth</th><th class="num">Top fifth beat index</th><th class="num">Real-edge odds</th><th>Verdict</th></tr></thead><tbody>
+      ${rows.map(x => { const v = VERDICT[x.verdict] || ["", x.verdict]; return `<tr><td title="${esc((r.signals[x.k] || {}).about || "")}">${esc(x.label)}<div class="sub">${esc((r.signals[x.k] || {}).family || "")}</div></td><td class="num">${x.s.ic >= 0 ? "+" : ""}${x.s.ic.toFixed(3)}</td><td class="num">${x.t >= 0 ? "+" : ""}${x.t.toFixed(2)}</td><td class="num ${x.s.top_minus_bottom >= 0 ? "up" : "down"}">${pct(x.s.top_minus_bottom, 2)}</td><td class="num">${x.s.top_beats_index_share == null ? "n/a" : Math.round(x.s.top_beats_index_share * 100) + "%"}</td><td class="num">${x.s.deflated_sharpe == null ? "n/a" : Math.round(x.s.deflated_sharpe * 100) + "%"}</td><td><span class="pill ${v[0]}" style="white-space:nowrap">${esc(v[1])}</span></td></tr>`; }).join("")}
       </tbody></table></div>
       ${it && it.difference != null ? `<div class="sub">Market timing: when NIFTY was above its 200-day average, it returned ${pct(it.above.mean, 2)} over the next ${h} days on average (${it.above.n} periods), against ${pct(it.below.mean, 2)} when below (${it.below.n}); t ${it.t_stat >= 0 ? "+" : ""}${(it.t_stat || 0).toFixed(2)}.</div>` : ""}
       <div class="sub">A coin toss scores a rank correlation near 0 and t near 0. "Predictive" needs t ≥ 3 and a top-minus-bottom gap larger than the charges, because with a dozen signals and three horizons about one test in twenty passes t ≥ 2 by luck.</div>`;

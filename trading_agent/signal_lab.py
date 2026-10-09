@@ -36,6 +36,7 @@ from datetime import date, timedelta
 from typing import Any, Callable, Iterable
 
 from .membership import Membership
+from .validation import expected_max_sharpe, moments, probabilistic_sharpe, sharpe
 
 Series = list[float | None]
 
@@ -241,12 +242,14 @@ def _summarise(ics: list[float], spreads: list[float], top_hits: list[float], up
     mic, sd = statistics.fmean(ics), statistics.pstdev(ics)
     t = mic / (sd / math.sqrt(n)) if sd > 0 else 0.0
     spread = statistics.fmean(spreads) if spreads else None
+    s_skew, s_kurt = moments(spreads)
     return {
         "periods": n, "ic": mic, "t_stat": t, "ic_positive_share": sum(i > 0 for i in ics) / n,
         "top_minus_bottom": spread, "top_beats_index_share": statistics.fmean(top_hits) if top_hits else None,
         "top_up_share": statistics.fmean(ups) if ups else None,
         "all_up_share": statistics.fmean(base_up) if base_up else None,
         "net_annual": (spread - cost) * periods_per_year if spread is not None else None,
+        "spread_sharpe": sharpe(spreads), "spread_skew": s_skew, "spread_kurt": s_kurt,
         "verdict": _verdict(t, spread, cost),
     }
 
@@ -363,8 +366,16 @@ def run_signal_lab(universe: Iterable[dict[str, str]], prices: Any, *, horizons:
         if progress:
             progress(f"{h}-day horizon done")
 
+    trials = [s for h in results.values() for s in h.values() if s.get("spread_sharpe") is not None]
+    if trials:
+        threshold = expected_max_sharpe(len(trials), statistics.pvariance([s["spread_sharpe"] for s in trials])
+                                        if len(trials) > 1 else 0.0)
+        for s in trials:
+            s["deflated_sharpe"] = probabilistic_sharpe(s["spread_sharpe"], s["periods"], s["spread_skew"],
+                                                        s["spread_kurt"], threshold)
     timing = _index_timing(bench, horizons, start_idx)
     return {
+        "trials": len(trials),
         "universe_size": len(syms), "with_history": len(hist), "start": start_day, "end": bd[-1],
         "horizons": [int(h) for h in horizons], "benchmark_symbol": benchmark, "round_trip_cost": cost,
         "point_in_time": membership is not None and membership.known_since <= start_day,

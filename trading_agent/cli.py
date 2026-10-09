@@ -541,7 +541,8 @@ def cmd_index_history(args: argparse.Namespace) -> int:
 def cmd_factor_backtest(args: argparse.Namespace) -> int:
     """Backtest the factor screen as a monthly-rebalanced portfolio with real charges."""
     from .costs import cost_model_for
-    from .factor_backtest import INDEX_FUNDS, format_factor_backtest, run_factor_backtest
+    from .factor_backtest import (INDEX_FUNDS, format_factor_backtest, format_validation, run_factor_backtest,
+                                  validate_factor_backtest)
     from .index_history import point_in_time
     from .runner import free_prices
     from .screen import load_universe
@@ -556,12 +557,21 @@ def cmd_factor_backtest(args: argparse.Namespace) -> int:
         from .fundamentals_history import ResultsHistory
         # cache only: run `fundamentals-history` first, so a half-filled cache is visible, not silent
         funds = ResultsHistory(settings.state_dir / "cache", max_new_downloads=0)
-    r = run_factor_backtest(members, free_prices(settings), top=args.top, years=args.years,
-                            cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
-                            require_above_200dma=not args.no_trend_filter, benchmark=args.benchmark,
-                            membership=membership, index_fund=INDEX_FUNDS.get(args.universe.upper()),
-                            fundamentals=funds, quality=1.0 if args.quality else 0.0, value=1.0 if args.value else 0.0)
+    prices = free_prices(settings)
+
+    def run_top(n: int) -> dict[str, Any]:
+        return run_factor_backtest(members, prices, top=n, years=args.years,
+                                   cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                                   require_above_200dma=not args.no_trend_filter, benchmark=args.benchmark,
+                                   membership=membership, index_fund=INDEX_FUNDS.get(args.universe.upper()),
+                                   fundamentals=funds, quality=1.0 if args.quality else 0.0,
+                                   value=1.0 if args.value else 0.0)
+
+    r = run_top(args.top)
     print(format_factor_backtest(r))
+    if args.validate:
+        r["validation"] = validate_factor_backtest(run_top, args.top, base=r, progress=print)
+        print("\n" + format_validation(r["validation"]))
     fx = r.get("fundamentals")
     if fx:
         print(f"\nFundamentals ({fx['source']}): quality x{fx['quality']:g}, value x{fx['value']:g}; "
@@ -745,6 +755,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="ignore membership history and use today's constituents (survivorship-biased)")
     sp.add_argument("--quality", action="store_true", help="also rank on point-in-time quality (NSE results)")
     sp.add_argument("--value", action="store_true", help="also rank on point-in-time value (NSE results)")
+    sp.add_argument("--validate", action="store_true",
+                    help="also test whether the result is skill or luck (walk-forward, deflated Sharpe, "
+                         "Monte Carlo); re-runs the backtest for 2 more portfolio sizes")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_factor_backtest)
     sp = sub.add_parser("fundamentals-history", help="download NSE quarterly results for a universe (resumable)")

@@ -292,6 +292,19 @@ these only ever touch the local paper account.
   dividends, with a worst fall of 26.7% against 14.0%. Treat any screen result on today's
   members as an upper bound.
 
+**Is it skill or luck?** Add `--validate` to `factor-backtest` (the dashboard does it
+automatically) and the result gets three plain checks:
+- *Walk-forward*: each year it picks the portfolio size (10, 20 or 30 stocks) that did best
+  in the earlier years only, then scores that pick on the year that followed. The first
+  year is only for learning, so it is never reported.
+- *Deflated Sharpe ratio*: a good-looking return is less impressive when you tried several
+  variants and kept the best. This gives the odds the edge is real after counting those tries.
+- *Monte Carlo*: the monthly returns are reshuffled in short blocks 5,000 times, giving the
+  range of worst falls and final returns that the same luck could have produced.
+
+It ends with one verdict: likely skill, could be luck, or no edge. The signal lab applies
+the same deflation to every signal and horizon, shown as "Real-edge odds".
+
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.

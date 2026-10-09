@@ -663,7 +663,7 @@ class App:
 
     def start_factor_backtest(self, universe: str, top: int, years: int) -> Job:
         from .costs import cost_model_for
-        from .factor_backtest import INDEX_FUNDS, run_factor_backtest
+        from .factor_backtest import INDEX_FUNDS, run_factor_backtest, validate_factor_backtest
         from .index_history import point_in_time
         from .screen import load_universe
 
@@ -680,12 +680,21 @@ class App:
         def run() -> None:
             try:
                 members = load_universe(universe)
-                r = run_factor_backtest(members, self.prices, top=top, years=years,
-                                        cost_model=cost_model_for("in"),
-                                        capital=self.settings.paper_starting_cash,
-                                        membership=point_in_time(universe, [m["symbol"] for m in members],
-                                                                 self.settings.state_dir),
-                                        index_fund=INDEX_FUNDS.get(universe.upper()))
+                membership = point_in_time(universe, [m["symbol"] for m in members], self.settings.state_dir)
+
+                def run_top(n: int) -> dict[str, Any]:
+                    return run_factor_backtest(members, self.prices, top=n, years=years,
+                                               cost_model=cost_model_for("in"),
+                                               capital=self.settings.paper_starting_cash,
+                                               membership=membership, index_fund=INDEX_FUNDS.get(universe.upper()))
+
+                r = run_top(top)
+                try:  # the other portfolio sizes reuse the cached price histories
+                    r["validation"] = validate_factor_backtest(
+                        run_top, top, base=r, progress=lambda m: setattr(job, "message", m))
+                except Exception:  # noqa: BLE001 - the backtest itself still stands
+                    log.exception("factor backtest validation failed")
+                    r["validation"] = None
                 self.last_factor_bt = {"at": _now(), "universe": universe.upper(), **r}
                 s_ = r["stats"]
                 job.ok = True

@@ -24,7 +24,7 @@ import logging
 import statistics
 from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .membership import DELISTED, Membership
 from .momentum import momentum_stats
@@ -316,4 +316,76 @@ def format_factor_backtest(r: dict[str, Any]) -> str:
         lines.append(f"  {c['date']}: +{' +'.join(c['added'])}  -{' -'.join(c['removed'])}")
     lines.append("* equal weight of that month's index members, rebalanced monthly, no costs.")
     lines.append("Caveat: " + r["caveat"])
+    return "\n".join(lines)
+
+
+def validate_factor_backtest(run_fn: Callable[[int], dict[str, Any]], top: int, candidates: Iterable[int] = (10, 20, 30),
+                             *, base: dict[str, Any] | None = None,
+                             progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """Is this result skill or luck? Re-run the neighbouring portfolio sizes, then walk forward
+    (pick the best size from earlier years, score it on the next), deflate the Sharpe for the number
+    of sizes tried, and reshuffle the returns for a range of possible falls."""
+    from .validation import deflated_sharpe, monte_carlo, period_returns, sharpe, walk_forward
+
+    tops = sorted({top, *candidates})
+    runs: dict[int, dict[str, Any]] = {}
+    for n, t in enumerate(tops, 1):
+        if t == top and base is not None:
+            runs[t] = base
+            continue
+        if progress:
+            progress(f"validating: top {t} ({n} of {len(tops)})")
+        runs[t] = run_fn(t)
+    b = runs[top]
+    fund = b.get("index_fund") or b.get("benchmark")
+    wf = walk_forward({t: r["strategy"] for t, r in runs.items()}, b["dates"], fund)
+    rets = period_returns(b["strategy"])
+    srs = [s for s in (sharpe(period_returns(r["strategy"])) for r in runs.values()) if s is not None]
+    dsr = deflated_sharpe(rets, len(runs), srs)
+    mc = monte_carlo(rets)
+    verdict, summary = _verdict(wf, dsr, mc)
+    return {"walk_forward": wf, "deflated_sharpe": dsr, "monte_carlo": mc, "verdict": verdict, "summary": summary}
+
+
+def _verdict(wf: dict[str, Any], dsr: dict[str, Any], mc: dict[str, Any] | None) -> tuple[str, str]:
+    p, oos, fund = dsr["probability"], wf["oos_return"], wf["fund_return"]
+    if p is None:
+        return "could be luck", "There are too few monthly returns to tell skill from luck."
+    pct = f"{p * 100:.0f}%"
+    tries = f"after {dsr['trials']} portfolio sizes were tried"
+    if oos is None:
+        walk = "There were too few years to test picking the size in advance."
+    elif fund is None:
+        walk = f"Choosing the size from earlier years returned {oos * 100:+.1f}% on the years that followed."
+    else:
+        walk = (f"Choosing the size from earlier years returned {oos * 100:+.1f}% on the years that followed, "
+                f"against {fund * 100:+.1f}% for the index fund.")
+    behind = oos is not None and fund is not None and oos < fund - 0.05
+    ahead = oos is not None and (fund is None or oos > fund)
+    if p < 0.5 or behind:
+        return "no edge", f"No edge shown: odds the edge is real are {pct} {tries}. {walk}"
+    if p >= 0.95 and ahead:
+        return "likely skill", f"Likely skill: odds the edge is real are {pct} {tries}. {walk}"
+    return "could be luck", f"Could be luck: odds the edge is real are {pct} {tries}. {walk}"
+
+
+def format_validation(v: dict[str, Any]) -> str:
+    wf, d, mc = v["walk_forward"], v["deflated_sharpe"], v["monte_carlo"]
+    pct = lambda x: "   n/a " if x is None else f"{x*100:+7.1f}%"  # noqa: E731
+    lines = [f"Skill or luck? {v['verdict'].upper()}. {v['summary']}",
+             f"Walk-forward (best of {', '.join(map(str, wf['candidates']))} stocks, chosen from earlier years only):",
+             f"  {'year':<6}{'stocks':>7}{'return':>10}{'fund':>10}"]
+    for y in wf["years"]:
+        lines.append(f"  {y['year']:<6}{y['chosen_top']:>7}{pct(y['return'])}{pct(y['fund_return'])}")
+    if wf["years"]:
+        lines.append(f"  {'all':<6}{'':>7}{pct(wf['oos_return'])}{pct(wf['fund_return'])}   "
+                     f"(beat the fund in {wf['beat_years']} of {len(wf['years'])} years)")
+    if d["probability"] is not None:
+        lines.append(f"Deflated Sharpe: {d['probability']*100:.0f}% odds the edge is real after "
+                     f"{d['trials']} tries ({d['periods']} monthly returns).")
+    if mc:
+        dd, fr = mc["max_drawdown"], mc["final_return"]
+        lines.append(f"Monte Carlo ({mc['paths']} reshuffles): in 90% the worst fall was between "
+                     f"{dd['p5']*100:.0f}% and {dd['p95']*100:.0f}%; final return between "
+                     f"{fr['p5']*100:+.0f}% and {fr['p95']*100:+.0f}%; {mc['loss_probability']*100:.0f}% ended in a loss.")
     return "\n".join(lines)
