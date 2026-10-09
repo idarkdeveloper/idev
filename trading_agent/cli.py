@@ -15,6 +15,7 @@ from .broker import LocalPaperBroker
 from .config import load_settings
 from .quiver import _norm_congress, filter_by_investor
 from .runner import check, make_broker
+from .state import State
 
 
 def _demo_inputs(settings):
@@ -117,6 +118,10 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
         perf = broker.performance()
         print(f"\nPaper performance: {perf['pnl']:+,.2f} ({perf['pnl_pct']:+.2f}%) "
               f"over {perf['orders']} orders from {cur}{perf['starting_cash']:,.0f}")
+        eq = State(settings.state_dir / "state.json").equity_stats()
+        if eq:
+            print(f"Peak {cur}{eq['peak']:,.0f}; now {eq['drawdown_now']*100:+.1f}% from peak; "
+                  f"worst fall {eq['max_drawdown']*100:+.1f}% over {eq['points']} recorded points")
     return 0
 
 
@@ -264,15 +269,19 @@ def cmd_factor_backtest(args: argparse.Namespace) -> int:
     """Backtest the factor screen as a monthly-rebalanced portfolio with real charges."""
     from .costs import cost_model_for
     from .factor_backtest import format_factor_backtest, run_factor_backtest
+    from .membership import membership_for
     from .runner import free_prices
     from .screen import load_universe
 
     settings = _settings(args)
     members = load_universe(args.universe)
     print(f"Backtesting top {args.top} of {args.universe.upper()} over {args.years} years (monthly rebalance)…")
+    membership = None if args.todays_members else membership_for(
+        args.universe, [m["symbol"] for m in members], args.changes)
     r = run_factor_backtest(members, free_prices(settings), top=args.top, years=args.years,
                             cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
-                            require_above_200dma=not args.no_trend_filter)
+                            require_above_200dma=not args.no_trend_filter, benchmark=args.benchmark,
+                            membership=membership)
     print(format_factor_backtest(r))
     if args.json:
         print(json.dumps(r, indent=2, default=str))
@@ -404,6 +413,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--top", type=int, default=20)
     sp.add_argument("--years", type=int, default=4, help="test window; one extra year is fetched for lookback")
     sp.add_argument("--no-trend-filter", action="store_true")
+    sp.add_argument("--benchmark", default="NIFTYBEES",
+                    help="NIFTYBEES includes dividends; ^NSEI is the price-only index")
+    sp.add_argument("--changes", metavar="CSV",
+                    help="index change log (date,added,removed) for point-in-time membership; NIFTY 50 is built in")
+    sp.add_argument("--todays-members", action="store_true",
+                    help="ignore membership history and use today's constituents (survivorship-biased)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_factor_backtest)
     sp = sub.add_parser("costs", help="show the verified Indian delivery cost model")

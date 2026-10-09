@@ -175,6 +175,7 @@ class App:
             "screen": self.last_screen,
             "factor_backtest": self.last_factor_bt,
             "equity_history": st.data.get("equity_history", [])[-1000:],
+            "equity_stats": st.equity_stats(),
             "costs": _cost_table(self.settings.market),
             "settings": {
                 "market": s.market, "currency": s.currency, "watch_investor": s.watch_investor,
@@ -523,6 +524,7 @@ class App:
     def start_factor_backtest(self, universe: str, top: int, years: int) -> Job:
         from .costs import cost_model_for
         from .factor_backtest import run_factor_backtest
+        from .membership import membership_for
         from .screen import load_universe
 
         job = Job(id=len(self.jobs) + 1, kind="factor_backtest")
@@ -540,7 +542,8 @@ class App:
                 members = load_universe(universe)
                 r = run_factor_backtest(members, self.prices, top=top, years=years,
                                         cost_model=cost_model_for("in"),
-                                        capital=self.settings.paper_starting_cash)
+                                        capital=self.settings.paper_starting_cash,
+                                        membership=membership_for(universe, [m["symbol"] for m in members]))
                 self.last_factor_bt = {"at": _now(), "universe": universe.upper(), **r}
                 s_ = r["stats"]
                 job.ok = True

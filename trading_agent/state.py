@@ -56,6 +56,9 @@ class State:
         self.data["equity_history"] = hist[-5000:]
         return True
 
+    def equity_stats(self) -> dict[str, Any] | None:
+        return equity_stats(self.data.get("equity_history", []))
+
     def record_recommendation(self, rec: dict[str, Any]) -> None:
         rec = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **rec}
         self.data["recommendations"] = (self.data["recommendations"] + [rec])[-500:]
@@ -70,3 +73,21 @@ class State:
     @property
     def seen_count(self) -> int:
         return len(self.data["seen"])
+
+
+def equity_stats(hist: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Peak, current fall from peak, and the worst fall from peak in the paper-account history."""
+    if not hist:
+        return None
+    peak = trough_peak = hist[0]["equity"]
+    peak_at, mdd, mdd_at = hist[0]["at"], 0.0, None
+    for p in hist:
+        if p["equity"] > peak:
+            peak, peak_at = p["equity"], p["at"]
+        dd = p["equity"] / peak - 1 if peak > 0 else 0.0
+        if dd < mdd:
+            mdd, mdd_at, trough_peak = dd, p["at"], peak
+    last = hist[-1]["equity"]
+    return {"peak": peak, "peak_at": peak_at, "drawdown_now": last / peak - 1 if peak > 0 else 0.0,
+            "max_drawdown": mdd, "max_drawdown_at": mdd_at, "max_drawdown_from": trough_peak,
+            "points": len(hist)}

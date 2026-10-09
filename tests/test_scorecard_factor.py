@@ -31,6 +31,10 @@ class Prices:
                 px = 100 * (0.999 ** i)
             elif sym == "^NSEI":
                 px = 1000 * (1.0003 ** i)
+            elif sym == "NIFTYBEES":  # the index plus dividends
+                px = 100 * (1.00035 ** i)
+            elif sym == "GONE":  # strong, then dropped from the index
+                px = 100 * (1.003 ** i)
             elif sym == "NONE":
                 raise RuntimeError("no data")
             else:
@@ -78,8 +82,10 @@ def test_factor_backtest_beats_index_and_pays_costs():
     assert all("UP" in p["picks"] and "DOWN" not in p["picks"] for p in r["picks"])
     assert r["stats"]["strategy"]["total_return"] > r["stats"]["benchmark"]["total_return"]
     assert 1.0 <= r["avg_names_held"] <= 2.0
+    assert r["stats"]["benchmark"]["total_return"] > r["stats"]["price_index"]["total_return"]
+    assert r["point_in_time"] is False and "today's constituents" in r["caveat"]
     text = format_factor_backtest(r)
-    assert "Strategy" in text and "Caveat" in text
+    assert "Strategy" in text and "Caveat" in text and "(no div)" in text
 
 
 def test_factor_backtest_helpers_and_short_history():

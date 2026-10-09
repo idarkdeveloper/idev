@@ -170,7 +170,7 @@
             <label for="fb-top" style="font-weight:500">Hold top</label><input id="fb-top" name="top" type="number" value="20" min="3" max="50" style="flex:0 1 90px">
             <button type="submit" class="primary small" id="fb-run">Run portfolio backtest</button><span class="sub" id="fb-status"></span>
           </div>
-          <div class="sub">Monthly rebalance into the top stocks with the same ranking, real Indian charges on every trade, compared with NIFTY 50 and an equal-weight hold of the universe. Uses the universe selected above.</div>
+          <div class="sub">Monthly rebalance into the top stocks with the same ranking, real Indian charges on every trade, compared with NIFTY 50 including dividends and an equal-weight hold of the universe. Uses the universe selected above. NIFTY 50 uses each month's actual members, including stocks later dropped; other universes use today's members.</div>
           <div id="fb-result"></div>
         </form>
       </div>
@@ -462,7 +462,10 @@
   function renderEquity(){
     const h = S.equity_history || [], el = $("eq-chart"), start = S.settings.paper_starting_cash;
     const perf = S.performance;
-    $("eq-note").textContent = h.length ? `${h.length} points since ${shortDate(h[0].at.slice(0,10))}` : "";
+    const es = S.equity_stats;
+    $("eq-note").textContent = h.length ? `${h.length} points since ${shortDate(h[0].at.slice(0,10))}` +
+      (es ? (es.drawdown_now < 0 ? ` · ${pct(es.drawdown_now)} from peak` : " · at its peak") +
+            (es.max_drawdown < 0 ? ` · worst fall ${pct(es.max_drawdown)}` : "") : "") : "";
     lineChart(el, {x: h.map(p => p.at), series: [{name:"Account value", color:C.s1, area:true, values: h.map(p => p.equity)}],
       refs: perf ? [{y: perf.starting_cash, label: "Starting cash"}] : [], yFmt: rupeesShort, height: 180, endLabels: false, left: 64,
       label: "Paper account value over time",
@@ -489,18 +492,21 @@
   }
   function renderFactor(r){
     if(!r || !r.dates){ return; }
+    const benchName = /^NIFTYBEES/i.test(r.benchmark_symbol||"") ? "NIFTY 50 with dividends (NIFTYBEES)" : "NIFTY 50";
     const st = r.stats, idx = (arr) => arr.map(v => v == null ? null : v / arr.find(x => x != null) * 100);
     const row = (label, s) => `<tr><td>${label}</td><td class="num ${(s.total_return||0)>=0?"up":"down"}">${pct(s.total_return)}</td><td class="num">${pct(s.cagr)}</td><td class="num down">${pct(s.max_drawdown)}</td><td class="num">${pct(s.volatility)}</td></tr>`;
     $("fb-result").innerHTML = `<div class="sub">${esc(r.universe)} · top ${r.top} · ${r.months} monthly rebalances · ${shortDate(r.dates[0])} to ${shortDate(r.dates[r.dates.length-1])} · ${when(r.at)}</div>
       <div class="chart" id="fb-chart"></div>
       <div class="scroll"><table><thead><tr><th></th><th class="num">Total</th><th class="num">CAGR</th><th class="num">Max drawdown</th><th class="num">Volatility</th></tr></thead><tbody>
-      ${row("Factor portfolio (after charges)", st.strategy)}${row("NIFTY 50", st.benchmark)}${row("Equal weight, no charges", st.equal_weight)}</tbody></table></div>
+      ${row("Factor portfolio (after charges)", st.strategy)}${row(benchName, st.benchmark)}${row("Equal weight of members, no charges", st.equal_weight)}${st.price_index ? row("NIFTY 50 price index (no dividends)", st.price_index) : ""}</tbody></table></div>
+      <div class="row" style="gap:6px">${r.point_in_time ? `<span class="pill">Point-in-time members</span>` : `<span class="pill">Today's members only</span>`}${(r.former_members||[]).length ? `<span class="sub">Includes ${r.former_members.length} later dropped: ${esc(r.former_members.join(", "))}</span>` : ""}</div>
+      ${(r.index_changes||[]).length ? `<div class="sub">Index changes in the window: ${r.index_changes.map(c => `${shortDate(c.date)} +${esc(c.added.join(" +"))} −${esc(c.removed.join(" −"))}`).join(" · ")}</div>` : ""}
       <div class="sub">Charges paid ${money(r.costs_paid)} over ${r.trades} trades · ${r.avg_names_held} names held on average · ${r.months_all_cash} months fully in cash. ${esc(r.caveat)}</div>`;
     lineChart($("fb-chart"), {x: r.dates, legend: true, endLabels: true, height: 220, left: 44,
       yFmt: v => Math.round(v).toString(), label: "Growth of 100: factor portfolio vs NIFTY 50 vs equal weight",
       refs: [{y: 100, label: "Start"}],
       series: [{name:"Factor portfolio", label:"Factor", color:C.s1, values: idx(r.strategy)},
-               {name:"NIFTY 50", label:"NIFTY 50", color:C.s2, values: idx(r.benchmark)},
+               {name: benchName, label:"NIFTY 50", color:C.s2, values: idx(r.benchmark)},
                {name:"Equal weight", label:"Equal wt", color:C.ctx, width:1.5, values: idx(r.equal_weight)}]});
   }
 
