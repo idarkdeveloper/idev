@@ -466,3 +466,37 @@ def test_static_files_and_tabs_are_served(settings):
         assert "<style>" not in page  # the CSS lives in one shared file now
     finally:
         srv.shutdown()
+
+
+def test_demo_is_isolated_from_live_and_groww(settings, monkeypatch, tmp_path):
+    import trading_agent.groww as g
+    from trading_agent.ui import App
+    monkeypatch.setattr(g.GrowwBroker, "__init__", lambda *a, **k: (_ for _ in ()).throw(AssertionError("groww")))
+    settings.market, settings.broker, settings.groww_access_token = "in", "groww", "tok"
+    settings.watch_investor = "Ashish Kacholia"
+    live = App(settings, dotenv=None)
+    demo = live.demo
+    assert demo.settings.state_dir == settings.state_dir / "demo" and demo.dotenv is None
+    assert demo.settings.groww_access_token is None and not demo.settings.use_groww
+    snap = demo.snapshot()
+    assert snap["settings"]["demo"] is True
+    assert not (settings.state_dir / "paper_broker.json").exists()  # live paper account untouched
+
+
+def test_demo_routes_share_the_page_with_a_prefix(settings):
+    import threading
+    import urllib.request
+    from trading_agent.ui import App, make_server
+
+    settings.market = "in"
+    srv = make_server(App(settings, dotenv=None), port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        page = urllib.request.urlopen(base + "/demo").read().decode()
+        assert 'data-api="/demo"' in page and 'data-mode="demo"' in page
+        import json
+        st = json.loads(urllib.request.urlopen(base + "/demo/api/state").read())
+        assert st["settings"]["demo"] is True
+    finally:
+        srv.shutdown()

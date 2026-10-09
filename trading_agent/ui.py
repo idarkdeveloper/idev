@@ -103,6 +103,22 @@ class App:
         self.busy = False
         self.running: Job | None = None  # the job holding the one slot
         self._replay: Any | None = None  # ReplayApp, built on first use
+        self._demo: "App | None" = None
+
+    @property
+    def demo(self) -> "App":
+        """The Demo page's app: bundled sample deals and prices, its own state, no Groww, no .env writes."""
+        if self.demo_trades is not None:
+            return self  # started with --demo: this app is the demo
+        if self._demo is None:
+            import dataclasses
+            from .cli import _demo_inputs
+            s = dataclasses.replace(self.settings, state_dir=self.settings.state_dir / "demo", broker="local",
+                                    groww_access_token=None, groww_api_key=None, groww_api_secret=None,
+                                    groww_totp_secret=None, groww_live_orders=False)
+            trades, broker = _demo_inputs(s)
+            self._demo = App(s, broker=broker, demo_trades=trades, dotenv=None, context=self.context)
+        return self._demo
 
     # -- lazy singletons ------------------------------------------------------
     @property
@@ -841,6 +857,7 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
 # --------------------------------------------------------------------------- #
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     index_html = (resources.files("trading_agent") / "ui" / "index.html").read_text(encoding="utf-8")
+    demo_html = index_html.replace("<body>", '<body data-api="/demo" data-mode="demo">', 1)
     replay_html = (resources.files("trading_agent") / "ui" / "replay.html").read_text(encoding="utf-8")
 
     class Handler(BaseHTTPRequestHandler):
@@ -898,6 +915,15 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 return
             if self._replay("GET"):
                 return
+            target = app
+            if path == "/demo" or path.startswith("/demo/"):
+                target, path = app.demo, (path[5:] or "/")
+                if path in ("/", "/index.html"):
+                    self._bytes(demo_html.encode(), "text/html; charset=utf-8")
+                    return
+            self._get(target, path)
+
+        def _get(self, app: App, path: str) -> None:
             if path in ("/", "/index.html"):
                 body = index_html.encode()
                 self.send_response(200)
@@ -976,6 +1002,12 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 except (json.JSONDecodeError, ValueError) as e:  # bad JSON or Content-Length
                     self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
                 return
+            target = app
+            if path == "/demo" or path.startswith("/demo/"):
+                target, path = app.demo, (path[5:] or "/")
+            self._post(target, path)
+
+        def _post(self, app: App, path: str) -> None:
             try:
                 body = self._body()
                 if path == "/api/check":
@@ -1064,7 +1096,7 @@ def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: in
     kwargs["context"] = GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache", cache_ttl=900))
     app = App(settings, **kwargs)
     server = make_server(app, host, port)
-    url = f"http://{host}:{server.server_address[1]}/"
+    url = f"http://{host}:{server.server_address[1]}/" + ("demo" if demo else "")
     print(f"Trading Agent dashboard: {url}  (Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
