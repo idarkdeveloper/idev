@@ -72,3 +72,20 @@ def test_stop_hits_notify_once_and_auto_exit(settings):
     assert len(hits) == 1 and hits[0]["symbol"] == "X" and hits[0]["order"]["side"] == "sell"
     assert broker.positions() == [] and notifier.sent[0]["subject"].startswith("[STOP]")
     assert w.check_trailing_stops() == []  # position gone, nothing to alert
+
+
+def test_india_tz_falls_back_without_tz_database(monkeypatch):
+    from datetime import datetime, timedelta
+
+    from zoneinfo import ZoneInfoNotFoundError
+
+    from trading_agent import forward, groww, live, timezones, watch
+
+    def missing(key):
+        raise ZoneInfoNotFoundError(key)
+
+    monkeypatch.setattr(timezones, "ZoneInfo", missing)
+    tz = timezones.india_tz()
+    assert tz.utcoffset(datetime(2026, 10, 9)) == timedelta(hours=5, minutes=30)
+    # every module that needs India time uses the shared, fallback-safe IST
+    assert watch.IST is live.IST is forward.IST is groww.IST is timezones.IST
