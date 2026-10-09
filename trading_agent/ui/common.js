@@ -135,7 +135,9 @@ window.TA = (function(){
     const pos = r.position;
     if(pos && r.price){
       const pl = r.price / pos.avg_entry_price - 1, room = pos.stop ? r.price / pos.stop - 1 : null;
-      out.push(`You hold ${pos.qty} at ${money(pos.avg_entry_price, 2)} (${pl >= 0 ? "+" : ""}${(pl * 100).toFixed(1)}%)${room != null ? `; its trailing stop at ${money(pos.stop, 2)} is ${(room * 100).toFixed(1)}% below the price` : ""}.`);
+      const kind = pos.stop_label || "trailing", stopTxt = pos.stop_type === "none" ? "; it has no stop-loss, so nothing sells it automatically"
+        : room != null ? `; its ${kind} stop at ${money(pos.stop, 2)} is ${(room * 100).toFixed(1)}% below the price` : "";
+      out.push(`You hold ${pos.qty} at ${money(pos.avg_entry_price, 2)} (${pl >= 0 ? "+" : ""}${(pl * 100).toFixed(1)}%)${stopTxt}.`);
     }
     // The market filter (live page only; Replay passes no ctx): risk-off, or the Nifty under its 200-day average, means no new buys.
     const rg = ctx && ctx.regime && !ctx.regime.error ? ctx.regime : null;

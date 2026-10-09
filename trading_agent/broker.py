@@ -38,6 +38,9 @@ class Position:
     # Shares that can be sold right now. Groww: demat_free_quantity + t1_quantity, never
     # pledged or locked shares. None = every share is sellable (paper accounts).
     sellable_qty: float | None = None
+    # Practice stop-loss (LocalPaperBroker only): "trailing" (None = the default), "fixed", "percent" or "none".
+    stop_type: str | None = None
+    stop_value: float | None = None
 
     @property
     def free_qty(self) -> float:
@@ -63,6 +66,8 @@ class Position:
             "unrealized_pl": self.unrealized_pl,
             "high_water": self.high_water,
             "sellable_qty": self.free_qty,
+            "stop_type": self.stop_type or "trailing",
+            "stop_value": self.stop_value,
         }
 
 
@@ -273,8 +278,10 @@ class LocalPaperBroker:
                 if px is not None and px > (p.get("high_water") or 0):
                     p["high_water"] = px
                     dirty = True
+                stop = p.get("stop") or {}
                 out.append(Position(symbol=sym, qty=p["qty"], avg_entry_price=p["avg_entry_price"],
-                                    current_price=px, high_water=p.get("high_water")))
+                                    current_price=px, high_water=p.get("high_water"),
+                                    stop_type=stop.get("type"), stop_value=stop.get("value")))
             if dirty:
                 self._save()
             return out
@@ -291,7 +298,9 @@ class LocalPaperBroker:
             return self._submit_order(*args, **kw)
 
     def _submit_order(self, symbol: str, side: str, notional: float | None = None,
-                     qty: float | None = None) -> dict[str, Any]:
+                      qty: float | None = None, stop: dict[str, Any] | None = None,
+                      extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        """``stop`` ({"type", "value"}) is stored with the position on a buy; ``extra`` is merged into the order."""
         symbol = symbol.upper()
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
@@ -315,6 +324,8 @@ class LocalPaperBroker:
             pos["avg_entry_price"] = (pos["qty"] * pos["avg_entry_price"] + cost) / new_qty
             pos["qty"] = new_qty
             pos["high_water"] = max(pos.get("high_water") or 0.0, price)
+            if stop is not None:
+                pos["stop"] = {"type": stop["type"], "value": stop.get("value")}
             self._state["cash"] -= cost + fees
             self._state["positions"][symbol] = pos
         else:
@@ -333,10 +344,37 @@ class LocalPaperBroker:
             "filled_avg_price": price, "notional": round(cost, 2), "fees": round(fees, 2),
             "status": "filled",
             "filled_at": self.now_fn(),
+            **(extra or {}),
         }
         self._state["orders"].append(order)
         self._save()
         return order
+
+    def set_stop(self, symbol: str, stop: dict[str, Any]) -> None:
+        """Change the practice stop-loss of an open position ({"type", "value"} from ``risk.normalize_stop``)."""
+        with self._lock:
+            pos = self._state["positions"].get(symbol.upper())
+            if pos is None:
+                raise LookupError(f"no open position in {symbol.upper()}")
+            pos["stop"] = {"type": stop["type"], "value": stop.get("value")}
+            self._save()
+
+    def sell_if_stopped(self, symbol: str, *, qty: float, level: float, stop: dict[str, Any],
+                        extra: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        """Sell the whole position at the latest price, but only if, now and inside the lock, it is still the same
+        position (same quantity, same stop setting) and the price is still at or below ``level``. The dashboard's
+        checker and the watch thread both come through here, so a position is sold once. None = nothing sold."""
+        with self._lock:
+            sym = symbol.upper()
+            pos = self._state["positions"].get(sym)
+            if pos is None or abs(pos["qty"] - qty) > 1e-9:
+                return None
+            now = pos.get("stop") or {}
+            if (now.get("type") or "trailing", now.get("value")) != (stop.get("type") or "trailing", stop.get("value")):
+                return None
+            if self.latest_price(sym) > level:
+                return None
+            return self._submit_order(sym, "sell", qty=pos["qty"], extra={"stop_hit": True, **(extra or {})})
 
     def orders(self) -> list[dict[str, Any]]:
         return list(self._state["orders"])

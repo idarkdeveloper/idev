@@ -927,3 +927,136 @@ console.log(JSON.stringify({
     assert o["offOnly"].startswith(o["offOnly"].split("The market is risk-off,")[0]) and "The market is risk-off, so" in o["offOnly"]
     assert "200-day average, so" not in o["offOnly"]  # the reason names only what is true
     assert o["oldScreen"].endswith("Stocks passing the screen as of 2026-01-02: A, B, C&lt;, D, E.")
+
+
+# -- practice stop-loss on the Demo page ---------------------------------------------------
+def test_demo_order_with_a_stop_stores_it_and_the_snapshot_shows_it(two_pages):
+    base, app, fake, settings = two_pages
+    app.prices.history = lambda sym, rng: []   # no network
+    status, j = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 3,
+                                                 "stop_type": "fixed", "stop_value": 90})
+    assert status == 200 and fake.writes == []
+    saved = json.loads((settings.state_dir / "paper_broker.json").read_text())
+    assert saved["positions"]["SENCO"]["stop"] == {"type": "fixed", "value": 90.0}
+    _, demo = _get(base + "/demo/api/state")
+    row = {p["symbol"]: p for p in demo["positions"]}
+    assert (row["SENCO"]["stop"], row["SENCO"]["stop_type"], row["SENCO"]["stop_label"]) == (90.0, "fixed", "fixed")
+    assert row["LAURUSLABS"]["stop_type"] == "trailing" and row["LAURUSLABS"]["stop"] is not None  # no setting = trailing
+    status, j = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 1,
+                                                 "stop_type": "fixed", "stop_value": 100})
+    assert status == 400 and "at or above today's price, so it would sell at once" in j["error"]
+    status, j = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 1,
+                                                 "stop_type": "percent", "stop_value": 70})
+    assert status == 400 and "0.5% and 50%" in j["error"]
+    _, demo = _get(base + "/demo/api/state")
+    assert {p["symbol"]: p["qty"] for p in demo["positions"]}["SENCO"] == 3   # the refused orders did not fill
+
+
+def test_stop_api_edits_on_demo_and_is_forbidden_on_live(two_pages):
+    base, app, fake, settings = two_pages
+    app.prices.history = lambda sym, rng: []   # no network
+    status, j = _post(base + "/demo/api/stop", {"symbol": "LAURUSLABS", "type": "percent", "value": 8})
+    assert status == 200 and j["stop"] == {"type": "percent", "value": 8.0}
+    _, demo = _get(base + "/demo/api/state")
+    p = demo["positions"][0]
+    assert p["stop"] == 92.0 and p["stop_label"] == "−8% from buy"
+    status, j = _post(base + "/demo/api/stop", {"symbol": "LAURUSLABS", "type": "none"})
+    assert status == 200
+    _, demo = _get(base + "/demo/api/state")
+    assert demo["positions"][0]["stop"] is None and demo["positions"][0]["stop_type"] == "none"
+    status, j = _post(base + "/demo/api/stop", {"symbol": "LAURUSLABS", "type": "fixed", "value": 100})
+    assert status == 400 and "sell at once" in j["error"]
+    status, j = _post(base + "/demo/api/stop", {"symbol": "NOPE", "type": "none"})
+    assert status == 400 and "no open position" in j["error"]
+    status, j = _post(base + "/api/stop", {"symbol": "LAURUSLABS", "type": "none"})
+    assert status == 403 and fake.writes == []
+
+
+def test_the_apps_checker_sells_on_practice_only_and_marks_the_order(two_pages, monkeypatch):
+    base, app, fake, settings = two_pages
+    app.prices.history = lambda sym, rng: []   # no network
+    assert _post(base + "/demo/api/stop", {"symbol": "LAURUSLABS", "type": "fixed", "value": 95})[0] == 200
+    pb = app.practice_broker
+    prices = {"v": 100.0}
+    pb.price_fn = lambda s: prices["v"]
+    checker = app.ensure_stop_checker()
+    checker.stop()   # the thread is not needed: drive one pass by hand at a market-hours time
+    from datetime import datetime
+    from trading_agent.timezones import IST
+    when = datetime(2026, 10, 9, 11, 0, tzinfo=IST)
+    assert checker.check_once(when) == []
+    prices["v"] = 94.0
+    assert len(checker.check_once(when)) == 1 and fake.writes == []
+    _, demo = _get(base + "/demo/api/state")
+    assert demo["positions"] == []
+    assert demo["stop_fills"][-1]["symbol"] == "LAURUSLABS" and demo["stop_fills"][-1]["type"] == "fixed"
+    assert demo["orders"][0]["stop_hit"] is True and demo["orders"][0]["side"] == "sell"
+    _, live = _get(base + "/api/state")
+    assert live["stop_fills"] == []   # Live does not show practice fills
+    # Live's reset keeps the practice fills
+    assert _post(base + "/api/reset", {})[0] == 200
+    assert json.loads((settings.state_dir / "state.json").read_text())["practice_stop_fills"]
+
+
+def test_lookup_note_names_the_stop_type(two_pages, monkeypatch):
+    base, app, fake, settings = two_pages
+    app.prices.history = lambda sym, rng: []   # no network
+    assert _post(base + "/demo/api/stop", {"symbol": "LAURUSLABS", "type": "percent", "value": 10})[0] == 200
+    out = app.demo.lookup("LAURUSLABS")
+    assert out["position"]["stop"] == 90.0 and out["position"]["stop_label"] == "−10% from buy"
+    assert _post(base + "/demo/api/stop", {"symbol": "LAURUSLABS", "type": "none"})[0] == 200
+    out = app.demo.lookup("LAURUSLABS")
+    assert out["position"]["stop"] is None and out["position"]["stop_type"] == "none"
+
+
+def test_demo_page_shows_the_stop_column_editor_and_fill_notice():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    root = Path(__file__).resolve().parent
+    html = (root.parent / "trading_agent" / "ui" / "index.html").read_text(encoding="utf-8")
+    assert "Practice stops are checked every minute in market hours while the dashboard is running; prices may be delayed." in html
+    assert "window.confirm" not in html.split("practice stop-loss (Demo page)")[1].split("function renderOrders")[0]
+    r = subprocess.run([node, str(root / "ui_mode_harness.js"), "demo"], capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, r.stderr + r.stdout
+    out = json.loads(r.stdout)
+    rows = out["positions_html"]
+    assert "−8% from buy" in rows and "11.1% below the price" in rows and "₹90.00" in rows    # level, type, distance
+    assert "No stop" in rows and rows.count('data-stop-edit=') == 2 and "Edit stop" in rows              # real buttons
+    opened = out["editor_open_html"]
+    assert 'for="se-type"' in opened and '<select id="se-type">' in opened and '<option value="percent" selected>' in opened
+    assert 'for="se-value"' in opened and 'id="se-value"' in opened and "data-stop-save" in opened and "data-stop-cancel" in opened
+    assert "se-type" not in out["editor_closed_html"]
+    assert out["toast"].startswith("Stop hit: sold 3 OLD at") and out["order_stop_select"] is True
+    for label in ("Trailing (automatic)", "Fixed price", "% below buy", "None"):
+        assert label in html
+    r = subprocess.run([node, str(root / "ui_mode_harness.js"), "live"], capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["positions_html"] == ""   # Live has no practice stop column
+
+
+def test_lookup_note_names_the_stop_type_in_the_page_script():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    js = """
+const fs=require('fs'),vm=require('vm');
+const ctx={document:{getElementById:()=>null,body:{dataset:{}}},console,Intl,Date,Math,JSON};ctx.window=ctx;
+vm.createContext(ctx);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),ctx);
+const m={verdict:'strong',ret_6m:0.2,ret_12_1:0.3,above_200dma:true};
+const mk=(pos)=>ctx.TA.lookupTakeaway({ticker:'X',momentum:m,price:100,position:{qty:2,avg_entry_price:100,...pos}});
+console.log(JSON.stringify({trailing:mk({stop:90,stop_type:'trailing',stop_label:'trailing'}),
+  fixed:mk({stop:95,stop_type:'fixed',stop_label:'fixed'}), none:mk({stop:null,stop_type:'none',stop_label:'none'}),
+  old:mk({stop:90})}));
+"""
+    common = Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "common.js"
+    r = subprocess.run([node, "-e", js, str(common)], capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, r.stderr
+    o = json.loads(r.stdout)
+    assert "its trailing stop at" in o["trailing"] and "its trailing stop at" in o["old"]
+    assert "its fixed stop at" in o["fixed"] and "no stop-loss, so nothing sells it automatically" in o["none"]
+    assert "its trailing stop" not in o["none"]

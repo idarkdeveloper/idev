@@ -32,6 +32,7 @@ from .quiver import DisclosedTrade
 from .momentum import MomentumScreen, momentum_summary
 from .runner import check, free_prices, make_broker, equity_key, make_data_source, make_notifier, make_practice_broker
 from .state import STATE_LOCK, State
+from .stops import FILLS_KEY, PracticeStopChecker
 from .watch import Watcher
 
 log = logging.getLogger(__name__)
@@ -112,6 +113,7 @@ class App:
         self._demo_ver = -1
         self._practice: LocalPaperBroker | None = practice  # the practice account the Demo page uses
         self._parent: "App | None" = None  # set on the Demo page's app: it shares this app's data sources
+        self._stops: PracticeStopChecker | None = None  # the practice stop checker (see ensure_stop_checker)
         self._lazy_lock = threading.RLock()  # one lock builds both the broker and the practice account
 
     @property
@@ -290,11 +292,13 @@ class App:
             pos["gtt"] = ({k: g.get(k) for k in ("status", "trigger", "limit", "qty", "smart_order_id", "last_error")}
                           if g else None)
             try:
-                from .risk import atr, trailing_stop
-                bars = self.prices.history(pos["symbol"], "1y") if not self.demo_trades else []
-                a = atr(bars) if bars else None
-                high = pos.get("high_water") or pos.get("current_price") or pos["avg_entry_price"]
-                pos["stop"] = round(trailing_stop(high, a), 2)
+                from .risk import position_stop
+                bars = []
+                if pos.get("stop_type") == "trailing" and not self.demo_trades:
+                    bars = self.prices.history(pos["symbol"], "1y")
+                st_ = position_stop(pos, bars)
+                pos["stop"] = round(st_["level"], 2) if st_["level"] is not None else None
+                pos["stop_type"], pos["stop_label"], pos["stop_value"] = st_["type"], st_["label"], st_["value"]
             except Exception:  # noqa: BLE001
                 pos["stop"] = None
         recs = []
@@ -326,6 +330,7 @@ class App:
             "screen": self.last_screen,
             "factor_backtest": self.last_factor_bt,
             "signal_lab": self.last_signal_lab,
+            "stop_fills": st.data.get(FILLS_KEY, [])[-20:] if self.page == "demo" else [],
             "equity_history": st.equity_history(since, ekey)[-1000:],
             "equity_stats": st.equity_stats(since, ekey),
             "costs": _cost_table(self.settings.market),
@@ -479,14 +484,15 @@ class App:
         pos = next((p for p in self.broker.positions() if p.symbol == ticker.upper()), None) \
             if self.paper_only else None
         if pos is not None:
-            from .risk import atr, trailing_stop
+            from .risk import position_stop
             try:
-                a = atr(self.prices.history(ticker, "1y"))
+                bars = self.prices.history(ticker, "1y") if (pos.stop_type or "trailing") == "trailing" else []
             except Exception:  # noqa: BLE001
-                a = None
-            high = pos.high_water or pos.current_price or pos.avg_entry_price
+                bars = []
+            st_ = position_stop(pos, bars)
             out["position"] = {"qty": pos.qty, "avg_entry_price": pos.avg_entry_price,
-                               "stop": round(trailing_stop(high, a), 2)}
+                               "stop": round(st_["level"], 2) if st_["level"] is not None else None,
+                               "stop_type": st_["type"], "stop_label": st_["label"]}
         return out
 
     def start_backtest(self, investor: str, days: int, horizons: tuple[int, ...], cost_bps: float) -> Job:
@@ -589,7 +595,8 @@ class App:
         return {"on": False, "every": every or 60, "auto_exit": bool(auto_exit)}
 
     def paper_order(self, symbol: str, side: str, notional: float | None = None,
-                    qty: float | None = None) -> dict[str, Any]:
+                    qty: float | None = None, stop_type: str | None = None,
+                    stop_value: float | None = None) -> dict[str, Any]:
         if self.demo_trades is None and self._parent is None:
             raise PermissionError("practice orders are placed on the Demo page")
         if not self.paper_only:
@@ -599,14 +606,52 @@ class App:
             raise ValueError("symbol required")
         if side not in ("buy", "sell"):
             raise ValueError("side must be buy or sell")
+        stop = None
+        if side == "buy" and stop_type not in (None, ""):  # none given: a held position keeps its stop, a new one trails
+            from .risk import normalize_stop
+            stop = normalize_stop(stop_type, stop_value, self.broker.latest_price(symbol))
         if qty not in (None, "", 0, "0"):
-            order = self.broker.submit_order(symbol, side, qty=float(qty))
+            order = self.broker.submit_order(symbol, side, qty=float(qty), stop=stop)
         elif notional in (None, "", 0, "0"):
             raise ValueError("enter an amount or a quantity")
         else:
-            order = self.broker.submit_order(symbol, side, notional=float(notional))
+            order = self.broker.submit_order(symbol, side, notional=float(notional), stop=stop)
         self._record_equity()
         return order
+
+    def set_stop(self, symbol: str, stop_type: str, stop_value: Any = None) -> dict[str, Any]:
+        """Change the practice stop-loss of an open practice position (Demo page only)."""
+        if self.demo_trades is None and self._parent is None:
+            raise PermissionError("practice stops are set on the Demo page; Live uses the real GTT at Groww")
+        if not self.paper_only:
+            raise PermissionError("stops from the dashboard are allowed only on the paper simulator")
+        from .risk import normalize_stop, position_stop, AT_ONCE
+        symbol = str(symbol).strip().upper()
+        broker = self.broker
+        pos = next((p for p in broker.positions() if p.symbol == symbol), None)
+        if pos is None:
+            raise LookupError(f"no open position in {symbol}")
+        price = pos.current_price if pos.current_price is not None else broker.latest_price(symbol)
+        stop = normalize_stop(stop_type, stop_value, price)
+        if stop["type"] == "percent" and price <= position_stop(
+                {**pos.to_dict(), "stop_type": "percent", "stop_value": stop["value"]})["level"]:
+            raise ValueError(AT_ONCE)
+        broker.set_stop(symbol, stop)
+        return stop
+
+    def ensure_stop_checker(self) -> PracticeStopChecker | None:
+        """Start (once) the practice stop checker: one daemon thread for the practice account, India only. It runs
+        while the dashboard process runs, with or without a browser tab open."""
+        root = self._parent or self
+        with root._lazy_lock:
+            if root._stops is None and root.settings.market == "in":
+                root._stops = PracticeStopChecker(
+                    lambda: root.practice_broker, root.settings.state_dir / "state.json",
+                    bars_fn=lambda sym: root.prices.history(sym, "1y") if not root.demo_trades else [],
+                    holidays=root.holidays, after_fill=lambda: root.demo._record_equity())
+            if root._stops is not None:
+                root._stops.start()
+            return root._stops
 
     def _record_equity(self) -> None:
         """Read the account first (slow, may be a network call), then load, merge and save state.json in one
@@ -649,15 +694,16 @@ class App:
             paths.append(self.practice_broker.path)
         with STATE_LOCK:
             keep = None
-            if self.demo_trades is None and paths[0].exists():  # Live: the practice account's curve is not Live's to forget
-                keep = State(paths[0]).data.get("practice_equity")
+            if self.demo_trades is None and paths[0].exists():  # Live: the practice account's curve and fills are not Live's to forget
+                old = State(paths[0]).data
+                keep = {k: old[k] for k in ("practice_equity", FILLS_KEY) if old.get(k)}
             for p in paths:
                 if p.exists() and p.name not in removed:
                     p.unlink()
                     removed.append(p.name)
             if keep:
                 fresh = State(paths[0])
-                fresh.data["practice_equity"] = keep
+                fresh.data.update(keep)
                 fresh.save()
         if self.demo_trades is not None:
             self.practice_broker.reset(self.settings.paper_starting_cash)
@@ -1173,8 +1219,12 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/order":
                     order = app.paper_order(body.get("symbol", ""), body.get("side", "buy"),
-                                            body.get("notional"), body.get("qty"))
+                                            body.get("notional"), body.get("qty"),
+                                            body.get("stop_type"), body.get("stop_value"))
                     self._json({"ok": True, "order": order})
+                elif path == "/api/stop":
+                    self._json({"ok": True, "stop": app.set_stop(str(body.get("symbol", "")), body.get("type"),
+                                                                  body.get("value"))})
                 elif path == "/api/close":
                     self._json({"ok": True, "order": app.close_position(str(body.get("symbol", "")))})
                 elif path == "/api/groww-test":
@@ -1261,6 +1311,7 @@ def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: in
     # --demo is the offline sample dashboard, isolated in state_dir/demo-sample. Without it the app is the
     # real one, and its /demo page is the same page with the practice account.
     app = sample_app(settings, context) if demo else App(settings, context=context)
+    app.ensure_stop_checker()  # practice stop-losses are checked while the dashboard runs, tab open or not
     server = make_server(app, host, port)
     url = f"http://{host}:{server.server_address[1]}/"
     print(f"Trading Agent dashboard: {url}  (Ctrl+C to stop)")

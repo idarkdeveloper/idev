@@ -40,7 +40,11 @@ const state = {
   costs: {examples: {"25000": 40}}, settings: baseSettings, market_day: null,
   connections: {claude: true, groww: true, groww_credentials: true, groww_live_orders: false, groww_gtt_active: false, data: "nse", prices: "groww"},
   account: {cash: 99000, equity: 100000, currency: "INR"}, positions: [{symbol: "LAURUSLABS", qty: 10, avg_entry_price: 100,
-    current_price: 100, market_value: 1000, unrealized_pl: 0, high_water: 100, stop: 90, gtt: null}],
+    current_price: 100, market_value: 1000, unrealized_pl: 0, high_water: 100, stop: 90, stop_type: "percent", stop_label: "−8% from buy",
+    stop_value: 8, gtt: null},
+    {symbol: "NOSTOP", qty: 5, avg_entry_price: 50, current_price: 40, market_value: 200, unrealized_pl: -50, high_water: 50, stop: null,
+     stop_type: "none", stop_label: "none", stop_value: null, gtt: null}],
+  stop_fills: [{at: "2026-10-10T09:30:00+05:30", symbol: "OLD", qty: 3, price: 92, stop: 95, type: "fixed", label: "fixed"}],
   performance: {pnl: 0, pnl_pct: 0, fees_paid: 0, starting_cash: 100000, orders: 1}, broker_error: null, deals: [], deals_error: null,
   recommendations: [{index: 0, ticker: "SENCO", action: "buy", headline: "h", rationale: "r", confidence: "high",
     suggested_notional_usd: 5000, at: "2026-10-01T00:00:00+00:00", dismissed: false}],
@@ -52,9 +56,11 @@ const portfolio = {linked: true, at: "2026-10-10T10:00:00+00:00", holdings: [{sy
 const answers = (url) => url.includes("/api/state") ? state : url.includes("/api/my-portfolio") ? portfolio
   : url.includes("/api/scorecard") ? {summary: {by_action: {}, horizons: [5], pending: 0, benchmark: "^NSEI"}, rows: []} : {};
 
+const listeners = {};
 const document = {
+  addEventListenerOrig: null,
   body: {dataset: Object.assign({mode}, sample ? {sample: "1"} : {})},
-  getElementById: el, querySelectorAll: () => [], addEventListener() {}, createElement: () => el("_new"),
+  getElementById: el, querySelectorAll: () => [], addEventListener(t, fn) { (listeners[t] = listeners[t] || []).push(fn); }, createElement: () => el("_new"),
 };
 const ctx = {document, console, setTimeout, clearTimeout, setInterval: () => 0, Intl, Date, Math, JSON, Number, String, Object, Array,
   Set, Map, Promise, URLSearchParams, encodeURIComponent, isNaN, isFinite, parseFloat, parseInt,
@@ -70,7 +76,17 @@ try {
   vm.runInContext(page, ctx);
 } catch (e) { console.error(e.stack); process.exit(1); }
 
-setTimeout(() => {
+const click = async (dataset) => {
+  const target = {closest: (sel) => sel === "button" ? {dataset} : null};
+  for (const fn of listeners.click || []) await fn({target});
+};
+setTimeout(async () => {
+  const positionsBefore = el("positions").innerHTML;
+  const toastText = el("toast").textContent;
+  await click({stopEdit: "LAURUSLABS"});
+  const editorOpen = el("positions").innerHTML;
+  await click({stopCancel: ""});
+  const editorClosed = el("positions").innerHTML;
   const banner = els["demo-banner"] && !els["demo-banner"].hidden
     ? els["demo-title"].textContent + " | " + els["btn-demo-reset"].textContent : "";
   console.log(JSON.stringify({
@@ -79,6 +95,8 @@ setTimeout(() => {
     dismiss_button: el("recs").innerHTML.includes("data-dismiss"),
     pp_card_hidden: el("pp-card").hidden,
     banner,
+    positions_html: positionsBefore, editor_open_html: editorOpen, editor_closed_html: editorClosed, toast: toastText,
+    order_stop_select: html.includes('id="tk-stop"'), stop_banner: el("stop-banner").textContent,
     check_hidden: el("check-split").hidden, settings_hidden: el("btn-settings").hidden, watch_hidden: el("btn-watch").hidden,
   }));
   process.exit(0);

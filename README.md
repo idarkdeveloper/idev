@@ -160,6 +160,18 @@ GTT smart orders) refuses with `LiveOrdersDisabled` before touching the network 
   on every watch tick, after a live sell, and with `python -m trading_agent gtt --sync`.
   The dashboard has the toggle in Settings and shows each holding's GTT status. The
   toggle does nothing unless `GROWW_LIVE_ORDERS=true`, which the dashboard cannot set.
+- **Practice stop-loss (Demo page, practice money).** Each practice position has its own
+  stop: *trailing* (the default: the tighter of 3× ATR or 15% below the highest price since
+  you bought), *fixed* (a price), *% below buy* (0.5 to 50% under your average buy price) or
+  *none*. Set it in the order box or with *Edit stop* in the positions table. While the
+  dashboard is running (a browser tab is not needed) a checker looks every minute between
+  09:15 and 15:30 IST on NSE trading days and sells the whole practice position at the
+  latest price, with the usual charges, once the price is at or below the stop; the fill is
+  kept in `state.json` (`practice_stop_fills`), shown as a notice on the Demo page and marked
+  "stop hit" in the order history. Watch mode's auto-exit uses the same rule, and the two
+  can never sell the same position twice. Unlike the GTT above this is not an order at any
+  broker: it only acts while the dashboard process runs, uses delayed Yahoo prices unless
+  Groww is linked, and never touches Groww or sends a notification.
 
 **Check it against your account before relying on it.** These paths are tested offline
 against Groww's documented formats. `python -m trading_agent groww-check` reads your

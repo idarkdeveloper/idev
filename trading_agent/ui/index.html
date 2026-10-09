@@ -62,6 +62,7 @@
         <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
           <button type="button" class="small" id="mp-refresh" style="margin-left:auto">Refresh</button></div>
         <div class="cardbody" id="mp-body" style="padding-top:0;border-top:none"><div class="stats" id="mp-stats"></div></div>
+        <div class="cardbody sub" id="stop-banner" style="border-bottom:1px solid var(--line)">Practice stops are checked every minute in market hours while the dashboard is running; prices may be delayed.</div>
         <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
       </div>
       <div class="card">
@@ -75,7 +76,7 @@
           <div class="row" style="justify-content:space-between"><h3>Account value</h3><span class="sub" id="eq-note"></span></div>
           <div class="chart" id="eq-chart"></div>
         </div>
-        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th class="num">Trailing stop</th><th>GTT stop</th><th><span class="sr-only">Close position</span></th></tr></thead><tbody id="positions"></tbody><tfoot id="pp-foot"></tfoot></table></div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th>Stop-loss</th><th>GTT stop</th><th><span class="sr-only">Close position</span></th></tr></thead><tbody id="positions"></tbody><tfoot id="pp-foot"></tfoot></table></div>
         <form class="cardbody" id="tk-form" style="border-top:1px solid var(--line)">
           <h3>Paper order</h3>
           <div class="row">
@@ -84,6 +85,16 @@
             <input id="tk-amount" name="notional" type="number" min="0" step="any" placeholder="Amount" style="flex:1 1 120px">
             <span class="sub">or</span>
             <input id="tk-qty" name="qty" type="number" min="0" step="any" placeholder="Shares" style="flex:1 1 100px">
+          </div>
+          <div class="row" id="tk-stop-row">
+            <label for="tk-stop" class="sub">Stop-loss</label>
+            <select id="tk-stop" name="stop_type">
+              <option value="trailing">Trailing (automatic)</option><option value="fixed">Fixed price</option>
+              <option value="percent">% below buy</option><option value="none">None</option>
+            </select>
+            <label for="tk-stop-value" class="sub" id="tk-stop-value-label" hidden>Stop price</label>
+            <input id="tk-stop-value" name="stop_value" type="number" min="0" step="any" placeholder="Stop price" style="flex:0 1 140px" hidden>
+            <span class="sub" id="tk-stop-note">Applies to a buy. A stock you already hold keeps its stop unless you change this.</span>
           </div>
           <div class="row">
             <button type="button" class="small" id="tk-size">Suggest size</button>
@@ -322,14 +333,15 @@
     if(MODE === "demo"){
     $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
     renderPaperStats(a, perf);
+    noticeStopFills();
     const plTone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
     $("positions").innerHTML = S.positions.length ? S.positions.map(p => { const inv = p.qty * p.avg_entry_price, pc = inv ? p.unrealized_pl / inv : null; return `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
         <td class="num">${money(inv)}</td><td class="num">${money(p.market_value)}</td>
         <td class="num ${plTone(p.unrealized_pl)}">${signed(p.unrealized_pl)}</td><td class="num ${plTone(pc)}">${pc == null ? "n/a" : spctP(pc)}</td>
-        <td class="num ${p.stop!=null && p.current_price!=null && p.current_price<=p.stop?"down":""}">${p.stop!=null?money(p.stop,2):"n/a"}</td>
+        <td>${stopCell(p)}</td>
         <td>${gttCell(p, c)}</td>
-        <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>`; }).join("")
+        <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>${stopEdit && stopEdit.symbol === p.symbol ? stopEditorRow(p) : ""}`; }).join("")
       : `<tr><td colspan="11" class="empty">No practice trades yet. ${s.auto_trade ? "The agent buys here when a check finds a good deal." : "Place a paper order below, or use a recommendation's paper-buy button."}</td></tr>`;
     }
 
@@ -402,10 +414,44 @@
     return `<span class="pill ${cls}" title="${esc(g.last_error || g.smart_order_id || "")}">${esc(g.status || "?")} · ${money(g.trigger,2)}</span>`;
   }
   function orderStatus(x){
-    if(!x.live) return '<span class="pill">paper · filled</span>';
+    if(!x.live) return x.stop_hit ? `<span class="pill warn" title="${esc((x.stop_type || "") + " stop at " + (x.stop_level != null ? x.stop_level : ""))}">paper · stop hit</span>` : '<span class="pill">paper · filled</span>';
     const cls = x.status === "filled" ? "ok" : x.status === "failed" ? "bad" : "warn";
     const filled = x.status === "open" && x.filled_quantity ? ` · ${x.filled_quantity}/${x.qty}` : "";
     return `<span class="pill ${cls}" title="${esc(x.remark || x.error || x.groww_order_id || "")}">LIVE · ${esc(x.order_status || x.status || "?")}${filled}</span>`;
+  }
+  // ---- practice stop-loss (Demo page) ----
+  const STOP_CHOICES = [["trailing", "Trailing (automatic)"], ["fixed", "Fixed price"], ["percent", "% below buy"], ["none", "None"]];
+  let stopEdit = null;   // {symbol, type, value}: the inline editor that is open
+  let fillsSeen = null;
+  function stopCell(p){
+    const type = p.stop_type || "trailing", label = p.stop_label || type;
+    if(p.stop == null) return `<div>No stop</div><div class="sub">${esc(label)} \u00b7 nothing sells it automatically</div>${stopBtn(p)}`;
+    const dist = p.current_price != null ? p.current_price / p.stop - 1 : null, hit = dist != null && dist <= 0;
+    return `<div class="${hit ? "down" : ""}" style="font-weight:600">${money(p.stop, 2)}</div>
+      <div class="sub">${esc(label)}${dist != null ? ` \u00b7 ${hit ? "at or below the stop" : (dist * 100).toFixed(1) + "% below the price"}` : ""}</div>${stopBtn(p)}`;
+  }
+  const stopBtn = (p) => `<button type="button" class="small" data-stop-edit="${esc(p.symbol)}" aria-label="Edit stop for ${esc(p.symbol)}">Edit stop</button>`;
+  const stopOptions = (cur) => STOP_CHOICES.map(([v, t]) => `<option value="${v}"${v === cur ? " selected" : ""}>${t}</option>`).join("");
+  function stopEditorRow(p){
+    const e = stopEdit, needs = e.type === "fixed" || e.type === "percent";
+    return `<tr class="stop-editor"><td colspan="11"><div class="row" role="group" aria-label="Edit stop-loss for ${esc(p.symbol)}">
+      <label for="se-type" class="sub">Stop-loss for ${esc(p.symbol)}</label>
+      <select id="se-type">${stopOptions(e.type)}</select>
+      ${needs ? `<label for="se-value" class="sub">${e.type === "fixed" ? "Stop price" : "% below buy price"}</label>
+        <input id="se-value" type="number" min="0" step="any" value="${esc(e.value ?? "")}" style="flex:0 1 120px">` : ""}
+      <button type="button" class="small primary" data-stop-save>Save stop</button>
+      <button type="button" class="small" data-stop-cancel>Cancel</button>
+      <span class="sub">${e.type === "trailing" ? "The tighter of 3\u00d7 ATR or 15% below the highest price since you bought." : e.type === "none" ? "Nothing will sell this automatically." : ""}</span>
+    </div></td></tr>`;
+  }
+  function noticeStopFills(){
+    const fills = S.stop_fills || [];
+    if(fillsSeen === null){ try { fillsSeen = localStorage.getItem("stopFillsSeen") || ""; } catch(e){ fillsSeen = ""; } }
+    const fresh = fills.filter(f => String(f.at || "") > fillsSeen);
+    if(!fresh.length) return;
+    fillsSeen = String(fresh[fresh.length - 1].at || "");
+    try { localStorage.setItem("stopFillsSeen", fillsSeen); } catch(e){}
+    toast("Stop hit: " + fresh.map(f => `sold ${f.qty} ${f.symbol} at ${money(f.price, 2)} (${f.label || f.type} stop ${money(f.stop, 2)})`).join("; "));
   }
   function renderOrders(){
     const o = S.orders || [], perf = S.performance;
@@ -752,13 +798,29 @@
   });
   let side = "buy";
   document.querySelectorAll("[data-side]").forEach(b => b.addEventListener("click", () => { side = b.dataset.side; document.querySelectorAll("[data-side]").forEach(x => x.classList.toggle("on", x === b)); $("tk-submit").textContent = `Place paper ${side}`; }));
+  let tkStopTouched = false;   // a held stock keeps its stop unless the select was changed
+  function showStopValue(){
+    const t = $("tk-stop").value, needs = t === "fixed" || t === "percent";
+    $("tk-stop-value").hidden = $("tk-stop-value-label").hidden = !needs;
+    $("tk-stop-value-label").textContent = t === "fixed" ? "Stop price" : "% below buy";
+    $("tk-stop-value").placeholder = t === "fixed" ? "Stop price" : "e.g. 8";
+  }
+  $("tk-stop").addEventListener("change", () => { tkStopTouched = true; showStopValue(); });
   $("tk-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const sym = $("tk-symbol").value.trim().toUpperCase(), qty = $("tk-qty").value, amt = $("tk-amount").value;
     if(!sym){ toast("Enter a ticker"); return; }
     if(!qty && !amt){ toast("Enter an amount or a number of shares"); return; }
+    const body = {symbol:sym, side, notional: amt ? Number(amt) : null, qty: qty ? Number(qty) : null};
+    if(side === "buy" && tkStopTouched){
+      body.stop_type = $("tk-stop").value;
+      if(body.stop_type === "fixed" || body.stop_type === "percent"){
+        if(!$("tk-stop-value").value){ toast(body.stop_type === "fixed" ? "Enter the stop price" : "Enter how many percent below your buy price"); return; }
+        body.stop_value = Number($("tk-stop-value").value);
+      }
+    }
     if(!confirm(`Paper ${side} ${sym} ${qty ? qty + " shares" : "for " + money(Number(amt))}?`)) return;
-    try { const j = await api("/api/order", {symbol:sym, side, notional: amt ? Number(amt) : null, qty: qty ? Number(qty) : null}); toast(`Filled ${j.order.qty} ${sym} @ ${money(j.order.filled_avg_price,2)}, charges ${money(j.order.fees||0,2)}`); $("tk-qty").value=""; $("tk-amount").value=""; await refresh(); }
+    try { const j = await api("/api/order", body); toast(`Filled ${j.order.qty} ${sym} @ ${money(j.order.filled_avg_price,2)}, charges ${money(j.order.fees||0,2)}`); $("tk-qty").value=""; $("tk-amount").value=""; tkStopTouched = false; $("tk-stop").value = "trailing"; $("tk-stop-value").value = ""; showStopValue(); await refresh(); }
     catch(e){ toast(e.message); }
   });
   $("tk-size").addEventListener("click", async () => {
@@ -914,9 +976,30 @@
   });
   let rsT; window.addEventListener("resize", () => { clearTimeout(rsT); rsT = setTimeout(() => { if(!S) return; renderEquity(); if(S.factor_backtest && S.factor_backtest.dates) renderFactor(S.factor_backtest); if(S.backtest && S.backtest.summary) renderBacktest(S.backtest); }, 200); });
   $("lk-form").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("lk-ticker").value.trim().toUpperCase(); if(t) lookup(t); });
+  document.addEventListener("change", (ev) => {
+    if(ev.target && ev.target.id === "se-type" && stopEdit){ stopEdit.type = ev.target.value; stopEdit.value = null; render(); const v = $("se-value") || $("se-type"); if(v.focus) v.focus(); }
+  });
+  document.addEventListener("input", (ev) => { if(ev.target && ev.target.id === "se-value" && stopEdit) stopEdit.value = ev.target.value; });
   document.addEventListener("click", async (ev) => {
     const l = ev.target.closest("a[data-lookup]"); if(l){ ev.preventDefault(); lookup(l.dataset.lookup); $("lk-form").scrollIntoView({behavior:"smooth", block:"center"}); return; }
     const b = ev.target.closest("button"); if(!b) return;
+    if(b.dataset.stopEdit !== undefined){
+      const p = (S.positions || []).find(x => x.symbol === b.dataset.stopEdit); if(!p) return;
+      stopEdit = {symbol: p.symbol, type: p.stop_type || "trailing", value: p.stop_value}; render();
+      const t = $("se-type"); if(t && t.focus) t.focus();
+      return;
+    }
+    if(b.dataset.stopCancel !== undefined){ stopEdit = null; render(); return; }
+    if(b.dataset.stopSave !== undefined){
+      if(!stopEdit) return;
+      const e = stopEdit, body = {symbol: e.symbol, type: e.type};
+      if(e.type === "fixed" || e.type === "percent"){
+        if(e.value === null || e.value === undefined || e.value === ""){ toast(e.type === "fixed" ? "Enter the stop price" : "Enter how many percent below your buy price"); return; }
+        body.value = Number(e.value);
+      }
+      try { await api("/api/stop", body); toast(`Stop for ${e.symbol} saved`); stopEdit = null; await refresh(); } catch(err){ toast(err.message); }
+      return;
+    }
     if(b.dataset.close !== undefined){
       if(!confirm(`Sell the whole paper position in ${b.dataset.close}?`)) return;
       try { const j = await api("/api/close", {symbol:b.dataset.close}); toast(`Sold ${j.order.qty} ${j.order.symbol} @ ${money(j.order.filled_avg_price,2)}`); await refresh(); } catch(e){ toast(e.message); }

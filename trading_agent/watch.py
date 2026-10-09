@@ -180,19 +180,32 @@ class Watcher:
             key = f"{h['symbol']}:{round(h['stop'], 2)}"
             if key in alerted:
                 continue
-            alerted[key] = h["price"]
             if self.auto_exit and getattr(self._broker, "name", "").startswith("local-paper"):
                 try:
-                    h["order"] = self._broker.submit_order(h["symbol"], "sell", qty=h["qty"])
+                    # re-checked inside the broker's lock: the dashboard's practice checker may have sold it already
+                    order = self._broker.sell_if_stopped(h["symbol"], qty=h["qty"], level=h["level"],
+                                                         stop={"type": h["type"], "value": h["stop_value"]},
+                                                         extra={"stop_level": h["stop"], "stop_type": h["type"]})
                 except Exception as e:  # noqa: BLE001
                     h["order_error"] = str(e)
+                    order = None
+                if order is not None:
+                    h["order"] = order
+                elif "order_error" not in h:
+                    continue  # already sold by the other seller, or the price came back above the stop
+            alerted[key] = h["price"]
             fresh.append(h)
         st.save()
+        from .stops import record_stop_fill  # after the save above, which would otherwise overwrite the record
+        for h in fresh:
+            if h.get("order"):
+                record_stop_fill(self.settings.state_dir / "state.json", h["order"],
+                                 {"level": h["level"], "type": h["type"], "label": h["label"]})
         if fresh and self._notifier is not None:
-            body = "\n".join(f"{h['symbol']}: {h['price']:.2f} at/below trailing stop {h['stop']:.2f} "
+            body ="\n".join(f"{h['symbol']}: {h['price']:.2f} at/below {h['label']} stop {h['stop']:.2f} "
                              f"({h['drawdown_from_high']*100:+.1f}% from high)"
                              + (" - paper SOLD" if h.get("order") else "") for h in fresh)
-            self._notifier.send(f"[STOP] {len(fresh)} position(s) hit trailing stop", body)
+            self._notifier.send(f"[STOP] {len(fresh)} position(s) hit their stop", body)
         return fresh
 
     def sync_live(self) -> dict[str, Any] | None:
