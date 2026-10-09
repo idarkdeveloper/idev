@@ -495,7 +495,8 @@
     $("pills").innerHTML = modePill + `<span class="pill">${esc(s.broker)}</span>`
       + (c.claude ? '<span class="pill">Claude ready</span>' : '<span class="pill warn">No ANTHROPIC_API_KEY</span>')
       + (w.on ? `<span class="pill ok">Watching every ${w.every}s${w.in_window?"":" (outside market window)"}</span>` : "")
-      + (s.demo ? '<span class="pill warn">Demo data</span>' : '');
+      + (s.demo ? '<span class="pill warn">Demo data</span>' : '')
+      + (S.running ? `<span class="pill warn"><span class="dot"></span>${esc(S.running.label)} running…</span>` : "");
     const lastRun = S.runs[0];
     $("lastcheck").textContent = lastRun ? "Last check " + when(lastRun.at) : "No checks yet";
     const wb = $("btn-watch"); wb.className = w.on ? "on" : ""; wb.querySelector("span").textContent = w.on ? `Stop watch (${w.ticks||0} ticks)` : "Start watch";
@@ -912,10 +913,24 @@
     tBars($("sl-chart"), rows, {label: `t-statistic of each signal, next ${h} trading days`});
     document.querySelectorAll("#sl-tabs button").forEach(b => b.addEventListener("click", () => renderSignalLab(r, b.dataset.h)));
   }
-  function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Failed: ":"Done: ")+j.message); $("bt-status").textContent=""; $("sc-status").textContent=""; $("fb-status").textContent=""; $("sl-status").textContent=""; } }, 2500); }
+  // Wait for the running job, then report that job (by id), not whatever came last.
+  let waitingFor = null;
+  function pollWhileBusy(){
+    clearInterval(pollTimer);
+    if(S && S.running && S.jobs.length) waitingFor = waitingFor || S.jobs[S.jobs.length - 1].id;
+    pollTimer = setInterval(async () => {
+      await refresh();
+      if(S.busy) return;
+      clearInterval(pollTimer);
+      const j = (waitingFor && S.jobs.find(x => x.id === waitingFor)) || S.jobs[S.jobs.length - 1];
+      waitingFor = null;
+      if(j && j.finished_at) toast((j.ok === false ? "Failed: " : "Done: ") + j.message);
+      ["bt-status", "sc-status", "fb-status", "sl-status"].forEach(id => $(id).textContent = "");
+    }, 2500);
+  }
 
   async function runCheck(force, dry){
-    try { const j = await api("/api/check", {force, dry_run: dry || !S.connections.claude}); toast(j.ok===false ? j.message : (dry ? "Dry run started" : force ? "Forced check started" : "Check started")); await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/check", {force, dry_run: dry || !S.connections.claude}); if(j.ok !== false) waitingFor = j.id; toast(j.ok===false ? j.message : (dry ? "Dry run started" : force ? "Forced check started" : "Check started")); await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   }
   $("btn-check").addEventListener("click", () => runCheck(false, false));
@@ -932,13 +947,13 @@
   $("bt-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target).entries());
-    try { const j = await api("/api/backtest", f); if(j.ok===false){ toast(j.message); return; } $("bt-status").textContent = "Replaying deals and fetching price history…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/backtest", f); if(j.ok===false){ toast(j.message); return; } waitingFor = j.id; $("bt-status").textContent = "Replaying deals and fetching price history…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   $("sc-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target).entries());
-    try { const j = await api("/api/screen", f); if(j.ok===false){ toast(j.message); return; } $("sc-status").textContent = "Scoring the universe…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/screen", f); if(j.ok===false){ toast(j.message); return; } waitingFor = j.id; $("sc-status").textContent = "Scoring the universe…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   let side = "buy";
@@ -1029,13 +1044,13 @@
   $("sl-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const body = {universe: $("sl-universe").value, years: Number($("sl-years").value), horizons: "5,20,60"};
-    try { const j = await api("/api/signal-lab", body); if(j.ok===false){ toast(j.message); return; } $("sl-status").textContent = "Loading price history and testing every signal…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/signal-lab", body); if(j.ok===false){ toast(j.message); return; } waitingFor = j.id; $("sl-status").textContent = "Loading price history and testing every signal…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   $("fb-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const body = {universe: $("sc-universe").value, years: Number($("fb-years").value), top: Number($("fb-top").value)};
-    try { const j = await api("/api/factor-backtest", body); if(j.ok===false){ toast(j.message); return; } $("fb-status").textContent = "Fetching history for the universe and simulating monthly rebalances…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/factor-backtest", body); if(j.ok===false){ toast(j.message); return; } waitingFor = j.id; $("fb-status").textContent = "Fetching history for the universe and simulating monthly rebalances…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   let rsT; window.addEventListener("resize", () => { clearTimeout(rsT); rsT = setTimeout(() => { if(!S) return; renderEquity(); if(S.factor_backtest && S.factor_backtest.dates) renderFactor(S.factor_backtest); if(S.backtest && S.backtest.summary) renderBacktest(S.backtest); }, 200); });

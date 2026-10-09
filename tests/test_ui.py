@@ -370,3 +370,32 @@ def test_my_groww_portfolio_shows_buy_current_and_pl(server, monkeypatch):
     assert len(sess.calls) == n  # cached for a minute
     _, html = _get(base + "/")
     assert 'id="mp-rows"' in html and "My Groww portfolio" in html
+
+
+def test_refused_job_is_not_recorded_and_names_the_running_one(server, monkeypatch):
+    import threading as th
+    from trading_agent import screen as screen_mod
+    base, app = server
+    release = th.Event()
+
+    def slow_screen(members, prices, **kw):
+        release.wait(5)
+        return {"universe_size": 1, "scored": 1, "eligible": 1, "errors": 0, "top": [], "all": [], "fundamentals": None}
+
+    monkeypatch.setattr(screen_mod, "load_universe", lambda u: [{"symbol": "A", "name": "A", "industry": ""}])
+    monkeypatch.setattr(screen_mod, "run_screen", slow_screen)
+    status, j = _post(base + "/api/screen", {"universe": "NIFTY50", "top": 5})
+    assert status == 202 and j["ok"] is None
+    _, st = _get(base + "/api/state")
+    assert st["busy"] and st["running"]["label"] == "The factor screen"
+    status, refused = _post(base + "/api/signal-lab", {"universe": "NIFTY50", "years": 3, "horizons": "5"})
+    assert refused["ok"] is False and refused["message"].startswith("The factor screen is still running")
+    release.set()
+    for _ in range(50):
+        _, st = _get(base + "/api/state")
+        if not st["busy"]:
+            break
+        time.sleep(0.05)
+    assert not st["busy"] and st["running"] is None
+    assert st["jobs"][-1]["kind"] == "screen" and st["jobs"][-1]["ok"] is True  # the refusal left no trace
+    assert all("still running" not in (x["message"] or "") for x in st["jobs"])

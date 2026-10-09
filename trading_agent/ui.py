@@ -96,6 +96,7 @@ class App:
         self.jobs: list[Job] = []
         self.lock = threading.Lock()
         self.busy = False
+        self.running: Job | None = None  # the job holding the one slot
 
     # -- lazy singletons ------------------------------------------------------
     @property
@@ -113,6 +114,20 @@ class App:
     @property
     def paper_only(self) -> bool:
         return isinstance(self.broker, LocalPaperBroker)
+
+    JOB_LABELS = {"check": "A check", "dry_run": "A dry run", "backtest": "The deal backtest",
+                  "screen": "The factor screen", "factor_backtest": "The portfolio backtest",
+                  "signal_lab": "The signal lab"}
+
+    def _refused(self, job: Job) -> Job:
+        """One long job at a time. A refused attempt is answered but not recorded, so it
+        can't later be reported as the result of the job that was actually running."""
+        r = self.running
+        what = self.JOB_LABELS.get(r.kind, "Another job") if r else "Another job"
+        since = f" (started {r.started_at[11:16]} UTC)" if r and r.started_at else ""
+        job.ok, job.finished_at = False, _now()
+        job.message = f"{what} is still running{since}; try again when it finishes."
+        return job
 
     # -- deals ----------------------------------------------------------------
     def deals(self, refresh: bool = False) -> list[DisclosedTrade]:
@@ -217,17 +232,18 @@ class App:
             "broker_error": broker_error, "deals": deals, "deals_error": self._deals_error,
             "recommendations": recs, "runs": list(reversed(st.data["runs"][-20:])),
             "seen_count": st.seen_count, "busy": self.busy,
+            "running": ({"kind": self.running.kind, "label": self.JOB_LABELS.get(self.running.kind, self.running.kind),
+                         "started_at": self.running.started_at} if self.busy and self.running else None),
             "jobs": [j.to_dict() for j in self.jobs[-5:]],
         }
 
     # -- actions --------------------------------------------------------------
     def start_check(self, *, force: bool, dry_run: bool) -> Job:
         job = Job(id=len(self.jobs) + 1, kind="dry_run" if dry_run else "check")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "a check is already running", _now()
-            return job
-        self.busy = True
+            return self._refused(job)
+        self.jobs.append(job)
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -299,11 +315,10 @@ class App:
         from .backtest import run_backtest
 
         job = Job(id=len(self.jobs) + 1, kind="backtest")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "another job is running", _now()
-            return job
-        self.busy = True
+            return self._refused(job)
+        self.jobs.append(job)
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -339,11 +354,10 @@ class App:
         from .screen import load_universe, run_screen
 
         job = Job(id=len(self.jobs) + 1, kind="screen")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "another job is running", _now()
-            return job
-        self.busy = True
+            return self._refused(job)
+        self.jobs.append(job)
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -551,14 +565,13 @@ class App:
         from .screen import load_universe
 
         job = Job(id=len(self.jobs) + 1, kind="factor_backtest")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "another job is running", _now()
-            return job
+            return self._refused(job)
+        self.jobs.append(job)
         if self.settings.market != "in":
             job.ok, job.message, job.finished_at = False, "the factor backtest uses NSE indices; switch market to India", _now()
             return job
-        self.busy = True
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -593,14 +606,13 @@ class App:
         from .signal_lab import run_signal_lab
 
         job = Job(id=len(self.jobs) + 1, kind="signal_lab")
-        self.jobs.append(job)
         if self.busy:
-            job.ok, job.message, job.finished_at = False, "another job is running", _now()
-            return job
+            return self._refused(job)
+        self.jobs.append(job)
         if self.settings.market != "in":
             job.ok, job.message, job.finished_at = False, "the signal lab uses NSE indices; switch market to India", _now()
             return job
-        self.busy = True
+        self.busy, self.running = True, job
 
         def run() -> None:
             try:
