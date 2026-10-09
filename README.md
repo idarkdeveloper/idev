@@ -86,12 +86,36 @@ shares, market type, CNC product on NSE, and Claude is told it is trading real m
 
 ## Which investors can I follow?
 
-`WATCH_INVESTOR` is matched (case-insensitive substring) against the **client name** in NSE
-bulk and block deals, or the acquirer name in insider filings. Names appear exactly as the
-exchange prints them, for example `ASHISH KACHOLIA`, `MUKUL MAHAVIR AGRAWAL`,
-`VIJAY KISHANLAL KEDIA`, `DOLLY KHANNA`, `RARE ENTERPRISES`, or an institution such as
-`SBI MUTUAL FUND`. Bulk deals only show trades above 0.5% of a company's shares, so
-small-cap moves by big investors are what you'll see most.
+`WATCH_INVESTOR` is matched against the **client name** in NSE bulk and block deals, or the
+acquirer name in insider filings. Matching is case-insensitive and ignores word order,
+because the exchange prints names surname-first and inconsistently (`KACHOLIA ASHISH`,
+`MUKUL MAHAVIR AGRAWAL`, `ESTATE OF LATE MR. RAKESH JHUNJHUNWALA`). Bulk deals only show
+trades above 0.5% of a company's shares, so famous investors appear only a few times a
+year; the names that appear weekly are mostly prop desks and operators. Run a backtest
+before trusting anyone:
+
+```bash
+python -m trading_agent backtest --investor "MUKUL AGRAWAL" --days 365
+python -m trading_agent backtest --demo
+```
+
+It replays every disclosed deal: entry at the first close after the deal date (NSE
+publishes that evening), hold 5 / 20 / 60 trading days, excess return over NIFTY 50
+(`^NSEI`) after a round-trip cost (`--cost-bps`, default 50), hit rate, and a split by
+who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
+
+## Momentum and "who traded"
+
+Two filters sit between a disclosure and a recommendation, based on what the evidence
+on Indian markets supports:
+
+- **Momentum** (`trading_agent/momentum.py`): trailing 1/3/6/12-month returns, 12-1
+  momentum, 200-day MA position, 60-day turnover and a verdict (strong / neutral / weak).
+  Claude is told to turn a disclosed buy in a weak-momentum stock into a *watch*, not a
+  buy. `python -m trading_agent momentum SENCO RELIANCE` prints it.
+- **Client type** (`trading_agent/investors.py`): promoter/insider, institution,
+  individual, corporate or broker desk, from the name as NSE prints it. Promoter and
+  institutional deals are weighted up; broker desks and corporate treasuries down.
 
 `WATCH_SOURCE`: `deals` (bulk + block, default), `bulk`, `block`, or `insider`.
 

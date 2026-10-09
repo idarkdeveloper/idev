@@ -90,7 +90,7 @@
     <div class="main">
       <div class="card">
         <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
-        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Who</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Paper portfolio</h2><span class="sub" id="pricesrc"></span></div>
@@ -135,6 +135,7 @@
   let S = null, pollTimer = null;
   const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"]],
                    us:[["congress","Congress trades"],["insider","Insider filings"]]};
+  const WHO = {promoter_insider:"Promoter", institution:"Institution", individual:"Individual", broker_desk:"Broker desk", corporate:"Corporate", unknown:"?"};
   const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
   const sym = () => S && S.settings.currency === "INR" ? "₹" : "$";
   const money = (v, d=0) => v == null ? "n/a" : sym() + Number(v).toLocaleString(S.settings.currency === "INR" ? "en-IN" : "en-US", {maximumFractionDigits:d, minimumFractionDigits:d});
@@ -180,8 +181,9 @@
         <td><span class="side-chip ${d.transaction==="Sale"?"sell":"buy"}">${d.transaction==="Sale"?"SELL":d.transaction==="Purchase"?"BUY":esc(d.transaction)}</span></td>
         <td><div style="font-weight:600">${esc(d.ticker)}</div><div class="sub">${esc(d.raw_name||d.investor)}</div></td>
         <td class="num">${esc(d.size)}</td><td>${esc(d.source)}</td>
+        <td><span class="pill" style="padding:3px 8px">${esc(WHO[d.client_type]||d.client_type||"")}</span></td>
         <td><span class="pill ${d.status==="new"?"warn":""}" style="padding:3px 8px">${d.status==="new"?"New":"Analysed"}</span></td></tr>`).join("")
-      : `<tr><td colspan="6" class="empty">No disclosed deals by ${esc(s.watch_investor)} in the window.</td></tr>`;
+      : `<tr><td colspan="7" class="empty">No disclosed deals by ${esc(s.watch_investor)} in the window.</td></tr>`;
 
     $("pricesrc").textContent = c.prices === "groww" ? "prices from Groww" : "prices via Yahoo Finance, delayed";
     $("positions").innerHTML = S.positions.length ? S.positions.map(p => `<tr><td style="font-weight:600">${esc(p.symbol)}</td>

@@ -124,8 +124,23 @@ class QuiverClient:
         return filter_by_investor(rows, investor)
 
 
+def matches_investor(name: str, investor: str) -> bool:
+    """True if ``investor`` is a substring of ``name`` or all its words appear in ``name``.
+
+    Exchanges print names in varying order ("KACHOLIA ASHISH" for Ashish Kacholia), so
+    word-set matching is what makes WATCH_INVESTOR usable.
+    """
+    needle = " ".join(investor.lower().split())
+    hay = " ".join(name.lower().replace(".", " ").split())
+    if not needle:
+        return False
+    if needle in hay:
+        return True
+    hay_words = set(hay.split())
+    return all(w in hay_words for w in needle.split())
+
+
 def filter_by_investor(rows: Iterable[DisclosedTrade], investor: str) -> list[DisclosedTrade]:
-    needle = investor.strip().lower()
-    out = [t for t in rows if needle and needle in t.investor.lower()]
+    out = [t for t in rows if matches_investor(t.investor, investor)]
     out.sort(key=lambda t: (t.report_date, t.transaction_date), reverse=True)
     return out

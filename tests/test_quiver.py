@@ -30,3 +30,12 @@ def test_historical_endpoint_uses_ticker(sample_rows):
     sess = FakeSession({("GET", "/historical/congresstrading/NVDA"): sample_rows[:1]})
     client = QuiverClient("k", session=sess)
     assert client.congress_trades("nvda")[0].ticker == "NVDA"
+
+
+def test_investor_match_is_word_order_independent():
+    from trading_agent.quiver import matches_investor
+    assert matches_investor("KACHOLIA ASHISH", "Ashish Kacholia")
+    assert matches_investor("MUKUL MAHAVIR AGRAWAL", "mukul agrawal")
+    assert matches_investor("ESTATE OF LATE MR. RAKESH JHUNJHUNWALA", "rakesh jhunjhunwala")
+    assert not matches_investor("ANKUSH KEDIA", "vijay kedia")
+    assert not matches_investor("ASHISH KACHOLIA", "")

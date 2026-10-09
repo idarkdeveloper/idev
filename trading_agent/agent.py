@@ -12,6 +12,8 @@ from anthropic import beta_tool
 
 from .broker import Broker
 from .config import Settings
+from .investors import classify_client, describe
+from .momentum import momentum_summary
 from .notify import Notifier
 from .quiver import DisclosedTrade
 from .state import State
@@ -27,10 +29,17 @@ Your job each run:
 3. For each new trade, decide whether the user should act. Consider: how recent the trade is
    (disclosures lag the actual trade, sometimes by weeks), the size bucket, whether the user
    already holds the ticker, position concentration, and available cash.
-4. Call send_recommendation exactly once per ticker that deserves a recommendation
+4. Weigh WHO traded (client_type): promoter/insider and institutional deals carry
+   information; broker/prop desks and corporate treasuries usually do not. Check the
+   stock's momentum with get_momentum (or the momentum given with the trade): only
+   recommend "buy" when momentum is strong or neutral with a positive 6-month return;
+   a disclosed buy in a weak-momentum stock is a "watch", not a buy. Evidence from NSE
+   event studies: front-runners take most of the bulk-deal edge before disclosure, so a
+   disclosure alone is a screen, never a signal.
+5. Call send_recommendation exactly once per ticker that deserves a recommendation
    (buy / sell / hold / watch). If nothing deserves action, call send_recommendation once
    with action "hold" summarising why.
-5. If and only if place_paper_order is available AND your confidence is "high", you may
+6. If and only if place_paper_order is available AND your confidence is "high", you may
    execute the recommendation with paper money. Never exceed 10% of equity on a single
    order, never buy a ticker already above 20% of equity, and never sell more than is held.
 
@@ -89,6 +98,7 @@ class AgentContext:
     notifier: Notifier
     state: State
     result: RunResult
+    momentum: Any | None = None  # MomentumScreen
 
     @property
     def live_money(self) -> bool:
@@ -172,8 +182,24 @@ def build_tools(ctx: AgentContext) -> list[Any]:
         delivered = ctx.notifier.send(subject, body)
         return json.dumps({"ok": True, "delivered_via": delivered})
 
+    @beta_tool
+    def get_momentum(ticker: str) -> str:
+        """Trailing 1/3/6/12-month returns, 12-1 momentum, 200-day MA position, 60-day
+        turnover and a verdict (strong / neutral / weak) for a stock.
+
+        Args:
+            ticker: Stock ticker symbol.
+        """
+        if ctx.momentum is None:
+            return json.dumps({"error": "momentum screen not configured"})
+        stats = ctx.momentum.stats(ticker)
+        stats["ticker"] = ticker.upper()
+        if "error" not in stats:
+            stats["summary"] = momentum_summary(stats)
+        return json.dumps(stats, default=str)
+
     tools: list[Any] = [get_portfolio, get_latest_price, get_investor_trade_history,
-                        send_recommendation]
+                        get_momentum, send_recommendation]
 
     if ctx.settings.auto_trade:
         @beta_tool
@@ -207,10 +233,21 @@ def _money(amount: float, currency: str) -> str:
     return f"{sym}{amount:,.0f}"
 
 
+def enrich_trade(ctx: AgentContext, trade: DisclosedTrade) -> dict[str, Any]:
+    """Trade dict plus who-traded classification and (best effort) momentum."""
+    d = trade.to_dict()
+    d.pop("raw", None)
+    ctype = classify_client(trade.investor, trade.source)
+    d["client_type"] = ctype
+    d["client_type_note"] = describe(ctype)
+    if ctx.momentum is not None:
+        stats = ctx.momentum.stats(trade.ticker)
+        d["momentum"] = stats.get("error") or momentum_summary(stats)
+    return d
+
+
 def build_user_message(ctx: AgentContext) -> str:
-    trades = [t.to_dict() for t in ctx.result.new_trades]
-    for t in trades:
-        t.pop("raw", None)
+    trades = [enrich_trade(ctx, t) for t in ctx.result.new_trades]
     if not ctx.settings.auto_trade:
         mode = "recommendation-only (no order tool)"
     elif ctx.live_money:

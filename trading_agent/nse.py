@@ -175,6 +175,16 @@ class NSEClient:
         (which returns the whole range) is used first and JSON only as a fallback.
         """
         end = end or date.today()
+        if days > 92:  # NSE serves long ranges unreliably; stitch 90-day windows
+            out: list[DisclosedTrade] = []
+            cursor = end
+            remaining = days
+            while remaining > 0:
+                span = min(90, remaining)
+                out += self.historical_deals(span, kind, end=cursor)
+                cursor = cursor - timedelta(days=span + 1)
+                remaining -= span + 1
+            return _dedupe(out)
         start = end - timedelta(days=days)
         params = {"optionType": f"{kind}_deals", "from": _nse_date(start), "to": _nse_date(end)}
         path = "api/historicalOR/bulk-block-short-deals"

@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 from .broker import Broker, LocalPaperBroker
 from .config import Settings, load_settings
+from .investors import classify_client
 from .quiver import DisclosedTrade
 from .runner import check, make_broker, make_data_source, make_notifier
 from .state import State
@@ -117,6 +118,7 @@ class App:
             d = t.to_dict()
             d.pop("raw", None)
             d["status"] = "new" if t.key not in st.data["seen"] else "analysed"
+            d["client_type"] = classify_client(t.investor, t.source)
             deals.append(d)
         try:
             acct = self.broker.account().to_dict()
