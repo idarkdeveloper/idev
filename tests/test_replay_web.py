@@ -186,3 +186,24 @@ def test_unexpected_error_is_500(rapp):
     r.client_factory = boom
     st, body = r.route("POST", f"/replay/api/trial/{slug}/ask", {}, {})
     assert st == 500 and "RuntimeError: kaput" in body["error"]
+
+
+def test_tools_route_returns_stored_results(rapp):
+    app, r = rapp
+    slug = create(app, r)
+    assert r.route("GET", f"/replay/api/trial/{slug}/tools", {}, None) == (200, {})
+    r._tool_results[slug] = {"signal_lab": {"date": "2021-03-15", "years": 3, "text": "x"},
+                             "factor_backtest": {"date": "2020-01-01", "years": 3, "text": "old"}}
+    st, body = r.route("GET", f"/replay/api/trial/{slug}/tools", {}, None)
+    assert st == 200 and list(body) == ["signal_lab"]
+
+
+def test_quickly_failing_step_leaves_lock_free(rapp):
+    app, r = rapp
+    slug = create(app, r)
+    st, j = r.route("POST", f"/replay/api/trial/{slug}/step", {}, {"by": "decade"})
+    assert st == 202
+    wait(app, app.jobs[-1])
+    assert app.jobs[-1].ok is False
+    st, _ = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
+    assert st == 200

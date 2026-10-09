@@ -49,7 +49,7 @@ class ReplayApp:
         self.today_fn = today_fn or (lambda: date.today().isoformat())
         self.screen_fn = screen_fn
         self._trials: dict[str, Trial] = {}
-        self._tools: dict[str, dict[str, Any]] = {}
+        self._tool_results: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
         self._trial_locks: dict[str, threading.Lock] = {}
 
@@ -92,18 +92,24 @@ class ReplayApp:
         if not lk.acquire(blocking=False):
             raise ReplayBusy("A step is running for this replay; try again when it finishes.")
 
+        once = threading.Lock()  # held = release already done
+
+        def release() -> None:
+            if once.acquire(blocking=False):
+                lk.release()
+
         def run(job: Any) -> str:
             try:
                 return fn(job)
             finally:
-                lk.release()
+                release()
         try:
             job = self.app.run_background(kind, run)
         except BaseException:
-            lk.release()
+            release()
             raise
-        if job.ok is False and job.finished_at:  # refused: fn never ran
-            lk.release()
+        if job not in self.app.jobs:  # refused: it was never recorded, so run() never ran
+            release()
         return job
 
     def _news(self, t: Trial) -> ClockedNews:
@@ -244,7 +250,7 @@ class ReplayApp:
                                         cost_model=cost_model_for("in"), capital=t.data["cash"],
                                         index_fund=BENCHMARKS[t.data["universe"]])
                 text = format_factor_backtest(r)
-            self._tools.setdefault(slug, {})[kind] = {"date": t.clock.today, "years": years, "text": text}
+            self._tool_results.setdefault(slug, {})[kind] = {"date": t.clock.today, "years": years, "text": text}
             return f"{kind.replace('_', ' ')} as of {t.clock.today} finished"
         return self._background(slug, "replay_tool", run)
 
@@ -254,7 +260,7 @@ class ReplayApp:
 
     def _tools(self, slug: str) -> dict[str, Any]:
         t = self.trial(slug)
-        return {k: v for k, v in self._tools.get(slug, {}).items() if v["date"] == t.clock.today}
+        return {k: v for k, v in self._tool_results.get(slug, {}).items() if v["date"] == t.clock.today}
 
     # -- the page's data ------------------------------------------------------------
     def snapshot(self, slug: str) -> dict[str, Any]:
