@@ -104,21 +104,24 @@ class App:
         self.running: Job | None = None  # the job holding the one slot
         self._replay: Any | None = None  # ReplayApp, built on first use
         self._demo: "App | None" = None
+        self._lazy_lock = threading.Lock()
 
     @property
     def demo(self) -> "App":
         """The Demo page's app: bundled sample deals and prices, its own state, no Groww, no .env writes."""
         if self.demo_trades is not None:
             return self  # started with --demo: this app is the demo
-        if self._demo is None:
-            import dataclasses
-            from .cli import _demo_inputs
-            s = dataclasses.replace(self.settings, state_dir=self.settings.state_dir / "demo", broker="local",
-                                    groww_access_token=None, groww_api_key=None, groww_api_secret=None,
-                                    groww_totp_secret=None, groww_live_orders=False)
-            trades, broker = _demo_inputs(s)
-            self._demo = App(s, broker=broker, demo_trades=trades, dotenv=None, context=self.context)
-        return self._demo
+        with self._lazy_lock:
+            if self._demo is None:
+                import dataclasses
+                from .cli import _demo_inputs
+                s = dataclasses.replace(self.settings, state_dir=self.settings.state_dir / "demo", broker="local",
+                                        groww_access_token=None, groww_api_key=None, groww_api_secret=None,
+                                        groww_totp_secret=None, groww_live_orders=False,
+                                        resend_api_key=None, notify_email_to=None, notify_webhook_url=None)
+                trades, broker = _demo_inputs(s)
+                self._demo = App(s, broker=broker, demo_trades=trades, dotenv=None, context=self.context)
+            return self._demo
 
     # -- lazy singletons ------------------------------------------------------
     @property
@@ -176,10 +179,11 @@ class App:
 
     @property
     def replay(self) -> Any:
-        if self._replay is None:
-            from .replay.web import ReplayApp
-            self._replay = ReplayApp(self)
-        return self._replay
+        with self._lazy_lock:
+            if self._replay is None:
+                from .replay.web import ReplayApp
+                self._replay = ReplayApp(self)
+            return self._replay
 
     # -- deals ----------------------------------------------------------------
     def deals(self, refresh: bool = False) -> list[DisclosedTrade]:

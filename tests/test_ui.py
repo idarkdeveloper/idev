@@ -474,8 +474,10 @@ def test_demo_is_isolated_from_live_and_groww(settings, monkeypatch, tmp_path):
     monkeypatch.setattr(g.GrowwBroker, "__init__", lambda *a, **k: (_ for _ in ()).throw(AssertionError("groww")))
     settings.market, settings.broker, settings.groww_access_token = "in", "groww", "tok"
     settings.watch_investor = "Ashish Kacholia"
+    settings.notify_webhook_url, settings.resend_api_key = "https://example.invalid/hook", "re_test"
     live = App(settings, dotenv=None)
     demo = live.demo
+    assert demo.settings.notify_webhook_url is None and demo.settings.resend_api_key is None
     assert demo.settings.state_dir == settings.state_dir / "demo" and demo.dotenv is None
     assert demo.settings.groww_access_token is None and not demo.settings.use_groww
     snap = demo.snapshot()
