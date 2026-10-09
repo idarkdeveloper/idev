@@ -49,7 +49,8 @@ def _print_result(result) -> None:
     for t in result.new_trades:
         print(f"  - {t.summary()}")
     if result.skipped:
-        print("(dry run: Claude was not called)")
+        print("(baseline: recorded as seen, Claude was not called)" if result.baseline
+              else "(dry run: Claude was not called)")
         return
     print(f"\nModel: {result.model}")
     print(f"Recommendations sent: {len(result.recommendations)}")
@@ -80,7 +81,8 @@ def cmd_check(args: argparse.Namespace) -> int:
     if args.demo:
         trades, broker = _demo_inputs(settings)
         kwargs.update(trades=trades, broker=broker)
-    result = check(settings, force=args.force, dry_run=args.dry_run, **kwargs)
+    result = check(settings, force=args.force, dry_run=args.dry_run,
+                   baseline=getattr(args, "baseline", False), **kwargs)
     _print_result(result)
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, default=str))
@@ -126,11 +128,131 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
 
 
 def cmd_groww_token(args: argparse.Namespace) -> int:
-    """Print a fresh Groww access token (valid until 06:00 IST next day)."""
+    """Print a Groww access token (valid until 06:00 IST); reuses the cached one."""
     from .runner import resolve_groww_token
     settings = _settings(args)
-    settings.groww_access_token = None  # force generation from key + secret / TOTP
-    print(resolve_groww_token(settings))
+    settings.groww_access_token = None  # use key + secret / TOTP (cached until 06:00 IST)
+    print(resolve_groww_token(settings, fresh=args.fresh))
+    return 0
+
+
+def _fmt_live_order(o: dict[str, Any]) -> str:
+    px = o.get("average_fill_price") or o.get("limit_price")
+    return (f"{(o.get('placed_at') or '')[:19]:<19}  {str(o.get('side', '')).upper():<4} {o.get('symbol', ''):<12} "
+            f"qty {o.get('qty')!s:<5} filled {o.get('filled_quantity') or 0:<5g} @ {px if px is not None else 'n/a'}  "
+            f"{o.get('status', ''):<6} {o.get('order_status') or ''}  {o.get('groww_order_id') or ''}"
+            + (f"  ({o.get('remark') or o.get('error')})" if o.get('remark') or o.get('error') else ""))
+
+
+def cmd_orders(args: argparse.Namespace) -> int:
+    """List live Groww orders recorded in state.json; --refresh re-checks open ones."""
+    from .live import refresh_open_orders
+    from .runner import make_groww, make_notifier
+    settings = _settings(args)
+    st = State(settings.state_dir / "state.json")
+    orders = st.data.get("live_orders", [])
+    if args.refresh:
+        if not any(o.get("status") == "open" for o in orders):
+            print("No open live orders to refresh.")
+        else:
+            updated = refresh_open_orders(make_groww(settings), st, make_notifier(settings))
+            st.save()
+            print(f"Re-checked {len(updated)} open order(s).")
+    if not orders:
+        print("No live orders recorded.")
+    for o in orders[-args.limit:]:
+        print(_fmt_live_order(o))
+    return 0
+
+
+def cmd_forward(args: argparse.Namespace) -> int:
+    """Paper-trade the factor screen forward, month by month, against its index fund."""
+    from .costs import cost_model_for
+    from .forward import ForwardTest, format_forward
+    from .runner import free_prices
+    from .screen import load_universe, run_screen
+
+    settings = _settings(args)
+    prices = free_prices(settings)
+    ft = ForwardTest(settings.state_dir, universe=args.universe, top=args.top,
+                     capital=args.capital or settings.paper_starting_cash, price_fn=prices.latest_price,
+                     cost_model=cost_model_for("in"))
+    if args.status:
+        print(format_forward(ft.summary()))
+        return 0
+    if args.if_due and not ft.due():
+        print("Forward test: nothing due (runs on weekdays after 15:40 IST, once a day).")
+        return 0
+
+    def screen() -> dict:
+        members = load_universe(ft.universe)
+        print(f"Ranking {len(members)} {ft.universe} members for this month's rebalance…")
+        return run_screen(members, prices, top=ft.data["top"])
+
+    print(format_forward(ft.run(screen, force_rebalance=args.rebalance)))
+    return 0
+
+
+def cmd_groww_check(args: argparse.Namespace) -> int:
+    """Check the live-trading assumptions against your Groww account (read-only by default)."""
+    from .groww import InstrumentTicks
+    from .groww_check import format_rows, live_test, read_only_checks, save
+    from .runner import make_groww, token_cache
+    settings = _settings(args)
+    if not settings.has_groww_credentials:
+        print("No Groww credentials in .env.")
+        return 1
+    if args.live_test and not (settings.groww_live_orders and args.i_understand_real_orders):
+        print("Refusing the live test: it places a REAL 1-share limit order (and a GTT) on Groww. "
+              "It needs GROWW_LIVE_ORDERS=true and --i-understand-real-orders.")
+        return 1
+    cache = token_cache(settings)
+    if settings.groww_access_token:
+        source = "GROWW_ACCESS_TOKEN in .env"
+    elif settings.groww_api_key and cache.get(settings.groww_api_key):
+        source = "cached token (no new generation used)"
+    else:
+        source = "newly generated from the API key (counts toward 150 a day)"
+    broker = make_groww(settings)
+    ticks = InstrumentTicks(settings.state_dir / "cache")
+    c = read_only_checks(broker, token_source=source, cache=cache, api_key=settings.groww_api_key,
+                         tick_fn=lambda sym: ticks.tick_size(sym, settings.groww_exchange))
+    if args.live_test:
+        print(f"Placing a REAL 1-share limit BUY of {args.live_test.upper()} {args.offset_pct:g}% below "
+              "the last price, then cancelling it...")
+        live_test(broker, args.live_test, offset_pct=args.offset_pct, c=c)
+    print(format_rows(c))
+    st = State(settings.state_dir / "state.json")
+    save(st, c, live=bool(args.live_test))
+    st.save()
+    return 0 if all(r["ok"] is not False for r in c.rows) else 2
+
+
+def cmd_gtt(args: argparse.Namespace) -> int:
+    """Show the Groww GTT stop-losses; --sync creates/raises/cancels them (live only)."""
+    from .live import GttStopManager
+    from .runner import free_prices, make_groww, make_notifier
+    settings = _settings(args)
+    st = State(settings.state_dir / "state.json")
+    if args.sync:
+        if not settings.groww_live_orders:
+            print("Refusing: GROWW_LIVE_ORDERS is not true, so no GTT orders are placed.")
+            return 1
+        if not settings.groww_gtt_stops:
+            print("Refusing: GROWW_GTT_STOPS is not true.")
+            return 1
+        prices = free_prices(settings)
+        mgr = GttStopManager(make_groww(settings, prices), st, notifier=make_notifier(settings),
+                             bars_fn=lambda sym: prices.history(sym, "1y"))
+        for a in mgr.sync():
+            print("  ", a)
+        st.save()
+    stops = st.data.get("gtt_stops", {})
+    if not stops:
+        print("No GTT stop-losses recorded.")
+    for sym, r in sorted(stops.items()):
+        print(f"{sym:<12} qty {r.get('qty')}  trigger {r.get('trigger')}  limit {r.get('limit')}  "
+              f"{r.get('status')}  {r.get('smart_order_id')}" + (f"  last error: {r['last_error']}" if r.get("last_error") else ""))
     return 0
 
 
@@ -240,8 +362,14 @@ def cmd_screen(args: argparse.Namespace) -> int:
     settings = _settings(args)
     members = load_universe(args.universe)
     print(f"Scoring {len(members)} stocks in {args.universe.upper()} (price history via Yahoo, cached)…")
+    fundamentals = None
+    if args.quality or args.value:
+        from .fundamentals import YahooFundamentals
+        fundamentals = YahooFundamentals(settings.state_dir / "cache")
+        print("Adding fundamentals from Yahoo (cached for a day; the first run takes about a minute)…")
     result = run_screen(members, free_prices(settings), top=args.top, workers=args.workers,
-                        require_above_200dma=not args.no_trend_filter)
+                        require_above_200dma=not args.no_trend_filter, fundamentals=fundamentals,
+                        quality=1.0 if args.quality else 0.0, value=1.0 if args.value else 0.0)
     print(format_screen(result, top=args.top))
     if args.json:
         result.pop("all", None)
@@ -419,6 +547,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--demo", action="store_true", help="use bundled sample trades/prices")
         sp.add_argument("--auto-trade", action="store_true", help="allow PAPER orders this run")
         sp.add_argument("--json", action="store_true", help="also print the result as JSON")
+        sp.add_argument("--baseline", action="store_true",
+                        help="record current trades as seen without calling Claude (after lost state)")
 
     sp = sub.add_parser("check", help="run one check now"); add_check_args(sp)
     sp.set_defaults(func=cmd_check)
@@ -430,8 +560,30 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_history)
     sub.add_parser("reset", help="forget seen trades and reset the local paper account") \
         .set_defaults(func=cmd_reset)
-    sub.add_parser("groww-token", help="generate a Groww access token from API key + secret/TOTP") \
-        .set_defaults(func=cmd_groww_token)
+    sp = sub.add_parser("groww-token", help="print a Groww access token (cached until 06:00 IST)")
+    sp.add_argument("--fresh", action="store_true", help="generate a new one even if the cached token is valid")
+    sp.set_defaults(func=cmd_groww_token)
+    sp = sub.add_parser("orders", help="list live Groww orders; --refresh re-checks open ones")
+    sp.add_argument("--refresh", action="store_true")
+    sp.add_argument("--limit", type=int, default=30)
+    sp.set_defaults(func=cmd_orders)
+    sp = sub.add_parser("forward", help="paper-trade the factor screen forward against its index fund")
+    sp.add_argument("--universe", default="NIFTYMIDCAP150")
+    sp.add_argument("--top", type=int, default=20, help="names to hold (set on the first run)")
+    sp.add_argument("--capital", type=float, help="starting capital (first run only; default PAPER_STARTING_CASH)")
+    sp.add_argument("--rebalance", action="store_true", help="rebalance now even if this month is done")
+    sp.add_argument("--status", action="store_true", help="show the current standing without trading")
+    sp.add_argument("--if-due", action="store_true", help="for schedules: skip unless a weekday after the close")
+    sp.set_defaults(func=cmd_forward)
+    sp = sub.add_parser("groww-check", help="verify live-trading assumptions on your Groww account")
+    sp.add_argument("--live-test", metavar="SYMBOL",
+                    help="also place a REAL 1-share limit buy below market (then cancel) and a test GTT")
+    sp.add_argument("--offset-pct", type=float, default=3.0, help="how far below the last price to rest the buy")
+    sp.add_argument("--i-understand-real-orders", action="store_true")
+    sp.set_defaults(func=cmd_groww_check)
+    sp = sub.add_parser("gtt", help="show Groww GTT stop-losses; --sync updates them (live only)")
+    sp.add_argument("--sync", action="store_true")
+    sp.set_defaults(func=cmd_gtt)
     sp = sub.add_parser("backtest", help="replay an investor's disclosed deals vs NIFTY 50")
     sp.add_argument("--investor", help="override WATCH_INVESTOR")
     sp.add_argument("--days", type=int, default=365, help="how far back to fetch deals")
@@ -449,6 +601,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--top", type=int, default=20)
     sp.add_argument("--workers", type=int, default=8)
     sp.add_argument("--no-trend-filter", action="store_true", help="don't require price above 200-day MA")
+    sp.add_argument("--quality", action="store_true", help="add quality: ROE, low debt, earnings growth (not backtested)")
+    sp.add_argument("--value", action="store_true", help="add value: earnings yield, book-to-price (not backtested)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_screen)
     sp = sub.add_parser("scorecard", help="how Claude's past recommendations did vs the index")

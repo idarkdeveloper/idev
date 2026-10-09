@@ -30,6 +30,13 @@ class Position:
     avg_entry_price: float
     current_price: float | None = None
     high_water: float | None = None  # highest price seen since entry (for trailing stops)
+    # Shares that can be sold right now. Groww: demat_free_quantity + t1_quantity, never
+    # pledged or locked shares. None = every share is sellable (paper accounts).
+    sellable_qty: float | None = None
+
+    @property
+    def free_qty(self) -> float:
+        return self.qty if self.sellable_qty is None else min(self.qty, self.sellable_qty)
 
     @property
     def market_value(self) -> float | None:
@@ -50,6 +57,7 @@ class Position:
             "market_value": self.market_value,
             "unrealized_pl": self.unrealized_pl,
             "high_water": self.high_water,
+            "sellable_qty": self.free_qty,
         }
 
 

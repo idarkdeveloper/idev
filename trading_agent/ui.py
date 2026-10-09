@@ -1,8 +1,10 @@
 """Local web dashboard: ``python -m trading_agent ui``.
 
 A small stdlib HTTP server that serves ``ui/index.html`` and a JSON API over the same
-objects the CLI uses. Nothing here can place real orders: the order endpoint only
-works against the local paper simulator.
+objects the CLI uses. The order endpoints only work against the local paper
+simulator. Live Groww orders (placed by the agent when GROWW_LIVE_ORDERS=true and
+AUTO_TRADE=true) are shown read-only in the order history, with their status, and
+each holding shows its GTT stop-loss status.
 """
 
 from __future__ import annotations
@@ -33,6 +35,8 @@ from .watch import Watcher
 log = logging.getLogger(__name__)
 
 DEALS_TTL_SECONDS = 600
+# The only static files besides the page: Inter, served locally so the page needs no network.
+FONT_FILES = {"/fonts/inter-latin.woff2", "/fonts/inter-latin-ext.woff2"}
 EDITABLE_ENV_KEYS = {
     "watch_investor": "WATCH_INVESTOR",
     "watch_source": "WATCH_SOURCE",
@@ -41,6 +45,8 @@ EDITABLE_ENV_KEYS = {
     "notify_webhook_url": "NOTIFY_WEBHOOK_URL",
     "market": "MARKET",
     "paper_starting_cash": "PAPER_STARTING_CASH",
+    # Only has an effect when GROWW_LIVE_ORDERS=true, which the dashboard can never set.
+    "groww_gtt_stops": "GROWW_GTT_STOPS",
 }
 
 
@@ -140,7 +146,11 @@ class App:
         except Exception as e:  # noqa: BLE001
             acct, positions, broker_error = None, [], str(e)
         perf = self.broker.performance() if isinstance(self.broker, LocalPaperBroker) else None
-        for pos in positions:  # trailing-stop level for the table
+        gtt = st.data.get("gtt_stops", {})
+        for pos in positions:  # trailing-stop level and GTT status for the table
+            g = gtt.get(pos["symbol"].upper())
+            pos["gtt"] = ({k: g.get(k) for k in ("status", "trigger", "limit", "qty", "smart_order_id", "last_error")}
+                          if g else None)
             try:
                 from .risk import atr, trailing_stop
                 bars = self.prices.history(pos["symbol"], "1y") if not self.demo_trades else []
@@ -172,6 +182,7 @@ class App:
             "watch": ({**self.watcher.status(), "auto_exit": self.watcher.auto_exit} if self.watcher
                       else {"on": False, "every": 60, "auto_exit": False}),
             "orders": self.orders(),
+            "forward": self.forward_summary(),
             "backtest": self.last_backtest,
             "screen": self.last_screen,
             "factor_backtest": self.last_factor_bt,
@@ -187,6 +198,8 @@ class App:
                 "notify_email_to": s.notify_email_to or "",
                 "notify_webhook_url": s.notify_webhook_url or "",
                 "paper_starting_cash": s.paper_starting_cash,
+                "groww_gtt_stops": s.groww_gtt_stops,
+                "max_slippage_pct": s.max_slippage_pct,
                 "demo": self.demo_trades is not None,
             },
             "connections": {
@@ -194,6 +207,7 @@ class App:
                 "groww": s.use_groww,
                 "groww_credentials": s.has_groww_credentials,
                 "groww_live_orders": s.groww_live_orders,
+                "groww_gtt_active": s.groww_gtt_stops and s.groww_live_orders and s.use_groww,
                 "data": s.data_source,
                 "prices": "groww" if s.use_groww else "yahoo",
             },
@@ -319,7 +333,7 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
-    def start_screen(self, universe: str, top: int) -> Job:
+    def start_screen(self, universe: str, top: int, quality: bool = False, value: bool = False) -> Job:
         from .screen import load_universe, run_screen
 
         job = Job(id=len(self.jobs) + 1, kind="screen")
@@ -332,7 +346,12 @@ class App:
         def run() -> None:
             try:
                 members = load_universe(universe)
-                result = run_screen(members, self.prices, top=top)
+                funds = None
+                if quality or value:
+                    from .fundamentals import YahooFundamentals
+                    funds = YahooFundamentals(self.settings.state_dir / "cache")
+                result = run_screen(members, self.prices, top=top, fundamentals=funds,
+                                    quality=1.0 if quality else 0.0, value=1.0 if value else 0.0)
                 result.pop("all", None)
                 self.last_screen = {"at": _now(), "universe": universe.upper(), **result}
                 job.ok, job.message = True, f"{result['eligible']} eligible of {result['scored']} scored in {universe.upper()}"
@@ -434,9 +453,9 @@ class App:
             if key not in changes:
                 continue
             value = changes[key]
-            if key == "auto_trade":
-                value = "true" if value in (True, "true", "1", 1) else "false"
-                self.settings.auto_trade = value == "true"
+            if key in ("auto_trade", "groww_gtt_stops"):
+                value = "true" if value in (True, "true", "1", 1, "on") else "false"
+                setattr(self.settings, key, value == "true")
             elif key == "market":
                 value = str(value).strip().lower()
                 if value not in ("in", "us"):
@@ -620,11 +639,41 @@ class App:
         return {"ok": True, "message": f"Connected: {len(holdings)} holdings, cash {acct.cash:,.2f} {acct.currency}",
                 "holdings": len(holdings), "cash": acct.cash, "equity": acct.equity}
 
+    def forward_summary(self) -> dict[str, Any] | None:
+        """The forward test's standing from stored prices (no network: the page polls)."""
+        from .forward import ForwardTest
+        d = self.settings.state_dir / "forward"
+        files = sorted(f for f in d.glob("*.json") if not f.stem.endswith("_broker")) if d.exists() else []
+        if not files:
+            return None
+        try:
+            s = ForwardTest(self.settings.state_dir, universe=files[0].stem.upper(), price_fn=None).summary()
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e)}
+        s["history"] = s["history"][-1000:]
+        return s
+
     def orders(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Paper fills plus live Groww orders (from state.json), newest first."""
+        out: list[dict[str, Any]] = []
         b = self.broker
         if isinstance(b, LocalPaperBroker):
-            return list(reversed(b.orders()))[:limit]
-        return []
+            # newest first already, so the (stable) sort below keeps same-second fills in order
+            out += [{**o, "at": o.get("filled_at")} for o in reversed(b.orders())]
+        st = State(self.settings.state_dir / "state.json")
+        for o in reversed(st.data.get("live_orders", [])):
+            out.append({**o, "live": True, "at": o.get("placed_at"),
+                        "filled_avg_price": o.get("average_fill_price") or o.get("limit_price"),
+                        "notional": round((o.get("average_fill_price") or o.get("limit_price") or 0)
+                                          * float(o.get("filled_quantity") or o.get("qty") or 0), 2)})
+        def when(o: dict[str, Any]) -> datetime:
+            try:
+                dt = datetime.fromisoformat(str(o.get("at")))
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                return datetime.min.replace(tzinfo=timezone.utc)
+        out.sort(key=when, reverse=True)
+        return out[:limit]
 
 
 def _cost_table(market: str) -> dict[str, Any]:
@@ -659,7 +708,7 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
 # HTTP
 # --------------------------------------------------------------------------- #
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
-    index_html = (resources.files("trading_agent") / "ui" / "index.html").read_text()
+    index_html = (resources.files("trading_agent") / "ui" / "index.html").read_text(encoding="utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "trading-agent-ui/1"
@@ -689,6 +738,14 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif path in FONT_FILES:
+                body = (resources.files("trading_agent") / "ui" / "fonts" / path.rsplit("/", 1)[-1]).read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "font/woff2")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "public, max-age=604800")
                 self.end_headers()
                 self.wfile.write(body)
             elif path == "/favicon.ico":
@@ -777,7 +834,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                                              float(body.get("cost_bps", 50)))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/screen":
-                    job = app.start_screen(str(body.get("universe") or "NIFTY200"), int(body.get("top", 20)))
+                    job = app.start_screen(str(body.get("universe") or "NIFTY200"), int(body.get("top", 20)),
+                                           quality=body.get("quality") in (True, "on", "true", 1),
+                                           value=body.get("value") in (True, "on", "true", 1))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/watch":
                     self._json(app.set_watch(bool(body.get("on")), int(body["every"]) if body.get("every") else None,

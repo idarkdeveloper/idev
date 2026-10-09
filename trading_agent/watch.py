@@ -134,6 +134,23 @@ class Watcher:
             self._notifier.send(f"[STOP] {len(fresh)} position(s) hit trailing stop", body)
         return fresh
 
+    def sync_live(self) -> dict[str, Any] | None:
+        """Live Groww only: re-check open orders and keep GTT stop-losses in line."""
+        from .live import is_live_broker, refresh_open_orders, sync_gtt_stops
+
+        if not is_live_broker(self._broker):
+            return None
+        st = State(self.settings.state_dir / "state.json")
+        out: dict[str, Any] = {}
+        try:
+            out["orders"] = refresh_open_orders(self._broker, st, self._notifier)
+        except Exception as e:  # noqa: BLE001
+            out["orders_error"] = str(e)
+        bars_fn = (lambda sym: self._prices.history(sym, "1y")) if self._prices is not None else None
+        out["gtt"] = sync_gtt_stops(self.settings, self._broker, st, bars_fn=bars_fn, notifier=self._notifier)
+        st.save()
+        return out
+
     def tick(self, force: bool = False) -> dict[str, Any]:
         now = datetime.now(self.tz)
         info: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "in_window": self.market_window_open(now)}
@@ -150,6 +167,9 @@ class Watcher:
             info["check_error"] = f"{type(e).__name__}: {e}"
         info["new_announcements"] = self.poll_announcements()
         info["stop_hits"] = self.check_trailing_stops()
+        live = self.sync_live()
+        if live is not None:
+            info["live"] = live
         self.ticks += 1
         self.last_tick = info
         return info

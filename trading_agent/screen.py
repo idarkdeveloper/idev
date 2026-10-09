@@ -1,8 +1,9 @@
 """Factor screen over an NSE index universe: the AQR / Dimensional playbook, retail size.
 
 Ranks every constituent on 12-1 momentum, 6-month return, low volatility and a trend
-filter, with a liquidity floor. Quality and value need fundamentals, which are not wired
-in yet; the ranking is documented and deterministic so a backtest can reproduce it.
+filter, with a liquidity floor; the ranking is documented and deterministic so a
+backtest can reproduce it. Quality and value (fundamentals.py) are an opt-in overlay on
+today's numbers only, so they are not part of any backtest.
 """
 
 from __future__ import annotations
@@ -92,8 +93,14 @@ def score_universe(stats_by_symbol: dict[str, dict[str, Any]], *, min_turnover: 
 
 
 def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20, workers: int = 8,
-               min_turnover: float = 1e7, require_above_200dma: bool = True) -> dict[str, Any]:
-    """``prices.history(symbol, '2y')`` per constituent, in parallel; returns ranked rows."""
+               min_turnover: float = 1e7, require_above_200dma: bool = True,
+               fundamentals: Any | None = None, quality: float = 0.0, value: float = 0.0) -> dict[str, Any]:
+    """``prices.history(symbol, '2y')`` per constituent, in parallel; returns ranked rows.
+
+    With a ``fundamentals`` provider and a ``quality`` and/or ``value`` weight, the
+    eligible names are re-ranked with those factors too (see fundamentals.py). Off by
+    default, so the backtested screen is unchanged.
+    """
     members = list(universe)
     names = {m["symbol"]: m for m in members}
 
@@ -112,10 +119,18 @@ def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20
     for r in rows:
         r["name"] = names.get(r["symbol"], {}).get("name", "")
         r["industry"] = names.get(r["symbol"], {}).get("industry", "")
+    overlay = None
+    if fundamentals is not None and (quality or value):
+        from .fundamentals import apply_fundamentals, fetch_all
+        funds = fetch_all(fundamentals, [r["symbol"] for r in rows if r["eligible"]])
+        apply_fundamentals(rows, funds, quality=quality, value=value)
+        overlay = {"quality": quality, "value": value, "source": "Yahoo Finance snapshot",
+                   "missing": sum(1 for f in funds.values() if "error" in f),
+                   "excluded": sum(1 for r in rows if r.get("excluded"))}
     eligible = [r for r in rows if r["eligible"]]
     return {"universe_size": len(members), "scored": len(rows), "eligible": len(eligible),
             "errors": sum(1 for s in stats.values() if "error" in s),
-            "top": eligible[:top], "all": rows}
+            "top": eligible[:top], "all": rows, "fundamentals": overlay}
 
 
 def format_screen(result: dict[str, Any], top: int = 20) -> str:
@@ -123,7 +138,17 @@ def format_screen(result: dict[str, Any], top: int = 20) -> str:
     lines = [f"Screen: {result['scored']}/{result['universe_size']} scored, {result['eligible']} eligible "
              f"(above 200dma, liquid), {result['errors']} errors",
              f"{'#':>3} {'symbol':<12} {'12-1':>7} {'6m':>7} {'1m':>7} {'vol':>6} {'52w':>7}  score  name"]
+    fx = result.get("fundamentals")
+    if fx:
+        lines[0] += (f"\nWith fundamentals (quality x{fx['quality']:g}, value x{fx['value']:g}, {fx['source']}): "
+                     f"{fx['excluded']} excluded, {fx['missing']} without data. Not backtested: today's numbers only.")
+        lines[1] += "    ROE   D/E    P/E"
     for r in result["top"][:top]:
-        lines.append(f"{r['rank']:>3} {r['symbol']:<12} {pct(r['ret_12_1'])} {pct(r['ret_6m'])} {pct(r['ret_1m'])} "
-                     f"{(r['vol_60d'] or 0)*100:5.0f}% {pct(r['pct_from_52w_high'])} {r['score']:+6.2f}  {r['name'][:28]}")
+        line = (f"{r['rank']:>3} {r['symbol']:<12} {pct(r['ret_12_1'])} {pct(r['ret_6m'])} {pct(r['ret_1m'])} "
+                f"{(r['vol_60d'] or 0)*100:5.0f}% {pct(r['pct_from_52w_high'])} {r['score']:+6.2f}  {r['name'][:28]:<28}")
+        if fx:
+            de = "  fin" if r.get("financial") else ("  n/a" if r.get("debt_to_equity") is None else f"{r['debt_to_equity']:5.2f}")
+            pe = f"{r['pe']:6.1f}" if r.get("pe") else "   n/a"
+            line += f"  {pct(r.get('roe'))} {de} {pe}"
+        lines.append(line)
     return "\n".join(lines)

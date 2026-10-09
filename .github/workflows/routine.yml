@@ -50,6 +50,8 @@ jobs:
           GROWW_API_SECRET: ${{ secrets.GROWW_API_SECRET }}
           GROWW_TOTP_SECRET: ${{ secrets.GROWW_TOTP_SECRET }}
           GROWW_LIVE_ORDERS: ${{ vars.GROWW_LIVE_ORDERS || 'false' }}
+          GROWW_GTT_STOPS: ${{ vars.GROWW_GTT_STOPS || 'false' }}
+          MAX_SLIPPAGE_PCT: ${{ vars.MAX_SLIPPAGE_PCT || '0.5' }}
           QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
           ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
           ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
@@ -67,7 +69,28 @@ jobs:
             echo "::warning::ANTHROPIC_API_KEY secret is not set - running a dry run only. Add it under Settings > Secrets and variables > Actions."
             FLAGS="$FLAGS --dry-run"
           fi
+          # Lost state (cache evicted or first run): record today's deals as seen instead of
+          # re-sending a month of old deals as new. Manual runs still analyse everything.
+          if [ "${{ github.event_name }}" = "schedule" ] && [ ! -f state/state.json ]; then
+            echo "::warning::No saved state was restored; recording current deals as seen without calling Claude."
+            FLAGS="--baseline"
+          fi
           python -m trading_agent check $FLAGS
+
+      # Forward test of the factor screen (paper only): once a weekday after the 15:30 close,
+      # rebalancing on the first such run of each month. Never fails the routine.
+      - name: Forward test of the factor screen
+        continue-on-error: true
+        env:
+          MARKET: ${{ vars.MARKET || 'in' }}
+          PAPER_STARTING_CASH: ${{ vars.PAPER_STARTING_CASH || '500000' }}
+        run: python -m trading_agent forward --if-due --universe "${{ vars.FORWARD_UNIVERSE || 'NIFTYMIDCAP150' }}"
+
+      # Never put the cached Groww access token into the Actions cache: it can trade.
+      # Each run generates its own (well under Groww's 150 a day at this schedule).
+      - name: Drop cached Groww token
+        if: always()
+        run: rm -f state/groww_token.json state/groww_token.json.tmp
 
       - uses: actions/cache/save@v4
         if: always()

@@ -44,8 +44,22 @@ class FakeResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+class Seq:
+    """Route answer that changes per call: answered in turn, the last one repeats."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+
+    def next(self):
+        return self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
+
+
 class FakeSession:
-    """Records requests; answers from a {(method, url_substring): payload} table."""
+    """Records requests; answers from a {(method, url_substring): payload} table.
+
+    A payload may be a ``Seq`` of answers, and any answer may be an exception
+    instance, which is raised instead of returned.
+    """
 
     def __init__(self, routes):
         self.routes = routes
@@ -55,8 +69,16 @@ class FakeSession:
         self.calls.append((method, url, kw))
         for (m, sub), payload in self.routes.items():
             if m == method and sub in url:
+                if isinstance(payload, Seq):
+                    payload = payload.next()
+                if isinstance(payload, BaseException):
+                    raise payload
                 return FakeResponse(payload)
         return FakeResponse({"error": "no route"}, 404)
+
+    def writes(self):
+        """Calls that could change something at the broker (anything but GET)."""
+        return [c for c in self.calls if c[0] != "GET"]
 
     def get(self, url, **kw):
         return self.request("GET", url, **kw)

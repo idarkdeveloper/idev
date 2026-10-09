@@ -164,3 +164,22 @@ def test_fallback_and_unknown_model_cost(settings, sample_rows):
                    runner_factory=lambda **kw: FallbackRunner([], **kw))
     assert result.fallback_used and result.stop == "max_tokens" and "cut short" in result.final_text
     assert result.usage.to_dict()["cost_usd"] is None and result.usage.output_tokens == 10
+
+
+def test_live_check_gives_claude_momentum_and_regime(settings, monkeypatch):
+    """Regression: a fetched (not supplied) trade list must still get momentum and the regime."""
+    from trading_agent import runner
+    from trading_agent.broker import LocalPaperBroker
+
+    class Data:
+        def trades_for_investor(self, investor, source):
+            return []
+
+    seen = {}
+    monkeypatch.setattr(runner, "MomentumScreen", lambda prices: "MOMENTUM")
+    monkeypatch.setattr(runner, "GlobalContext", lambda prices: "REGIME")
+    monkeypatch.setattr(runner, "run_agent", lambda ctx, runner_factory=None: seen.update(
+        momentum=ctx.momentum, context=ctx.context))
+    broker = LocalPaperBroker(settings.state_dir / "pb.json", price_fn=lambda s: 1.0)
+    runner.check(settings, force=True, data=Data(), broker=broker)
+    assert seen == {"momentum": "MOMENTUM", "context": "REGIME"}

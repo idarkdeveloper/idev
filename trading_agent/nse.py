@@ -10,16 +10,30 @@ Well-known investors (Ashish Kacholia, Mukul Agrawal, Vijay Kedia, the Jhunjhunw
 family, Dolly Khanna, ...) and institutions show up in bulk/block deals under their
 client name, which is what ``WATCH_INVESTOR`` is matched against.
 
-NSE's JSON endpoints are not officially documented and need browser-like headers.
-Bulk/block endpoints answer without cookies; the insider endpoint is best-effort.
+NSE's JSON endpoints are not officially documented and need browser-like headers;
+none of the ones used here needs cookies.
+
+Insider (PIT) disclosures moved in May 2026: the old ``api/corporates-pit`` JSON stops
+on 2 May 2026, and newer filings are XBRL documents listed by ``api/corporates-pit-gg``
+(company, symbol, regulation and a link to the filing's XML). The person, category,
+quantity, value and buy/sell are inside each XML, so each filing is downloaded once and
+its parsed rows cached on disk as small JSON (the XML itself is ~100 KB and is not
+kept); a routine run only fetches filings it hasn't seen. NSE's archive
+host blocks bursts (HTTP 403 for about a minute), so downloads are sequential over one
+connection with a short pause, capped per run, and stop early if NSE starts refusing.
 """
 
 from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
+import re
+import time
+import xml.etree.ElementTree as ET
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any, Iterable
 
 import requests
@@ -36,6 +50,12 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://www.nseindia.com/market-data/large-deals",
 }
+
+_TRADE_FIELDS = ("source", "investor", "ticker", "transaction", "transaction_date", "report_date",
+                 "size", "raw")
+
+# First day served only by the XBRL insider feed; earlier days come from the old JSON.
+PIT_XBRL_SINCE = date(2026, 5, 1)
 
 _MONTHS = {m: i for i, m in enumerate(
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], 1)}
@@ -134,15 +154,74 @@ def _norm_insider(row: dict[str, Any]) -> DisclosedTrade:
     )
 
 
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def parse_pit_xbrl(xml_text: str, filing: dict[str, Any] | None = None) -> list[DisclosedTrade]:
+    """One DisclosedTrade per ``DisclosureN`` context in an NSE insider XBRL filing."""
+    filing = filing or {}
+    # XBRL filings never declare a DTD; refusing one blocks entity-expansion and
+    # external-entity tricks without needing defusedxml.
+    if re.search(r"<!(DOCTYPE|ENTITY)", xml_text, re.I):
+        raise ValueError("refusing XML with a DOCTYPE/ENTITY declaration")
+    root = ET.fromstring(xml_text.encode("utf-8"))
+    main: dict[str, str] = {}
+    disclosures: dict[str, dict[str, str]] = {}
+    for el in root.iter():
+        ctx = el.get("contextRef")
+        if not ctx or el.text is None:
+            continue
+        name, value = _local(el.tag), el.text.strip()
+        if ctx.lower().startswith("disclosure"):
+            disclosures.setdefault(ctx, {})[name] = value
+        else:
+            main.setdefault(name, value)
+    symbol = (main.get("Symbol") or filing.get("symbol") or "").upper().strip()
+    out = []
+    for ctx in sorted(disclosures, key=lambda c: int(re.sub(r"[^0-9]", "", c) or 0)):
+        d = disclosures[ctx]
+        person = (d.get("NameOfThePerson") or "").strip()
+        if not person:
+            continue
+        ttype = (d.get("SecuritiesAcquiredOrDisposedTransactionType") or "").strip()
+        qty = d.get("SecuritiesAcquiredOrDisposedNumberOfSecurity") or ""
+        val = d.get("SecuritiesAcquiredOrDisposedValueOfSecurity") or ""
+        out.append(DisclosedTrade(
+            source="insider",
+            investor=person,
+            ticker=symbol,
+            transaction={"BUY": "Purchase", "SELL": "Sale"}.get(ttype.upper(), ttype or "Trade"),
+            transaction_date=_iso(d.get("DateOfAllotmentAdviceOrAcquisitionOfSharesOrSaleOfSharesSpecifyFromDate")),
+            report_date=_iso(d.get("DateOfIntimationToCompany") or main.get("DateOfFiling")),
+            size=f"{qty} sh" + (f" (₹{val})" if val else ""),
+            raw={"category": d.get("CategoryOfPerson"), "mode": d.get("ModeOfAcquisitionOrDisposal"),
+                 "instrument": d.get("TypeOfInstrument"), "company": main.get("NameOfTheCompany"),
+                 "regulation": main.get("DisclosureUnderRegulation") or filing.get("regulation"),
+                 "held_after": d.get("SecuritiesHeldPostAcquistionOrDisposalNumberOfSecurity"),
+                 "filed_at": filing.get("broadcastDateTime"), "xbrl": filing.get("xmlFileName")},
+        ))
+    return out
+
+
 class NSEClient:
     """Pass ``session`` to inject a fake in tests."""
 
     def __init__(self, session: requests.Session | None = None, timeout: float = 30.0,
-                 base_url: str = BASE_URL):
+                 base_url: str = BASE_URL, cache_dir: Path | None = None,
+                 max_insider_filings: int = 1500, max_new_downloads: int = 400,
+                 pause: float = 0.25, sleep: Any = time.sleep):
         self.session = session or requests.Session()
         self.timeout = timeout
         self.base_url = base_url.rstrip("/")
         self._warm = False
+        # Insider filings never change once filed, so their parsed rows are cached by file name.
+        self.pit_cache = Path(cache_dir) / "nse_pit" if cache_dir else None
+        self._pit_mem: dict[str, list[DisclosedTrade]] = {}
+        self.max_insider_filings = max_insider_filings
+        self.max_new_downloads = max_new_downloads  # the rest wait for the next run
+        self.pause = pause
+        self.sleep = sleep
 
     def _get(self, path: str, params: dict[str, Any] | None = None,
              referer: str | None = None) -> Any:
@@ -211,15 +290,111 @@ class NSEClient:
         return [t for t in (_norm_deal(r, kind) for r in rows) if t.investor]
 
     # -- insider (PIT) disclosures ------------------------------------------
-    def insider_trades(self, days: int = 30, end: date | None = None) -> list[DisclosedTrade]:
+    def insider_trades(self, days: int = 30, end: date | None = None,
+                       symbol: str | None = None) -> list[DisclosedTrade]:
         end = end or date.today()
         start = end - timedelta(days=days)
-        data = self._get("api/corporates-pit",
-                         params={"index": "equities", "from_date": _nse_date(start),
-                                 "to_date": _nse_date(end)},
-                         referer=f"{self.base_url}/companies-listing/corporate-filings-insider-trading")
+        rows: list[DisclosedTrade] = []
+        if start < PIT_XBRL_SINCE:  # the old JSON feed, which stops in early May 2026
+            params = {"index": "equities", "from_date": _nse_date(start),
+                      "to_date": _nse_date(min(end, PIT_XBRL_SINCE))}
+            if symbol:
+                params["symbol"] = symbol.upper()
+            data = self._get("api/corporates-pit", params=params, referer=self._pit_referer)
+            legacy = data.get("data", []) if isinstance(data, dict) else data
+            rows += [t for t in (_norm_insider(r) for r in legacy) if t.investor]
+        if end >= PIT_XBRL_SINCE:
+            rows += self.insider_xbrl_trades(max(start, PIT_XBRL_SINCE), end, symbol=symbol)
+        return _dedupe(rows)
+
+    @property
+    def _pit_referer(self) -> str:
+        return f"{self.base_url}/companies-listing/corporate-filings-insider-trading"
+
+    def insider_filings(self, start: date, end: date, symbol: str | None = None) -> list[dict[str, Any]]:
+        """XBRL insider filings (newest first) between two dates, without their contents."""
+        params = {"index": "equities", "from_date": _nse_date(start), "to_date": _nse_date(end)}
+        if symbol:
+            params["symbol"] = symbol.upper()
+        data = self._get("api/corporates-pit-gg", params=params, referer=self._pit_referer)
         rows = data.get("data", []) if isinstance(data, dict) else data
-        return [t for t in (_norm_insider(r) for r in rows) if t.investor]
+        return [r for r in rows if r.get("xmlFileName")]
+
+    def insider_xbrl_trades(self, start: date, end: date, symbol: str | None = None) -> list[DisclosedTrade]:
+        filings = self.insider_filings(start, end, symbol)
+        if len(filings) > self.max_insider_filings:
+            log.warning("NSE listed %d insider filings; reading the newest %d", len(filings),
+                        self.max_insider_filings)
+            filings = filings[:self.max_insider_filings]
+
+        out: list[DisclosedTrade] = []
+        downloads = refused = skipped = unreadable = 0
+        for f in filings:
+            url = f["xmlFileName"]
+            cached = self._pit_cached(url)
+            if cached is None and (refused >= 2 or downloads >= self.max_new_downloads):
+                skipped += 1
+                continue
+            try:
+                if cached is None:
+                    downloads += 1
+                    if downloads > 1 and self.pause:
+                        self.sleep(self.pause)
+                    cached = self._pit_fetch(url, f)
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code in (403, 429):
+                    refused += 1
+                    if refused < 2:
+                        self.sleep(60)  # NSE's archive block lifts after about a minute
+                skipped += 1
+                continue
+            except Exception as e:  # noqa: BLE001 - one bad filing must not sink the rest
+                log.debug("insider filing %s unreadable: %s", url, e)
+                unreadable += 1
+                continue
+            out += cached
+        if skipped or unreadable:
+            log.warning("insider filings: %d read, %d left for the next run%s, %d unreadable",
+                        len(filings) - skipped - unreadable, skipped,
+                        " (NSE refused downloads)" if refused >= 2 else "", unreadable)
+        return out
+
+    @staticmethod
+    def _pit_name(url: str) -> str:
+        base = re.sub(r"[^A-Za-z0-9_.-]", "_", url.rsplit("/", 1)[-1]) or "filing"
+        return re.sub(r"\.xml$", "", base, flags=re.I) + ".json"
+
+    def _pit_cached(self, url: str) -> list[DisclosedTrade] | None:
+        name = self._pit_name(url)
+        if name in self._pit_mem:
+            return self._pit_mem[name]
+        path = self.pit_cache / name if self.pit_cache else None
+        if path is None or not path.exists():
+            return None
+        try:
+            rows = [DisclosedTrade(**{k: r[k] for k in _TRADE_FIELDS}) for r in json.loads(path.read_text("utf-8"))]
+        except (ValueError, KeyError, TypeError):
+            return None  # damaged cache entry: download again
+        self._pit_mem[name] = rows
+        return rows
+
+    def _pit_fetch(self, url: str, filing: dict[str, Any]) -> list[DisclosedTrade]:
+        """Download and parse one filing, caching the parsed rows."""
+        resp = self.session.get(url, headers={**HEADERS, "Accept": "application/xml,*/*"},
+                                timeout=self.timeout)
+        resp.raise_for_status()
+        text = resp.content.decode("utf-8-sig", errors="replace")
+        if not text.lstrip().startswith("<"):
+            raise ValueError("not an XML document")
+        rows = parse_pit_xbrl(text, filing)
+        name = self._pit_name(url)
+        if self.pit_cache is not None:
+            self.pit_cache.mkdir(parents=True, exist_ok=True)
+            (self.pit_cache / name).write_text(
+                json.dumps([{k: getattr(t, k) for k in _TRADE_FIELDS} for t in rows], ensure_ascii=False),
+                encoding="utf-8")
+        self._pit_mem[name] = rows
+        return rows
 
     # -- corporate announcements ---------------------------------------------
     def announcements(self, symbol: str | None = None, limit: int = 20) -> list[dict[str, Any]]:

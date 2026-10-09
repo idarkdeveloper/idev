@@ -75,14 +75,59 @@ will then use them automatically and keep Yahoo as a fallback.
    **access token** (expires 06:00 IST) or create an **API key** with a secret or TOTP.
 2. Put it in `.env` as `GROWW_ACCESS_TOKEN`, or `GROWW_API_KEY` + `GROWW_API_SECRET`
    (approval flow, needs a daily tap in the app), or `GROWW_API_KEY` + `GROWW_TOTP_SECRET`
-   (no daily approval). `python -m trading_agent groww-token` prints a fresh token.
+   (no daily approval). A token generated from the key is cached in
+   `state/groww_token.json` (owner-only permissions where the OS allows, tied to a
+   fingerprint of the key, never the key itself) and reused until it expires at 06:00 IST,
+   because Groww allows only 150 token generations a day. `GROWW_ACCESS_TOKEN` in `.env`
+   always wins. `python -m trading_agent groww-token` prints the token (`--fresh` forces a
+   new one).
 3. Run `python -m trading_agent portfolio`. The first run mirrors your real holdings and
    cash into `state/paper_broker.json`; from then on paper fills happen there while prices
    stay live from Groww.
 
 Real orders on Groww are sent only when **both** `AUTO_TRADE=true` and
-`GROWW_LIVE_ORDERS=true`. Even then, each order is capped at 10% of equity, uses whole
-shares, market type, CNC product on NSE, and Claude is told it is trading real money.
+`GROWW_LIVE_ORDERS=true`. Every call that can place, change or cancel an order (orders and
+GTT smart orders) refuses with `LiveOrdersDisabled` before touching the network unless
+`GROWW_LIVE_ORDERS=true`. When live:
+
+- **Limit orders, not market orders.** Each order is a DAY **LIMIT** order, CNC, cash
+  segment: buys at LTP × (1 + `MAX_SLIPPAGE_PCT`), sells at LTP × (1 − `MAX_SLIPPAGE_PCT`)
+  (default 0.5%), rounded to the stock's tick size from Groww's public instrument list
+  (0.05 if unknown), towards the LTP so the price never gives away more than the slippage.
+  Capped at 10% of equity, whole shares, and Claude is told it is trading real money.
+- **No duplicates on retry.** Each order carries an `order_reference_id` (8–20 characters,
+  e.g. `TA-3F9A1C07B24E5D`). If the request times out, the agent looks the order up by
+  that reference before retrying once with the same reference.
+- **Every order is confirmed.** After placing, the agent polls the order status (4 tries,
+  0.5–3 s apart) and records `groww_order_id`, `order_status`, `filled_quantity`,
+  `average_fill_price` and `remark` in `state/state.json` (`live_orders`). REJECTED,
+  FAILED and CANCELLED orders, and orders Groww refuses outright, are sent to your email /
+  webhook. An unfilled DAY limit order stays **open**: `python -m trading_agent orders
+  --refresh` (and watch mode, every tick) re-checks open orders. The dashboard's order
+  history shows live orders with their status.
+- **Only free shares are sold.** Sells use `demat_free_quantity + t1_quantity` from your
+  holdings; pledged, repledged and locked shares are never sold. Positions expose this as
+  `sellable_qty`.
+- **Real stop-losses at Groww (opt-in, `GROWW_GTT_STOPS=true`).** For each live CNC
+  holding the agent keeps one GTT SELL smart order: trigger direction DOWN at the trailing
+  stop (`risk.trailing_stop`: the tighter of 3× ATR or 15% below the high), LIMIT price
+  `MAX_SLIPPAGE_PCT` below the trigger. When the stop rises the GTT is modified upwards;
+  it is never moved down. When the holding is sold the GTT is cancelled. The
+  `smart_order_id` is kept in `state/state.json` (`gtt_stops`). It syncs after each check,
+  on every watch tick, after a live sell, and with `python -m trading_agent gtt --sync`.
+  The dashboard has the toggle in Settings and shows each holding's GTT status. The
+  toggle does nothing unless `GROWW_LIVE_ORDERS=true`, which the dashboard cannot set.
+
+**Check it against your account before relying on it.** These paths are tested offline
+against Groww's documented formats. `python -m trading_agent groww-check` reads your
+account to confirm the rest: token source and expiry, that holdings carry
+`demat_free_quantity` and `t1_quantity`, tick sizes, and that the order and GTT lists
+are readable. With `GROWW_LIVE_ORDERS=true`, `groww-check --live-test SYMBOL
+--i-understand-real-orders` places **real** but harmless orders: a 1-share limit buy 3%
+below the last price (`--offset-pct`), read back by id and by reference, then cancelled.
+If you hold a free share of SYMBOL, it also creates a 1-share GTT 20% below the price,
+raises it once and cancels it. Results go to `state/state.json` (`groww_checks`). If
+anything fails to cancel, the output says so and names the id to cancel in the Groww app.
 
 ## Which investors can I follow?
 
@@ -135,6 +180,9 @@ Everything the CLI does is also in the dashboard:
 | `index-history` | Built automatically when the signal lab or portfolio backtest uses a broad index |
 | `scorecard` | *Claude's track record* panel |
 | `groww-token` | *Test Groww connection* in Settings (the token itself is never shown) |
+| `groww-check` | CLI only: verifies live-trading assumptions on your account |
+| `orders`, `orders --refresh` | Order history (live orders show their Groww status) |
+| `gtt`, `gtt --sync` | *GTT stop* column in the portfolio, toggle in Settings |
 | `--market`, `.env` strategy keys | Settings: investor, disclosures, market, starting cash, order mode, notifications |
 
 The dashboard can also place paper buys and sells for any ticker and close positions;
@@ -145,7 +193,15 @@ these only ever touch the local paper account.
 - **Factor screen** (`trading_agent/screen.py`, `python -m trading_agent screen --universe NIFTY200`):
   ranks every constituent on 12-1 momentum, 6-month return and low 60-day volatility,
   requires price above the 200-day MA and a liquidity floor. The dashboard has the same
-  panel. Quality and value factors need fundamentals and are not wired in yet.
+  panel.
+- **Quality and value, opt-in** (`trading_agent/fundamentals.py`, `screen --quality --value`,
+  or the two checkboxes on the dashboard's factor screen): fundamentals come from Yahoo
+  Finance, cached for a day. Quality is return on equity (EPS ÷ book value per share),
+  low debt to equity (ignored for banks and other lenders) and earnings growth; value is
+  earnings yield and book-to-price. Loss-makers and non-financials with debt above 2×
+  equity are dropped. These are **today's** numbers only, so they can't be backtested
+  here; they are kept out of the factor backtest and the forward test, and with equal
+  weights they can outweigh momentum (a cheap stock with a flat trend can rank first).
 - **Volatility-based sizing** (`trading_agent/risk.py`, `python -m trading_agent size SENCO`):
   risk 1% of equity on a 2x ATR(14) move, capped at 10% of equity, whole shares. Claude
   must call `suggest_position_size` for every buy and quote the stop.
@@ -194,6 +250,27 @@ these only ever touch the local paper account.
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.
+
+## Forward test: the screen on months it has never seen
+
+The factor backtest beat its index fund after charges in one place, the Midcap 150, over
+one five-year window. A backtest can be fitted to its own past, so
+`python -m trading_agent forward` runs the same screen forward in a **separate paper
+account** (`state/forward/`), never touching the investor-following account or Groww:
+
+- **First run:** puts the capital (`PAPER_STARTING_CASH`, or `--capital`) into the top 20
+  (`--top`) of the universe (`--universe`, default `NIFTYMIDCAP150`) in equal weights, whole
+  shares, with real delivery charges. The same capital goes into the index fund
+  (MID150BEES for the Midcap 150), charges included, as the benchmark.
+- **Each month:** the first run after the close re-ranks today's members with the same
+  score. It sells names that dropped out, buys new ones, and trims a kept name only when
+  it is more than 25% over its target weight, so small trims don't each pay a ₹20 DP charge.
+- **Every weekday:** one point is recorded for the strategy and the fund, so the gap builds
+  up over months the backtest never saw. `forward --status` shows it without trading. The
+  dashboard has a *Factor screen, forward* card with both curves.
+
+The scheduled routine runs `forward --if-due`, which does nothing except on weekdays after
+15:40 IST, once a day. Give it several months before reading anything into the gap.
 
 ## Can algo trading predict a share? The signal lab
 
@@ -273,10 +350,13 @@ on Indian markets supports:
 | Variable | Purpose |
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude. Model defaults to `claude-opus-5-5` (`CLAUDE_MODEL`). |
+| `ANTHROPIC_WORKSPACE_ID` | Only for a key that isn't scoped to one workspace: the API then rejects every request until this is set. |
 | `MARKET` | `in` (default: NSE + Groww) or `us` (QuiverQuant + Alpaca). |
 | `WATCH_INVESTOR`, `WATCH_SOURCE` | Who to follow and which disclosures to read. |
 | `GROWW_ACCESS_TOKEN` / `GROWW_API_KEY` + `GROWW_API_SECRET` or `GROWW_TOTP_SECRET` | Groww access. Unset = local simulator only. |
 | `GROWW_LIVE_ORDERS` | `false` (default) = paper fills with real holdings/prices. `true` = real orders. |
+| `MAX_SLIPPAGE_PCT` | Live limit price distance from the LTP, in percent (default `0.5`, max 5). |
+| `GROWW_GTT_STOPS` | `false` (default). `true` = keep a GTT stop-loss at Groww per live holding (needs `GROWW_LIVE_ORDERS=true`). |
 | *(prices)* | Yahoo Finance is used automatically when Groww Live Data is unavailable or no broker is linked. |
 | `AUTO_TRADE` | `false` (default) = recommendations only. `true` = Claude may place orders. |
 | `PAPER_STARTING_CASH` | Cash for the simulator when no brokerage is linked (default ₹5,00,000). |
@@ -300,11 +380,17 @@ Setup, in the repository's **Settings → Secrets and variables → Actions**:
 | Secret | `RESEND_API_KEY`, `NOTIFY_WEBHOOK_URL` | no | Email / chat delivery. |
 | Variable | `WATCH_INVESTOR` | no | Defaults to `ASHISH KACHOLIA`. |
 | Variable | `NOTIFY_EMAIL_TO`, `NOTIFY_EMAIL_FROM` | no | With `RESEND_API_KEY`. |
-| Variable | `AUTO_TRADE`, `GROWW_LIVE_ORDERS` | no | Both default to `false`. |
+| Variable | `AUTO_TRADE`, `GROWW_LIVE_ORDERS`, `GROWW_GTT_STOPS` | no | All default to `false`. |
+| Variable | `MAX_SLIPPAGE_PCT` | no | Default `0.5`. |
 | Variable | `MARKET`, `WATCH_SOURCE`, `PAPER_STARTING_CASH` | no | Defaults: `in`, `deals`, `500000`. |
 
 Then open **Actions → trading-agent routine → Run workflow** (tick *dry_run* for a first
 look) and check the job log.
+
+If a scheduled run starts without saved state (first run, or the Actions cache was
+evicted after 7 days unused), it runs `check --baseline`: current deals are recorded as
+seen without calling Claude, so a month of old deals isn't re-sent as new. A manual run
+always analyses everything.
 
 ## How a check works
 
@@ -317,9 +403,15 @@ look) and check the job log.
    may call `place_paper_order`.
 4. Trades are remembered only after a successful analysis, so API hiccups are retried.
 
-Safety rails: paper fills by default, Groww live orders behind a double opt-in, per-order
-size cap, concentration rule in the prompt, whole-share rounding, and server-side refusal
-fallback on the Claude request.
+Safety rails: paper fills by default; Groww live orders behind a double opt-in
+(`GROWW_LIVE_ORDERS` + `AUTO_TRADE`), with every order-changing call refusing unless
+`GROWW_LIVE_ORDERS=true`; DAY limit orders within `MAX_SLIPPAGE_PCT` of the last price,
+rounded to the tick; an `order_reference_id` so retries can't duplicate; every live order
+confirmed and failures notified; sells limited to free (unpledged, unlocked) shares;
+optional GTT stop-losses at Groww that only ever move up; the Groww token cached on disk
+(owner-only) and never written to the Actions cache; per-order size cap, concentration
+rule in the prompt, whole-share rounding, and server-side refusal fallback on the Claude
+request.
 
 Cost control: each check runs Claude at `effort: high` (Opus 5.5 would otherwise default
 to medium) for at most 20 tool steps, with prompt caching on, so the conversation resent
@@ -331,8 +423,15 @@ log says so instead of ending with a blank summary.
 ## Notes on the data
 
 NSE's JSON endpoints are public but undocumented; the client sends browser-like headers.
-Bulk/block deals are reliable. The insider (PIT) endpoint sometimes returns an empty list
-without a browser session, so treat `WATCH_SOURCE=insider` as best-effort.
+Bulk/block deals are reliable. Insider (PIT) filings moved in May 2026: NSE's old
+`api/corporates-pit` JSON ends on 2 May 2026, and newer filings are XBRL documents listed by
+`api/corporates-pit-gg`. The client reads both (the old feed only for dates before May
+2026). Each XBRL filing is downloaded once and its parsed rows are cached in
+`state/cache/nse_pit/` (about 1.5 KB a filing). NSE's archive host blocks bursts for about
+a minute, so filings are fetched one at a time with a short pause, at most 400 new ones
+per run, and a run stops early if NSE refuses; the rest are read on the next run. A
+30-day window is about 750 filings: the first run reads 400 (about 4 minutes), the next
+run the rest, and after that only new filings, which takes seconds.
 
 ## Development
 
