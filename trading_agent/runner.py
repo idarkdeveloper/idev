@@ -146,7 +146,8 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     broker = broker or make_broker(settings)
     notifier = notifier or make_notifier(settings)
 
-    if trades is None:
+    live_run = trades is None  # trades fetched here, not supplied by a demo or test
+    if live_run:
         data = data or make_data_source(settings)
         trades = data.trades_for_investor(settings.watch_investor, settings.watch_source)
 
@@ -176,7 +177,7 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
         state.save()
         return result
 
-    if trades is None:  # live run: free price history for momentum and the global regime
+    if live_run:  # free price history for momentum and the global regime
         prices = free_prices(settings)
         momentum = momentum or MomentumScreen(prices)
         context = context or GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache",
