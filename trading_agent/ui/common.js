@@ -105,6 +105,7 @@ window.TA = (function(){
   // ---- "What this means" for a looked-up stock; `now` is the replay date on the Replay page ----
   const daysAgo = (at, now) => { const d = new Date(String(at).replace(" ", "T")); return isNaN(d) ? null : Math.floor(((now ?? Date.now()) - d) / 864e5); };
   const shortDay = (at) => { const d = new Date(String(at).replace(" ", "T")); return isNaN(d) ? String(at).slice(0, 10) : d.toLocaleDateString("en-IN", {day: "numeric", month: "short"}); };
+  const istDay = (at) => { const d = new Date(String(at)); return isNaN(d) ? String(at).slice(0, 10) : d.toLocaleDateString("en-IN", {timeZone: "Asia/Kolkata", day: "numeric", month: "short"}); };
   const clip = (t, n) => t.length <= n ? t : t.slice(0, t.lastIndexOf(" ", n) > n * 0.6 ? t.lastIndexOf(" ", n) : n).replace(/[,;:.]$/, "") + "…";
   function lookupTakeaway(r, now){
     const m = r.momentum || {}, out = [], name = r.name ? r.name.replace(/ Limited$/, "") : r.ticker;
@@ -130,7 +131,7 @@ window.TA = (function(){
     if(hits.length) out.push(`Also in the last two months: ${hits.join(", ")}. Worth a look.`);
     const bad = ((r.news && r.news.items) || []).find(n => n.sentiment === "negative" && (n.confidence === "medium" || n.confidence === "high")
                                                             && (d => d != null && d <= 3)(daysAgo(n.published, now)));
-    if(bad) out.push(`Negative news on ${shortDay(bad.published)} (${esc(bad.source)}): "${esc(clip(bad.title, 110))}". Read it before buying.`);
+    if(bad) out.push(`Negative news on ${istDay(bad.published)} (${esc(bad.source)}): "${esc(clip(bad.title, 110))}". Read it before buying.`);
     const pos = r.position;
     if(pos && r.price){
       const pl = r.price / pos.avg_entry_price - 1, room = pos.stop ? r.price / pos.stop - 1 : null;

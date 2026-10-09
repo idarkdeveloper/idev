@@ -363,6 +363,18 @@ class App:
             self._news = NewsService(self.settings)
         return self._news
 
+    def news_for_ticker(self, text: str) -> dict[str, Any]:
+        """Headlines for the look-up, answered at once: tags already known are shown, the rest are tagged on a
+        background thread. Empty in demo mode."""
+        svc = self.news
+        if svc is None:
+            return {"items": [], "errors": [], "tagger": "none", "demo": True}
+        ticker, company = self.resolve(text)
+        try:
+            return {**svc.for_symbol(ticker, company, background=True), "ticker": ticker.upper()}
+        except Exception as e:  # noqa: BLE001 - headlines are a nicety
+            return {"items": [], "errors": [f"{type(e).__name__}: {e}"], "tagger": "none", "ticker": ticker.upper()}
+
     def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
         n = self.names
         return n.search(query, limit) if n is not None else []
@@ -391,12 +403,6 @@ class App:
                 out["announcements"] = data.announcements(ticker, limit=8)
             except Exception as e:  # noqa: BLE001
                 out["announcements_error"] = str(e)
-        out["news"] = None
-        if self.news is not None:
-            try:
-                out["news"] = self.news.for_symbol(ticker, company)
-            except Exception as e:  # noqa: BLE001 - headlines are a nicety, never a failed look-up
-                out["news"] = {"items": [], "errors": [f"{type(e).__name__}: {e}"], "tagger": "none"}
         try:
             out["price"] = self.broker.latest_price(ticker)
         except Exception:  # noqa: BLE001
@@ -1015,6 +1021,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
                 else:
                     self._json(app.lookup(ticker))
+            elif path == "/api/news":
+                from urllib.parse import parse_qs
+                ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()
+                if not ticker:
+                    self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
+                else:
+                    self._json(app.news_for_ticker(ticker))
             elif path == "/api/backtest":
                 self._json(app.last_backtest or {})
             elif path == "/api/screen":

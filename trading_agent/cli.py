@@ -475,6 +475,16 @@ def cmd_momentum(args: argparse.Namespace) -> int:
     return 0
 
 
+def _short_link(link: str, source: str) -> str:
+    """Google News links are ~600 characters of redirect: print the publisher; others host + path, 80 characters."""
+    from urllib.parse import urlparse
+    u = urlparse(link)
+    if u.netloc.endswith("news.google.com"):
+        return f"via {source} (Google News)"
+    text = u.netloc + u.path
+    return text if len(text) <= 80 else text[:79] + "…"
+
+
 def cmd_news(args: argparse.Namespace) -> int:
     from .news import NewsService, make_tagger
     settings = _settings(args)
@@ -506,7 +516,8 @@ def cmd_news(args: argparse.Namespace) -> int:
     print(f"{symbol}{' - ' + name if name else ''}: {len(res['items'])} headline(s), last 7 days (tagger: {res['tagger']})")
     for i in res["items"]:
         tag = f"{i['sentiment']}/{i['event']}/{i['confidence']}" if i["sentiment"] else "untagged"
-        print(f"  {i['published'][:16].replace('T', ' ')}  {i['source']}  [{tag}]\n    {i['title']}\n    {i['link']}")
+        print(f"  {i['published'][:16].replace('T', ' ')} IST  {i['source']}  [{tag}]\n    {i['title']}\n"
+              f"    {_short_link(i['link'], i['source'])}")
     for e in res["errors"]:
         print(f"  note: {e}")
     return 0

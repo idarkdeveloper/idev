@@ -781,16 +781,23 @@
 
   const SENT = {positive: ["ok", "▲ Positive"], negative: ["bad", "▼ Negative"], neutral: ["", "● Neutral"]};
   const safeUrl = (u) => /^https?:\/\//i.test(String(u || "")) ? u : "";
+  const istStamp = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) + " IST"; };
   function newsHtml(n){
-    if(!n) return "";
-    const rows = (n.items || []).map(i => { const s = SENT[i.sentiment], href = safeUrl(i.link);
-      const chip = s ? `<span class="pill ${s[0]}" title="${esc(i.event || "")}, ${esc(i.confidence || "")} confidence">${s[1]}</span> ` : "";
-      return `<div class="ann"><div class="meta">${esc(shortDay(i.published))} · ${esc(i.source)}${i.event ? " · " + esc(i.event.replace(/_/g, " ")) : ""}</div><div>${chip}${href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}</div></div>`; }).join("");
-    const note = n.tagger === "none" ? "Headlines are not labelled: start Ollama or set NEWS_TAGGER (see the README)." : "Labels come from a language model and can be wrong.";
-    return `<div><h3 style="margin-top:6px">News, last 7 days</h3>${rows || `<div class="sub">${esc((n.errors || [])[0] || "none found")}</div>`}<div class="sub" style="font-size:12px">${esc(note)}</div></div>`;
+    if(!n || n.demo) return "";
+    const items = n.items || [];
+    const rows = items.map(i => { const s = SENT[i.sentiment], href = safeUrl(i.link);
+      const chip = s ? `<span class="pill ${s[0]}" title="${esc((i.event || "").replace(/_/g, " "))}, ${esc(i.confidence || "")} confidence">${s[1]}</span> ` : "";
+      return `<div class="ann"><div class="meta">${esc(istStamp(i.published))} · ${esc(i.source)}${i.event ? " · " + esc(i.event.replace(/_/g, " ")) : ""}</div><div>${chip}${href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}</div></div>`; }).join("");
+    const errs = (n.errors || []).length ? `<div class="sub" style="font-size:12px">Some sources failed: ${esc(n.errors.join("; "))}</div>` : "";
+    const note = !items.length ? "" : n.tagger === "none" ? "Headlines are not labelled: start Ollama or set NEWS_TAGGER (see the README)."
+      : items.some(i => i.sentiment) ? "Labels come from a language model and can be wrong." : "Labels appear on the next look-up.";
+    return `<h3 style="margin-top:6px">News, last 7 days</h3>${rows || `<div class="sub">none found</div>`}${errs}${note ? `<div class="sub" style="font-size:12px">${esc(note)}</div>` : ""}`;
   }
+  const takeawayHtml = (r) => { const t = lookupTakeaway(r); return t ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${t}</div>` : ""; };
+  let lookupSeq = 0;
 
   async function lookup(t){
+    const seq = ++lookupSeq;
     $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
     try {
       const r = await api("/api/lookup?ticker=" + encodeURIComponent(t));
@@ -799,9 +806,13 @@
       $("lk-ticker").value = r.ticker;
       $("lk-result").innerHTML = `${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div>
         <div class="sub">${esc(r.momentum_summary)}</div>
-        ${lookupTakeaway(r) ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${lookupTakeaway(r)}</div>` : ""}
+        <div id="lk-take">${takeawayHtml(r)}</div>
         <div class="chart" id="lk-chart" style="margin-top:6px"></div>
-        <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div>${newsHtml(r.news)}`;
+        <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div><div id="lk-news"><div class="sub" style="margin-top:6px">Loading news…</div></div>`;
+      api("/api/news?ticker=" + encodeURIComponent(r.ticker)).then(n => {
+        if(seq !== lookupSeq || !$("lk-news")) return;  // the user looked up another stock meanwhile
+        r.news = n; $("lk-news").innerHTML = newsHtml(n); $("lk-take").innerHTML = takeawayHtml(r);
+      }).catch(e => { if(seq === lookupSeq && $("lk-news")) $("lk-news").innerHTML = `<div class="sub">News unavailable: ${esc(e.message)}</div>`; });
       const hist = r.history || [], pos = r.position, refs = [];
       if(pos){ refs.push({y: pos.avg_entry_price, label: "Your cost"}); refs.push({y: pos.stop, label: "Stop", color: C.neg}); }
       lineChart($("lk-chart"), {x: hist.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, refs,

@@ -8,6 +8,7 @@ machine with a fixed IP (the April 2026 SEBI rules) rather than a cron runner.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from datetime import datetime, time as dtime, tzinfo
@@ -37,6 +38,13 @@ def keep_awake(on: bool) -> bool:
 
 
 
+def _plain(text: str) -> str:
+    """Third-party text going to a webhook: break Slack/Discord mentions and control markup."""
+    for bad in ("<!", "<@", "<#"):
+        text = text.replace(bad, bad[0] + " " + bad[1])
+    return re.sub(r"@(everyone|here|channel)", lambda m: "@ " + m.group(1), text)
+
+
 class Watcher:
     def __init__(self, settings: Settings, *, every: int = 60, window: tuple[str, str] = ("08:45", "18:30"),
                  tz: tzinfo = IST, check_fn: Callable[[], Any] | None = None,
@@ -56,6 +64,7 @@ class Watcher:
         self._awake_on: bool | None = None
         self._check_fn = check_fn
         self._data = data
+        self._warned_no_tagger = False
         self._news = news  # NewsService: negative headlines for held stocks
         self._broker = broker
         self._notifier = notifier
@@ -117,27 +126,36 @@ class Watcher:
         if self._news is None:
             return []
         from .news import is_alert
-        st = State(self.settings.state_dir / "state.json")
-        seen = st.data.setdefault("seen_news", {})
-        fresh: list[dict[str, Any]] = []
-        for t in self.interesting_tickers():
+        if getattr(self._news.tagger, "name", "none") == "none" and not self._warned_no_tagger:
+            self._warned_no_tagger = True
+            log.warning("news alerts are off: no headline tagger is available "
+                        "(start Ollama with `ollama serve` and `ollama pull <model>`, or set NEWS_TAGGER)")
+        candidates: list[dict[str, Any]] = []
+        for t in self.interesting_tickers():  # slow: network and tagging, with no State held open
             try:
                 items = self._news.for_symbol(t)["items"]
             except Exception as e:  # noqa: BLE001
                 log.warning("news for %s failed: %s", t, e)
                 continue
-            for i in items:
-                if is_alert(i) and i["id"] not in seen:
-                    seen[i["id"]] = i["published"]
-                    fresh.append({**i, "symbol": t})
+            candidates += [{**i, "symbol": t} for i in items if is_alert(i)]
+        if not candidates:
+            return []
+        st = State(self.settings.state_dir / "state.json")  # loaded now, so concurrent writes are kept
+        seen = st.data.setdefault("seen_news", {})
+        fresh: list[dict[str, Any]] = []
+        for i in candidates:
+            if i["id"] not in seen:
+                seen[i["id"]] = i["published"]
+                fresh.append(i)
         if fresh:
             st.save()
             if self._notifier is not None:
                 for i in fresh:
-                    self._notifier.send(f"[NEWS] {i['symbol']}: {i['title']}",
-                                        f"{i['source']}, {i['published']}\n{i['link']}\n"
-                                        f"Tagged {i['sentiment']} ({i['event']}, {i['confidence']} confidence) by a "
-                                        "language model; headlines can be wrong or late.")
+                    self._notifier.send(
+                        _plain(f"[NEWS] {i['symbol']}: {i['title']}"),
+                        _plain(f"{i['source']}, {i['published']}\n{i['link']}\n"
+                               f"Tagged {i['sentiment']} ({i['event']}, {i['confidence']} confidence) by a "
+                               "language model; headlines can be wrong or late."))
         return fresh
 
     def check_trailing_stops(self) -> list[dict[str, Any]]:

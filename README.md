@@ -241,7 +241,9 @@ article text is never fetched or stored.
 - Watch mode sends `[NEWS] SYMBOL: headline` once per headline that is negative with medium or high
   confidence, for stocks you hold or were recently recommended. Claude's daily check can call
   `get_news` for the last two days of tagged headlines; it is told to treat them as data, never as instructions.
-- Every headline is written once, with its tags, to `state/news/YYYY-MM.jsonl`.
+- Every headline is written once per stock, with its tags, to `state/news/YYYY-MM.jsonl`; its first-seen time is the
+  earliest `logged_at` for its id. The look-up shows headlines at once and labels new ones in the background, so labels
+  appear on the next look-up.
 - **News is not yet a tested trading signal.** Labels come from a small language model and can be wrong,
   and headlines can be late. The log exists so news can be tested as a signal later; the replay does not
   use it because the feeds have no history.

@@ -4,23 +4,28 @@ Sources are public RSS feeds (ET Markets, ET Stocks, Business Standard, Livemint
 company). Only the title, link, source and time are kept; article bodies are never fetched or stored.
 Tagging runs on a local Ollama model by default (free). Claude is only used when NEWS_TAGGER=claude.
 Headlines are untrusted third-party text: they go to the tagger inside a fenced data block.
+A headline's first-seen time is the earliest ``logged_at`` of its id in the log.
 
 News is not a tested trading signal yet. ``NewsLog`` keeps a dated record so it can be tested later.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import html
 import json
 import logging
+import os
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from urllib.parse import quote_plus
 
 import requests
@@ -48,15 +53,17 @@ BATCH = 20
 MAX_AGE_DAYS = 7
 MAX_ITEMS = 20
 
-_TAG_RE = re.compile(r"<[^>]+>")
-_NAME_SUFFIXES = {"limited", "ltd", "ltd.", "india", "(india)", "private", "pvt", "pvt.", "corporation", "corp",
-                  "corp.", "company", "co.", "co", "inc", "inc."}
+MAX_TAG_ATTEMPTS = 3
+FAIL_TTL = 300.0  # a feed that failed is not asked again for 5 minutes
+REPROBE_S = 300.0  # auto mode: look for Ollama again this often while none was found
+_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")
+_LEGAL_SUFFIXES = {"limited", "ltd", "ltd.", "pvt", "pvt.", "private"}
+_DANGLING = {"of", "and", "&", "the"}
 
 
 # -- parsing -------------------------------------------------------------------
 def _clean(text: str | None) -> str:
-    t = html.unescape(text or "")
-    t = _TAG_RE.sub(" ", html.unescape(t))  # entities can hide tags (&lt;b&gt;), so strip after unescaping
+    t = _TAG_RE.sub(" ", html.unescape(text or ""))  # unescape once; entities can hide real tags
     return re.sub(r"\s+", " ", t).strip()
 
 
@@ -70,8 +77,8 @@ def _ist_iso(raw: str | None) -> str | None:
             dt = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
         except ValueError:
             return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=IST)
+    if dt.tzinfo is None:  # "-0000" and bare ISO times are UTC
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(IST).isoformat(timespec="seconds")
 
 
@@ -87,7 +94,7 @@ def parse_rss(xml_text: str, source: str, *, split_publisher: bool = False) -> l
     root = ET.fromstring(xml_text.lstrip("﻿"))
     out: list[dict[str, Any]] = []
     for it in root.iter("item"):
-        title = _clean(it.findtext("title"))
+        title = _clean("".join((it.find("title").itertext() if it.find("title") is not None else [])))
         link = (it.findtext("link") or "").strip()
         if not title or not link:
             continue
@@ -104,11 +111,23 @@ def parse_rss(xml_text: str, source: str, *, split_publisher: bool = False) -> l
 
 
 def short_name(name: str | None) -> str:
-    """'Senco Gold Limited' -> 'Senco Gold'."""
+    """'Senco Gold Limited' -> 'Senco Gold'; 'Coal India Limited' -> 'Coal India'. Only legal suffixes and a
+    trailing '(India)' go, and never a dangling 'of' / 'and' / '&'."""
     words = (name or "").replace(",", " ").split()
-    while len(words) > 1 and words[-1].lower() in _NAME_SUFFIXES:
+    while len(words) > 1:
+        last = words[-1].lower()
+        if last in _LEGAL_SUFFIXES or (last == "(india)" and len(words) > 2):
+            words.pop()
+        else:
+            break
+    while len(words) > 1 and words[-1].lower() in _DANGLING:
         words.pop()
     return " ".join(words)
+
+
+def title_key(title: str) -> str:
+    """Normalised headline for spotting the same story from two sources."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", title.lower())).strip()
 
 
 def mentions(title: str, symbol: str, name: str | None) -> bool:
@@ -130,54 +149,100 @@ class NewsFeed:
         self.ttl = ttl
         self.timeout = timeout
         self._clock = clock or (lambda: datetime.now(IST))
-        self.errors: list[str] = []
+        self._failed: dict[str, float] = {}  # url -> when it last failed
+        self._mem: dict[str, tuple[float, str]] = {}  # url -> (fetched at, text) when there is no disk cache
 
-    def _fetch(self, url: str) -> str:
-        path = None
-        if self.cache_dir is not None:
-            path = self.cache_dir / (hashlib.sha1(url.encode()).hexdigest()[:16] + ".xml")
-            if path.exists() and time.time() - path.stat().st_mtime < self.ttl:
-                return path.read_text(encoding="utf-8")
-        r = self.session.get(url, headers=UA, timeout=self.timeout)
-        r.raise_for_status()
-        text = r.content.decode("utf-8-sig", errors="replace")
-        if path is not None:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(text, encoding="utf-8")
-            except OSError as e:  # a cache is a nicety
-                log.warning("news cache write failed: %s", e)
-        return text
+    def _ts(self) -> float:
+        return self._clock().timestamp()
 
-    def _feed(self, label: str, url: str, *, split_publisher: bool = False) -> list[dict[str, Any]]:
+    def _cache_path(self, url: str) -> Path | None:
+        if self.cache_dir is None:
+            return None
+        return self.cache_dir / (hashlib.sha1(url.encode()).hexdigest()[:16] + ".xml")
+
+    def _cached(self, url: str) -> tuple[float, str] | None:
+        path = self._cache_path(url)
+        if path is None:
+            return self._mem.get(url)
         try:
-            return parse_rss(self._fetch(url), label, split_publisher=split_publisher)
+            return path.stat().st_mtime, path.read_text(encoding="utf-8")
+        except OSError:
+            return None
+
+    def _store(self, url: str, text: str) -> None:
+        path, now = self._cache_path(url), self._ts()
+        if path is None:
+            self._mem[url] = (now, text)
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            os.utime(path, (now, now))
+        except OSError as e:  # a cache is a nicety
+            log.warning("news cache write failed: %s", e)
+
+    def _fetch(self, url: str) -> tuple[str, str | None]:
+        """(text, note). Fresh cache wins; a recent failure is not retried for FAIL_TTL; on error a stale copy is served."""
+        cached, now = self._cached(url), self._ts()
+        if cached and now - cached[0] < self.ttl:
+            return cached[1], None
+        try:
+            if now - self._failed.get(url, -1e12) < FAIL_TTL:
+                raise RuntimeError("failed recently, not retried yet")
+            r = self.session.get(url, headers=UA, timeout=self.timeout)
+            r.raise_for_status()
+            text = r.content.decode("utf-8-sig", errors="replace")
+        except Exception as e:  # noqa: BLE001
+            self._failed[url] = now if "recently" not in str(e) else self._failed.get(url, now)
+            if cached:
+                return cached[1], f"{type(e).__name__}: {e} (showing an older copy)"
+            raise
+        self._failed.pop(url, None)
+        self._store(url, text)
+        return text, None
+
+    def _feed(self, label: str, url: str, *, split_publisher: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
+        try:
+            text, note = self._fetch(url)
+            return parse_rss(text, label, split_publisher=split_publisher), ([f"{label}: {note}"] if note else [])
         except Exception as e:  # noqa: BLE001 - one feed down never breaks the rest
             msg = f"{label}: {type(e).__name__}: {e}"
             log.warning("news feed failed: %s", msg)
-            self.errors.append(msg)
-            return []
+            return [], [msg]
+
+    def _all(self, jobs: list[tuple[str, str, bool]]) -> tuple[list[dict[str, Any]], list[str]]:
+        with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+            results = list(pool.map(lambda j: self._feed(j[0], j[1], split_publisher=j[2]), jobs))
+        return [i for r in results for i in r[0]], [e for r in results for e in r[1]]
 
     def general(self) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        for label, url in FEEDS.items():
-            out += self._feed(label, url)
-        return out
+        return self._all([(label, url, False) for label, url in FEEDS.items()])[0]
+
+    def fetch_company(self, symbol: str, name: str | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+        """(items, errors) for one company: the 4 general feeds plus Google News, fetched in parallel, all passed
+        through the same whole-word company filter, newest first, last 7 days, at most 20."""
+        short = short_name(name) or symbol
+        jobs = [(f"Google News ({symbol})", GOOGLE_NEWS.format(q=quote_plus(f'"{short}"')), True)]
+        jobs += [(label, url, False) for label, url in FEEDS.items()]
+        items, errors = self._all(jobs)
+        cutoff = self._clock() - timedelta(days=MAX_AGE_DAYS)
+        seen_id: set[str] = set()
+        seen_title: set[str] = set()
+        keep = []
+        # earliest-published copy of a story wins
+        for i in sorted((i for i in items if i["published"] and mentions(i["title"], symbol, name)),
+                        key=lambda i: i["published"]):
+            key = title_key(i["title"])
+            if i["id"] in seen_id or key in seen_title or datetime.fromisoformat(i["published"]) < cutoff:
+                continue
+            seen_id.add(i["id"])
+            seen_title.add(key)
+            keep.append(i)
+        keep.sort(key=lambda i: i["published"], reverse=True)
+        return keep[:MAX_ITEMS], errors
 
     def company(self, symbol: str, name: str | None = None) -> list[dict[str, Any]]:
-        short = short_name(name) or symbol
-        url = GOOGLE_NEWS.format(q=quote_plus(f'"{short}"'))
-        items = self._feed(f"Google News ({symbol})", url, split_publisher=True)
-        items += [i for i in self.general() if mentions(i["title"], symbol, name)]
-        cutoff = self._clock() - timedelta(days=MAX_AGE_DAYS)
-        seen: set[str] = set()
-        fresh = []
-        for i in sorted((i for i in items if i["published"]), key=lambda i: i["published"], reverse=True):
-            if i["id"] in seen or datetime.fromisoformat(i["published"]) < cutoff:
-                continue
-            seen.add(i["id"])
-            fresh.append(i)
-        return fresh[:MAX_ITEMS]
+        return self.fetch_company(symbol, name)[0]
 
 
 # -- taggers -------------------------------------------------------------------
@@ -226,25 +291,41 @@ def _collect(batch: list[dict[str, Any]], answer: Any) -> dict[str, dict[str, st
     return out
 
 
-class NoTagger:
+class _Tagger:
+    """Subclasses implement ``_batch``; errors are returned per call, never kept on the object."""
     name = "none"
-    errors: list[str] = []
 
     def available(self) -> bool:
         return True
 
-    def tag(self, items: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    def _batch(self, batch: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
         return {}
 
+    def tag_with_errors(self, items: list[dict[str, Any]]) -> tuple[dict[str, dict[str, str]], list[str]]:
+        out: dict[str, dict[str, str]] = {}
+        errors: list[str] = []
+        for k in range(0, len(items), BATCH):
+            try:
+                out.update(self._batch(items[k:k + BATCH]))
+            except Exception as e:  # noqa: BLE001 - this batch stays untagged
+                errors.append(f"{self.name.split(':')[0]}: {type(e).__name__}: {e}")
+        return out, errors
 
-class OllamaTagger:
+    def tag(self, items: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        return self.tag_with_errors(items)[0]
+
+
+class NoTagger(_Tagger):
+    name = "none"
+
+
+class OllamaTagger(_Tagger):
     def __init__(self, url: str, model: str, session: requests.Session | None = None, timeout: float = 120.0):
         self.url = url.rstrip("/")
         self.model = model
         self.session = session or requests.Session()
         self.timeout = timeout
         self.name = f"ollama:{model}"
-        self.errors: list[str] = []
 
     def available(self) -> bool:
         try:
@@ -255,24 +336,16 @@ class OllamaTagger:
             return False
         return self.model in names or (":" not in self.model and f"{self.model}:latest" in names)
 
-    def tag(self, items: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
-        self.errors = []
-        out: dict[str, dict[str, str]] = {}
-        for k in range(0, len(items), BATCH):
-            batch = items[k:k + BATCH]
-            try:
-                r = self.session.post(f"{self.url}/api/chat", timeout=self.timeout, json={
-                    "model": self.model, "stream": False, "format": ANSWER_SCHEMA,
-                    "options": {"temperature": 0},
-                    "messages": [{"role": "user", "content": build_prompt(batch)}]})
-                r.raise_for_status()
-                out.update(_collect(batch, json.loads(r.json()["message"]["content"])))
-            except Exception as e:  # noqa: BLE001 - this batch stays untagged
-                self.errors.append(f"ollama: {type(e).__name__}: {e}")
-        return out
+    def _batch(self, batch: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        r = self.session.post(f"{self.url}/api/chat", timeout=self.timeout, json={
+            "model": self.model, "stream": False, "format": ANSWER_SCHEMA,
+            "options": {"temperature": 0},
+            "messages": [{"role": "user", "content": build_prompt(batch)}]})
+        r.raise_for_status()
+        return _collect(batch, json.loads(r.json()["message"]["content"]))
 
 
-class ClaudeTagger:
+class ClaudeTagger(_Tagger):
     TOOL = {"name": "tag_headlines", "description": "Record the labels for every numbered headline.",
             "input_schema": ANSWER_SCHEMA}
 
@@ -280,26 +353,16 @@ class ClaudeTagger:
         self.client = client
         self.model = model
         self.name = f"claude:{model}"
-        self.errors: list[str] = []
 
-    def available(self) -> bool:
-        return True
-
-    def tag(self, items: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
-        self.errors = []
+    def _batch(self, batch: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        msg = self.client.messages.create(
+            model=self.model, max_tokens=2000, temperature=0, tools=[self.TOOL],
+            tool_choice={"type": "tool", "name": self.TOOL["name"]},
+            messages=[{"role": "user", "content": build_prompt(batch)}])
         out: dict[str, dict[str, str]] = {}
-        for k in range(0, len(items), BATCH):
-            batch = items[k:k + BATCH]
-            try:
-                msg = self.client.messages.create(
-                    model=self.model, max_tokens=2000, temperature=0, tools=[self.TOOL],
-                    tool_choice={"type": "tool", "name": self.TOOL["name"]},
-                    messages=[{"role": "user", "content": build_prompt(batch)}])
-                for block in msg.content:
-                    if getattr(block, "type", None) == "tool_use":
-                        out.update(_collect(batch, block.input))
-            except Exception as e:  # noqa: BLE001
-                self.errors.append(f"claude: {type(e).__name__}: {e}")
+        for block in msg.content:
+            if getattr(block, "type", None) == "tool_use":
+                out.update(_collect(batch, block.input))
         return out
 
 
@@ -317,8 +380,39 @@ def make_tagger(settings: Any, session: requests.Session | None = None) -> Any:
 
 
 # -- log -----------------------------------------------------------------------
+_LOG_LOCK = threading.Lock()  # one writer at a time inside this process
+
+
+@contextlib.contextmanager
+def _file_lock(path: Path, wait: float = 5.0, stale: float = 30.0):
+    """Exclusive-create lock file so the dashboard and watch (two processes) cannot interleave writes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + wait
+    while True:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > stale:  # left behind by a crashed process
+                    path.unlink()
+                    continue
+            except OSError:
+                continue
+            if time.time() > deadline:
+                raise TimeoutError(f"news log is locked ({path})")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            path.unlink()
+
+
 class NewsLog:
-    """state/news/YYYY-MM.jsonl: every headline once, with its tags, so news can be tested as a signal later."""
+    """state/news/YYYY-MM.jsonl: one row per (headline id, stock), with its tags, so news can be tested as a signal
+    later. A headline's first-seen time is the earliest ``logged_at`` of its id."""
 
     def __init__(self, state_dir: Path, clock: Callable[[], datetime] | None = None):
         self.dir = Path(state_dir) / "news"
@@ -345,36 +439,62 @@ class NewsLog:
                     continue  # a half-written line never blocks the rest
         return rows
 
+    def state(self) -> tuple[dict[str, dict[str, Any]], dict[str, int], set[tuple[str, str]]]:
+        """(tag by id, failed tagging attempts by id, (id, symbol) pairs already recorded)."""
+        tags: dict[str, dict[str, Any]] = {}
+        attempts: dict[str, int] = {}
+        keys: set[tuple[str, str]] = set()
+        for r in self._read(self._files()):
+            i = r.get("id")
+            if not i:
+                continue
+            keys.add((i, r.get("symbol", "")))
+            if r.get("sentiment"):
+                tags.setdefault(i, r)
+            attempts[i] = max(attempts.get(i, 0), int(r.get("attempts") or 0))
+        return tags, attempts, keys
+
     def known(self) -> dict[str, dict[str, Any]]:
-        """id -> record for this and last month; a tagged record wins over an untagged one."""
+        """id -> a tagged record when there is one, else any record (this and last month)."""
         out: dict[str, dict[str, Any]] = {}
         for r in self._read(self._files()):
-            if r.get("id") and (r["id"] not in out or r.get("sentiment")):
+            if r.get("id") and (r["id"] not in out or (r.get("sentiment") and not out[r["id"]].get("sentiment"))):
                 out[r["id"]] = r
         return out
 
     def add(self, symbol: str, items: list[dict[str, Any]], tags: dict[str, dict[str, str]],
-            tagger: str = "none") -> int:
-        known = self.known()
-        now = self._clock()
-        lines = []
-        for i in items:
-            tag = tags.get(i["id"])
-            old = known.get(i["id"])
-            if old is not None and (tag is None or old.get("sentiment")):
-                continue
-            rec = {"id": i["id"], "symbol": symbol.upper(), "title": i["title"], "link": i["link"],
-                   "source": i["source"], "published": i["published"],
-                   "sentiment": tag["sentiment"] if tag else None, "event": tag["event"] if tag else None,
-                   "confidence": tag["confidence"] if tag else None,
-                   "tagger": tagger if tag else None, "logged_at": now.isoformat(timespec="seconds")}
-            lines.append(json.dumps(rec, ensure_ascii=False))
-            known[i["id"]] = rec
-        if lines:
-            self.dir.mkdir(parents=True, exist_ok=True)
-            with (self.dir / f"{now:%Y-%m}.jsonl").open("a", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
-        return len(lines)
+            tagger: str = "none", tried: Iterable[str] = ()) -> int:
+        """Record each headline once per stock. ``tried``: ids a tagger was asked about; one that stays untagged
+        counts as a failed attempt (after MAX_TAG_ATTEMPTS it is left alone)."""
+        tried = set(tried)
+        if not items:
+            return 0
+        sym = symbol.upper()
+        with _LOG_LOCK, _file_lock(self.dir / "write.lock"):
+            tagged, attempts, keys = self.state()
+            now = self._clock()
+            lines = []
+            for i in items:
+                tag = tags.get(i["id"]) or tagged.get(i["id"])
+                fresh_tag = i["id"] in tags and i["id"] not in tagged
+                had = (i["id"], sym) in keys
+                failed = i["id"] in tried and not tag
+                if had and not fresh_tag and not failed:
+                    continue
+                n = attempts.get(i["id"], 0) + (1 if failed else 0)
+                rec = {"id": i["id"], "symbol": sym, "title": i["title"], "link": i["link"],
+                       "source": i["source"], "published": i["published"],
+                       "sentiment": tag["sentiment"] if tag else None, "event": tag["event"] if tag else None,
+                       "confidence": tag["confidence"] if tag else None,
+                       "tagger": (tagger if fresh_tag else tag.get("tagger")) if tag else None,
+                       "attempts": n, "logged_at": now.isoformat(timespec="seconds")}
+                lines.append(json.dumps(rec, ensure_ascii=False))
+                keys.add((i["id"], sym))
+            if lines:
+                self.dir.mkdir(parents=True, exist_ok=True)
+                with (self.dir / f"{now:%Y-%m}.jsonl").open("a", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")  # one write per batch
+            return len(lines)
 
     def recent(self, symbol: str, days: float = 7) -> list[dict[str, Any]]:
         cutoff = self._clock() - timedelta(days=days)
@@ -382,66 +502,117 @@ class NewsLog:
         for r in self._read(self._files(months_back=1 + int(days // 28))):
             if r.get("symbol") == symbol.upper() and r.get("published") \
                     and datetime.fromisoformat(r["published"]) >= cutoff:
-                if r["id"] not in seen or r.get("sentiment"):
+                if r["id"] not in seen or (r.get("sentiment") and not seen[r["id"]].get("sentiment")):
                     seen[r["id"]] = r
         return sorted(seen.values(), key=lambda r: r["published"], reverse=True)
 
 
 # -- putting it together -------------------------------------------------------
-def news_for(symbol: str, name: str | None, feed: NewsFeed, tagger: Any, log: NewsLog | None) -> dict[str, Any]:
-    """Recent headlines for one stock with tags. Never raises: problems are listed in ``errors``."""
-    feed.errors = []
+_TAG_BUSY = threading.Lock()  # background tagging: one job at a time per process
+LAST_TAG_THREAD: threading.Thread | None = None
+
+
+def _resolve(tagger: Any) -> Any:
+    return tagger() if callable(tagger) and not hasattr(tagger, "tag") else tagger
+
+
+def _tag_in_background(symbol: str, items: list[dict[str, Any]], todo: list[dict[str, Any]], tagger: Any,
+                       log: NewsLog | None) -> None:
+    global LAST_TAG_THREAD
+    if not todo or not _TAG_BUSY.acquire(blocking=False):
+        return  # already busy: these get tagged on a later look-up
+
+    def run() -> None:
+        try:
+            t = _resolve(tagger)
+            if t.name == "none":
+                return
+            tags, _errors = t.tag_with_errors(todo)
+            if log is not None:
+                log.add(symbol, items, tags, t.name, tried=[i["id"] for i in todo])
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("background news tagging failed")
+        finally:
+            _TAG_BUSY.release()
+    LAST_TAG_THREAD = threading.Thread(target=run, daemon=True)
+    LAST_TAG_THREAD.start()
+
+
+def news_for(symbol: str, name: str | None, feed: NewsFeed, tagger: Any, log: NewsLog | None,
+             background: bool = False) -> dict[str, Any]:
+    """Recent headlines for one stock with tags. Never raises: problems are listed in ``errors``.
+
+    ``background``: answer at once with the tags already in the log and tag the rest on a worker thread (tags show
+    on the next look-up). ``tagger`` may be a zero-argument callable that picks one, so a probe never blocks."""
     try:
-        items = feed.company(symbol, name)
+        items, errors = feed.fetch_company(symbol, name)
     except Exception as e:  # noqa: BLE001
-        feed.errors.append(f"news: {type(e).__name__}: {e}")
-        items = []
-    errors = list(feed.errors)
-    known = log.known() if log is not None else {}
-    todo = [i for i in items if not known.get(i["id"], {}).get("sentiment")]
+        items, errors = [], [f"news: {type(e).__name__}: {e}"]
+    try:
+        tagged, attempts, _ = log.state() if log is not None else ({}, {}, set())
+    except OSError as e:
+        tagged, attempts = {}, {}
+        errors.append(f"news log: {e}")
+    todo = [i for i in items if i["id"] not in tagged and attempts.get(i["id"], 0) < MAX_TAG_ATTEMPTS]
     tags: dict[str, dict[str, str]] = {}
-    if todo and tagger.name != "none":
-        try:
-            tags = tagger.tag(todo)
-        except Exception as e:  # noqa: BLE001
-            errors.append(f"tagger: {type(e).__name__}: {e}")
-        errors += list(getattr(tagger, "errors", []))
-    if log is not None:
-        try:
-            log.add(symbol, items, tags, tagger.name)
-        except OSError as e:
-            errors.append(f"news log: {e}")
+    tagger_name = getattr(tagger, "name", "pending") if not callable(tagger) or hasattr(tagger, "tag") else "pending"
+    try:
+        if background:
+            if log is not None:
+                log.add(symbol, items, {}, "none")
+            _tag_in_background(symbol, items, todo, tagger, log)
+        else:
+            t = _resolve(tagger)
+            tagger_name = t.name
+            if todo and t.name != "none":
+                tags, errs = t.tag_with_errors(todo)
+                errors += errs
+            if log is not None:
+                log.add(symbol, items, tags, t.name, tried=[i["id"] for i in todo] if t.name != "none" else ())
+    except (OSError, TimeoutError) as e:
+        errors.append(f"news log: {e}")
     out = []
     for i in items:
-        t = tags.get(i["id"]) or {k: known.get(i["id"], {}).get(k) for k in ("sentiment", "event", "confidence")}
+        t = tags.get(i["id"]) or tagged.get(i["id"]) or {}
         out.append({**i, "sentiment": t.get("sentiment"), "event": t.get("event"), "confidence": t.get("confidence")})
-    return {"items": out, "errors": errors, "tagger": tagger.name}
+    return {"items": out, "errors": errors, "tagger": tagger_name}
 
 
 class NewsService:
-    """Feed + tagger + log for one settings object. The tagger is chosen on first use (it may probe Ollama)."""
+    """Feed + tagger + log for one settings object. The tagger is chosen on first use (it may probe Ollama); in
+    auto mode a missing Ollama is looked for again every 5 minutes, so starting it later needs no restart."""
 
-    def __init__(self, settings: Any, session: requests.Session | None = None, names: Any | None = None):
+    def __init__(self, settings: Any, session: requests.Session | None = None, names: Any | None = None,
+                 clock: Callable[[], float] = time.time):
         self.settings = settings
         self.session = session
         self.names = names  # CompanyNames: finds a company's name when only the symbol is known
+        self._clock = clock
         self.feed = NewsFeed(session, Path(settings.state_dir) / "cache")
         self.log = NewsLog(settings.state_dir)
         self._tagger: Any | None = None
+        self._probed_at = 0.0
+        self._lock = threading.Lock()
 
     @property
     def tagger(self) -> Any:
-        if self._tagger is None:
-            self._tagger = make_tagger(self.settings, self.session)
-        return self._tagger
+        with self._lock:
+            auto = (getattr(self.settings, "news_tagger", "auto") or "auto").lower() == "auto"
+            stale = self._tagger is not None and auto and self._tagger.name == "none" \
+                and self._clock() - self._probed_at >= REPROBE_S
+            if self._tagger is None or stale:
+                self._tagger = make_tagger(self.settings, self.session)
+                self._probed_at = self._clock()
+            return self._tagger
 
-    def for_symbol(self, symbol: str, name: str | None = None) -> dict[str, Any]:
+    def for_symbol(self, symbol: str, name: str | None = None, background: bool = False) -> dict[str, Any]:
         if name is None and self.names is not None:
             try:
                 name = self.names.resolve(symbol)[1]
             except Exception:  # noqa: BLE001 - names are a nicety
                 name = None
-        return news_for(symbol, name, self.feed, self.tagger, self.log)
+        return news_for(symbol, name, self.feed, (lambda: self.tagger) if background else self.tagger,
+                        self.log, background=background)
 
 
 def is_alert(item: dict[str, Any]) -> bool:
