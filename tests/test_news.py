@@ -544,7 +544,7 @@ def test_failed_tagging_is_retried_at_most_three_times(tmp_path):
 
         def tag_with_errors(self, its):
             Dud.calls += 1
-            return {}, ["bad"]
+            return {}, []  # answered, but nothing usable for any headline
     f = feed({"news.google.com": GOOGLE, **QUIET})
     log = news.NewsLog(tmp_path, clock=lambda: NOW)
     for _ in range(5):
@@ -633,3 +633,105 @@ def test_get_news_note_and_cli_short_links(settings):
     long = _short_link("https://www.livemint.com/" + "a" * 200, "Livemint")
     assert long.startswith("www.livemint.com/") and len(long) == 80
     assert _short_link("https://x.com/a", "S") == "x.com/a"
+
+
+# =============================== fix round 2 ===================================
+@pytest.mark.parametrize("symbol,name,title,expected", [
+    ("TITAN", "Titan Company Limited", "Titan shares slump 5% after Q2 update", True),
+    ("IOC", "Indian Oil Corporation Limited", "Indian Oil shares fall on margins", True),
+    ("IOC", "Indian Oil Corporation Limited", "IOC plans refinery", True),
+    ("POWERGRID", "Power Grid Corporation of India Limited", "Power Grid wins transmission order", True),
+    ("LICI", "Life Insurance Corporation of India", "LIC shares drop 3%", True),
+    ("COALINDIA", "Coal India Limited", "Coal prices and oil prices slide", False),
+    ("OILINDIA", "Oil India Limited", "Oil prices fall as crude slides", False),
+    ("BANKINDIA", "Bank of India", "Bank shares rally", False),
+    ("ITC", "ITC Limited", "SWITCH mobility wins order", False),
+])
+def test_aliases_recover_common_headline_forms(symbol, name, title, expected):
+    assert news.mentions(title, symbol, name) is expected
+
+
+def test_reported_tagger_name_is_the_chosen_one(settings, tmp_path):
+    settings_with(settings, news_tagger="auto", ollama_url="http://o", ollama_model="m", state_dir=tmp_path)
+    sess = FeedSession({"news.google.com": GOOGLE, **QUIET})
+    svc = news.NewsService(settings, session=OllamaSession(down=True))
+    svc.feed = news.NewsFeed(sess, clock=lambda: NOW)
+    pending = news.news_for("SENCO", "Senco Gold", svc.feed, lambda: svc.tagger, None, background=True)
+    assert pending["tagger"] == "pending"  # only before the first probe is it unknown
+    assert svc.tagger.name == "none"
+    assert svc.for_symbol("SENCO", "Senco Gold", background=True)["tagger"] == "none"  # dashboard can show the hint
+    svc2 = news.NewsService(settings_with(settings, news_tagger="ollama"), session=OllamaSession(models=("m",)))
+    svc2.feed = svc.feed
+    svc2.tagger
+    assert svc2.for_symbol("SENCO", "Senco Gold", background=True)["tagger"] == "ollama:m"
+
+
+def test_attempts_ignore_batches_that_raised_but_count_invalid_answers(tmp_path):
+    f = feed({"news.google.com": GOOGLE, **QUIET})
+    cold = news.OllamaTagger("http://o", "m", OllamaSession(models=("m",), answer=lambda n: 1 / 0))
+    log = news.NewsLog(tmp_path, clock=lambda: NOW)
+    for _ in range(6):  # Ollama cold start / refused: no headline loses an attempt
+        news.news_for("SENCO", "Senco Gold", f, cold, log)
+    assert max(log.state()[1].values()) == 0
+    junk = news.OllamaTagger("http://o", "m", OllamaSession(models=("m",), answer=lambda n: ollama_answer(n, event="gossip")))
+    for _ in range(5):
+        news.news_for("SENCO", "Senco Gold", f, junk, log)
+    assert set(log.state()[1].values()) == {news.MAX_TAG_ATTEMPTS}
+    good = news.OllamaTagger("http://o", "m", OllamaSession(models=("m",)))
+    assert all(i["sentiment"] is None for i in news.news_for("SENCO", "Senco Gold", f, good, log)["items"])  # gave up
+
+
+def test_lock_retries_permission_error_and_breaks_stale_lock(tmp_path, monkeypatch):
+    real, calls = news.os.open, []
+
+    def flaky(path, *a, **k):
+        calls.append(1)
+        if len(calls) <= 2:
+            raise PermissionError("busy")
+        return real(path, *a, **k)
+    monkeypatch.setattr(news.os, "open", flaky)
+    lock = tmp_path / "w.lock"
+    with news._file_lock(lock, wait=5):
+        assert lock.exists()
+    assert len(calls) == 3 and not lock.exists()
+    monkeypatch.undo()
+    lock.write_text("")
+    old = time_ago = 1000
+    news.os.utime(lock, (old, old))  # crashed owner, long ago
+    with news._file_lock(lock, wait=5, stale=30):
+        pass
+    assert not list(tmp_path.glob("*.stale")) and not lock.exists()
+    lock.write_text("")  # fresh and held: times out instead of spinning
+    with pytest.raises(TimeoutError):
+        with news._file_lock(lock, wait=0.2, stale=30):
+            pass
+
+
+def test_torn_cache_file_is_refetched_and_writes_are_atomic(tmp_path):
+    f = feed({"news.google.com": GOOGLE, **QUIET}, tmp_path)
+    f.company("SENCO", "Senco Gold")
+    files = list((tmp_path / "news").glob("*.xml"))
+    assert len(files) == 5 and not list((tmp_path / "news").glob("*.tmp"))
+    for p in files:
+        p.write_text("<rss><channel><item><title>cut off", encoding="utf-8")  # a crash mid-write
+        import os
+        os.utime(p, (NOW.timestamp(), NOW.timestamp()))
+    n = len(f.session.urls)
+    items = f.company("SENCO", "Senco Gold")
+    assert len(f.session.urls) == n + 5 and items  # torn copies treated as misses
+
+
+def test_seen_news_is_pruned_to_thirty_days(settings):
+    from datetime import timedelta
+    broker = LocalPaperBroker(settings.state_dir / "pb.json", starting_cash=1000)
+    broker.set_price("SENCO", 100)
+    broker.submit_order("SENCO", "buy", qty=2)
+    old = (datetime.now(IST) - timedelta(days=45)).date().isoformat()
+    recent = (datetime.now(IST) - timedelta(days=5)).date().isoformat()
+    st = State(settings.state_dir / "state.json")
+    st.data["seen_news"] = {"old": old, "recent": recent}
+    st.save()
+    w = Watcher(settings, every=60, broker=broker, notifier=Notifier(), news=FakeService([headline("n1")]))
+    assert len(w.poll_news()) == 1
+    seen = State(settings.state_dir / "state.json").data["seen_news"]
+    assert set(seen) == {"recent", "n1"} and seen["n1"] == datetime.now(IST).date().isoformat()

@@ -11,7 +11,7 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, time as dtime, tzinfo
+from datetime import datetime, time as dtime, timedelta, tzinfo
 from typing import Any, Callable
 
 from .config import Settings
@@ -145,9 +145,12 @@ class Watcher:
         fresh: list[dict[str, Any]] = []
         for i in candidates:
             if i["id"] not in seen:
-                seen[i["id"]] = i["published"]
+                seen[i["id"]] = datetime.now(self.tz).date().isoformat()  # first-seen day
                 fresh.append(i)
         if fresh:
+            cutoff = (datetime.now(self.tz) - timedelta(days=30)).date().isoformat()
+            for k in [k for k, v in seen.items() if str(v)[:10] < cutoff]:
+                del seen[k]  # headlines older than 30 days can't come back
             st.save()
             if self._notifier is not None:
                 for i in fresh:

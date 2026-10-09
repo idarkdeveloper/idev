@@ -20,6 +20,7 @@ import os
 import re
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,7 @@ from urllib.parse import quote_plus
 
 import requests
 
+from .state import atomic_write
 from .timezones import IST
 
 log = logging.getLogger(__name__)
@@ -130,14 +132,45 @@ def title_key(title: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", title.lower())).strip()
 
 
-def mentions(title: str, symbol: str, name: str | None) -> bool:
-    """Whole-word match of the short company name (any case) or the symbol (as written) in a headline."""
-    def whole(word: str, flags: int = 0) -> bool:
-        return bool(re.search(r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])", title, flags))
+_COMMON = {"coal", "oil", "bank", "steel", "power", "india", "energy", "finance", "capital", "gold", "gas", "life",
+           "tata", "group", "global", "motors", "tech", "home", "auto", "star", "sun", "one", "all", "new", "sail",
+           "bharat", "national", "indian", "state", "united", "general", "first", "can", "due", "key", "man", "max",
+           "pay", "safe", "time", "top", "well", "great", "royal", "bajaj", "cement", "ltd", "inc"}
+_CORE_SUFFIXES = ("corporation of india", "of india", "corporation", "company", "industries")
+
+
+def aliases(symbol: str, name: str | None) -> list[tuple[str, bool]]:
+    """(phrase, case-insensitive?) pairs a headline may use for this company: the short name, a core name
+    (without Company / Corporation / of India / Industries), the symbol, and the initials of the name."""
+    out: list[tuple[str, bool]] = []
     short = short_name(name)
-    if short and len(short) >= 3 and whole(short, re.I):
-        return True
-    return bool(symbol) and whole(symbol.upper())
+    if len(short) >= 3:
+        out.append((short, True))
+        core = short
+        for suf in _CORE_SUFFIXES:
+            if core.lower().endswith(" " + suf):
+                core = core[:-(len(suf) + 1)].strip()
+                break
+        words = core.split()
+        if core != short and (len(words) >= 2 or (len(core) >= 4 and core.lower() not in _COMMON)):
+            out.append((core, True))
+        initials = "".join(w[0] for w in re.sub(r"\s+of India$", "", short, flags=re.I).split()
+                           if w.lower() not in _DANGLING and w[0].isalpha()).upper()
+        if len(initials) >= 3:
+            out.append((initials, False))
+    sym = symbol.upper()
+    if sym:
+        out.append((sym, not (len(sym) < 3 or sym.lower() in _COMMON)))
+    return out
+
+
+def mentions(title: str, symbol: str, name: str | None) -> bool:
+    """Whole-word match of any alias of the company (see ``aliases``) in a headline."""
+    for phrase, ignore_case in aliases(symbol, name):
+        if re.search(r"(?<![A-Za-z0-9])" + re.escape(phrase) + r"(?![A-Za-z0-9])", title,
+                     re.I if ignore_case else 0):
+            return True
+    return False
 
 
 # -- feeds ---------------------------------------------------------------------
@@ -165,8 +198,10 @@ class NewsFeed:
         if path is None:
             return self._mem.get(url)
         try:
-            return path.stat().st_mtime, path.read_text(encoding="utf-8")
-        except OSError:
+            mtime, text = path.stat().st_mtime, path.read_text(encoding="utf-8")
+            parse_rss(text, "cache")  # a torn or damaged copy counts as a miss
+            return mtime, text
+        except (OSError, ValueError, ET.ParseError):
             return None
 
     def _store(self, url: str, text: str) -> None:
@@ -175,8 +210,7 @@ class NewsFeed:
             self._mem[url] = (now, text)
             return
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
+            atomic_write(path, text)
             os.utime(path, (now, now))
         except OSError as e:  # a cache is a nicety
             log.warning("news cache write failed: %s", e)
@@ -301,15 +335,23 @@ class _Tagger:
     def _batch(self, batch: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
         return {}
 
-    def tag_with_errors(self, items: list[dict[str, Any]]) -> tuple[dict[str, dict[str, str]], list[str]]:
+    def tag_detail(self, items: list[dict[str, Any]]) -> tuple[dict[str, dict[str, str]], list[str], set[str]]:
+        """(tags, errors, answered ids). A batch that raised (timeout, refused, cold start) is not 'answered', so
+        it costs nothing against an item's attempts; only answered-but-invalid or missing items count as failures."""
         out: dict[str, dict[str, str]] = {}
         errors: list[str] = []
+        answered: set[str] = set()
         for k in range(0, len(items), BATCH):
+            batch = items[k:k + BATCH]
             try:
-                out.update(self._batch(items[k:k + BATCH]))
+                out.update(self._batch(batch))
+                answered.update(i["id"] for i in batch)
             except Exception as e:  # noqa: BLE001 - this batch stays untagged
                 errors.append(f"{self.name.split(':')[0]}: {type(e).__name__}: {e}")
-        return out, errors
+        return out, errors, answered
+
+    def tag_with_errors(self, items: list[dict[str, Any]]) -> tuple[dict[str, dict[str, str]], list[str]]:
+        return self.tag_detail(items)[:2]
 
     def tag(self, items: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
         return self.tag_with_errors(items)[0]
@@ -393,13 +435,12 @@ def _file_lock(path: Path, wait: float = 5.0, stale: float = 30.0):
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.close(fd)
             break
-        except FileExistsError:
-            try:
+        except (FileExistsError, PermissionError):  # Windows answers PermissionError while the lock is being removed
+            with contextlib.suppress(OSError):
                 if time.time() - path.stat().st_mtime > stale:  # left behind by a crashed process
-                    path.unlink()
-                    continue
-            except OSError:
-                continue
+                    grave = path.with_name(f"{path.name}.{uuid.uuid4().hex}.stale")
+                    os.replace(path, grave)  # only one process wins this rename
+                    grave.unlink(missing_ok=True)
             if time.time() > deadline:
                 raise TimeoutError(f"news log is locked ({path})")
             time.sleep(0.05)
@@ -516,6 +557,16 @@ def _resolve(tagger: Any) -> Any:
     return tagger() if callable(tagger) and not hasattr(tagger, "tag") else tagger
 
 
+def _run_tagger(t: Any, todo: list[dict[str, Any]]) -> tuple[dict[str, dict[str, str]], list[str], list[str]]:
+    """(tags, errors, ids that count as a tagging attempt)."""
+    if hasattr(t, "tag_detail"):
+        tags, errors, answered = t.tag_detail(todo)
+    else:
+        tags, errors = t.tag_with_errors(todo)
+        answered = {i["id"] for i in todo} if not errors else set()
+    return tags, errors, [i["id"] for i in todo if i["id"] in answered]
+
+
 def _tag_in_background(symbol: str, items: list[dict[str, Any]], todo: list[dict[str, Any]], tagger: Any,
                        log: NewsLog | None) -> None:
     global LAST_TAG_THREAD
@@ -527,9 +578,9 @@ def _tag_in_background(symbol: str, items: list[dict[str, Any]], todo: list[dict
             t = _resolve(tagger)
             if t.name == "none":
                 return
-            tags, _errors = t.tag_with_errors(todo)
+            tags, _errors, tried = _run_tagger(t, todo)
             if log is not None:
-                log.add(symbol, items, tags, t.name, tried=[i["id"] for i in todo])
+                log.add(symbol, items, tags, t.name, tried=tried)
         except Exception:  # noqa: BLE001
             logging.getLogger(__name__).exception("background news tagging failed")
         finally:
@@ -564,11 +615,12 @@ def news_for(symbol: str, name: str | None, feed: NewsFeed, tagger: Any, log: Ne
         else:
             t = _resolve(tagger)
             tagger_name = t.name
+            tried: list[str] = []
             if todo and t.name != "none":
-                tags, errs = t.tag_with_errors(todo)
+                tags, errs, tried = _run_tagger(t, todo)
                 errors += errs
             if log is not None:
-                log.add(symbol, items, tags, t.name, tried=[i["id"] for i in todo] if t.name != "none" else ())
+                log.add(symbol, items, tags, t.name, tried=tried)
     except (OSError, TimeoutError) as e:
         errors.append(f"news log: {e}")
     out = []
@@ -611,8 +663,11 @@ class NewsService:
                 name = self.names.resolve(symbol)[1]
             except Exception:  # noqa: BLE001 - names are a nicety
                 name = None
-        return news_for(symbol, name, self.feed, (lambda: self.tagger) if background else self.tagger,
-                        self.log, background=background)
+        res = news_for(symbol, name, self.feed, (lambda: self.tagger) if background else self.tagger,
+                       self.log, background=background)
+        if self._tagger is not None:  # "pending" only before the first probe
+            res["tagger"] = self._tagger.name
+        return res
 
 
 def is_alert(item: dict[str, Any]) -> bool:
