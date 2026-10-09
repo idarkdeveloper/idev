@@ -132,6 +132,7 @@ Everything the CLI does is also in the dashboard:
 | `screen`, `backtest` (+ `--json`) | Factor screen and Backtest panels, each with *Export JSON* |
 | `factor-backtest` | *Backtest the screen as a portfolio* under the factor screen, with a growth-of-100 chart |
 | `signal-lab` | *Signal lab* card: which algo-trading signals predicted the next week, month or quarter |
+| `index-history` | Built automatically when the signal lab or portfolio backtest uses a broad index |
 | `scorecard` | *Claude's track record* panel |
 | `groww-token` | *Test Groww connection* in Settings (the token itself is never shown) |
 | `--market`, `.env` strategy keys | Settings: investor, disclosures, market, starting cash, order mode, notifications |
@@ -213,10 +214,44 @@ card) measures whether the rules algo traders use actually predicted anything:
   twenty, "predictive" needs t ≥ 3 and a gap bigger than the charges.
 
 On NIFTY 50, Sept 2021 to Oct 2026, every signal and the model came out **no edge** at
-every horizon. The best (RSI oversold, next month) reached t = 1.2. On NIFTY 200, 12-1
-momentum reached t = 2.3 for the next month, but only on today's members, which flatter
-trend signals, and below the t ≥ 3 bar. Large Indian stocks priced these patterns in
-long ago; treat any tip that a chart pattern "predicts" a share with the same test.
+every horizon. The best (RSI oversold, next month) reached t = 1.2. Large Indian stocks
+priced these patterns in long ago.
+
+Smaller companies are different. With past members rebuilt from NSE's own notices (below),
+trend signals clear the t ≥ 3 bar in mid and small caps, and buying last month's losers
+loses money:
+
+| Sept 2021 to Oct 2026 | Midcap 150 | Smallcap 250 |
+|---|---|---|
+| Best next-month signal | 12-1 momentum, t = 3.2 | Factor screen score, t = 3.9 |
+| Best next-quarter signal | Factor screen score, t = 3.4 | Near 52-week high, t = 4.6 |
+| 1-month reversal, next quarter | t = −2.6 (reversed) | t = −2.9 (reversed) |
+
+Whether that survives trading costs is a separate question, answered by the factor
+portfolio backtest against each universe's own index fund:
+
+| Top 20, monthly, after charges | Factor portfolio | Index fund |
+|---|---|---|
+| Midcap 150, Dec 2022 to Oct 2026 | +114.0% (worst fall −24.5%) | MID150BEES +89.8% (−20.5%) |
+| Smallcap 250, Oct 2023 to Oct 2026 | +26.1% (−32.5%) | HDFCSML250 +44.1% (−25.7%) |
+
+Midcaps kept an edge of about 3.7% a year after charges, with deeper falls. In smallcaps
+the signal was real but monthly trading costs and wider swings ate it. One five-year
+window is not proof; rerun it as new data arrives.
+
+### Past members for the broad indices
+
+`python -m trading_agent index-history NIFTYMIDCAP150 NIFTYSMALLCAP250 NIFTY100 NIFTY200`
+downloads NSE Indices' "Replacements in indices" press releases since 2021 (once, cached
+as text), parses every index's exclusions and inclusions, including revoked changes and
+delistings, maps old tickers to today's using NSE's symbol-change file, and checks the
+result. Walking back from today's list, the index must keep its exact size and every change
+must fit. Midcap 150 and Smallcap 250 pass on every date. NIFTY 100 and 200 show two
+known quirks: NSE ran them with 101 and 201 stocks for five months in 2024 while the
+Tata Motors DVR was a second share class, and NIFTY 100 is off by one stock swap before
+Sept 2021. The signal lab and the factor backtest build these histories automatically the
+first time a broad index is used; any remaining inconsistency is printed with the result.
+Temporary demerger placeholders (DUMMY symbols) are ignored.
 
 ## Momentum and "who traded"
 

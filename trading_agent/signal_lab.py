@@ -371,6 +371,8 @@ def run_signal_lab(universe: Iterable[dict[str, str]], prices: Any, *, horizons:
         "signals": {**SIGNALS, MODEL: MODEL_INFO},
         "results": results, "model_weights": model_weights, "index_timing": timing,
         "summary": _headline(results, horizons, membership is not None and membership.known_since <= start_day),
+        "membership_source": membership.source if membership else None,
+        "membership_warnings": membership.warnings if membership else [],
     }
 
 

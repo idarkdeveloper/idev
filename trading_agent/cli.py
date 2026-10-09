@@ -271,15 +271,15 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
 def cmd_signal_lab(args: argparse.Namespace) -> int:
     """Test whether common algo-trading signals predicted next-period returns."""
     from .costs import cost_model_for
-    from .membership import membership_for
+    from .index_history import point_in_time
     from .runner import free_prices
     from .screen import load_universe
     from .signal_lab import SIGNALS, format_signal_lab, run_signal_lab
 
     settings = _settings(args)
     members = load_universe(args.universe)
-    membership = None if args.todays_members else membership_for(
-        args.universe, [m["symbol"] for m in members], args.changes)
+    membership = None if args.todays_members else point_in_time(
+        args.universe, [m["symbol"] for m in members], settings.state_dir, changes_csv=args.changes, progress=print)
     horizons = [int(h) for h in str(args.horizons).split(",") if h.strip()]
     print(f"Testing {len(SIGNALS)} signals and a walk-forward model on {args.universe.upper()} over {args.years} years…")
     r = run_signal_lab(members, free_prices(settings), horizons=horizons, years=args.years,
@@ -290,23 +290,44 @@ def cmd_signal_lab(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_index_history(args: argparse.Namespace) -> int:
+    """Rebuild past index membership from NSE Indices press releases and check it."""
+    from .index_history import SIZES, build_history
+    from .screen import load_universe
+
+    settings = _settings(args)
+    for idx in args.index:
+        current = [m["symbol"] for m in load_universe(idx)]
+        print(f"{idx.upper()}: downloading and parsing NSE Indices press releases since {args.since}…")
+        meta = build_history(idx, current, settings.state_dir, since=args.since)
+        size = SIZES.get(meta["index"])
+        print(f"  {meta['changes']} change dates, {meta['stocks_added']} stocks added; saved to {meta['path']}")
+        if meta["problems"]:
+            print(f"  {len(meta['problems'])} inconsistencies (index not {size} stocks, or a change that does not fit):")
+            for p in meta["problems"][:10]:
+                print("   ", p)
+        else:
+            print(f"  Checked: exactly {size} members on every date, every change consistent.")
+    return 0
+
+
 def cmd_factor_backtest(args: argparse.Namespace) -> int:
     """Backtest the factor screen as a monthly-rebalanced portfolio with real charges."""
     from .costs import cost_model_for
-    from .factor_backtest import format_factor_backtest, run_factor_backtest
-    from .membership import membership_for
+    from .factor_backtest import INDEX_FUNDS, format_factor_backtest, run_factor_backtest
+    from .index_history import point_in_time
     from .runner import free_prices
     from .screen import load_universe
 
     settings = _settings(args)
     members = load_universe(args.universe)
     print(f"Backtesting top {args.top} of {args.universe.upper()} over {args.years} years (monthly rebalance)…")
-    membership = None if args.todays_members else membership_for(
-        args.universe, [m["symbol"] for m in members], args.changes)
+    membership = None if args.todays_members else point_in_time(
+        args.universe, [m["symbol"] for m in members], settings.state_dir, changes_csv=args.changes, progress=print)
     r = run_factor_backtest(members, free_prices(settings), top=args.top, years=args.years,
                             cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
                             require_above_200dma=not args.no_trend_filter, benchmark=args.benchmark,
-                            membership=membership)
+                            membership=membership, index_fund=INDEX_FUNDS.get(args.universe.upper()))
     print(format_factor_backtest(r))
     if args.json:
         print(json.dumps(r, indent=2, default=str))
@@ -446,6 +467,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="ignore membership history and use today's constituents (survivorship-biased)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_factor_backtest)
+    sp = sub.add_parser("index-history", help="rebuild past index members from NSE press releases")
+    sp.add_argument("index", nargs="+", help="e.g. NIFTYMIDCAP150 NIFTYSMALLCAP250")
+    sp.add_argument("--since", default="2021-01-01")
+    sp.set_defaults(func=cmd_index_history)
     sp = sub.add_parser("signal-lab", help="test whether algo-trading signals predicted returns")
     sp.add_argument("--universe", default="NIFTY50")
     sp.add_argument("--years", type=int, default=5)

@@ -43,7 +43,7 @@ def load_universe(name: str = "NIFTY200", session: requests.Session | None = Non
     out = []
     for r in rows:
         sym = (r.get("Symbol") or "").strip()
-        if sym:
+        if sym and not sym.upper().startswith("DUMMY"):  # placeholder for a demerged company not yet listed
             out.append({"symbol": sym, "name": (r.get("Company Name") or "").strip(),
                         "industry": (r.get("Industry") or "").strip()})
     return out

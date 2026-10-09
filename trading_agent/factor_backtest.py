@@ -31,6 +31,9 @@ from .screen import _vol, score_universe
 
 MIN_BARS = 274  # 12-1 momentum needs 252 + 21 bars of history
 
+# Index funds that track a universe, for an investable like-for-like comparison.
+INDEX_FUNDS = {"NIFTYMIDCAP150": "MID150BEES", "NIFTYSMALLCAP250": "HDFCSML250", "NIFTYNEXT50": "JUNIORBEES"}
+
 
 def _yahoo_range(years: int) -> str:
     need = years + 1  # one extra year of lookback for the first ranking
@@ -71,7 +74,8 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
                         benchmark: str = "NIFTYBEES", price_index: str | None = "^NSEI",
                         cost_model: Any | None = None, capital: float = 500_000.0,
                         workers: int = 8, min_turnover: float = 1e7, require_above_200dma: bool = True,
-                        membership: Membership | None = None) -> dict[str, Any]:
+                        membership: Membership | None = None, index_fund: str | None = None
+                        ) -> dict[str, Any]:
     current = [m["symbol"] for m in universe]
     rng = _yahoo_range(years)
     bench = prices.history(benchmark, rng)
@@ -188,10 +192,22 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
             stats["price_index"] = _stats([capital * (_price_at(px, px_dates, d) or p0) / p0 for d in rebal], rebal)
         except Exception:  # noqa: BLE001 - informational row only
             pass
+    fund_curve: list[float | None] | None = None
+    if index_fund:
+        try:
+            fx = prices.history(index_fund, rng)
+            fx_dates = [b["date"] for b in fx]
+            if fx_dates and fx_dates[0] <= rebal[0]:  # only when the fund existed for the whole test
+                f0 = _price_at(fx, fx_dates, rebal[0])
+                fund_curve = [round(capital * (_price_at(fx, fx_dates, d) or f0) / f0, 2) for d in rebal]
+                stats["index_fund"] = _stats(fund_curve, rebal)
+        except Exception:  # noqa: BLE001 - optional comparison
+            pass
     point_in_time = membership is not None and membership.known_since <= rebal[0]
     dropped = sorted(window_members - set(current))
     return {
         "dates": rebal, "strategy": curve, "benchmark": bench_curve, "equal_weight": ew_curve,
+        "index_fund": fund_curve, "index_fund_symbol": index_fund if fund_curve else None,
         "stats": stats,
         "costs_paid": round(costs_paid, 2), "trades": trades, "months": len(rebal) - 1,
         "avg_names_held": round(avg_names, 1), "months_all_cash": cash_months,
@@ -212,13 +228,16 @@ def _caveat(benchmark: str, membership: Membership | None, point_in_time: bool,
     if membership is None:
         parts.append("Universe is today's constituents: stocks that left the index are missing, which "
                      "flatters both the strategy and the equal-weight curve. Point-in-time membership is "
-                     "built in for NIFTY 50; for other indices pass a change log.")
+                     "built in for NIFTY 50 and rebuilt from NSE press releases for the broad indices "
+                     "(index-history); for others pass a change log.")
     elif not point_in_time:
         parts.append(f"Index membership is known from {membership.known_since}; months before that use "
                      "the earliest known list, so they still carry some survivorship bias.")
     else:
         parts.append(f"Each month ranks only that month's index members ({len(dropped)} later dropped "
                      "are included), so there is no survivorship bias.")
+    if membership is not None and membership.warnings:
+        parts.extend(membership.warnings)
     if missing:
         parts.append(f"No price history for {', '.join(missing)}, so "
                      f"{'it is' if len(missing) == 1 else 'they are'} left out of the months "
@@ -236,13 +255,15 @@ def format_factor_backtest(r: dict[str, Any]) -> str:
     lines = [f"Factor portfolio: top {r['top']} of {r['with_history']}/{r['universe_size']} stocks, "
              f"{r['months']} monthly rebalances {r['dates'][0]} to {r['dates'][-1]}"
              + (" (point-in-time members)" if r.get("point_in_time") else ""),
-             f"{'':<16}{'total':>9}{'CAGR':>9}{'max DD':>9}{'vol':>8}"]
+             f"{'':<20}{'total':>9}{'CAGR':>9}{'max DD':>9}{'vol':>8}"]
     rows = [("strategy", "Strategy"), ("benchmark", r["benchmark_symbol"]), ("equal_weight", "Equal weight*")]
+    if "index_fund" in r["stats"]:
+        rows.append(("index_fund", f"{r.get('index_fund_symbol')} (fund)"))
     if "price_index" in r["stats"]:
         rows.append(("price_index", f"{r.get('price_index_symbol')} (no div)"))
     for key, label in rows:
         s = r["stats"][key]
-        lines.append(f"{label:<16}{pct(s['total_return'])}{pct(s['cagr'])}{pct(s['max_drawdown'])}"
+        lines.append(f"{label:<20}{pct(s['total_return'])}{pct(s['cagr'])}{pct(s['max_drawdown'])}"
                      f"{pct(s['volatility'])}")
     lines.append(f"Charges paid ₹{r['costs_paid']:,.0f} over {r['trades']} trades; "
                  f"avg {r['avg_names_held']} names held; {r['months_all_cash']} months fully in cash.")

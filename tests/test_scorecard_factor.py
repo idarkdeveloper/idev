@@ -102,3 +102,18 @@ def test_equity_history_throttles(tmp_path):
     assert len(st.data["equity_history"]) == 1 and st.data["equity_history"][0]["equity"] == 101
     assert st.record_equity(102, 50, 1, min_gap_s=0) is True
     assert len(st.data["equity_history"]) == 2
+
+
+def test_factor_backtest_index_fund_row():
+    uni = [{"symbol": s} for s in ("UP", "DOWN", "FLAT")]
+    r = run_factor_backtest(uni, Prices(900), top=2, years=2, min_turnover=0, workers=2, index_fund="FUNDX")
+    assert r["index_fund_symbol"] == "FUNDX" and "index_fund" in r["stats"] and len(r["index_fund"]) == len(r["dates"])
+    assert "FUNDX (fund)" in format_factor_backtest(r)
+
+    class LateFund(Prices):
+        def history(self, sym, range_="2y"):
+            bars = super().history(sym, range_)
+            return bars[-100:] if sym == "LATE" else bars
+
+    r = run_factor_backtest(uni, LateFund(900), top=2, years=2, min_turnover=0, workers=2, index_fund="LATE")
+    assert r["index_fund"] is None and "index_fund" not in r["stats"]  # fund did not exist for the whole test
