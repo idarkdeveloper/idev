@@ -19,17 +19,39 @@ from .state import State
 log = logging.getLogger(__name__)
 
 
-def resolve_groww_token(settings: Settings) -> str:
-    from .groww import get_access_token, totp_now
+def token_cache(settings: Settings) -> Any:
+    from .groww import TokenCache
+    return TokenCache(settings.state_dir / "groww_token.json")
 
-    if settings.groww_access_token:
+
+def resolve_groww_token(settings: Settings, *, fresh: bool = False, session: Any | None = None) -> str:
+    """GROWW_ACCESS_TOKEN wins; otherwise reuse the cached generated token until it
+    expires (06:00 IST), and only then generate a new one (Groww allows 150 a day)."""
+    from .groww import cached_access_token, totp_now
+
+    if settings.groww_access_token and not fresh:
         return settings.groww_access_token
-    if settings.groww_api_key and settings.groww_api_secret:
-        return get_access_token(settings.groww_api_key, secret=settings.groww_api_secret)
-    if settings.groww_api_key and settings.groww_totp_secret:
-        return get_access_token(settings.groww_api_key, totp=totp_now(settings.groww_totp_secret))
+    key = settings.groww_api_key
+    if key and settings.groww_api_secret:
+        return cached_access_token(key, token_cache(settings), secret=settings.groww_api_secret,
+                                   fresh=fresh, session=session)
+    if key and settings.groww_totp_secret:
+        totp_secret = settings.groww_totp_secret
+        return cached_access_token(key, token_cache(settings), totp_fn=lambda: totp_now(totp_secret),
+                                   fresh=fresh, session=session)
     raise SystemExit("Groww selected but no GROWW_ACCESS_TOKEN or GROWW_API_KEY + "
                      "GROWW_API_SECRET / GROWW_TOTP_SECRET is set.")
+
+
+def make_groww(settings: Settings, price_fn: Any | None = None) -> Any:
+    """The real Groww client. Order calls inside it refuse unless GROWW_LIVE_ORDERS=true."""
+    from .groww import GrowwBroker, InstrumentTicks
+
+    ticks = InstrumentTicks(settings.state_dir / "cache") if settings.groww_live_orders else None
+    return GrowwBroker(resolve_groww_token(settings), live_orders=settings.groww_live_orders,
+                       exchange=settings.groww_exchange, price_fallback=price_fn,
+                       max_slippage_pct=settings.max_slippage_pct,
+                       tick_size_fn=(lambda sym: ticks.tick_size(sym, settings.groww_exchange)) if ticks else None)
 
 
 def free_prices(settings: Settings) -> YahooPrices:
@@ -42,10 +64,7 @@ def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
     sim_path = settings.state_dir / "paper_broker.json"
     price_fn = price_fn or free_prices(settings)
     if settings.use_groww:
-        from .groww import GrowwBroker
-
-        groww = GrowwBroker(resolve_groww_token(settings), live_orders=settings.groww_live_orders,
-                            exchange=settings.groww_exchange, price_fallback=price_fn)
+        groww = make_groww(settings, price_fn)
         if settings.groww_live_orders:
             log.warning("GROWW_LIVE_ORDERS=true: orders will use REAL money on Groww.")
             return groww
@@ -97,6 +116,19 @@ def record_equity(state: State, broker: Any) -> None:
         log.debug("equity point skipped: %s", e)
 
 
+def _after_run_gtt(settings: Settings, broker: Any, state: State, notifier: Any) -> None:
+    """Keep the Groww GTT stop-losses in line with holdings (live + GROWW_GTT_STOPS only)."""
+    from .live import gtt_enabled, sync_gtt_stops
+
+    if not gtt_enabled(settings, broker):
+        return
+    prices = free_prices(settings)
+    actions = sync_gtt_stops(settings, broker, state, notifier=notifier,
+                             bars_fn=lambda sym: prices.history(sym, "1y"))
+    if actions:
+        log.info("GTT stops: %s", actions)
+
+
 def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
           trades: list[DisclosedTrade] | None = None, broker: Broker | None = None,
           data: Any | None = None, notifier: Notifier | None = None,
@@ -144,6 +176,7 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     # Only remember trades once they were actually analysed, so a failed API call
     # (bad key, outage) is retried on the next run instead of silently dropped.
     state.mark_seen(new)
+    _after_run_gtt(settings, broker, state, notifier)
     record_equity(state, broker)
     state.record_run({"new_trades": len(new), "recommendations": len(result.recommendations),
                       "orders": len(result.orders), "model": result.model,

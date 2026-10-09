@@ -319,24 +319,35 @@ def build_tools(ctx: AgentContext) -> list[Any]:
     if ctx.settings.auto_trade:
         @beta_tool
         def place_paper_order(symbol: str, side: str, notional_usd: float) -> str:
-            """Place a market order. Only use after send_recommendation, only with high
+            """Place an order. Only use after send_recommendation, only with high
             confidence, and never more than 10% of equity per order. The order goes to the
-            configured brokerage (paper simulator unless live orders were explicitly enabled).
+            configured brokerage (paper simulator unless live orders were explicitly enabled;
+            live Groww orders are DAY limit orders within MAX_SLIPPAGE_PCT of the last price
+            and may stay open unfilled). Sells only use free (unpledged, unlocked) shares.
 
             Args:
                 symbol: Ticker symbol.
                 side: "buy" or "sell".
                 notional_usd: Amount to trade in the account currency (INR or USD).
             """
+            live = ctx.live_money
             try:
                 equity = ctx.broker.account().equity
                 if notional_usd > 0.10 * equity + 1e-6:
                     return json.dumps({"error": f"order exceeds 10% of equity ({equity:.2f})"})
                 order = ctx.broker.submit_order(symbol, side.lower(), notional=float(notional_usd))
             except Exception as e:  # noqa: BLE001
+                if live and not isinstance(e, (ValueError, PermissionError)):
+                    from .live import record_order_error
+                    record_order_error(ctx.state, symbol, side.lower(), str(e), ctx.notifier, source="agent")
                 return json.dumps({"error": str(e)})
+            if order.get("live"):
+                from .live import record_order, sync_gtt_stops
+                record_order(ctx.state, order, ctx.notifier, source="agent")
+                if order.get("side") == "sell" and order.get("status") == "filled":
+                    sync_gtt_stops(ctx.settings, ctx.broker, ctx.state, notifier=ctx.notifier)
             ctx.result.orders.append(order)
-            return json.dumps({"ok": True, "order": order}, default=str)
+            return json.dumps({"ok": order.get("status") != "failed", "order": order}, default=str)
 
         tools.append(place_paper_order)
 

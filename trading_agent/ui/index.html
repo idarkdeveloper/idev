@@ -132,7 +132,7 @@
           <div class="row" style="justify-content:space-between"><h3>Account value</h3><span class="sub" id="eq-note"></span></div>
           <div class="chart" id="eq-chart"></div>
         </div>
-        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th><th class="num">Trailing stop</th><th></th></tr></thead><tbody id="positions"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th><th class="num">Trailing stop</th><th>GTT stop</th><th></th></tr></thead><tbody id="positions"></tbody></table></div>
         <form class="cardbody" id="tk-form" style="border-top:1px solid var(--line)">
           <h3>Paper order</h3>
           <div class="row">
@@ -151,7 +151,7 @@
       </div>
       <div class="card">
         <div class="cardhead"><h2>Order history</h2><span class="sub" id="fees-note"></span></div>
-        <div class="scroll"><table><thead><tr><th>Time</th><th>Side</th><th>Stock</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Value</th><th class="num">Charges</th></tr></thead><tbody id="orders"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>Time</th><th>Side</th><th>Stock</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Value</th><th class="num">Charges</th><th>Status</th></tr></thead><tbody id="orders"></tbody></table></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Factor screen</h2><span class="sub">12-1 momentum + 6m return − volatility, above 200-day MA, liquid</span></div>
@@ -259,6 +259,9 @@
         <div class="radio" style="align-items:center"><input type="checkbox" id="f-autoexit" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-autoexit" style="color:var(--ink)">Sell paper positions that hit their trailing stop</label></div>
       </div>
     </div>
+    <div class="field"><label>Stop-losses at Groww</label>
+      <div class="radio" style="align-items:center"><input type="checkbox" id="f-gtt" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-gtt" style="color:var(--ink)">Keep a GTT stop-loss at Groww for each live holding</label><div class="sub" id="f-gtt-note">A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Only acts when GROWW_LIVE_ORDERS=true.</div></div></div>
+    </div>
     <div class="field"><label>Order mode</label>
       <div class="radio"><input type="radio" name="auto_trade" value="false" id="m-reco"><div><label for="m-reco" style="font-size:15px;color:var(--ink)">Recommendations only</label><div class="sub">Claude explains what changed. Nothing is bought or sold.</div></div></div>
       <div class="radio"><input type="radio" name="auto_trade" value="true" id="m-paper"><div><label for="m-paper" style="font-size:15px;color:var(--ink)">Paper trading</label><div class="sub">Claude places simulated orders, max 10% of equity each, whole shares.</div></div></div>
@@ -349,8 +352,9 @@
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
         <td class="num">${money(p.market_value)}</td><td class="num ${p.unrealized_pl>0?"up":p.unrealized_pl<0?"down":""}">${signed(p.unrealized_pl)}</td>
         <td class="num ${p.stop!=null && p.current_price!=null && p.current_price<=p.stop?"down":""}">${p.stop!=null?money(p.stop,2):"n/a"}</td>
+        <td>${gttCell(p, c)}</td>
         <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>`).join("")
-      : `<tr><td colspan="8" class="empty">No open positions. ${s.auto_trade ? "" : "Use a recommendation's paper-buy button, or switch to paper trading in Settings."}</td></tr>`;
+      : `<tr><td colspan="9" class="empty">No open positions. ${s.auto_trade ? "" : "Use a recommendation's paper-buy button, or switch to paper trading in Settings."}</td></tr>`;
 
     $("recs").innerHTML = S.recommendations.length ? S.recommendations.map(r => `<article class="card rec ${esc(r.action)} ${r.dismissed?"dismissed":""}">
         <div class="row" style="gap:8px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><span style="font-size:16px;font-weight:700">${esc(r.ticker)}</span>
@@ -385,13 +389,27 @@
   }
 
   let btCostSet = false;
+  function gttCell(p, c){
+    if(!c.groww_gtt_active) return '<span class="sub">off</span>';
+    const g = p.gtt;
+    if(!g) return '<span class="pill warn" style="padding:3px 8px">none yet</span>';
+    const cls = g.last_error ? "bad" : (g.status === "ACTIVE" ? "ok" : "warn");
+    return `<span class="pill ${cls}" style="padding:3px 8px" title="${esc(g.last_error || g.smart_order_id || "")}">${esc(g.status || "?")} · ${money(g.trigger,2)}</span>`;
+  }
+  function orderStatus(x){
+    if(!x.live) return '<span class="pill" style="padding:3px 8px">paper · filled</span>';
+    const cls = x.status === "filled" ? "ok" : x.status === "failed" ? "bad" : "warn";
+    const filled = x.status === "open" && x.filled_quantity ? ` · ${x.filled_quantity}/${x.qty}` : "";
+    return `<span class="pill ${cls}" style="padding:3px 8px" title="${esc(x.remark || x.error || x.groww_order_id || "")}">LIVE · ${esc(x.order_status || x.status || "?")}${filled}</span>`;
+  }
   function renderOrders(){
     const o = S.orders || [], perf = S.performance;
     $("fees-note").textContent = perf ? `${perf.orders} orders · charges paid ${money(perf.fees_paid||0,2)}` : "";
-    $("orders").innerHTML = o.length ? o.map(x => `<tr><td class="mono sub" style="white-space:nowrap">${when(x.filled_at)}</td>
-      <td><span class="side-chip ${x.side==="sell"?"sell":"buy"}">${esc(x.side.toUpperCase())}</span></td><td style="font-weight:600">${esc(x.symbol)}</td>
-      <td class="num">${x.qty}</td><td class="num">${money(x.filled_avg_price,2)}</td><td class="num">${money(x.notional)}</td><td class="num">${x.fees!=null?money(x.fees,2):"n/a"}</td></tr>`).join("")
-      : `<tr><td colspan="7" class="empty">No paper orders yet.</td></tr>`;
+    $("orders").innerHTML = o.length ? o.map(x => `<tr><td class="mono sub" style="white-space:nowrap">${when(x.at || x.filled_at)}</td>
+      <td><span class="side-chip ${x.side==="sell"?"sell":"buy"}">${esc(String(x.side||"").toUpperCase())}</span></td><td style="font-weight:600">${esc(x.symbol)}</td>
+      <td class="num">${x.qty ?? ""}</td><td class="num">${x.filled_avg_price!=null?money(x.filled_avg_price,2):"n/a"}</td><td class="num">${money(x.notional)}</td><td class="num">${x.fees!=null?money(x.fees,2):"n/a"}</td>
+      <td>${orderStatus(x)}</td></tr>`).join("")
+      : `<tr><td colspan="8" class="empty">No orders yet.</td></tr>`;
   }
   function renderScreen(sc){
     const rows = sc.top.map(r => `<tr><td class="num">${r.rank}</td><td style="font-weight:600"><a href="#" data-lookup="${esc(r.symbol)}" style="text-decoration:none">${esc(r.symbol)}</a><div class="sub">${esc(r.name)}</div></td>
@@ -730,6 +748,8 @@
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
+    $("f-gtt").checked = !!s.groww_gtt_stops;
+    $("f-gtt-note").textContent = c.groww_live_orders ? "A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Uses REAL orders on Groww." : "Saved, but inactive: GROWW_LIVE_ORDERS is not true in .env, so no GTT orders are placed.";
     $("groww-test-result").textContent = c.groww_credentials ? "" : "No Groww keys in .env";
     $("conns").innerHTML = [
       conn(c.claude, "Claude", c.claude ? s.claude_model + " · key set" : "ANTHROPIC_API_KEY missing in .env"),
@@ -743,7 +763,7 @@
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true";
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.groww_gtt_stops = $("f-gtt").checked;
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);

@@ -126,11 +126,68 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
 
 
 def cmd_groww_token(args: argparse.Namespace) -> int:
-    """Print a fresh Groww access token (valid until 06:00 IST next day)."""
+    """Print a Groww access token (valid until 06:00 IST); reuses the cached one."""
     from .runner import resolve_groww_token
     settings = _settings(args)
-    settings.groww_access_token = None  # force generation from key + secret / TOTP
-    print(resolve_groww_token(settings))
+    settings.groww_access_token = None  # use key + secret / TOTP (cached until 06:00 IST)
+    print(resolve_groww_token(settings, fresh=args.fresh))
+    return 0
+
+
+def _fmt_live_order(o: dict[str, Any]) -> str:
+    px = o.get("average_fill_price") or o.get("limit_price")
+    return (f"{(o.get('placed_at') or '')[:19]:<19}  {str(o.get('side', '')).upper():<4} {o.get('symbol', ''):<12} "
+            f"qty {o.get('qty')!s:<5} filled {o.get('filled_quantity') or 0:<5g} @ {px if px is not None else 'n/a'}  "
+            f"{o.get('status', ''):<6} {o.get('order_status') or ''}  {o.get('groww_order_id') or ''}"
+            + (f"  ({o.get('remark') or o.get('error')})" if o.get('remark') or o.get('error') else ""))
+
+
+def cmd_orders(args: argparse.Namespace) -> int:
+    """List live Groww orders recorded in state.json; --refresh re-checks open ones."""
+    from .live import refresh_open_orders
+    from .runner import make_groww, make_notifier
+    settings = _settings(args)
+    st = State(settings.state_dir / "state.json")
+    orders = st.data.get("live_orders", [])
+    if args.refresh:
+        if not any(o.get("status") == "open" for o in orders):
+            print("No open live orders to refresh.")
+        else:
+            updated = refresh_open_orders(make_groww(settings), st, make_notifier(settings))
+            st.save()
+            print(f"Re-checked {len(updated)} open order(s).")
+    if not orders:
+        print("No live orders recorded.")
+    for o in orders[-args.limit:]:
+        print(_fmt_live_order(o))
+    return 0
+
+
+def cmd_gtt(args: argparse.Namespace) -> int:
+    """Show the Groww GTT stop-losses; --sync creates/raises/cancels them (live only)."""
+    from .live import GttStopManager
+    from .runner import free_prices, make_groww, make_notifier
+    settings = _settings(args)
+    st = State(settings.state_dir / "state.json")
+    if args.sync:
+        if not settings.groww_live_orders:
+            print("Refusing: GROWW_LIVE_ORDERS is not true, so no GTT orders are placed.")
+            return 1
+        if not settings.groww_gtt_stops:
+            print("Refusing: GROWW_GTT_STOPS is not true.")
+            return 1
+        prices = free_prices(settings)
+        mgr = GttStopManager(make_groww(settings, prices), st, notifier=make_notifier(settings),
+                             bars_fn=lambda sym: prices.history(sym, "1y"))
+        for a in mgr.sync():
+            print("  ", a)
+        st.save()
+    stops = st.data.get("gtt_stops", {})
+    if not stops:
+        print("No GTT stop-losses recorded.")
+    for sym, r in sorted(stops.items()):
+        print(f"{sym:<12} qty {r.get('qty')}  trigger {r.get('trigger')}  limit {r.get('limit')}  "
+              f"{r.get('status')}  {r.get('smart_order_id')}" + (f"  last error: {r['last_error']}" if r.get("last_error") else ""))
     return 0
 
 
@@ -430,8 +487,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=20); sp.set_defaults(func=cmd_history)
     sub.add_parser("reset", help="forget seen trades and reset the local paper account") \
         .set_defaults(func=cmd_reset)
-    sub.add_parser("groww-token", help="generate a Groww access token from API key + secret/TOTP") \
-        .set_defaults(func=cmd_groww_token)
+    sp = sub.add_parser("groww-token", help="print a Groww access token (cached until 06:00 IST)")
+    sp.add_argument("--fresh", action="store_true", help="generate a new one even if the cached token is valid")
+    sp.set_defaults(func=cmd_groww_token)
+    sp = sub.add_parser("orders", help="list live Groww orders; --refresh re-checks open ones")
+    sp.add_argument("--refresh", action="store_true")
+    sp.add_argument("--limit", type=int, default=30)
+    sp.set_defaults(func=cmd_orders)
+    sp = sub.add_parser("gtt", help="show Groww GTT stop-losses; --sync updates them (live only)")
+    sp.add_argument("--sync", action="store_true")
+    sp.set_defaults(func=cmd_gtt)
     sp = sub.add_parser("backtest", help="replay an investor's disclosed deals vs NIFTY 50")
     sp.add_argument("--investor", help="override WATCH_INVESTOR")
     sp.add_argument("--days", type=int, default=365, help="how far back to fetch deals")

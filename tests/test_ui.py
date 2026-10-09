@@ -261,3 +261,34 @@ def test_signal_lab_endpoints(server):
     assert status == 202 and job["kind"] == "signal_lab" and job["ok"] is False and "India" in job["message"]
     _, st = _get(base + "/api/state")
     assert st["signal_lab"] is None
+
+
+def test_live_orders_gtt_status_and_gtt_toggle(server):
+    from trading_agent.state import State
+    base, app = server
+    app.broker.set_price("NVDA", 180.0)
+    app.broker.submit_order("NVDA", "buy", qty=2)
+    st = State(app.settings.state_dir / "state.json")
+    st.data["live_orders"] = [
+        {"groww_order_id": "GMK1", "symbol": "RELIANCE", "side": "buy", "qty": 3, "limit_price": 2876.3,
+         "status": "open", "order_status": "OPEN", "filled_quantity": 0, "placed_at": "2099-01-01T10:00:00+05:30"},
+        {"groww_order_id": "GMK2", "symbol": "TCS", "side": "sell", "qty": 1, "status": "failed",
+         "order_status": "REJECTED", "remark": "price band", "placed_at": "2000-01-01T10:00:00+05:30"}]
+    st.data["gtt_stops"] = {"NVDA": {"smart_order_id": "gtt_1", "trigger": 153.0, "limit": 152.25, "qty": 2,
+                                     "status": "ACTIVE"}}
+    st.save()
+    _, s = _get(base + "/api/state")
+    assert [o.get("groww_order_id") for o in s["orders"]] == ["GMK1", None, "GMK2"]  # newest first
+    assert s["orders"][0]["live"] and s["orders"][0]["status"] == "open"
+    assert s["orders"][2]["order_status"] == "REJECTED"
+    assert s["positions"][0]["gtt"]["status"] == "ACTIVE" and s["positions"][0]["gtt"]["trigger"] == 153.0
+    assert s["positions"][0]["sellable_qty"] == 2
+    assert s["settings"]["groww_gtt_stops"] is False and s["connections"]["groww_gtt_active"] is False
+    status, j = _post(base + "/api/settings", {"groww_gtt_stops": True})
+    assert status == 200 and j["applied"]["GROWW_GTT_STOPS"] == "true"
+    assert "GROWW_GTT_STOPS=true" in (app.settings.state_dir / ".env").read_text()
+    _, s = _get(base + "/api/state")
+    # saved, but still inactive: live orders are off and can't be turned on from here
+    assert s["settings"]["groww_gtt_stops"] is True and s["connections"]["groww_gtt_active"] is False
+    status, j = _post(base + "/api/settings", {"groww_live_orders": True})
+    assert status == 200 and j["applied"] == {} and app.settings.groww_live_orders is False

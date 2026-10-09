@@ -14,6 +14,8 @@ ROUTES = {
     ("GET", "/margins/detail/user"): {"status": "SUCCESS", "payload": {"clear_cash": 50000.0}},
     ("GET", "/live-data/ltp"): {"status": "SUCCESS", "payload": {"NSE_RELIANCE": 2862.0, "NSE_SENCO": 346.2}},
     ("POST", "/order/create"): {"status": "SUCCESS", "payload": {"groww_order_id": "GMK1", "order_status": "OPEN"}},
+    ("GET", "/order/status/GMK1"): {"status": "SUCCESS", "payload": {"groww_order_id": "GMK1", "order_status": "OPEN",
+                                                                    "filled_quantity": 0}},
 }
 
 
@@ -42,13 +44,13 @@ def test_orders_blocked_unless_live_enabled():
 
 def test_live_order_body_uses_whole_shares():
     sess = FakeSession(ROUTES)
-    b = GrowwBroker("tok", session=sess, live_orders=True)
+    b = GrowwBroker("tok", session=sess, live_orders=True, sleep=lambda s: None)
     order = b.submit_order("reliance", "buy", notional=10000)  # 10000 / 2862 -> 3 shares
     assert order["qty"] == 3 and order["id"] == "GMK1" and order["live"] is True
-    body = sess.calls[-1][2]["json"]
+    body = next(c[2]["json"] for c in sess.calls if c[1].endswith("/order/create"))
     assert body["trading_symbol"] == "RELIANCE" and body["quantity"] == 3
     assert body["transaction_type"] == "BUY" and body["segment"] == "CASH"
-    assert body["product"] == "CNC" and body["order_type"] == "MARKET"
+    assert body["product"] == "CNC" and body["order_type"] == "LIMIT" and body["validity"] == "DAY"
 
 
 def test_api_failure_raises():

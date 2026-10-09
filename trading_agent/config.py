@@ -61,6 +61,9 @@ class Settings:
     notify_webhook_url: str | None
     # Paths
     state_dir: Path = field(default_factory=lambda: Path("state"))
+    # Live-order safety (Groww)
+    max_slippage_pct: float = 0.5  # limit price = LTP +/- this percent
+    groww_gtt_stops: bool = False  # keep a GTT stop-loss at Groww per live holding
 
     @property
     def use_alpaca(self) -> bool:
@@ -103,6 +106,12 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
             broker = "local"
     if broker not in {"local", "groww", "alpaca"}:
         raise SystemExit(f"BROKER must be local, groww or alpaca, got {broker!r}")
+    try:
+        slippage = float(env("MAX_SLIPPAGE_PCT") or 0.5)
+    except ValueError:
+        raise SystemExit("MAX_SLIPPAGE_PCT must be a number (percent), e.g. 0.5") from None
+    if not 0 < slippage <= 5:
+        raise SystemExit(f"MAX_SLIPPAGE_PCT must be between 0 and 5 percent, got {slippage}")
     data_source = (env("DATA_SOURCE") or ("nse" if market == "in" else "quiver")).lower()
     default_investor = "ASHISH KACHOLIA" if market == "in" else "Nancy Pelosi"
     default_source = "deals" if data_source == "nse" else "congress"
@@ -131,4 +140,6 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         notify_email_from=env("NOTIFY_EMAIL_FROM") or "Trading Agent <onboarding@resend.dev>",
         notify_webhook_url=env("NOTIFY_WEBHOOK_URL") or None,
         state_dir=Path(env("STATE_DIR") or "state"),
+        max_slippage_pct=slippage,
+        groww_gtt_stops=_bool(env("GROWW_GTT_STOPS"), False),
     )

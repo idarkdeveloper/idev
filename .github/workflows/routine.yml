@@ -50,6 +50,8 @@ jobs:
           GROWW_API_SECRET: ${{ secrets.GROWW_API_SECRET }}
           GROWW_TOTP_SECRET: ${{ secrets.GROWW_TOTP_SECRET }}
           GROWW_LIVE_ORDERS: ${{ vars.GROWW_LIVE_ORDERS || 'false' }}
+          GROWW_GTT_STOPS: ${{ vars.GROWW_GTT_STOPS || 'false' }}
+          MAX_SLIPPAGE_PCT: ${{ vars.MAX_SLIPPAGE_PCT || '0.5' }}
           QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
           ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
           ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
@@ -68,6 +70,12 @@ jobs:
             FLAGS="$FLAGS --dry-run"
           fi
           python -m trading_agent check $FLAGS
+
+      # Never put the cached Groww access token into the Actions cache: it can trade.
+      # Each run generates its own (well under Groww's 150 a day at this schedule).
+      - name: Drop cached Groww token
+        if: always()
+        run: rm -f state/groww_token.json state/groww_token.json.tmp
 
       - uses: actions/cache/save@v4
         if: always()
