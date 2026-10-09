@@ -93,6 +93,26 @@ class YahooPrices:
             cache.write_text(json.dumps(bars))
         return bars
 
+    def dividends(self, symbol: str, range_: str = "10y") -> list[dict[str, Any]]:
+        """Dividends per share by ex-date, oldest first: [{date, amount}]. Cached on disk."""
+        ysym = self.yahoo_symbol(symbol)
+        cache = self.cache_dir / f"yahoo_div_{ysym.replace('^', 'IDX_')}_{range_}.json" if self.cache_dir else None
+        if cache and cache.exists() and time.time() - cache.stat().st_mtime < self.cache_ttl:
+            return json.loads(cache.read_text())
+        resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
+                                params={"range": range_, "interval": "1d", "events": "div"}, timeout=self.timeout)
+        resp.raise_for_status()
+        try:
+            events = (resp.json()["chart"]["result"][0].get("events") or {}).get("dividends") or {}
+        except (KeyError, IndexError, TypeError) as e:
+            raise LookupError(f"Yahoo returned no dividend data for {ysym}") from e
+        out = sorted(({"date": datetime.fromtimestamp(int(v["date"]), tz=timezone.utc).strftime("%Y-%m-%d"),
+                       "amount": float(v["amount"])} for v in events.values()), key=lambda d: d["date"])
+        if cache:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(out))
+        return out
+
 
 def chain(*fns: Any) -> Any:
     """Try each price function in order; raise the last error if all fail."""
