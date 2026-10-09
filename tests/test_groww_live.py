@@ -576,3 +576,20 @@ def test_cli_baseline_marks_seen_without_claude(tmp_path, monkeypatch, capsys):
     assert "baseline" in capsys.readouterr().out
     assert cli.main(["check", "--demo", "--dry-run"]) == 0
     assert "No new disclosed trades" in capsys.readouterr().out
+
+
+def test_gtt_skips_holdings_that_are_not_exchange_traded(tmp_path):
+    sess = FakeSession(dict(GTT_ROUTES))
+    b = live_broker(sess, tick_size_fn=lambda s: None if s == "NSE" else 0.05)  # unlisted NSE Ltd shares
+    mgr = GttStopManager(b, State(tmp_path / "s.json"))
+    acts = mgr.sync([Position("NSE", 8, 1000.0, current_price=1100.0, sellable_qty=8), pos(1000.0)])
+    assert {"symbol": "NSE", "action": "skip", "reason": "not exchange-traded"} in acts
+    assert [a["symbol"] for a in acts if a["action"] == "create"] == ["TCS"]
+    assert GrowwBroker("tok", session=sess).is_listed("ANY")  # no instrument list: don't block
+
+
+def test_anthropic_client_sends_workspace_header(settings):
+    from trading_agent.agent import make_client
+    assert "anthropic-workspace-id" not in make_client(settings).default_headers
+    settings.anthropic_workspace_id = "wrkspc_test"
+    assert make_client(settings).default_headers["anthropic-workspace-id"] == "wrkspc_test"

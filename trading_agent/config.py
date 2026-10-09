@@ -64,6 +64,8 @@ class Settings:
     # Live-order safety (Groww)
     max_slippage_pct: float = 0.5  # limit price = LTP +/- this percent
     groww_gtt_stops: bool = False  # keep a GTT stop-loss at Groww per live holding
+    # Needed when the API key is not scoped to one workspace (the API then asks for it).
+    anthropic_workspace_id: str | None = None
 
     @property
     def use_alpaca(self) -> bool:
@@ -142,4 +144,5 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         state_dir=Path(env("STATE_DIR") or "state"),
         max_slippage_pct=slippage,
         groww_gtt_stops=_bool(env("GROWW_GTT_STOPS"), False),
+        anthropic_workspace_id=env("ANTHROPIC_WORKSPACE_ID") or None,
     )

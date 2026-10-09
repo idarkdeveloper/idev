@@ -152,6 +152,10 @@ class GttStopManager:
                 continue
             if price is None:
                 continue
+            if hasattr(self.broker, "is_listed") and not self.broker.is_listed(sym):
+                if not rec:
+                    actions.append({"symbol": sym, "action": "skip", "reason": "not exchange-traded"})
+                continue
             high = max(x for x in (rec.get("high_water") if rec else None, price, p.avg_entry_price) if x)
             trigger, limit = self.broker.gtt_stop_prices(sym, self._stop_for(sym, high))
             if rec is None or not rec.get("smart_order_id"):

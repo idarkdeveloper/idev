@@ -402,6 +402,13 @@ def build_user_message(ctx: AgentContext) -> str:
 MAX_STEPS = 20
 
 
+def make_client(settings: Settings) -> anthropic.Anthropic:
+    """Anthropic client; adds the workspace header for keys not scoped to one workspace."""
+    ws = getattr(settings, "anthropic_workspace_id", None)
+    return anthropic.Anthropic(api_key=settings.anthropic_api_key or None,
+                               default_headers={"anthropic-workspace-id": ws} if ws else None)
+
+
 def run_agent(ctx: AgentContext, client: anthropic.Anthropic | None = None,
               runner_factory: Any | None = None) -> RunResult:
     """Drive one Claude run over ``ctx.result.new_trades``.
@@ -410,7 +417,7 @@ def run_agent(ctx: AgentContext, client: anthropic.Anthropic | None = None,
     arguments ``client.beta.messages.tool_runner`` would.
     """
     settings = ctx.settings
-    client = client or anthropic.Anthropic()
+    client = client or make_client(settings)
     tools = build_tools(ctx)
 
     kwargs: dict[str, Any] = dict(

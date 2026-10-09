@@ -72,7 +72,7 @@ def read_only_checks(broker: GrowwBroker, *, token_source: str, cache: TokenCach
         try:
             payload = broker._req("GET", path, params={"segment": "CASH"} if name == "order list"
                                   else {"smart_order_type": "GTT", "segment": "CASH"})
-            n = len(payload.get("order_list") or payload.get("data") or payload.get("smart_orders") or [])
+            n = len(payload.get("order_list") or payload.get("orders") or payload.get("data") or [])
             c.add(name, True, f"readable ({n} rows; keys: {', '.join(sorted(payload)[:6])})")
         except Exception as e:  # noqa: BLE001
             c.add(name, False, f"{type(e).__name__}: {e}")

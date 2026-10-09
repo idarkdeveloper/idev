@@ -321,6 +321,7 @@ on Indian markets supports:
 | Variable | Purpose |
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude. Model defaults to `claude-opus-5-5` (`CLAUDE_MODEL`). |
+| `ANTHROPIC_WORKSPACE_ID` | Only for a key that isn't scoped to one workspace: the API then rejects every request until this is set. |
 | `MARKET` | `in` (default: NSE + Groww) or `us` (QuiverQuant + Alpaca). |
 | `WATCH_INVESTOR`, `WATCH_SOURCE` | Who to follow and which disclosures to read. |
 | `GROWW_ACCESS_TOKEN` / `GROWW_API_KEY` + `GROWW_API_SECRET` or `GROWW_TOTP_SECRET` | Groww access. Unset = local simulator only. |

@@ -419,6 +419,16 @@ class GrowwBroker:
             raise LookupError(f"Groww returned no LTP for {self.exchange}_{symbol}")
         return prices[symbol]
 
+    def is_listed(self, symbol: str) -> bool:
+        """False when the instrument list is known and lacks the symbol (unlisted shares,
+        some bonds): no order or GTT can be placed for those."""
+        if self.tick_size_fn is None:
+            return True
+        try:
+            return bool(self.tick_size_fn(symbol.upper()))
+        except Exception:  # noqa: BLE001 - list unavailable: don't block on it
+            return True
+
     def tick_size(self, symbol: str) -> float:
         tick = None
         if self.tick_size_fn is not None:
