@@ -553,7 +553,7 @@
         <td class="num ${p.stop!=null && p.current_price!=null && p.current_price<=p.stop?"down":""}">${p.stop!=null?money(p.stop,2):"n/a"}</td>
         <td>${gttCell(p, c)}</td>
         <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>`).join("")
-      : `<tr><td colspan="9" class="empty">No open positions. ${s.auto_trade ? "" : "Use a recommendation's paper-buy button, or switch to paper trading in Settings."}</td></tr>`;
+      : `<tr><td colspan="9" class="empty">No practice trades yet. ${s.auto_trade ? "The agent buys here when a check finds a good deal." : "Place a paper order below, or use a recommendation's paper-buy button."}</td></tr>`;
 
     $("recs").innerHTML = S.recommendations.length ? S.recommendations.map(r => `<article class="card rec ${esc(r.action)} ${r.dismissed?"dismissed":""}">
         <div class="row" style="gap:8px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>
@@ -772,7 +772,7 @@
     const h = S.equity_history || [], el = $("eq-chart"), start = S.settings.paper_starting_cash;
     const perf = S.performance;
     const es = S.equity_stats;
-    $("eq-note").textContent = h.length ? `${h.length} points since ${shortDate(h[0].at.slice(0,10))}` +
+    $("eq-note").textContent = h.length ? `${h.length} point${h.length === 1 ? "" : "s"} since ${shortDate(h[0].at.slice(0,10))}` +
       (es ? (es.drawdown_now < 0 ? ` · ${pct(es.drawdown_now)} from peak` : " · at its peak") +
             (es.max_drawdown < 0 ? ` · worst fall ${pct(es.max_drawdown)}` : "") : "") : "";
     lineChart(el, {x: h.map(p => p.at), series: [{name:"Account value", color:C.s1, area:true, values: h.map(p => p.equity)}],
