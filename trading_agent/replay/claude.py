@@ -73,7 +73,9 @@ def ask(trial: Any, client: Any, model: str, news: Any, lookup: str | None = Non
     resp = client.messages.create(model=model, max_tokens=4000, system=SYSTEM.format(date=trial.clock.today),
                                   tools=[TOOL], tool_choice={"type": "tool", "name": TOOL["name"]},
                                   messages=[{"role": "user", "content": json.dumps(ctx, default=str)}])
-    block = next(b for b in resp.content if getattr(b, "type", None) == "tool_use")
+    block = next((b for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
+    if block is None or not isinstance(block.input, dict):
+        raise ValueError(f"Claude returned no recorded view (stop reason: {getattr(resp, 'stop_reason', None)})")
     entry = {"date": trial.clock.today, "summary": block.input.get("summary", ""),
              "recommendations": block.input.get("recommendations", []),
              "model": getattr(resp, "model", model), "hindsight": True}

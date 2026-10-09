@@ -40,6 +40,24 @@ def test_context_holds_nothing_after_the_clock(tmp_path):
     assert ctx["lookup"]["symbol"] == "E" and ctx["market"]["nifty_above_200dma"] in (True, False)
 
 
+class RefusingClient:
+    def __init__(self):
+        self.messages = self
+
+    def create(self, **kw):
+        return SimpleNamespace(model="claude-test", stop_reason="refusal",
+                               content=[SimpleNamespace(type="text", text="I can't help with that.")])
+
+
+def test_ask_raises_when_there_is_no_recorded_view(tmp_path):
+    import pytest
+
+    t = make(tmp_path)
+    with pytest.raises(ValueError, match="no recorded view"):
+        ask(t, RefusingClient(), "claude-x", FakeNews())
+    assert t.data["claude"] == [] and t.data["claude_presses"] == 0
+
+
 def test_ask_uses_one_forced_tool_and_saves_the_answer(tmp_path):
     t = make(tmp_path)
     client = FakeClient()
