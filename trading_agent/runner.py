@@ -73,8 +73,35 @@ def free_prices(settings: Settings) -> YahooPrices:
     return YahooPrices(suffix=suffix, cache_dir=settings.state_dir / "cache")
 
 
-def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
+def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww: Any | None = None) -> LocalPaperBroker:
+    """The practice (paper) account on ``state/paper_broker.json``. Simulated fills only; with Groww linked its
+    prices come from Groww (read-only: the client is built with live orders off), otherwise from ``price_fn``."""
+    import dataclasses
+
     sim_path = settings.state_dir / "paper_broker.json"
+    price_fn = price_fn or free_prices(settings)
+    if settings.use_groww:
+        groww = groww or make_groww(dataclasses.replace(settings, groww_live_orders=False), price_fn)
+
+        def make() -> LocalPaperBroker:
+            return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
+                                    price_fn=groww.latest_price, currency="INR", whole_shares=True,
+                                    cost_model=cost_model_for("in"))
+        sim = make()
+        if sim.is_untouched_mirror:
+            # Older versions copied the Groww holdings in on the first run. A copy nobody has
+            # traded in is just a stale duplicate, so start the practice account afresh.
+            log.info("Replacing the untouched copy of the Groww holdings with a fresh practice "
+                     "account of %.0f.", settings.paper_starting_cash)
+            sim.path.unlink()
+            sim = make()
+        return sim
+    return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash, price_fn=price_fn,
+                            currency=settings.currency, whole_shares=settings.market == "in",
+                            cost_model=cost_model_for(settings.market))
+
+
+def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
     price_fn = price_fn or free_prices(settings)
     if settings.use_groww:
         groww = make_groww(settings, price_fn)
@@ -84,25 +111,11 @@ def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
         # Paper mode: a separate practice account (PAPER_STARTING_CASH, no stocks) with live
         # prices from Groww and simulated fills. Real holdings are shown on their own and
         # are never copied in, so the two never look like duplicates.
-        sim = LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
-                               price_fn=groww.latest_price, currency="INR", whole_shares=True,
-                               cost_model=cost_model_for("in"))
-        if sim.is_untouched_mirror:
-            # Older versions copied the Groww holdings in on the first run. A copy nobody has
-            # traded in is just a stale duplicate, so start the practice account afresh.
-            log.info("Replacing the untouched copy of the Groww holdings with a fresh practice "
-                     "account of %.0f.", settings.paper_starting_cash)
-            sim.path.unlink()
-            sim = LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
-                                   price_fn=groww.latest_price, currency="INR", whole_shares=True,
-                                   cost_model=cost_model_for("in"))
-        return sim
+        return make_practice_broker(settings, price_fn, groww)
     if settings.use_alpaca:
         return AlpacaPaperBroker(settings.alpaca_key_id, settings.alpaca_secret,
                                  settings.alpaca_base_url)
-    return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash, price_fn=price_fn,
-                            currency=settings.currency, whole_shares=settings.market == "in",
-                            cost_model=cost_model_for(settings.market))
+    return make_practice_broker(settings, price_fn)
 
 
 def make_data_source(settings: Settings) -> Any:

@@ -205,6 +205,17 @@ class LocalPaperBroker:
         """A copy of a real account (see ``seed``) with no paper orders placed in it."""
         return bool(self._state.get("mirrors")) and not self._state.get("orders")
 
+    def reset(self, starting_cash: float) -> bool:
+        """Start the account over in place (same object, so every holder of it sees the fresh account).
+        Removes the file; it is written again by the next order. True if a file was removed."""
+        existed = self.path.exists()
+        if existed:
+            self.path.unlink()
+        self._state = {"cash": float(starting_cash), "starting_cash": float(starting_cash), "positions": {},
+                       "orders": [], "prices": {}, "created_at": _utc_now(), "fees_paid": 0.0}
+        self.__dict__.pop("name", None)
+        return existed
+
     @property
     def is_fresh(self) -> bool:
         """True until the first order or seed is persisted."""

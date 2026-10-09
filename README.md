@@ -52,11 +52,11 @@ Other commands: `portfolio` (account + P&L), `history` (past recommendations),
 
 ```bash
 python -m trading_agent ui            # opens http://127.0.0.1:8787 in your browser
-python -m trading_agent ui --demo     # same, on bundled sample deals
+python -m trading_agent ui --demo     # offline sample dashboard (bundled sample deals), kept in state/demo-sample/
 ```
 
 A local web page served by the package itself (no extra dependencies) that shows the
-watched investor's disclosed deals with new ones flagged, your paper portfolio with live
+watched investor's disclosed deals with new ones flagged, your real Groww holdings with live
 P&L, Claude's recommendations with a one-click paper order, and the run log. The
 **Run check now** button runs the same check as the CLI in the background. **Settings**
 edits the investor, disclosure source, order mode and notification targets and writes
@@ -89,8 +89,19 @@ labelled so and are never a reason to trust it with real money.
 
 Replays are saved in `state/replay/<name>/`. Nothing on the Replay or Demo pages can place a real order.
 
-**Demo** (`/demo`, or `python -m trading_agent ui --demo`) is the dashboard on bundled sample deals and prices,
-with its own practice account in `state/demo/`. It never contacts Groww; **Reset demo** starts it over.
+**Live** (`/`) shows only real things: market regime, the watched deals, your My Groww portfolio, recommendations,
+real orders, settings, Run check and the watch. Its top tiles are your Groww holdings value, profit / loss and holding
+count ("n/a" until Groww is linked).
+
+**Demo** (`/demo`) is the same page on the same real data (same regime, deals, recommendations, look-up, news and
+My Groww portfolio) with the practice account added: the practice portfolio (account-value chart, positions, order
+form), practice tiles and "Paper buy/sell" buttons on recommendations. The practice account is
+`state/paper_broker.json` (PAPER_STARTING_CASH, prices from Groww when linked, otherwise Yahoo). Demo can never place a
+Groww order, write `.env` or send a notification, even with GROWW_LIVE_ORDERS=true; Run check, Settings and Start watch
+are only on the Live page. **Reset practice account** (asks first) resets only `paper_broker.json`, not the Live state.
+
+`python -m trading_agent ui --demo` is the offline sample dashboard: bundled sample deals and prices with its own
+state and practice account in `state/demo-sample/`, no Groww, no `.env` writes, no notifications. CI and tests use it.
 
 ## Linking Groww
 

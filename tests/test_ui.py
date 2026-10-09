@@ -2,6 +2,7 @@
 import json
 import threading
 import time
+from pathlib import Path
 import urllib.error
 import urllib.request
 
@@ -468,62 +469,221 @@ def test_static_files_and_tabs_are_served(settings):
         srv.shutdown()
 
 
-def test_demo_is_isolated_from_live_and_groww(settings, monkeypatch, tmp_path):
-    import trading_agent.groww as g
-    from trading_agent.ui import App
-    monkeypatch.setattr(g.GrowwBroker, "__init__", lambda *a, **k: (_ for _ in ()).throw(AssertionError("groww")))
+class _FakeGroww:
+    """Stands in for the Groww client: reads work, any write is recorded so a test can assert there were none."""
+    name = "groww"
+
+    def __init__(self):
+        self.writes = []
+
+    def latest_price(self, symbol):
+        return 100.0
+
+    def account(self):
+        raise AssertionError("the live broker's account is not read by the Demo page")
+
+    def positions(self):
+        return []
+
+    def submit_order(self, *a, **k):
+        self.writes.append((a, k))
+        raise AssertionError("Groww write on the Demo page")
+
+    def orders(self):
+        return []
+
+
+class _FakeData:
+    def __init__(self, trades):
+        self.trades = trades
+
+    def trades_for_investor(self, investor, source, **kw):
+        return self.trades
+
+
+@pytest.fixture
+def two_pages(settings, sample_rows, monkeypatch):
+    """A Live app (Groww live orders ON, fake Groww) plus an existing practice account on disk, served over HTTP."""
+    import trading_agent.runner as runner
+    fake = _FakeGroww()
+    monkeypatch.setattr(runner, "make_groww", lambda s, price_fn=None: fake)
+    monkeypatch.setattr(App, "holidays", property(lambda self: None))
+
+    def no_notifier(*a, **k):
+        raise AssertionError("a notifier was built")
+    monkeypatch.setattr("trading_agent.ui.make_notifier", no_notifier)
     settings.market, settings.broker, settings.groww_access_token = "in", "groww", "tok"
-    settings.watch_investor = "Ashish Kacholia"
+    settings.groww_live_orders = True
     settings.notify_webhook_url, settings.resend_api_key = "https://example.invalid/hook", "re_test"
-    live = App(settings, dotenv=None)
-    demo = live.demo
-    assert demo.settings.notify_webhook_url is None and demo.settings.resend_api_key is None
-    assert demo.settings.state_dir == settings.state_dir / "demo" and demo.dotenv is None
-    assert demo.settings.groww_access_token is None and not demo.settings.use_groww
-    snap = demo.snapshot()
-    assert snap["settings"]["demo"] is True
-    assert not (settings.state_dir / "paper_broker.json").exists()  # live paper account untouched
-
-
-def test_demo_routes_share_the_page_with_a_prefix(settings):
-    import threading
-    import urllib.request
-    from trading_agent.ui import App, make_server
-
-    settings.market = "in"
-    srv = make_server(App(settings, dotenv=None), port=0)
+    settings.watch_investor, settings.watch_source = "Nancy Pelosi", "congress"
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    pb = LocalPaperBroker(settings.state_dir / "paper_broker.json", starting_cash=100_000, price_fn=lambda s: 100.0,
+                          currency="INR", whole_shares=True)
+    pb.submit_order("LAURUSLABS", "buy", qty=10)
+    (settings.state_dir / "state.json").write_text(json.dumps(
+        {"seen": [], "recommendations": [{"ticker": "SENCO", "action": "buy", "headline": "h", "rationale": "r",
+                                          "confidence": "high", "suggested_notional_usd": 5000,
+                                          "at": "2026-01-01T00:00:00+00:00"}],
+         "runs": [], "equity_history": []}))
+    trades = filter_by_investor([_norm_congress(r) for r in sample_rows], "Nancy Pelosi")
+    app = App(settings, broker=fake, data=_FakeData(trades), dotenv=None)
+    srv = make_server(app, "127.0.0.1", 0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    base = f"http://127.0.0.1:{srv.server_address[1]}"
-    try:
-        page = urllib.request.urlopen(base + "/demo").read().decode()
-        assert 'data-api="/demo"' in page and 'data-mode="demo"' in page
-        import json
-        st = json.loads(urllib.request.urlopen(base + "/demo/api/state").read())
-        assert st["settings"]["demo"] is True
-    finally:
-        srv.shutdown()
+    yield f"http://127.0.0.1:{srv.server_address[1]}", app, fake, settings
+    srv.shutdown()
+    srv.server_close()
 
 
-def test_serve_demo_app_resets_only_the_isolated_demo(settings):
-    """`serve(demo=True)` builds the normal App; the Demo tab is the isolated child."""
+def test_live_snapshot_is_the_live_page_and_the_page_switches_on_mode(two_pages):
+    base, app, fake, settings = two_pages
+    _, live = _get(base + "/api/state")
+    assert live["page"] == "live"
+    html = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "index.html").read_text(encoding="utf-8")
+    assert 'id="pp-card" hidden' in html and 'MODE === "demo"' in html
+    assert "practice money on real market data" in html and "Reset practice account" in html
+    _, page = _get(base + "/")
+    assert 'data-mode="demo"' not in page
+    _, dpage = _get(base + "/demo")
+    assert 'data-api="/demo"' in dpage and 'data-mode="demo"' in dpage and 'data-sample="1"' not in dpage
+
+
+def test_demo_uses_the_practice_account_and_shares_recommendations(two_pages):
+    base, app, fake, settings = two_pages
+    _, live = _get(base + "/api/state")
+    _, demo = _get(base + "/demo/api/state")
+    assert demo["page"] == "demo"
+    assert [p["symbol"] for p in demo["positions"]] == ["LAURUSLABS"]
+    assert demo["account"]["cash"] == 100_000 - 10 * 100 - demo["performance"]["fees_paid"]
+    assert [r["ticker"] for r in demo["recommendations"]] == [r["ticker"] for r in live["recommendations"]] == ["SENCO"]
+    assert len(demo["deals"]) == len(live["deals"]) > 0
+    assert demo["connections"]["groww_live_orders"] is False and demo["settings"]["demo"] is False
+    assert demo["settings"]["notify_webhook_url"] == "" and demo["settings"]["notify_email_to"] == ""
+    assert app.demo.dotenv is None and app.demo.settings.state_dir == settings.state_dir
+
+
+def test_demo_order_fills_on_practice_even_with_live_orders_on(two_pages):
+    base, app, fake, settings = two_pages
+    status, j = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 3})
+    assert status == 200 and j["order"]["qty"] == 3
+    assert fake.writes == []
+    saved = json.loads((settings.state_dir / "paper_broker.json").read_text())
+    assert saved["positions"]["SENCO"]["qty"] == 3
+    status, j = _post(base + "/demo/api/close", {"symbol": "SENCO"})
+    assert status == 200 and fake.writes == []
+    # the Live page no longer takes practice orders
+    status, j = _post(base + "/api/order", {"symbol": "SENCO", "side": "buy", "qty": 1})
+    assert status == 403
+
+
+def test_demo_reset_touches_only_the_practice_account(two_pages):
+    base, app, fake, settings = two_pages
+    state_before = (settings.state_dir / "state.json").read_bytes()
+    status, j = _post(base + "/demo/api/reset", {})
+    assert status == 200 and j["removed"] == ["paper_broker.json"]
+    assert (settings.state_dir / "state.json").read_bytes() == state_before
+    assert not (settings.state_dir / "paper_broker.json").exists()
+    _, demo = _get(base + "/demo/api/state")
+    assert demo["positions"] == [] and demo["account"]["cash"] == settings.paper_starting_cash
+    status, _ = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 1})
+    assert status == 200 and (settings.state_dir / "paper_broker.json").exists()
+
+
+def test_live_reset_forgets_deals_but_never_the_practice_account(two_pages):
+    base, app, fake, settings = two_pages
+    status, j = _post(base + "/api/reset", {})
+    assert status == 200 and j["removed"] == ["state.json"]
+    assert (settings.state_dir / "paper_broker.json").exists()
+
+
+def test_demo_refuses_what_controls_the_real_agent(two_pages):
+    base, app, fake, settings = two_pages
+    before = dict(vars(settings))
+    for path, body in (("/demo/api/check", {"dry_run": True}), ("/demo/api/settings", {"auto_trade": True}),
+                       ("/demo/api/watch", {"on": True}), ("/demo/api/groww-test", {})):
+        status, j = _post(base + path, body)
+        assert status == 403 and "Live page" in j["error"], path
+    assert vars(settings) == before and app.watcher is None and fake.writes == []
+
+
+def test_live_and_demo_share_one_practice_writer_in_paper_mode(settings, monkeypatch):
+    monkeypatch.setattr(App, "holidays", property(lambda self: None))
     settings.market = "in"
     settings.state_dir.mkdir(parents=True, exist_ok=True)
-    live_pb, live_state = settings.state_dir / "paper_broker.json", settings.state_dir / "state.json"
-    live_pb.write_text("{}")
-    live_state.write_text("{}")
-    app = App(settings)  # what serve(demo=True) now builds
-    assert app.demo_trades is None and app.demo is not app
+    pb = LocalPaperBroker(settings.state_dir / "paper_broker.json", starting_cash=1000, price_fn=lambda s: 10.0,
+                          currency="INR", whole_shares=True)
+    app = App(settings, broker=pb, data=_FakeData([]), dotenv=None)
+    assert app.practice_broker is pb and app.demo.broker is pb
     app.demo.reset()
-    assert live_pb.read_text() == "{}" and live_state.read_text() == "{}"
-    assert app.demo.dotenv is None
+    assert app.practice_broker is pb and pb.account().cash == settings.paper_starting_cash
 
 
-def test_demo_settings_ignore_notification_keys(settings):
+def test_sample_mode_is_isolated_and_is_the_whole_dashboard(settings):
+    from trading_agent.ui import sample_app
     settings.market = "in"
-    demo = App(settings).demo
-    applied = demo.update_settings({"notify_webhook_url": "https://example.invalid/h", "notify_email_to": "a@b.c"})
-    assert demo.settings.notify_webhook_url is None and demo.settings.notify_email_to is None
-    assert "NOTIFY_WEBHOOK_URL" not in applied
+    settings.broker, settings.groww_access_token, settings.groww_live_orders = "groww", "tok", True
+    settings.notify_webhook_url, settings.resend_api_key = "https://example.invalid/hook", "re_test"
+    settings.watch_investor = "Ashish Kacholia"
+    app = sample_app(settings, None)
+    assert app.settings.state_dir == settings.state_dir / "demo-sample" and app.dotenv is None
+    assert app.demo_trades and app.demo is app and app.practice_broker is app.broker
+    assert app.settings.groww_access_token is None and not app.settings.use_groww
+    assert not app.settings.groww_live_orders
+    assert app.settings.notify_webhook_url is None and app.settings.resend_api_key is None
+    assert app.snapshot()["page"] == "demo" and app.snapshot()["settings"]["demo"] is True
+    srv = make_server(app, "127.0.0.1", 0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        _, page = _get(f"http://127.0.0.1:{srv.server_address[1]}/")
+        assert 'data-mode="demo"' in page and 'data-sample="1"' in page and "bundled sample data (offline)" in page
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    app.update_settings({"notify_webhook_url": "https://example.invalid/h", "notify_email_to": "a@b.c"})
+    assert app.settings.notify_webhook_url is None and app.settings.notify_email_to is None
+    assert not (settings.state_dir / "paper_broker.json").exists() and not (settings.state_dir / "state.json").exists()
+
+
+def test_index_script_parses():
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    html = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "index.html").read_text(encoding="utf-8")
+    scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+    assert scripts
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "page.js"
+        f.write_text("\n".join(scripts), encoding="utf-8")
+        r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
+
+def test_tiles_and_recommendation_buttons_depend_on_mode():
+    """The page, not the server, decides what each mode shows: run it under node with a stub DOM."""
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    harness = Path(__file__).resolve().parent / "ui_mode_harness.js"
+    for mode, want_buy, want_tile, no_tile in (("live", False, "Holdings value", "Practice equity"),
+                                               ("demo", True, "Practice equity", "Holdings value")):
+        r = subprocess.run([node, str(harness), mode], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr + r.stdout
+        out = json.loads(r.stdout)
+        assert out["paper_buy_button"] is want_buy, mode
+        assert want_tile in out["tiles"] and no_tile not in out["tiles"], mode
+        assert out["pp_card_hidden"] is (mode == "live"), mode
+        assert ("Reset practice account" in out["banner"]) is (mode == "demo"), mode
+        assert out["check_hidden"] is out["settings_hidden"] is out["watch_hidden"] is (mode == "demo"), mode
+    # the offline sample dashboard is a Demo page that owns everything: banner says so, controls stay
+    r = subprocess.run([node, str(harness), "demo", "sample"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert "bundled sample data (offline)" in out["banner"] and out["check_hidden"] is False and out["pp_card_hidden"] is False
 
 
 def test_run_background_busy_check_is_atomic(settings):

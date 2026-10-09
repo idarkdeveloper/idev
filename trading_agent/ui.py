@@ -9,6 +9,7 @@ each holding shows its GTT stop-loss status.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import sys
@@ -29,7 +30,7 @@ from .config import Settings, load_settings
 from .investors import classify_client
 from .quiver import DisclosedTrade
 from .momentum import MomentumScreen, momentum_summary
-from .runner import check, free_prices, make_broker, make_data_source, make_notifier
+from .runner import check, free_prices, make_broker, make_data_source, make_notifier, make_practice_broker
 from .state import State
 from .watch import Watcher
 
@@ -78,7 +79,7 @@ class App:
     def __init__(self, settings: Settings, *, broker: Broker | None = None,
                  data: Any | None = None, demo_trades: list[DisclosedTrade] | None = None,
                  dotenv: Path | None = Path(".env"), context: Any | None = None,
-                 prices: Any | None = None):
+                 prices: Any | None = None, practice: LocalPaperBroker | None = None):
         self.settings = settings
         self.dotenv = dotenv
         self._broker = broker
@@ -107,32 +108,69 @@ class App:
         self._replay: Any | None = None  # ReplayApp, built on first use
         self._holidays: Any | None = None
         self._demo: "App | None" = None
+        self._demo_src: dict[str, Any] | None = None
+        self._practice: LocalPaperBroker | None = practice  # the practice account the Demo page uses
+        self._parent: "App | None" = None  # set on the Demo page's app: it shares this app's data sources
         self._lazy_lock = threading.Lock()
 
     @property
     def demo(self) -> "App":
-        """The Demo page's app: bundled sample deals and prices, its own state, no Groww, no .env writes."""
+        """The Demo page's app: the same real data sources, state and recommendations as this one, but with the
+        practice account, never a Groww order, never the real .env, never a notification. On the offline sample
+        dashboard (``ui --demo``) the app is its own Demo page."""
+        if self.demo_trades is not None or self._parent is not None:
+            return self
         with self._lazy_lock:
-            if self._demo is None:
-                import dataclasses
-                from .cli import _demo_inputs
-                s = dataclasses.replace(self.settings, state_dir=self.settings.state_dir / "demo", broker="local",
-                                        groww_access_token=None, groww_api_key=None, groww_api_secret=None,
-                                        groww_totp_secret=None, groww_live_orders=False,
-                                        resend_api_key=None, notify_email_to=None, notify_webhook_url=None)
-                trades, broker = _demo_inputs(s)
-                self._demo = App(s, broker=broker, demo_trades=trades, dotenv=None, context=self.context)
+            src = dataclasses.asdict(self.settings)
+            if self._demo is None or self._demo_src != src:
+                settings = dataclasses.replace(self.settings, groww_live_orders=False, resend_api_key=None,
+                                               notify_email_to=None, notify_webhook_url=None)
+                child = App(settings, dotenv=None, context=self.context, prices=self.prices)
+                child.momentum, child._parent = self.momentum, self
+                self._demo, self._demo_src = child, src
             return self._demo
+
+    @property
+    def page(self) -> str:
+        return "demo" if self.demo_trades is not None or self._parent is not None else "live"
+
+    def _on_live_page(self, what: str) -> None:
+        if self._parent is not None:
+            raise PermissionError(f"{what}: do this on the Live page")
+
+    @property
+    def practice_broker(self) -> LocalPaperBroker:
+        """The practice (paper) account on state/paper_broker.json. When this app's own broker already is that
+        account (paper mode) it is the same object, so there is one writer."""
+        if self._parent is not None:
+            return self._parent.practice_broker
+        if self.demo_trades is not None:
+            return self.broker  # type: ignore[return-value]
+        with self._lazy_lock:
+            if self._practice is None:
+                b = self._broker
+                self._practice = b if isinstance(b, LocalPaperBroker) else make_practice_broker(
+                    self.settings, price_fn=self.prices)
+            return self._practice
 
     # -- lazy singletons ------------------------------------------------------
     @property
     def broker(self) -> Broker:
+        if self._parent is not None:
+            return self._parent.practice_broker
         if self._broker is None:
-            self._broker = make_broker(self.settings)
+            b = make_broker(self.settings)
+            if isinstance(b, LocalPaperBroker) and self._practice is not None:
+                b = self._practice  # the practice account is already open: keep one writer
+            elif isinstance(b, LocalPaperBroker):
+                self._practice = b
+            self._broker = b
         return self._broker
 
     @property
     def data(self) -> Any | None:
+        if self._parent is not None:
+            return self._parent.data
         if self._data is None and self.demo_trades is None:
             self._data = make_data_source(self.settings)
         return self._data
@@ -182,6 +220,8 @@ class App:
     @property
     def holidays(self) -> Any | None:
         """NSE trading holidays (India only; not fetched in demo mode)."""
+        if self._parent is not None:
+            return self._parent.holidays
         if self.settings.market != "in" or self.demo_trades is not None:
             return None
         if self._holidays is None:
@@ -199,6 +239,10 @@ class App:
 
     # -- deals ----------------------------------------------------------------
     def deals(self, refresh: bool = False) -> list[DisclosedTrade]:
+        if self._parent is not None:  # the same deals, fetched and cached once
+            out = self._parent.deals(refresh)
+            self._deals_error = self._parent._deals_error
+            return out
         fresh = self._deals is not None and time.time() - self._deals_at < DEALS_TTL_SECONDS
         if self.demo_trades is not None or (fresh and not refresh):
             return self._deals or []
@@ -264,6 +308,7 @@ class App:
                 regime = {"error": str(e)}
         return {
             "now": _now(),
+            "page": self.page,
             "regime": regime,
             "watch": ({**self.watcher.status(), "auto_exit": self.watcher.auto_exit} if self.watcher
                       else {"on": False, "every": 60, "auto_exit": False}),
@@ -309,6 +354,7 @@ class App:
 
     # -- actions --------------------------------------------------------------
     def start_check(self, *, force: bool, dry_run: bool) -> Job:
+        self._on_live_page("Checks run the real agent")
         with self._slot_lock:
             job = Job(id=len(self.jobs) + 1, kind="dry_run" if dry_run else "check")
             if self.busy:
@@ -346,6 +392,8 @@ class App:
     @property
     def names(self) -> Any | None:
         """Company-name list for search; none in demo mode (no network needed there)."""
+        if self._parent is not None:
+            return self._parent.names
         if self.demo_trades is not None:
             return None
         if self._names is None:
@@ -356,6 +404,8 @@ class App:
     @property
     def news(self) -> Any | None:
         """Headlines + tags for the look-up; none in demo mode (no network needed there)."""
+        if self._parent is not None:
+            return self._parent.news
         if self.demo_trades is not None:
             return None
         if self._news is None:
@@ -504,6 +554,7 @@ class App:
         return job
 
     def set_watch(self, on: bool, every: int | None = None, auto_exit: bool | None = None) -> dict[str, Any]:
+        self._on_live_page("The watch controls the real agent")
         if on:
             want_exit = self.settings.auto_trade if auto_exit is None else bool(auto_exit)
             if (self.watcher is None or (every and every != self.watcher.every)
@@ -531,6 +582,8 @@ class App:
 
     def paper_order(self, symbol: str, side: str, notional: float | None = None,
                     qty: float | None = None) -> dict[str, Any]:
+        if self.demo_trades is None and self._parent is None:
+            raise PermissionError("practice orders are placed on the Demo page")
         if not self.paper_only:
             raise PermissionError("orders from the dashboard are allowed only on the paper simulator")
         symbol = str(symbol).strip().upper()
@@ -568,24 +621,29 @@ class App:
         return ok
 
     def reset(self) -> list[str]:
-        paths = [self.settings.state_dir / "state.json", self.settings.state_dir / "paper_broker.json"]
-        if isinstance(self._broker, LocalPaperBroker):
-            paths.append(self._broker.path)
+        """Live: forget the seen deals and recommendations (state.json); the practice account is not touched.
+        Demo: start the practice account over, nothing else. Offline sample: both, in its own folder."""
+        if self._parent is not None:
+            return self._parent.reset_practice()
         removed = []
+        paths = [self.settings.state_dir / "state.json"]
+        if self.demo_trades is not None:
+            paths.append(self.practice_broker.path)
         for p in paths:
             if p.exists() and p.name not in removed:
                 p.unlink()
                 removed.append(p.name)
-        if isinstance(self._broker, LocalPaperBroker):
-            old = self._broker
-            self._broker = LocalPaperBroker(old.path, price_fn=old.price_fn, currency=old.currency,
-                                            whole_shares=old.whole_shares, cost_model=old.cost_model,
-                                            starting_cash=self.settings.paper_starting_cash)
-        elif self.demo_trades is None:
-            self._broker = None
+        if self.demo_trades is not None:
+            self.practice_broker.reset(self.settings.paper_starting_cash)
         return removed
 
+    def reset_practice(self) -> list[str]:
+        """Start the practice account over (PAPER_STARTING_CASH), in place so every holder of it sees the fresh one."""
+        b = self.practice_broker
+        return [b.path.name] if b.reset(self.settings.paper_starting_cash) else []
+
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
+        self._on_live_page("Settings change the real agent")
         applied: dict[str, str] = {}
         is_demo = self.dotenv is None and self.demo_trades is not None
         for key, env_key in EDITABLE_ENV_KEYS.items():
@@ -634,7 +692,7 @@ class App:
         self.prices = free_prices(s)
         self.momentum = MomentumScreen(self.prices)
         if self.demo_trades is None:
-            self._broker = None
+            self._broker = self._practice = None
             self._data = None
         self._deals, self._deals_at = None, 0.0
         self.last_screen = None
@@ -776,6 +834,8 @@ class App:
         Read-only (the client is built with live orders off). Cached for a minute,
         since the page polls; refresh=True fetches again.
         """
+        if self._parent is not None:  # the same real holdings, read once
+            return self._parent.my_portfolio(refresh)
         if self._my_portfolio is not None and not refresh and time.time() - self._my_portfolio_at < 60:
             return self._my_portfolio
         s = self.settings
@@ -827,6 +887,7 @@ class App:
         """Check Groww credentials end to end without ever returning the token."""
         from .groww import GrowwBroker
         from .runner import resolve_groww_token
+        self._on_live_page("The Groww connection test")
         s = self.settings
         if not s.has_groww_credentials:
             return {"ok": False, "message": "No Groww credentials in .env (GROWW_ACCESS_TOKEN, or GROWW_API_KEY "
@@ -864,6 +925,9 @@ class App:
         if isinstance(b, LocalPaperBroker):
             # newest first already, so the (stable) sort below keeps same-second fills in order
             out += [{**o, "at": o.get("filled_at")} for o in reversed(b.orders())]
+        if self._parent is not None:  # practice fills only: real Groww orders are on the Live page
+            out.sort(key=lambda o: str(o.get("at")), reverse=True)
+            return out[:limit]
         st = State(self.settings.state_dir / "state.json")
         for o in reversed(st.data.get("live_orders", [])):
             out.append({**o, "live": True, "at": o.get("placed_at"),
@@ -913,7 +977,10 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
 # --------------------------------------------------------------------------- #
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     index_html = (resources.files("trading_agent") / "ui" / "index.html").read_text(encoding="utf-8")
-    demo_html = index_html.replace("<body>", '<body data-api="/demo" data-mode="demo">', 1)
+    sample = ' data-sample="1"' if app.demo_trades is not None else ""  # the offline sample dashboard
+    demo_html = index_html.replace("<body>", f'<body data-api="/demo" data-mode="demo"{sample}>', 1)
+    if sample:  # the sample app is the whole dashboard, at /
+        index_html = index_html.replace("<body>", f'<body data-mode="demo"{sample}>', 1)
     replay_html = (resources.files("trading_agent") / "ui" / "replay.html").read_text(encoding="utf-8")
 
     class Handler(BaseHTTPRequestHandler):
@@ -1144,19 +1211,30 @@ def make_server(app: App, host: str = "127.0.0.1", port: int = 8787) -> Threadin
     return server
 
 
+def sample_app(settings: Settings, context: Any | None) -> App:
+    """The offline sample dashboard (``ui --demo``): bundled sample deals and prices, its own state and practice
+    account in ``state_dir/demo-sample``, no Groww, no .env writes, no notifications."""
+    from .cli import _demo_inputs
+    s = dataclasses.replace(settings, state_dir=settings.state_dir / "demo-sample", broker="local",
+                            groww_access_token=None, groww_api_key=None, groww_api_secret=None,
+                            groww_totp_secret=None, groww_live_orders=False,
+                            resend_api_key=None, notify_email_to=None, notify_webhook_url=None)
+    trades, broker = _demo_inputs(s)
+    return App(s, broker=broker, demo_trades=trades, dotenv=None, context=context)
+
+
 def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: int = 8787,
           open_browser: bool = True, demo: bool = False) -> None:
     settings = settings or load_settings()
-    kwargs: dict[str, Any] = {}
-    # --demo only opens the Demo tab: the app itself is the normal one, and /demo is the
-    # isolated child (own state dir, no Groww, no .env writes, no notifications).
     from .regime import GlobalContext
     from .prices import YahooPrices
 
-    kwargs["context"] = GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache", cache_ttl=900))
-    app = App(settings, **kwargs)
+    context = GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache", cache_ttl=900))
+    # --demo is the offline sample dashboard, isolated in state_dir/demo-sample. Without it the app is the
+    # real one, and its /demo page is the same page with the practice account.
+    app = sample_app(settings, context) if demo else App(settings, context=context)
     server = make_server(app, host, port)
-    url = f"http://{host}:{server.server_address[1]}/" + ("demo" if demo else "")
+    url = f"http://{host}:{server.server_address[1]}/"
     print(f"Trading Agent dashboard: {url}  (Ctrl+C to stop)")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()

@@ -11,7 +11,7 @@ window.TA = (function(){
   const when = (iso) => { if(!iso) return ""; const dt = new Date(iso); return dt.toLocaleString(undefined,{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); };
   const cap = (s) => s ? s[0].toUpperCase()+s.slice(1) : "";
   const toast = (m) => { const t=$("toast"); t.textContent=m; t.style.display="block"; clearTimeout(t._t); t._t=setTimeout(()=>t.style.display="none",4500); };
-  // The Demo page sets <body data-api="/demo">, so the same page talks to its own sample-data app.
+  // The Demo page sets <body data-api="/demo">, so the same page talks to the practice-account app.
   const BASE = () => (document.body && document.body.dataset.api) || "";
   const api = async (path, body) => {
     const r = await fetch((path.startsWith("/api/") ? BASE() : "") + path, body ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)} : {});

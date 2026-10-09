@@ -21,7 +21,7 @@
       <div class="sub" id="lastcheck"></div>
       <button type="button" id="btn-watch" title="Poll deals and announcements every minute during market hours"><span>Start watch</span></button>
       <button type="button" id="btn-settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>Settings</button>
-      <div class="split">
+      <div class="split" id="check-split">
       <button type="button" class="primary" id="btn-check"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg><span>Run check now</span></button>
       <details class="menu" id="check-menu">
         <summary class="btn" aria-label="More check options" style="padding:0 12px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
@@ -36,7 +36,11 @@
 </header>
 
 <main>
-  <div class="mode-banner demo" id="demo-banner" hidden>Demo · sample data <span class="sub">Bundled sample deals and prices, its own practice account. Never touches Groww.</span><button type="button" class="small" id="btn-demo-reset" style="margin-left:auto">Reset demo</button></div>
+  <div class="mode-banner demo" id="demo-banner" hidden><span id="demo-title"></span> <span class="sub" id="demo-sub"></span>
+    <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button type="button" class="small" id="btn-demo-reset"></button>
+      <span id="demo-confirm" hidden><span id="demo-confirm-text" style="font-weight:400"></span> <button type="button" class="small danger" id="btn-demo-yes">Yes, reset</button> <button type="button" class="small" id="btn-demo-no">Cancel</button></span>
+    </span></div>
   <section class="card regime-card">
     <div class="regime-row">
       <div class="regime" id="regime"><span class="sub">Loading global context…</span></div>
@@ -64,8 +68,8 @@
         <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
         <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Who</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
       </div>
-      <div class="card">
-        <div class="cardhead"><h2>Paper portfolio</h2><span class="sub" id="pricesrc"></span></div>
+      <div class="card" id="pp-card" hidden>
+        <div class="cardhead"><h2>Practice portfolio</h2><span class="sub" id="pricesrc"></span></div>
         <div class="cardbody" style="padding-top:0;border-top:none;border-bottom:1px solid var(--line)"><div class="stats" id="pp-stats"></div></div>
         <div class="cardbody" style="border-bottom:1px solid var(--line)">
           <div class="row" style="justify-content:space-between"><h3>Account value</h3><span class="sub" id="eq-note"></span></div>
@@ -201,7 +205,7 @@
       <div class="field"><label for="f-email">Email recommendations to</label><input id="f-email" name="notify_email_to" type="email" placeholder="you@example.com"><div class="sub">Needs RESEND_API_KEY in .env</div></div>
       <div class="field"><label for="f-webhook">Webhook (Slack, Discord, n8n)</label><input id="f-webhook" name="notify_webhook_url" type="url" placeholder="https://hooks.slack.com/…"></div>
       <div class="field"><label for="f-market">Market</label><select id="f-market" name="market"><option value="in">India · NSE · Groww</option><option value="us">United States · paper</option></select><div class="sub">Switching rebuilds data, prices and broker</div></div>
-      <div class="field"><label for="f-cash">Paper starting cash</label><input id="f-cash" name="paper_starting_cash" type="number" min="1000" step="any"><div class="sub">Applies after Reset paper account</div></div>
+      <div class="field"><label for="f-cash">Practice starting cash</label><input id="f-cash" name="paper_starting_cash" type="number" min="1000" step="any"><div class="sub">Applies after Reset practice account on the Demo page</div></div>
     </div>
     <div class="group"><span class="group-title">Watch mode</span>
       <div class="grid2">
@@ -219,7 +223,7 @@
     </div>
     <div class="group"><span class="group-title">Connections</span><div id="conns" style="display:flex;flex-direction:column"></div>
       <div class="row"><button type="button" class="small" id="btn-groww-test">Test Groww connection</button><span class="sub" id="groww-test-result"></span></div></div>
-    <div class="row group" style="flex-direction:row"><button type="button" class="danger small" id="btn-reset">Reset paper account</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
+    <div class="row group" style="flex-direction:row"><button type="button" class="danger small" id="btn-reset">Forget seen deals</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
   </form>
 </dialog>
 <div class="suggest" id="suggest" role="listbox" aria-label="Matching companies"></div>
@@ -235,13 +239,30 @@
   TA.setCurrency(() => (S && S.settings && S.settings.currency) || "INR");
   const MODE = document.body.dataset.mode || "live";
   document.querySelectorAll(".tabs a").forEach(a => { if(a.dataset.tab === MODE) a.setAttribute("aria-current", "page"); });
+  // Live shows only real things. Demo is the same page on the same real data plus the practice account
+  // (the offline sample dashboard, data-sample, is a Demo page that owns everything, so it keeps its controls).
+  const SAMPLE = document.body.dataset.sample === "1";
   if(MODE === "demo"){
+    $("pp-card").hidden = false;
     $("demo-banner").hidden = false;
-    $("btn-demo-reset").addEventListener("click", async () => {
-      if(!confirm("Put the demo back to its starting sample data?")) return;
-      try { await api("/api/reset", {}); toast("Demo reset"); await refresh(); } catch(e){ toast(e.message); }
+    $("demo-title").textContent = SAMPLE ? "Demo \u00b7 bundled sample data (offline)" : "Demo \u00b7 practice money on real market data";
+    $("demo-sub").textContent = SAMPLE ? "Bundled sample deals and prices, its own practice account. Never touches Groww."
+                                       : "Real deals, prices and recommendations. Practice orders only: never Groww, never your .env.";
+    $("btn-demo-reset").textContent = SAMPLE ? "Reset demo" : "Reset practice account";
+    if(!SAMPLE) [$("check-split"), $("btn-settings"), $("btn-watch")].forEach(el => { el.hidden = true; });  // these run the real agent
+    const ask = (on) => { $("demo-confirm").hidden = !on; $("btn-demo-reset").hidden = on; };
+    $("btn-demo-reset").addEventListener("click", () => {
+      $("demo-confirm-text").textContent = SAMPLE ? "Put the demo back to its starting sample data?"
+        : `Reset the practice account to ${money(S && S.settings ? S.settings.paper_starting_cash : null)}? Your deals and recommendations stay.`;
+      ask(true);
+    });
+    $("btn-demo-no").addEventListener("click", () => ask(false));
+    $("btn-demo-yes").addEventListener("click", async () => {
+      ask(false);
+      try { await api("/api/reset", {}); toast(SAMPLE ? "Demo reset" : "Practice account reset"); await refresh(); } catch(e){ toast(e.message); }
     });
   }
+  let MP = null;  // the last My Groww portfolio answer: it fills the Live tiles
   const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"]],
                    us:[["congress","Congress trades"],["insider","Insider filings"]]};
   const WHO = {promoter_insider:"Promoter", institution:"Institution", individual:"Individual", broker_desk:"Broker desk", corporate:"Corporate", unknown:"?"};
@@ -284,13 +305,7 @@
     const newDeals = S.deals.filter(d => d.status === "new").length;
     $("summary").textContent = `${newDeals} new disclosure${newDeals===1?"":"s"} · ${S.recommendations.length} recommendation${S.recommendations.length===1?"":"s"} so far · ${S.deals.length} deals in window`;
     const perf = S.performance;
-    const biggest = S.positions.slice().sort((x,y)=>(y.market_value||0)-(x.market_value||0))[0];
-    $("tiles").innerHTML = [
-      a ? tile("Paper equity", money(a.equity), perf ? `<span class="${perf.pnl>=0?"up":"down"}">${signed(perf.pnl)} (${perf.pnl_pct>=0?"+":""}${perf.pnl_pct}%) since start</span>` : "") : tile("Paper equity","n/a",esc(S.broker_error||"")),
-      a ? tile("Cash available", money(a.cash), esc(s.broker) + (perf && perf.fees_paid ? ` · fees paid ${money(perf.fees_paid)}` : "") + (S.costs && S.costs.examples ? ` · ~${S.costs.examples["25000"]} bps/round trip` : "")) : tile("Cash","n/a",""),
-      tile("Open positions", String(S.positions.length), biggest && a ? `largest: ${esc(biggest.symbol)} ${Math.round(100*(biggest.market_value||0)/a.equity)}% of equity` : "none yet"),
-      tile("Model", esc(s.claude_model.replace("claude-","")), S.busy ? "job running…" : (S.jobs.length ? esc(S.jobs[S.jobs.length-1].message||"") : "idle")),
-    ].join("");
+    renderTiles();
 
     $("newcount").textContent = `${newDeals} new`; $("newcount").className = "pill ok"; $("newcount").style.fontWeight = "600";
     $("dealsrc").textContent = S.deals_error ? "fetch failed: " + S.deals_error : (s.data_source === "nse" ? "NSE, last 30 days" : "QuiverQuant");
@@ -303,6 +318,7 @@
         <td><span class="pill ${d.status==="new"?"ok":""}">${d.status==="new"?"New":"Analysed"}</span></td></tr>`).join("")
       : `<tr><td colspan="7" class="empty">No disclosed deals by ${esc(s.watch_investor)} in the window.</td></tr>`;
 
+    if(MODE === "demo"){
     $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
     renderPaperStats(a, perf);
     const plTone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
@@ -314,13 +330,14 @@
         <td>${gttCell(p, c)}</td>
         <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>`; }).join("")
       : `<tr><td colspan="11" class="empty">No practice trades yet. ${s.auto_trade ? "The agent buys here when a check finds a good deal." : "Place a paper order below, or use a recommendation's paper-buy button."}</td></tr>`;
+    }
 
     $("recs").innerHTML = S.recommendations.length ? S.recommendations.map(r => `<article class="card rec ${esc(r.action)} ${r.dismissed?"dismissed":""}">
         <div class="row" style="gap:8px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>
           <span class="pill">${esc(cap(r.confidence))} confidence</span><span class="sub" style="margin-left:auto;font-size:12px">${when(r.at)}</span></div>
         <div class="headline">${esc(r.headline)}</div><p class="rationale">${esc(r.rationale)}</p>
         <div class="row" style="gap:8px">
-          ${(r.action==="buy"||r.action==="sell") && r.suggested_notional_usd>0 && !r.dismissed && s.broker.startsWith("local-paper") ? `<button type="button" class="small primary" data-order="${r.index}">Paper ${esc(r.action)} ${money(r.suggested_notional_usd)}</button>` : ""}
+          ${(r.action==="buy"||r.action==="sell") && r.suggested_notional_usd>0 && !r.dismissed && MODE === "demo" && s.broker.startsWith("local-paper") ? `<button type="button" class="small primary" data-order="${r.index}">Paper ${esc(r.action)} ${money(r.suggested_notional_usd)}</button>` : ""}
           ${r.dismissed ? '<span class="sub">dismissed</span>' : `<button type="button" class="small" data-dismiss="${r.index}">Dismiss</button>`}
         </div></article>`).join("")
       : `<div class="card empty">No recommendations yet. Run a check when there are new deals${c.claude?"":" (needs ANTHROPIC_API_KEY)"}.</div>`;
@@ -335,7 +352,7 @@
     if(!$("bt-investor").value) $("bt-investor").value = s.watch_investor;
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
     renderOrders();
-    renderEquity();
+    if(MODE === "demo") renderEquity();
     renderForward();
     if(S.factor_backtest && S.factor_backtest.dates && $("fb-result").dataset.at !== S.factor_backtest.at){ renderFactor(S.factor_backtest); $("fb-result").dataset.at = S.factor_backtest.at; }
     $("fb-run").disabled = S.busy;
@@ -346,6 +363,33 @@
     $("sc-run").disabled = S.busy;
     $("btn-check").disabled = S.busy; $("btn-check").querySelector("span").textContent = S.busy ? "Running…" : "Run check now";
     $("bt-run").disabled = S.busy;
+  }
+
+  // Live tiles come from the real Groww holdings; Demo tiles come from the practice account.
+  function renderTiles(){
+    const s = S.settings, a = S.account, perf = S.performance;
+    const model = tile("Model", esc(s.claude_model.replace("claude-","")), S.busy ? "job running\u2026" : (S.jobs.length ? esc(S.jobs[S.jobs.length-1].message||"") : "idle"));
+    let t;
+    if(MODE === "demo"){
+      const biggest = S.positions.slice().sort((x,y)=>(y.market_value||0)-(x.market_value||0))[0];
+      t = [
+        a ? tile("Practice equity", money(a.equity), perf ? `<span class="${perf.pnl>=0?"up":"down"}">${signed(perf.pnl)} (${perf.pnl_pct>=0?"+":""}${perf.pnl_pct}%) since start</span>` : "") : tile("Practice equity","n/a",esc(S.broker_error||"")),
+        a ? tile("Cash available", money(a.cash), esc(s.broker) + (perf && perf.fees_paid ? ` \u00b7 fees paid ${money(perf.fees_paid)}` : "") + (S.costs && S.costs.examples ? ` \u00b7 ~${S.costs.examples["25000"]} bps/round trip` : "")) : tile("Cash","n/a",""),
+        tile("Open positions", String(S.positions.length), biggest && a ? `largest: ${esc(biggest.symbol)} ${Math.round(100*(biggest.market_value||0)/a.equity)}% of equity` : "none yet"),
+      ];
+    } else {
+      const na = (why) => [tile("Holdings value","n/a",why), tile("Profit / loss","n/a",why), tile("Holdings","n/a",why)];
+      if(!MP) t = na("loading\u2026");
+      else if(!MP.linked) t = na("Groww isn't linked");
+      else if(MP.error) t = na("Groww didn't answer");
+      else {
+        const cls = MP.pl == null ? "" : MP.pl >= 0 ? "up" : "down";
+        t = [tile("Holdings value", inr(MP.value), `invested ${inr(MP.invested)}`),
+             tile("Profit / loss", sinr(MP.pl), `<span class="${cls}">${spct(MP.pl_pct)} vs what you paid</span>`),
+             tile("Holdings", String(MP.holdings.length), MP.unpriced.length ? `${MP.unpriced.length} without a price` : "all priced")];
+      }
+    }
+    $("tiles").innerHTML = t.concat(model).join("");
   }
 
   let btCostSet = false;
@@ -389,6 +433,7 @@
     finally { btn.disabled = false; }
   }
   function renderMyPortfolio(m){
+    MP = m; if(S) renderTiles();
     const rows = $("mp-rows"), stats = $("mp-stats");
     $("mp-foot").innerHTML = "";
     if(!m.linked){
@@ -469,6 +514,7 @@
   }
 
   function renderEquity(){
+    if(MODE !== "demo") return;
     const h = S.equity_history || [], el = $("eq-chart"), start = S.settings.paper_starting_cash;
     const perf = S.performance;
     const es = S.equity_stats;
@@ -731,8 +777,8 @@
         <span>Max position</span><span>${money(r.max_notional)}</span>${c?`<span>Round-trip cost</span><span>${money(c.total,2)} (${c.total_bps.toFixed(0)} bps)</span>`:""}</div>
         <div class="sub" style="margin-top:6px">${esc(r.basis)}</div>
         ${sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct)) ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct))}</div>` : ""}
-        <div class="row" style="margin-top:8px"><button type="button" class="small" id="sz-use">Use in paper order</button></div>`;
-      $("sz-use").addEventListener("click", () => { $("tk-symbol").value = r.ticker; $("tk-qty").value = r.qty; $("tk-amount").value = ""; $("tk-form").scrollIntoView({behavior:"smooth", block:"center"}); });
+        ${MODE === "demo" ? '<div class="row" style="margin-top:8px"><button type="button" class="small" id="sz-use">Use in paper order</button></div>' : ""}`;
+      if($("sz-use")) $("sz-use").addEventListener("click", () => { $("tk-symbol").value = r.ticker; $("tk-qty").value = r.qty; $("tk-amount").value = ""; $("tk-form").scrollIntoView({behavior:"smooth", block:"center"}); });
     } catch(e){ $("sz-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   });
   $("cs-form").addEventListener("submit", async (ev) => {
@@ -902,8 +948,8 @@
       $("dlg").close(); toast(marketChanged ? "Saved; market switched" : "Saved to .env"); $("bt-investor").value = body.watch_investor || ""; await refresh(); } catch(e){ toast(e.message); }
   });
   $("btn-reset").addEventListener("click", async () => {
-    if(!confirm("Forget seen deals and reset the paper account?")) return;
-    try { await api("/api/reset", {}); $("dlg").close(); toast("Paper account reset"); await refresh(); } catch(e){ toast(e.message); }
+    if(!confirm("Forget seen deals and recommendations? Your practice account is not touched.")) return;
+    try { await api("/api/reset", {}); $("dlg").close(); toast("Seen deals forgotten"); await refresh(); } catch(e){ toast(e.message); }
   });
 
   refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); });
