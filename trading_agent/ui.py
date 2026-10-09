@@ -87,6 +87,8 @@ class App:
         self.last_screen: dict[str, Any] | None = None
         self.last_factor_bt: dict[str, Any] | None = None
         self.last_signal_lab: dict[str, Any] | None = None
+        self._my_portfolio: dict[str, Any] | None = None
+        self._my_portfolio_at = 0.0
         self.demo_trades = demo_trades
         self._deals: list[DisclosedTrade] | None = demo_trades
         self._deals_at = time.time() if demo_trades else 0.0
@@ -619,6 +621,58 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
+    def my_portfolio(self, refresh: bool = False) -> dict[str, Any]:
+        """Your real Groww holdings with buy price, current price and profit or loss.
+
+        Read-only (the client is built with live orders off). Cached for a minute,
+        since the page polls; refresh=True fetches again.
+        """
+        if self._my_portfolio is not None and not refresh and time.time() - self._my_portfolio_at < 60:
+            return self._my_portfolio
+        s = self.settings
+        if not s.has_groww_credentials:
+            return {"linked": False}
+        from .groww import GrowwBroker
+        from .runner import resolve_groww_token
+        from .instruments import CompanyNames, nse_then_bse
+        from .prices import YahooPrices
+        bse = YahooPrices(suffix=".BO", cache_dir=s.state_dir / "cache")
+        try:
+            g = GrowwBroker(resolve_groww_token(s), live_orders=False, exchange=s.groww_exchange,
+                            price_fallback=nse_then_bse(self.prices, bse))
+            positions = g.positions()
+        except SystemExit as e:
+            return {"linked": True, "error": str(e)}
+        except Exception as e:  # noqa: BLE001
+            return {"linked": True, "error": f"{type(e).__name__}: {e}"}
+        try:
+            names = CompanyNames(s.state_dir / "cache").lookup([p.symbol for p in positions])
+        except Exception:  # noqa: BLE001 - names are optional
+            names = {}
+        rows = []
+        for p in positions:
+            invested = p.qty * p.avg_entry_price
+            value = p.qty * p.current_price if p.current_price is not None else None
+            info = names.get(p.symbol.upper()) or {}
+            rows.append({"symbol": p.symbol, "name": info.get("name"), "exchange": info.get("exchange"),
+                         "qty": p.qty, "sellable_qty": p.free_qty,
+                         "avg_price": p.avg_entry_price, "price": p.current_price,
+                         "invested": round(invested, 2), "value": round(value, 2) if value is not None else None,
+                         "pl": round(value - invested, 2) if value is not None else None,
+                         "pl_pct": (p.current_price / p.avg_entry_price - 1)
+                         if p.current_price is not None and p.avg_entry_price else None})
+        rows.sort(key=lambda r: -(r["value"] if r["value"] is not None else r["invested"]))
+        priced = [r for r in rows if r["value"] is not None]
+        inv_priced = sum(r["invested"] for r in priced)
+        value = sum(r["value"] for r in priced)
+        out = {"linked": True, "at": _now(), "holdings": rows,
+               "invested": round(sum(r["invested"] for r in rows), 2),
+               "value": round(value, 2), "pl": round(value - inv_priced, 2),
+               "pl_pct": (value / inv_priced - 1) if inv_priced else None,
+               "unpriced": [r["symbol"] for r in rows if r["value"] is None]}
+        self._my_portfolio, self._my_portfolio_at = out, time.time()
+        return out
+
     def groww_test(self) -> dict[str, Any]:
         """Check Groww credentials end to end without ever returning the token."""
         from .groww import GrowwBroker
@@ -753,6 +807,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self.end_headers()
             elif path == "/api/state":
                 self._json(app.snapshot())
+            elif path == "/api/my-portfolio":
+                from urllib.parse import parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                self._json(app.my_portfolio(refresh=(q.get("refresh") or ["0"])[0] in ("1", "true")))
             elif path == "/api/jobs":
                 self._json([j.to_dict() for j in app.jobs])
             elif path == "/api/regime":

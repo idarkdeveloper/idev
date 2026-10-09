@@ -127,6 +127,51 @@ def cmd_portfolio(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_holdings(args: argparse.Namespace) -> int:
+    """Your real Groww holdings: buy price, current price, profit or loss. Read-only."""
+    from .groww import GrowwBroker
+    from .runner import free_prices, resolve_groww_token
+    settings = _settings(args)
+    if not settings.has_groww_credentials:
+        print("Groww isn't linked: add GROWW_API_KEY + GROWW_API_SECRET / GROWW_TOTP_SECRET to .env.")
+        return 1
+    from .instruments import CompanyNames, nse_then_bse
+    from .prices import YahooPrices
+    bse = YahooPrices(suffix=".BO", cache_dir=settings.state_dir / "cache")
+    g = GrowwBroker(resolve_groww_token(settings), live_orders=False, exchange=settings.groww_exchange,
+                    price_fallback=nse_then_bse(free_prices(settings), bse))
+    rows = sorted(g.positions(), key=lambda p: -(p.market_value or p.qty * p.avg_entry_price))
+    names = CompanyNames(settings.state_dir / "cache").lookup([p.symbol for p in rows])
+    if not rows:
+        print("No holdings in your Groww account.")
+        return 0
+    print(f"{'Stock':<12} {'Company':<44} {'Qty':>6} {'Buy price':>11} {'Current':>11} {'Invested':>12} {'Value':>12} {'P&L':>12} {'P&L %':>8}")
+    def company(sym: str) -> str:
+        info = names.get(sym.upper()) or {}
+        n = (info.get("name") or "").replace(" Limited", " Ltd")
+        if info.get("exchange") == "BSE":
+            n += " (BSE)"
+        return n[:44]
+
+    inv_all = inv_priced = value = 0.0
+    for p in rows:
+        invested = p.qty * p.avg_entry_price
+        inv_all += invested
+        if p.current_price is None:
+            print(f"{p.symbol:<12} {company(p.symbol):<44} {p.qty:>6g} {p.avg_entry_price:>11,.2f} {'no price':>11} {invested:>12,.0f}")
+            continue
+        v = p.qty * p.current_price
+        inv_priced += invested
+        value += v
+        pct = (p.current_price / p.avg_entry_price - 1) * 100 if p.avg_entry_price else 0.0
+        print(f"{p.symbol:<12} {company(p.symbol):<44} {p.qty:>6g} {p.avg_entry_price:>11,.2f} {p.current_price:>11,.2f} {invested:>12,.0f} "
+              f"{v:>12,.0f} {v - invested:>+12,.0f} {pct:>+7.2f}%")
+    pl = value - inv_priced
+    print(f"\nInvested ₹{inv_all:,.0f} · value now ₹{value:,.0f} · P&L ₹{pl:+,.0f} "
+          f"({(value / inv_priced - 1) * 100 if inv_priced else 0:+.2f}%) on holdings with a price")
+    return 0
+
+
 def cmd_groww_token(args: argparse.Namespace) -> int:
     """Print a Groww access token (valid until 06:00 IST); reuses the cached one."""
     from .runner import resolve_groww_token
@@ -162,6 +207,45 @@ def cmd_orders(args: argparse.Namespace) -> int:
         print("No live orders recorded.")
     for o in orders[-args.limit:]:
         print(_fmt_live_order(o))
+    return 0
+
+
+def cmd_fundamentals_history(args: argparse.Namespace) -> int:
+    """Download and cache NSE quarterly results (XBRL) for every stock in a universe."""
+    from datetime import date, timedelta
+    from .fundamentals_history import ResultsHistory
+    from .index_history import point_in_time
+    from .screen import load_universe
+
+    settings = _settings(args)
+    members = [m["symbol"] for m in load_universe(args.universe)]
+    try:
+        membership = point_in_time(args.universe, members, settings.state_dir, progress=print)
+        since = (date.today() - timedelta(days=365 * args.years)).isoformat()
+        symbols = sorted(set(members) | set(membership.ever_members(since)))
+    except Exception as e:  # noqa: BLE001 - fall back to today's members
+        print(f"Past members unavailable ({e}); using today's {len(members)} members.")
+        symbols = sorted(members)
+    h = ResultsHistory(settings.state_dir / "cache", max_new_downloads=args.max)
+    print(f"{len(symbols)} stocks; downloading results filings NSE hasn't given us yet "
+          f"(about 2 a second, at most {args.max} this run)…")
+    done = empty = 0
+    for i, sym in enumerate(symbols, 1):
+        try:
+            recs = h.history(sym)
+        except Exception as e:  # noqa: BLE001
+            print(f"  {sym}: listing failed ({type(e).__name__})")
+            continue
+        done += 1
+        empty += not recs
+        if i % 10 == 0 or i == len(symbols):
+            print(f"  {i}/{len(symbols)} stocks, {h.downloads} downloaded this run", flush=True)
+        if h.refused >= 2:
+            print("NSE is refusing downloads for now; run this again in a few minutes to continue.")
+            break
+    left = h.downloads >= args.max or h.refused >= 2
+    print(f"Done: {done} stocks read, {empty} with no XBRL results, {h.downloads} filings downloaded. "
+          + ("Run again to continue." if left else "Cache complete for now."))
     return 0
 
 
@@ -452,11 +536,24 @@ def cmd_factor_backtest(args: argparse.Namespace) -> int:
     print(f"Backtesting top {args.top} of {args.universe.upper()} over {args.years} years (monthly rebalance)…")
     membership = None if args.todays_members else point_in_time(
         args.universe, [m["symbol"] for m in members], settings.state_dir, changes_csv=args.changes, progress=print)
+    funds = None
+    if args.quality or args.value:
+        from .fundamentals_history import ResultsHistory
+        # cache only: run `fundamentals-history` first, so a half-filled cache is visible, not silent
+        funds = ResultsHistory(settings.state_dir / "cache", max_new_downloads=0)
     r = run_factor_backtest(members, free_prices(settings), top=args.top, years=args.years,
                             cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
                             require_above_200dma=not args.no_trend_filter, benchmark=args.benchmark,
-                            membership=membership, index_fund=INDEX_FUNDS.get(args.universe.upper()))
+                            membership=membership, index_fund=INDEX_FUNDS.get(args.universe.upper()),
+                            fundamentals=funds, quality=1.0 if args.quality else 0.0, value=1.0 if args.value else 0.0)
     print(format_factor_backtest(r))
+    fx = r.get("fundamentals")
+    if fx:
+        print(f"\nFundamentals ({fx['source']}): quality x{fx['quality']:g}, value x{fx['value']:g}; "
+              f"{fx['avg_coverage']*100:.0f}% of eligible names had results on an average rebalance. {fx['note']}")
+        if fx["avg_coverage"] < 0.8:
+            print(f"Coverage is low: run `python -m trading_agent fundamentals-history --universe {args.universe}` "
+                  "(repeat until it reports nothing left) and backtest again.")
     if args.json:
         print(json.dumps(r, indent=2, default=str))
     return 0
@@ -563,6 +660,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("groww-token", help="print a Groww access token (cached until 06:00 IST)")
     sp.add_argument("--fresh", action="store_true", help="generate a new one even if the cached token is valid")
     sp.set_defaults(func=cmd_groww_token)
+    sp = sub.add_parser("holdings", help="your real Groww holdings: buy price, current price, P&L (read-only)")
+    sp.set_defaults(func=cmd_holdings)
     sp = sub.add_parser("orders", help="list live Groww orders; --refresh re-checks open ones")
     sp.add_argument("--refresh", action="store_true")
     sp.add_argument("--limit", type=int, default=30)
@@ -619,8 +718,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="index change log (date,added,removed) for point-in-time membership; NIFTY 50 is built in")
     sp.add_argument("--todays-members", action="store_true",
                     help="ignore membership history and use today's constituents (survivorship-biased)")
+    sp.add_argument("--quality", action="store_true", help="also rank on point-in-time quality (NSE results)")
+    sp.add_argument("--value", action="store_true", help="also rank on point-in-time value (NSE results)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_factor_backtest)
+    sp = sub.add_parser("fundamentals-history", help="download NSE quarterly results for a universe (resumable)")
+    sp.add_argument("--universe", default="NIFTYMIDCAP150")
+    sp.add_argument("--years", type=int, default=5, help="also cover stocks that were members this far back")
+    sp.add_argument("--max", type=int, default=3000, help="most new filings to download this run")
+    sp.set_defaults(func=cmd_fundamentals_history)
     sp = sub.add_parser("index-history", help="rebuild past index members from NSE press releases")
     sp.add_argument("index", nargs="+", help="e.g. NIFTYMIDCAP150 NIFTYSMALLCAP250")
     sp.add_argument("--since", default="2021-01-01")

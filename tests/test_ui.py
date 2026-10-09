@@ -343,3 +343,46 @@ def test_dropped_connection_is_quiet(capsys):
     except ValueError:
         srv.handle_error(None, ("127.0.0.1", 52352))
     assert "a real bug" in capsys.readouterr().err  # real errors still print
+
+
+def test_my_groww_portfolio_shows_buy_current_and_pl(server, monkeypatch):
+    from trading_agent import groww
+    from .conftest import FakeSession
+    base, app = server
+    _, m = _get(base + "/api/my-portfolio")
+    assert m == {"linked": False}
+    routes = {
+        ("GET", "/holdings/user"): {"status": "SUCCESS", "payload": {"holdings": [
+            {"trading_symbol": "TCS", "quantity": 20, "average_price": 3000.0, "demat_free_quantity": 20, "t1_quantity": 0},
+            {"trading_symbol": "INFY", "quantity": 10, "average_price": 1600.0, "demat_free_quantity": 6, "t1_quantity": 0,
+             "pledge_quantity": 4},
+            {"trading_symbol": "NSE", "quantity": 8, "average_price": 1000.0, "demat_free_quantity": 8, "t1_quantity": 0}]}},
+        ("GET", "/live-data/ltp"): {"status": "SUCCESS", "payload": {"NSE_TCS": 3300.0, "NSE_INFY": 1400.0}},
+        ("GET", "EQUITY_L.csv"): "SYMBOL,NAME OF COMPANY\nTCS,Tata Consultancy Services Limited\nINFY,Infosys Limited\n",
+        ("GET", "instrument.csv"): "exchange,trading_symbol,name,segment\nBSE,NSE,NSE,CASH\n",
+    }
+    sess = FakeSession(routes)
+    monkeypatch.setattr(groww.requests, "Session", lambda: sess)
+
+    class NoPrice:
+        def __call__(self, sym):
+            raise LookupError("unlisted")
+
+    app.prices = NoPrice()
+    app.settings.groww_access_token = "tok"
+    _, m = _get(base + "/api/my-portfolio?refresh=1")
+    assert m["linked"] and [h["symbol"] for h in m["holdings"]] == ["TCS", "INFY", "NSE"]
+    tcs, infy, nse = m["holdings"]
+    assert tcs["avg_price"] == 3000 and tcs["price"] == 3300 and tcs["pl"] == 6000 and abs(tcs["pl_pct"] - 0.10) < 1e-9
+    assert infy["pl"] == -2000 and abs(infy["pl_pct"] + 0.125) < 1e-9 and infy["sellable_qty"] == 6
+    assert nse["price"] is None and nse["value"] is None and m["unpriced"] == ["NSE"]
+    assert tcs["name"] == "Tata Consultancy Services Limited" and tcs["exchange"] == "NSE"
+    assert nse["name"] == "National Stock Exchange of India Limited" and nse["exchange"] == "BSE"
+    assert m["invested"] == 60000 + 16000 + 8000 and m["value"] == 66000 + 14000 and m["pl"] == 4000
+    assert abs(m["pl_pct"] - 4000 / 76000) < 1e-9
+    assert sess.writes() == []  # read-only
+    n = len(sess.calls)
+    _get(base + "/api/my-portfolio")
+    assert len(sess.calls) == n  # cached for a minute
+    _, html = _get(base + "/")
+    assert 'id="mp-rows"' in html and "My Groww portfolio" in html

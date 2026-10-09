@@ -77,12 +77,15 @@ def test_stop_hits_notify_once_and_auto_exit(settings):
 def test_india_tz_falls_back_without_tz_database(monkeypatch):
     from datetime import datetime, timedelta
 
-    from trading_agent import watch
     from zoneinfo import ZoneInfoNotFoundError
+
+    from trading_agent import forward, groww, live, timezones, watch
 
     def missing(key):
         raise ZoneInfoNotFoundError(key)
 
-    monkeypatch.setattr(watch, "ZoneInfo", missing)
-    tz = watch.india_tz()
+    monkeypatch.setattr(timezones, "ZoneInfo", missing)
+    tz = timezones.india_tz()
     assert tz.utcoffset(datetime(2026, 10, 9)) == timedelta(hours=5, minutes=30)
+    # every module that needs India time uses the shared, fallback-safe IST
+    assert watch.IST is live.IST is forward.IST is groww.IST is timezones.IST

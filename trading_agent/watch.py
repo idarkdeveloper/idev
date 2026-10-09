@@ -10,28 +10,17 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, time as dtime, timedelta, timezone, tzinfo
+from datetime import datetime, time as dtime, tzinfo
 from typing import Any, Callable
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import Settings
 from .risk import check_stops
 from .state import State
+from .timezones import IST
 
 log = logging.getLogger(__name__)
 
 
-
-def india_tz() -> tzinfo:
-    """Asia/Kolkata, or a fixed UTC+05:30 when the OS has no time-zone database (Windows
-    without the `tzdata` package). India has no daylight saving, so the two are identical."""
-    try:
-        return ZoneInfo("Asia/Kolkata")
-    except ZoneInfoNotFoundError:
-        return timezone(timedelta(hours=5, minutes=30), "IST")
-
-
-IST = india_tz()
 
 
 class Watcher:

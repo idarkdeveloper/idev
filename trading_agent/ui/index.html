@@ -273,6 +273,12 @@
 
   <section class="cols">
     <div class="main">
+      <div class="card" id="mp-card">
+        <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
+          <button type="button" class="small" id="mp-refresh" style="margin-left:auto">Refresh</button></div>
+        <div class="cardbody" id="mp-body" style="padding-top:0;border-top:none"><div class="stats" id="mp-stats"></div></div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th></tr></thead><tbody id="mp-rows"></tbody></table></div>
+      </div>
       <div class="card">
         <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
         <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Who</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
@@ -666,6 +672,48 @@
   }
   const rupeesShort = v => { const a = Math.abs(v); return (v < 0 ? "−" : "") + sym() + (a >= 1e7 ? (a / 1e7).toFixed(2) + " Cr" : a >= 1e5 ? (a / 1e5).toFixed(2) + " L" : Math.round(a).toLocaleString("en-IN")); };
 
+  // ---- My Groww portfolio: real holdings, read-only ----
+  const inr = (v, d=0) => v == null ? "n/a" : "₹" + Number(v).toLocaleString("en-IN", {minimumFractionDigits:d, maximumFractionDigits:d});
+  const sinr = (v, d=0) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + inr(Math.abs(v), d);
+  const spct = (v) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + Math.abs(v * 100).toFixed(2) + "%";
+  async function loadMyPortfolio(refresh){
+    const btn = $("mp-refresh"); btn.disabled = true;
+    try { renderMyPortfolio(await api("/api/my-portfolio" + (refresh ? "?refresh=1" : ""))); }
+    catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; }
+    finally { btn.disabled = false; }
+  }
+  function renderMyPortfolio(m){
+    const rows = $("mp-rows"), stats = $("mp-stats");
+    if(!m.linked){
+      $("mp-sub").textContent = "Groww isn't linked";
+      stats.innerHTML = "";
+      rows.innerHTML = `<tr><td colspan="8" class="empty">Add GROWW_API_KEY with GROWW_API_SECRET or GROWW_TOTP_SECRET (or GROWW_ACCESS_TOKEN) to .env to see your real holdings here.</td></tr>`;
+      return;
+    }
+    if(m.error){
+      $("mp-sub").textContent = "Groww didn't answer";
+      stats.innerHTML = "";
+      rows.innerHTML = `<tr><td colspan="8" class="empty">${esc(m.error)}</td></tr>`;
+      return;
+    }
+    const tone = v => v == null ? "" : v > 0 ? "up" : v < 0 ? "down" : "";
+    $("mp-sub").textContent = `${m.holdings.length} holdings · read-only from Groww · ${when(m.at)}`;
+    const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
+    stats.innerHTML = stat("Invested", inr(m.invested), "what you paid, all holdings")
+      + stat("Value now", inr(m.value), m.unpriced.length ? `excludes ${m.unpriced.map(esc).join(", ")} (no market price)` : "at current prices")
+      + stat("Profit / loss", sinr(m.pl), "on holdings with a price", tone(m.pl))
+      + stat("Return", spct(m.pl_pct), "vs what you paid", tone(m.pl_pct));
+    rows.innerHTML = m.holdings.length ? m.holdings.map(h => `<tr>
+        <td><div style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.exchange === "BSE" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">BSE</span>' : ""}</div>
+          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}</td>
+        <td class="num">${h.qty}</td><td class="num">${inr(h.avg_price, 2)}</td>
+        <td class="num">${h.price != null ? inr(h.price, 2) : '<span class="sub">no price</span>'}</td>
+        <td class="num">${inr(h.invested)}</td><td class="num">${inr(h.value)}</td>
+        <td class="num ${tone(h.pl)}">${sinr(h.pl)}</td><td class="num ${tone(h.pl_pct)}">${spct(h.pl_pct)}</td></tr>`).join("")
+      : `<tr><td colspan="8" class="empty">No holdings in your Groww account.</td></tr>`;
+  }
+  $("mp-refresh").addEventListener("click", () => loadMyPortfolio(true));
+
   function renderForward(){
     const f = S.forward, el = $("fw-body");
     if(!f || f.error){
@@ -972,6 +1020,8 @@
   });
 
   refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); });
+  loadMyPortfolio(false);
+  setInterval(() => loadMyPortfolio(false), 120000);
   setInterval(refresh, 60000);
 })();
 </script>
