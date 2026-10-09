@@ -241,6 +241,44 @@ def cmd_screen(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scorecard(args: argparse.Namespace) -> int:
+    """How Claude's past recommendations did against the index."""
+    from .costs import cost_model_for
+    from .runner import free_prices
+    from .scorecard import format_scorecard, score_recommendations
+    from .state import State
+
+    settings = _settings(args)
+    st = State(settings.state_dir / "state.json")
+    cm = cost_model_for(settings.market)
+    r = score_recommendations(st.data.get("recommendations", []), free_prices(settings),
+                              benchmark="^NSEI" if settings.market == "in" else "^GSPC",
+                              cost_model=cm if hasattr(cm, "round_trip") else None)
+    print(format_scorecard(r))
+    if args.json:
+        print(json.dumps(r, indent=2, default=str))
+    return 0
+
+
+def cmd_factor_backtest(args: argparse.Namespace) -> int:
+    """Backtest the factor screen as a monthly-rebalanced portfolio with real charges."""
+    from .costs import cost_model_for
+    from .factor_backtest import format_factor_backtest, run_factor_backtest
+    from .runner import free_prices
+    from .screen import load_universe
+
+    settings = _settings(args)
+    members = load_universe(args.universe)
+    print(f"Backtesting top {args.top} of {args.universe.upper()} over {args.years} years (monthly rebalance)…")
+    r = run_factor_backtest(members, free_prices(settings), top=args.top, years=args.years,
+                            cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                            require_above_200dma=not args.no_trend_filter)
+    print(format_factor_backtest(r))
+    if args.json:
+        print(json.dumps(r, indent=2, default=str))
+    return 0
+
+
 def cmd_costs(args: argparse.Namespace) -> int:
     from .costs import cost_model_for
     settings = _settings(args)
@@ -358,6 +396,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-trend-filter", action="store_true", help="don't require price above 200-day MA")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_screen)
+    sp = sub.add_parser("scorecard", help="how Claude's past recommendations did vs the index")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_scorecard)
+    sp = sub.add_parser("factor-backtest", help="backtest the factor screen as a monthly portfolio")
+    sp.add_argument("--universe", default="NIFTY200")
+    sp.add_argument("--top", type=int, default=20)
+    sp.add_argument("--years", type=int, default=4, help="test window; one extra year is fetched for lookback")
+    sp.add_argument("--no-trend-filter", action="store_true")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_factor_backtest)
     sp = sub.add_parser("costs", help="show the verified Indian delivery cost model")
     sp.add_argument("amounts", nargs="*", type=float, default=[10_000, 25_000, 100_000])
     sp.set_defaults(func=cmd_costs)

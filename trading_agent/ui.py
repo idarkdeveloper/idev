@@ -79,6 +79,7 @@ class App:
         self.watcher: Watcher | None = None
         self.last_backtest: dict[str, Any] | None = None
         self.last_screen: dict[str, Any] | None = None
+        self.last_factor_bt: dict[str, Any] | None = None
         self.demo_trades = demo_trades
         self._deals: list[DisclosedTrade] | None = demo_trades
         self._deals_at = time.time() if demo_trades else 0.0
@@ -172,6 +173,8 @@ class App:
             "orders": self.orders(),
             "backtest": self.last_backtest,
             "screen": self.last_screen,
+            "factor_backtest": self.last_factor_bt,
+            "equity_history": st.data.get("equity_history", [])[-1000:],
             "costs": _cost_table(self.settings.market),
             "settings": {
                 "market": s.market, "currency": s.currency, "watch_investor": s.watch_investor,
@@ -249,6 +252,28 @@ class App:
             out["price"] = self.broker.latest_price(ticker)
         except Exception:  # noqa: BLE001
             out["price"] = None
+        out["history"] = []
+        try:
+            bars = self.prices.history(ticker, "2y")
+            closes = [b["close"] for b in bars]
+            pts = []
+            for i in range(max(0, len(bars) - 252), len(bars)):
+                ma = sum(closes[i - 199:i + 1]) / 200 if i >= 199 else None
+                pts.append({"d": bars[i]["date"], "c": round(closes[i], 2), "ma200": round(ma, 2) if ma else None})
+            out["history"] = pts
+        except Exception as e:  # noqa: BLE001
+            out["history_error"] = str(e)
+        pos = next((p for p in self.broker.positions() if p.symbol == ticker.upper()), None) \
+            if self.paper_only else None
+        if pos is not None:
+            from .risk import atr, trailing_stop
+            try:
+                a = atr(self.prices.history(ticker, "1y"))
+            except Exception:  # noqa: BLE001
+                a = None
+            high = pos.high_water or pos.current_price or pos.avg_entry_price
+            out["position"] = {"qty": pos.qty, "avg_entry_price": pos.avg_entry_price,
+                               "stop": round(trailing_stop(high, a), 2)}
         return out
 
     def start_backtest(self, investor: str, days: int, horizons: tuple[int, ...], cost_bps: float) -> Job:
@@ -354,10 +379,19 @@ class App:
         if side not in ("buy", "sell"):
             raise ValueError("side must be buy or sell")
         if qty not in (None, "", 0, "0"):
-            return self.broker.submit_order(symbol, side, qty=float(qty))
-        if notional in (None, "", 0, "0"):
+            order = self.broker.submit_order(symbol, side, qty=float(qty))
+        elif notional in (None, "", 0, "0"):
             raise ValueError("enter an amount or a quantity")
-        return self.broker.submit_order(symbol, side, notional=float(notional))
+        else:
+            order = self.broker.submit_order(symbol, side, notional=float(notional))
+        self._record_equity()
+        return order
+
+    def _record_equity(self) -> None:
+        from .runner import record_equity
+        st = State(self.settings.state_dir / "state.json")
+        record_equity(st, self.broker)
+        st.save()
 
     def close_position(self, symbol: str) -> dict[str, Any]:
         symbol = symbol.upper()
@@ -476,6 +510,52 @@ class App:
                 pass
         return r
 
+    def scorecard(self) -> dict[str, Any]:
+        from .costs import cost_model_for
+        from .scorecard import score_recommendations
+        st = State(self.settings.state_dir / "state.json")
+        recs = st.data.get("recommendations", [])
+        bench = "^NSEI" if self.settings.market == "in" else "^GSPC"
+        cm = cost_model_for(self.settings.market)
+        return score_recommendations(recs, self.prices, benchmark=bench,
+                                     cost_model=cm if hasattr(cm, "round_trip") else None)
+
+    def start_factor_backtest(self, universe: str, top: int, years: int) -> Job:
+        from .costs import cost_model_for
+        from .factor_backtest import run_factor_backtest
+        from .screen import load_universe
+
+        job = Job(id=len(self.jobs) + 1, kind="factor_backtest")
+        self.jobs.append(job)
+        if self.busy:
+            job.ok, job.message, job.finished_at = False, "another job is running", _now()
+            return job
+        if self.settings.market != "in":
+            job.ok, job.message, job.finished_at = False, "the factor backtest uses NSE indices; switch market to India", _now()
+            return job
+        self.busy = True
+
+        def run() -> None:
+            try:
+                members = load_universe(universe)
+                r = run_factor_backtest(members, self.prices, top=top, years=years,
+                                        cost_model=cost_model_for("in"),
+                                        capital=self.settings.paper_starting_cash)
+                self.last_factor_bt = {"at": _now(), "universe": universe.upper(), **r}
+                s_ = r["stats"]
+                job.ok = True
+                job.message = (f"{universe.upper()} top {top}: strategy {s_['strategy']['total_return']*100:+.1f}% vs "
+                               f"NIFTY 50 {s_['benchmark']['total_return']*100:+.1f}% over {r['months']} months")
+            except Exception as e:  # noqa: BLE001
+                log.exception("factor backtest failed")
+                job.ok, job.message = False, f"{type(e).__name__}: {e}"
+            finally:
+                job.finished_at = _now()
+                self.busy = False
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
     def groww_test(self) -> dict[str, Any]:
         """Check Groww credentials end to end without ever returning the token."""
         from .groww import GrowwBroker
@@ -589,6 +669,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.last_backtest or {})
             elif path == "/api/screen":
                 self._json(app.last_screen or {})
+            elif path == "/api/scorecard":
+                self._json(app.scorecard())
+            elif path == "/api/factor-backtest":
+                self._json(app.last_factor_bt or {})
             elif path in ("/api/costs", "/api/size", "/api/orders"):
                 from urllib.parse import parse_qs
                 q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
@@ -623,6 +707,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"ok": True, "order": app.close_position(str(body.get("symbol", "")))})
                 elif path == "/api/groww-test":
                     self._json(app.groww_test())
+                elif path == "/api/factor-backtest":
+                    job = app.start_factor_backtest(str(body.get("universe") or "NIFTY200"),
+                                                    int(body.get("top", 20)), int(body.get("years", 4)))
+                    self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/dismiss":
                     self._json({"ok": app.dismiss(int(body["index"]))})
                 elif path == "/api/settings":

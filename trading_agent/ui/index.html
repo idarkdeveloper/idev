@@ -66,6 +66,13 @@
   .radio{display:flex;align-items:flex-start;gap:14px;padding:14px;border:1px solid #D3D7DE;border-radius:12px} .radio input{width:20px;height:20px;min-height:20px;margin:2px 0 0;padding:0}
   .conn{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px} .conn .dot.off{background:var(--amber)}
   footer{font-size:12px;color:var(--mute);padding:8px 0 24px}
+  .chart{position:relative;min-width:0} .chart svg{display:block;width:100%;height:auto;overflow:visible}
+  .chart svg text{font-family:var(--mono);font-size:11px;fill:var(--mute)}
+  .ctip{position:absolute;pointer-events:none;background:#16181D;color:#fff;font-size:12px;line-height:1.45;padding:7px 9px;border-radius:7px;white-space:nowrap;display:none;z-index:3}
+  .ctip b{font-weight:600}
+  .legend-row{display:flex;gap:6px 16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
+  .legend-row span{display:inline-flex;align-items:center;gap:6px} .legend-row i{display:inline-block;width:16px;height:3px;border-radius:2px}
+  .chart-empty{padding:18px 0;color:var(--mute);font-size:13px}
   details.menu{position:relative} details.menu>summary{list-style:none} details.menu>summary::-webkit-details-marker{display:none}
   details.menu .menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:5;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px;display:flex;flex-direction:column;gap:4px;min-width:260px;box-shadow:0 8px 24px rgba(22,24,29,.12)}
   details.menu .menu-pop button{justify-content:flex-start;border:none;min-height:40px;font-weight:500}
@@ -120,6 +127,10 @@
       </div>
       <div class="card">
         <div class="cardhead"><h2>Paper portfolio</h2><span class="sub" id="pricesrc"></span></div>
+        <div class="cardbody" style="border-bottom:1px solid var(--line)">
+          <div class="row" style="justify-content:space-between"><h3>Account value</h3><span class="sub" id="eq-note"></span></div>
+          <div class="chart" id="eq-chart"></div>
+        </div>
         <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th><th class="num">Trailing stop</th><th></th></tr></thead><tbody id="positions"></tbody></table></div>
         <form class="cardbody" id="tk-form" style="border-top:1px solid var(--line)">
           <h3>Paper order</h3>
@@ -152,6 +163,16 @@
           </div>
           <div id="sc-result" class="sub">Ranks every constituent; takes a minute or two the first time while price history is cached.</div>
         </form>
+        <form class="cardbody" id="fb-form" style="border-top:1px solid var(--line)">
+          <h3>Backtest the screen as a portfolio</h3>
+          <div class="row">
+            <label for="fb-years" style="font-weight:500">Years</label><select id="fb-years" name="years" style="flex:0 1 90px"><option>2</option><option selected>4</option><option>9</option></select>
+            <label for="fb-top" style="font-weight:500">Hold top</label><input id="fb-top" name="top" type="number" value="20" min="3" max="50" style="flex:0 1 90px">
+            <button type="submit" class="primary small" id="fb-run">Run portfolio backtest</button><span class="sub" id="fb-status"></span>
+          </div>
+          <div class="sub">Monthly rebalance into the top stocks with the same ranking, real Indian charges on every trade, compared with NIFTY 50 and an equal-weight hold of the universe. Uses the universe selected above.</div>
+          <div id="fb-result"></div>
+        </form>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Backtest</h2><span class="sub">replay disclosed deals: entry next close, excess return vs NIFTY 50 after cost</span></div>
@@ -165,6 +186,10 @@
           <div class="row"><button type="submit" class="primary small" id="bt-run">Run backtest</button><button type="button" class="small" id="bt-export">Export JSON</button><span class="sub" id="bt-status"></span></div>
           <div id="bt-result"></div>
         </form>
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Claude's track record</h2><span class="sub">each call vs the index afterwards</span><button type="button" class="small" id="scd-run" style="margin-left:auto">Refresh</button></div>
+        <div class="cardbody" id="scd-result"><div class="sub">Scores every recommendation once it has 5 trading days of history: buys are right when they beat the index by more than the trading cost, sells when the stock then lagged.</div></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Recent runs</h2></div>
@@ -332,6 +357,9 @@
     if(!$("bt-investor").value) $("bt-investor").value = s.watch_investor;
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
     renderOrders();
+    renderEquity();
+    if(S.factor_backtest && S.factor_backtest.dates && $("fb-result").dataset.at !== S.factor_backtest.at){ renderFactor(S.factor_backtest); $("fb-result").dataset.at = S.factor_backtest.at; }
+    $("fb-run").disabled = S.busy;
     if(!btCostSet && S.costs && S.costs.examples){ $("bt-cost").value = S.costs.examples["25000"]; btCostSet = true; }
     if(S.screen && S.screen.top) renderScreen(S.screen);
     $("sc-run").disabled = S.busy;
@@ -354,6 +382,93 @@
     $("sc-result").innerHTML = `<div class="sub">${esc(sc.universe)} · ${sc.eligible} eligible of ${sc.scored} scored · ${sc.errors} without data · ${when(sc.at)}</div>
       <div class="scroll"><table><thead><tr><th class="num">#</th><th>Stock</th><th class="num">12-1</th><th class="num">6m</th><th class="num">1m</th><th class="num">Vol</th><th class="num">vs 52w high</th><th class="num">Score</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
+  // ---- charts: plain SVG, one y-axis, hairline grid, crosshair tooltip ----
+  const C = {s1:"#2a78d6", s2:"#eb6834", ctx:"#898781", grid:"#ECEEF1", base:"#c3c2b7", pos:"#2a78d6", neg:"#e34948", ring:"#ffffff"};
+  const NS = "http://www.w3.org/2000/svg";
+  function niceTicks(min, max, n){
+    n = n || 4; let span = max - min; if(!(span > 0)) span = Math.abs(max) || 1;
+    const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), e = raw / mag;
+    const step = (e >= 7.5 ? 10 : e >= 3.5 ? 5 : e >= 1.5 ? 2 : 1) * mag;
+    const lo = Math.floor(min / step) * step, hi = Math.ceil(max / step) * step, out = [];
+    for(let v = lo; v <= hi + step / 2; v += step) out.push(+v.toFixed(10));
+    return out;
+  }
+  const shortDate = (d) => { const x = new Date(d + (d.length === 10 ? "T00:00:00" : "")); return isNaN(x) ? d : x.toLocaleDateString("en-IN", {day:"numeric", month:"short", year:"2-digit"}); };
+  function lineChart(el, cfg){
+    const xs = cfg.x, n = xs.length;
+    if(n < 2){ el.innerHTML = `<div class="chart-empty">${esc(cfg.empty || "Not enough data to draw yet.")}</div>`; return; }
+    const W = Math.max(280, el.clientWidth || 560), H = cfg.height || 200;
+    const m = {l: cfg.left || 60, r: cfg.endLabels ? 92 : 14, t: 10, b: 24}, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const vals = []; cfg.series.forEach(s => s.values.forEach(v => { if(v != null && isFinite(v)) vals.push(v); }));
+    (cfg.refs || []).forEach(r => vals.push(r.y));
+    const ticks = niceTicks(Math.min(...vals), Math.max(...vals), 4), y0 = ticks[0], y1 = ticks[ticks.length - 1];
+    const X = i => m.l + (n === 1 ? 0 : i / (n - 1) * pw), Y = v => m.t + ph - (v - y0) / ((y1 - y0) || 1) * ph;
+    const yF = cfg.yFmt || (v => v.toLocaleString());
+    let g = "";
+    ticks.forEach(t => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${t === y0 ? C.base : C.grid}" stroke-width="1"/><text x="${m.l - 8}" y="${Y(t) + 4}" text-anchor="end">${esc(yF(t))}</text>`; });
+    const xt = Math.max(2, Math.min(5, n, Math.floor(pw / 95)));
+    for(let k = 0; k < xt; k++){ const i = Math.round(k * (n - 1) / (xt - 1)); g += `<text x="${X(i)}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === xt - 1 ? "end" : "middle"}">${esc(shortDate(xs[i]))}</text>`; }
+    (cfg.refs || []).forEach(r => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(r.y)}" y2="${Y(r.y)}" stroke="${r.color || C.ctx}" stroke-width="1" stroke-dasharray="4 3"><title>${esc(r.label)} ${esc(yF(r.y))}</title></line>`; });
+    const placed = [];
+    cfg.series.forEach(s => {
+      let d = "", pen = false;
+      s.values.forEach((v, i) => { if(v == null || !isFinite(v)){ pen = false; return; } d += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1); pen = true; });
+      if(s.area && d){ const fi = s.values.findIndex(v => v != null), li = s.values.length - 1 - [...s.values].reverse().findIndex(v => v != null);
+        g += `<path d="${d}L${X(li).toFixed(1)} ${Y(y0)}L${X(fi).toFixed(1)} ${Y(y0)}Z" fill="${s.color}" fill-opacity="0.08"/>`; }
+      g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2}" stroke-linejoin="round" stroke-linecap="round"/>`;
+      const li = s.values.length - 1 - [...s.values].reverse().findIndex(v => v != null);
+      if(li >= 0 && li < n && s.values[li] != null){
+        g += `<circle cx="${X(li)}" cy="${Y(s.values[li])}" r="4" fill="${s.color}" stroke="${C.ring}" stroke-width="2"/>`;
+        const ly = Y(s.values[li]);
+        if(cfg.endLabels && !placed.some(py => Math.abs(py - ly) < 13)){ placed.push(ly); g += `<text x="${X(li) + 8}" y="${ly + 4}" style="fill:var(--ink2)">${esc(s.label || s.name)}</text>`; }
+      }
+    });
+    const refs = cfg.refs || [], showLegend = cfg.legend !== false && (cfg.series.length + refs.length) > 1;
+    el.innerHTML = (showLegend ? `<div class="legend-row" style="margin-bottom:6px">${cfg.series.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}${refs.map(r => `<span><i style="background:repeating-linear-gradient(90deg, ${r.color || C.ctx} 0 4px, transparent 4px 7px)"></i>${esc(r.label)} ${esc(yF(r.y))}</span>`).join("")}</div>` : "")
+      + `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "chart")}">${g}<line class="xh" x1="0" x2="0" y1="${m.t}" y2="${m.t + ph}" stroke="${C.base}" stroke-width="1" visibility="hidden"/><g class="dots"></g><rect x="${m.l}" y="${m.t}" width="${pw}" height="${ph}" fill="transparent" class="hit"/></svg><div class="ctip"></div>`;
+    const svg = el.querySelector("svg"), tip = el.querySelector(".ctip"), xh = svg.querySelector(".xh"), dots = svg.querySelector(".dots");
+    const at = (ev) => { const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width; return Math.max(0, Math.min(n - 1, Math.round((sx - m.l) / pw * (n - 1)))); };
+    svg.querySelector(".hit").addEventListener("mousemove", ev => {
+      const i = at(ev), x = X(i);
+      xh.setAttribute("x1", x); xh.setAttribute("x2", x); xh.setAttribute("visibility", "visible");
+      dots.innerHTML = cfg.series.map(s => s.values[i] == null ? "" : `<circle cx="${x}" cy="${Y(s.values[i])}" r="4" fill="${s.color}" stroke="${C.ring}" stroke-width="2"/>`).join("");
+      tip.innerHTML = `<b>${esc(shortDate(xs[i]))}</b>` + cfg.series.map(s => s.values[i] == null ? "" : `<br><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.color};margin-right:6px"></span>${esc(s.name)} ${esc(yF(s.values[i]))}`).join("");
+      tip.style.display = "block";
+      const r = svg.getBoundingClientRect(), px = x * r.width / W, tw = tip.offsetWidth;
+      tip.style.left = Math.max(0, Math.min(r.width - tw, px + 12 + tw > r.width ? px - tw - 12 : px + 12)) + "px"; tip.style.top = "8px";
+    });
+    svg.querySelector(".hit").addEventListener("mouseleave", () => { xh.setAttribute("visibility", "hidden"); dots.innerHTML = ""; tip.style.display = "none"; });
+  }
+  function histogram(el, values, cfg){
+    if(values.length < 2){ el.innerHTML = `<div class="chart-empty">${esc(cfg.empty || "Not enough data to draw yet.")}</div>`; return; }
+    const W = Math.max(280, el.clientWidth || 560), H = cfg.height || 170, m = {l:40, r:14, t:10, b:26}, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    let lo = Math.min(...values, 0), hi = Math.max(...values, 0);
+    const bw = niceTicks(lo, hi, 8); const step = bw[1] - bw[0];
+    lo = bw[0]; hi = bw[bw.length - 1];
+    const bins = []; for(let b = lo; b < hi - step / 2; b += step) bins.push({lo:b, hi:b + step, n:0});
+    values.forEach(v => { const k = Math.min(bins.length - 1, Math.max(0, Math.floor((v - lo) / step))); bins[k].n++; });
+    const maxN = Math.max(...bins.map(b => b.n)), yt = niceTicks(0, maxN, 3).filter(t => Number.isInteger(t));
+    const X = v => m.l + (v - lo) / (hi - lo) * pw, Y = c => m.t + ph - c / (yt[yt.length - 1] || 1) * ph;
+    let g = "";
+    yt.forEach(t => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${t === 0 ? C.base : C.grid}"/><text x="${m.l - 8}" y="${Y(t) + 4}" text-anchor="end">${t}</text>`; });
+    bins.forEach((b, k) => { if(!b.n) return; const x0 = X(b.lo) + 1, x1 = X(b.hi) - 1, mid = (b.lo + b.hi) / 2;
+      g += `<path d="M${x0} ${Y(0)}V${Y(b.n) + 3}q0 -3 3 -3H${x1 - 3}q3 0 3 3V${Y(0)}Z" fill="${mid < 0 ? C.neg : C.pos}"><title>${pct(b.lo,0)} to ${pct(b.hi,0)}: ${b.n} deal${b.n === 1 ? "" : "s"}</title></path>`; });
+    g += `<line x1="${X(0)}" x2="${X(0)}" y1="${m.t}" y2="${m.t + ph}" stroke="var(--ink2)" stroke-width="1"/>`;
+    [lo, 0, hi].forEach((v, k) => { g += `<text x="${X(v)}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === 2 ? "end" : "middle"}">${pct(v,0)}</text>`; });
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "histogram")}">${g}</svg>`;
+  }
+  const rupeesShort = v => { const a = Math.abs(v); return (v < 0 ? "−" : "") + sym() + (a >= 1e7 ? (a / 1e7).toFixed(2) + " Cr" : a >= 1e5 ? (a / 1e5).toFixed(2) + " L" : Math.round(a).toLocaleString("en-IN")); };
+
+  function renderEquity(){
+    const h = S.equity_history || [], el = $("eq-chart"), start = S.settings.paper_starting_cash;
+    const perf = S.performance;
+    $("eq-note").textContent = h.length ? `${h.length} points since ${shortDate(h[0].at.slice(0,10))}` : "";
+    lineChart(el, {x: h.map(p => p.at), series: [{name:"Account value", color:C.s1, area:true, values: h.map(p => p.equity)}],
+      refs: perf ? [{y: perf.starting_cash, label: "Starting cash"}] : [], yFmt: rupeesShort, height: 180, endLabels: false, left: 64,
+      label: "Paper account value over time",
+      empty: "The curve starts with the next check or paper order. Each check records the account value."});
+  }
+
   function renderBacktest(b){
     const sm = b.summary, rows = [];
     for(const [side, perH] of Object.entries(sm.by_side||{})){
@@ -362,12 +477,35 @@
     const types = Object.entries(sm.by_client_type||{}).map(([t,r]) => `<span class="pill">${esc(WHO[t]||t)} n=${r.n} ${pct(r.mean_excess,2)}</span>`).join(" ");
     $("bt-result").innerHTML = rows.length ? `<div class="sub">${esc(sm.investor)} vs ${esc(sm.benchmark)} · ${sm.priced}/${sm.deals} deals priced · ${b.days} days · cost ${sm.cost_bps} bps · ${when(b.at)}</div>
       <div class="scroll"><table><thead><tr><th>Side</th><th class="num">Hold</th><th class="num">N</th><th class="num">Mean excess</th><th class="num">Median</th><th class="num">Hit rate</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
-      ${types ? `<div class="row" style="gap:6px"><span class="sub">Buys by who traded (longest horizon):</span>${types}</div>` : ""}`
+      ${types ? `<div class="row" style="gap:6px"><span class="sub">Buys by who traded (longest horizon):</span>${types}</div>` : ""}
+      <h3 style="margin-top:6px">Each deal's excess return, longest horizon</h3><div class="chart" id="bt-hist"></div>`
       : `<div class="sub">No priced deals for ${esc(sm.investor)} in that window. Famous names rarely cross the 0.5% bulk-deal threshold; try more days or another name.</div>`;
+    const hEl = $("bt-hist");
+    if(hEl && b.outcomes){
+      const hs = Object.keys((b.outcomes[0] || {}).excess || {}), H = hs[hs.length - 1];
+      const ex = b.outcomes.filter(o => !o.error && o.excess && o.excess[H] != null).map(o => o.excess[H] - (o.transaction === "Purchase" ? sm.cost_bps / 1e4 : 0));
+      histogram(hEl, ex, {label: "Distribution of excess returns", empty: "Need at least two priced deals to show a spread."});
+    }
+  }
+  function renderFactor(r){
+    if(!r || !r.dates){ return; }
+    const st = r.stats, idx = (arr) => arr.map(v => v == null ? null : v / arr.find(x => x != null) * 100);
+    const row = (label, s) => `<tr><td>${label}</td><td class="num ${(s.total_return||0)>=0?"up":"down"}">${pct(s.total_return)}</td><td class="num">${pct(s.cagr)}</td><td class="num down">${pct(s.max_drawdown)}</td><td class="num">${pct(s.volatility)}</td></tr>`;
+    $("fb-result").innerHTML = `<div class="sub">${esc(r.universe)} · top ${r.top} · ${r.months} monthly rebalances · ${shortDate(r.dates[0])} to ${shortDate(r.dates[r.dates.length-1])} · ${when(r.at)}</div>
+      <div class="chart" id="fb-chart"></div>
+      <div class="scroll"><table><thead><tr><th></th><th class="num">Total</th><th class="num">CAGR</th><th class="num">Max drawdown</th><th class="num">Volatility</th></tr></thead><tbody>
+      ${row("Factor portfolio (after charges)", st.strategy)}${row("NIFTY 50", st.benchmark)}${row("Equal weight, no charges", st.equal_weight)}</tbody></table></div>
+      <div class="sub">Charges paid ${money(r.costs_paid)} over ${r.trades} trades · ${r.avg_names_held} names held on average · ${r.months_all_cash} months fully in cash. ${esc(r.caveat)}</div>`;
+    lineChart($("fb-chart"), {x: r.dates, legend: true, endLabels: true, height: 220, left: 44,
+      yFmt: v => Math.round(v).toString(), label: "Growth of 100: factor portfolio vs NIFTY 50 vs equal weight",
+      refs: [{y: 100, label: "Start"}],
+      series: [{name:"Factor portfolio", label:"Factor", color:C.s1, values: idx(r.strategy)},
+               {name:"NIFTY 50", label:"NIFTY 50", color:C.s2, values: idx(r.benchmark)},
+               {name:"Equal weight", label:"Equal wt", color:C.ctx, width:1.5, values: idx(r.equal_weight)}]});
   }
 
   async function refresh(){ try { S = await api("/api/state"); render(); } catch(e){ toast("Could not load: "+e.message); } }
-  function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Failed: ":"Done: ")+j.message); $("bt-status").textContent=""; $("sc-status").textContent=""; } }, 2500); }
+  function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Failed: ":"Done: ")+j.message); $("bt-status").textContent=""; $("sc-status").textContent=""; $("fb-status").textContent=""; } }, 2500); }
 
   async function runCheck(force, dry){
     try { const j = await api("/api/check", {force, dry_run: dry || !S.connections.claude}); toast(j.ok===false ? j.message : (dry ? "Dry run started" : force ? "Forced check started" : "Check started")); await refresh(); pollWhileBusy(); }
@@ -454,9 +592,40 @@
       const cls = v==="strong"?"ok":v==="weak"?"bad":"";
       $("lk-result").innerHTML = `<div class="row" style="gap:8px"><span style="font-size:16px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div>
         <div class="sub">${esc(r.momentum_summary)}</div>
+        <div class="chart" id="lk-chart" style="margin-top:6px"></div>
         <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div>`;
+      const hist = r.history || [], pos = r.position, refs = [];
+      if(pos){ refs.push({y: pos.avg_entry_price, label: "Your cost"}); refs.push({y: pos.stop, label: "Stop", color: C.neg}); }
+      lineChart($("lk-chart"), {x: hist.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, refs,
+        yFmt: v => sym() + Math.round(v).toLocaleString("en-IN"), label: `${r.ticker} price, last year`,
+        empty: r.history_error ? "Price history unavailable: " + r.history_error : "No price history.",
+        series: [{name: "Price", color: C.s1, values: hist.map(p => p.c)}, {name: "200-day average", color: C.ctx, width: 1.5, values: hist.map(p => p.ma200)}]});
     } catch(e){ $("lk-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   }
+  async function loadScorecard(){
+    $("scd-run").disabled = true; $("scd-result").innerHTML = `<div class="sub">Scoring recommendations against the index…</div>`;
+    try {
+      const r = await api("/api/scorecard"), s = r.summary, rows = r.rows || [];
+      if(!rows.length){ $("scd-result").innerHTML = `<div class="sub">No recommendations yet. They are scored here once Claude has made some and 5 trading days have passed.</div>`; return; }
+      const sumRows = []; for(const [a, perH] of Object.entries(s.by_action)) for(const [h, x] of Object.entries(perH))
+        sumRows.push(`<tr><td>${esc(cap(a))}</td><td class="num">${h}d</td><td class="num">${x.n}</td><td class="num ${x.mean_excess>=0?"up":"down"}">${pct(x.mean_excess,2)}</td><td class="num">${x.hit_rate!=null?Math.round(x.hit_rate*100)+"%":"not scored"}</td></tr>`);
+      const verdict = (row) => { const hs = s.horizons.map(String).reverse(); for(const h of hs){ const c = row.correct[h]; if(c === true) return `<span class="pill ok" style="padding:2px 8px">Right at ${h}d</span>`; if(c === false) return `<span class="pill bad" style="padding:2px 8px">Wrong at ${h}d</span>`; }
+        return row.action==="watch"||row.action==="hold" ? `<span class="pill" style="padding:2px 8px">Not scored</span>` : `<span class="pill" style="padding:2px 8px">Pending</span>`; };
+      $("scd-result").innerHTML = `${sumRows.length ? `<div class="scroll"><table><thead><tr><th>Call</th><th class="num">After</th><th class="num">N</th><th class="num">Mean vs index</th><th class="num">Right</th></tr></thead><tbody>${sumRows.join("")}</tbody></table></div>` : `<div class="sub">${s.pending} recommendation${s.pending===1?"":"s"} still too recent to score.</div>`}
+        <div class="scroll"><table><thead><tr><th>Made</th><th>Call</th><th>Stock</th>${s.horizons.map(h => `<th class="num">${h}d vs index</th>`).join("")}<th>Verdict</th></tr></thead><tbody>
+        ${rows.slice().reverse().map(x => `<tr><td class="mono sub" style="white-space:nowrap">${when(x.at)}</td><td><span class="act ${esc(x.action)}">${esc(x.action.toUpperCase())}</span></td><td style="font-weight:600">${esc(x.ticker)}</td>${s.horizons.map(h => { const v = x.excess[String(h)]; return `<td class="num ${v==null?"":v>=0?"up":"down"}">${v==null?"pending":pct(v,1)}</td>`; }).join("")}<td>${verdict(x)}</td></tr>`).join("")}
+        </tbody></table></div><div class="sub">Benchmark ${esc(s.benchmark)}. Buys must beat it by more than their round-trip trading cost to count as right.</div>`;
+    } catch(e){ $("scd-result").innerHTML = `<div class="sub">${esc(e.message)}</div>`; }
+    $("scd-run").disabled = false;
+  }
+  $("scd-run").addEventListener("click", loadScorecard);
+  $("fb-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const body = {universe: $("sc-universe").value, years: Number($("fb-years").value), top: Number($("fb-top").value)};
+    try { const j = await api("/api/factor-backtest", body); if(j.ok===false){ toast(j.message); return; } $("fb-status").textContent = "Fetching history for the universe and simulating monthly rebalances…"; await refresh(); pollWhileBusy(); }
+    catch(e){ toast(e.message); }
+  });
+  let rsT; window.addEventListener("resize", () => { clearTimeout(rsT); rsT = setTimeout(() => { if(!S) return; renderEquity(); if(S.factor_backtest && S.factor_backtest.dates) renderFactor(S.factor_backtest); if(S.backtest && S.backtest.summary) renderBacktest(S.backtest); }, 200); });
   $("lk-form").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("lk-ticker").value.trim().toUpperCase(); if(t) lookup(t); });
   document.addEventListener("click", async (ev) => {
     const l = ev.target.closest("a[data-lookup]"); if(l){ ev.preventDefault(); lookup(l.dataset.lookup); $("lk-form").scrollIntoView({behavior:"smooth", block:"center"}); return; }
@@ -510,7 +679,7 @@
     try { await api("/api/reset", {}); $("dlg").close(); toast("Paper account reset"); await refresh(); } catch(e){ toast(e.message); }
   });
 
-  refresh().then(() => { if(S && S.busy) pollWhileBusy(); });
+  refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); });
   setInterval(refresh, 60000);
 })();
 </script>
