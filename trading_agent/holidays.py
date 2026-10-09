@@ -14,10 +14,10 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+
+from .timezones import IST
 
 log = logging.getLogger(__name__)
-IST = ZoneInfo("Asia/Kolkata")
 
 
 def _parse(d: str) -> str | None:
