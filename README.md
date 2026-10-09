@@ -199,9 +199,21 @@ these only ever touch the local paper account.
   Finance, cached for a day. Quality is return on equity (EPS ÷ book value per share),
   low debt to equity (ignored for banks and other lenders) and earnings growth; value is
   earnings yield and book-to-price. Loss-makers and non-financials with debt above 2×
-  equity are dropped. These are **today's** numbers only, so they can't be backtested
-  here; they are kept out of the factor backtest and the forward test, and with equal
-  weights they can outweigh momentum (a cheap stock with a flat trend can rank first).
+  equity are dropped. Yahoo gives **today's** numbers only, and with equal weights they
+  can outweigh momentum (a cheap stock with a flat trend can rank first). They are kept
+  out of the forward test.
+- **Point-in-time fundamentals for backtests** (`trading_agent/fundamentals_history.py`):
+  `python -m trading_agent fundamentals-history --universe NIFTYMIDCAP150` downloads every
+  quarterly results filing NSE has as XBRL (old feed to Dec 2024, SEBI's integrated
+  filing after that) for the universe and its past members, and caches each as a small
+  record. It is resumable: rerun it until it says nothing is left. Then
+  `factor-backtest --universe NIFTYMIDCAP150 --quality --value` ranks each month on the
+  results **broadcast by that day**: trailing-twelve-month profit (from year-to-date
+  figures), ROE, debt to equity, earnings growth, earnings yield and book-to-price.
+  Limits: earnings growth starts around 2020, and ROE and debt around 2022-23, when
+  balance sheets appear in the filings. Companies are valued on today's share count
+  (Yahoo prices are split-adjusted), so later share issues leak in slightly. The
+  backtest prints how many eligible names had results on an average rebalance.
 - **Volatility-based sizing** (`trading_agent/risk.py`, `python -m trading_agent size SENCO`):
   risk 1% of equity on a 2x ATR(14) move, capped at 10% of equity, whole shares. Claude
   must call `suggest_position_size` for every buy and quote the stop.

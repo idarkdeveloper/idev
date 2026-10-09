@@ -20,6 +20,7 @@ caveat says so.
 from __future__ import annotations
 
 import math
+import logging
 import statistics
 from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor
@@ -28,6 +29,8 @@ from typing import Any, Iterable
 from .membership import DELISTED, Membership
 from .momentum import momentum_stats
 from .screen import _vol, score_universe
+
+log = logging.getLogger(__name__)
 
 MIN_BARS = 274  # 12-1 momentum needs 252 + 21 bars of history
 
@@ -74,8 +77,14 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
                         benchmark: str = "NIFTYBEES", price_index: str | None = "^NSEI",
                         cost_model: Any | None = None, capital: float = 500_000.0,
                         workers: int = 8, min_turnover: float = 1e7, require_above_200dma: bool = True,
-                        membership: Membership | None = None, index_fund: str | None = None
+                        membership: Membership | None = None, index_fund: str | None = None,
+                        fundamentals: Any | None = None, quality: float = 0.0, value: float = 0.0
                         ) -> dict[str, Any]:
+    """Monthly-rebalanced factor portfolio. With ``fundamentals`` (a ResultsHistory) and a
+    quality and/or value weight, each rebalance also ranks on NSE results filings that had
+    been broadcast by that day (point-in-time)."""
+    universe = list(universe)
+    industries = {m["symbol"]: m.get("industry", "") for m in universe}
     current = [m["symbol"] for m in universe]
     rng = _yahoo_range(years)
     bench = prices.history(benchmark, rng)
@@ -101,6 +110,21 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
     if len(rebal) < 2:
         raise ValueError("not enough price history for a backtest; try fewer years")
     in_index = (lambda day: membership.members_on(day)) if membership else (lambda day: set(current))
+    use_funds = fundamentals is not None and bool(quality or value)
+    filings: dict[str, list[dict[str, Any]]] = {}
+    shares_now: dict[str, float] = {}
+    fund_cover: list[float] = []
+    if use_funds:
+        from .fundamentals_history import point_in_time as _pit
+        for sym in sorted(set().union(*(in_index(d) for d in rebal[:-1])) & set(hist)):
+            try:
+                filings[sym] = fundamentals.history(sym)
+            except Exception as e:  # noqa: BLE001
+                log.warning("results history for %s unavailable: %s", sym, e)
+                filings[sym] = []
+            latest = _pit(filings[sym], rebal[-1]) if filings[sym] else None
+            if latest and latest.get("shares"):
+                shares_now[sym] = latest["shares"]
     window_members = set().union(*(in_index(d) for d in rebal[:-1]))
     missing = sorted(window_members - set(hist))
 
@@ -153,6 +177,20 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
             st["vol_60d"] = _vol(window)
             stats[sym] = st
         ranked = score_universe(stats, min_turnover=min_turnover, require_above_200dma=require_above_200dma)
+        if use_funds:
+            from .fundamentals import apply_fundamentals
+            from .fundamentals_history import point_in_time as _pit, with_price
+            funds = {}
+            for r in ranked:
+                if not r["eligible"]:
+                    continue
+                m = _pit(filings.get(r["symbol"], []), day)
+                if m and r["symbol"] in shares_now:
+                    m = {**m, "shares": shares_now[r["symbol"]]}  # Yahoo prices are split-adjusted
+                funds[r["symbol"]] = with_price(m, _price_at(hist[r["symbol"]], dates_of[r["symbol"]], day))
+            have = [f for f in funds.values() if "error" not in f]
+            fund_cover.append(len(have) / len(funds) if funds else 0.0)
+            apply_fundamentals(ranked, funds, quality=quality, value=value, industries=industries)
         picks = [r["symbol"] for r in ranked if r["eligible"]][:top]
         if not picks:
             cash_months += 1
@@ -219,6 +257,11 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
         "missing_history": [{"symbol": m, "why": DELISTED.get(m, "no price history found")} for m in missing],
         "index_changes": membership.changes_between(rebal[0], rebal[-1]) if membership else [],
         "caveat": _caveat(benchmark, membership, point_in_time, dropped, missing),
+        "fundamentals": ({"quality": quality, "value": value, "source": "NSE results filings, point-in-time",
+                          "avg_coverage": round(statistics.fmean(fund_cover), 3) if fund_cover else 0.0,
+                          "note": "Valued on today's share count with split-adjusted prices, so later share "
+                                  "issues leak in slightly. ROE and debt start around 2022-23, when balance "
+                                  "sheets appear in the filings."} if use_funds else None),
     }
 
 

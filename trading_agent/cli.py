@@ -165,6 +165,45 @@ def cmd_orders(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fundamentals_history(args: argparse.Namespace) -> int:
+    """Download and cache NSE quarterly results (XBRL) for every stock in a universe."""
+    from datetime import date, timedelta
+    from .fundamentals_history import ResultsHistory
+    from .index_history import point_in_time
+    from .screen import load_universe
+
+    settings = _settings(args)
+    members = [m["symbol"] for m in load_universe(args.universe)]
+    try:
+        membership = point_in_time(args.universe, members, settings.state_dir, progress=print)
+        since = (date.today() - timedelta(days=365 * args.years)).isoformat()
+        symbols = sorted(set(members) | set(membership.ever_members(since)))
+    except Exception as e:  # noqa: BLE001 - fall back to today's members
+        print(f"Past members unavailable ({e}); using today's {len(members)} members.")
+        symbols = sorted(members)
+    h = ResultsHistory(settings.state_dir / "cache", max_new_downloads=args.max)
+    print(f"{len(symbols)} stocks; downloading results filings NSE hasn't given us yet "
+          f"(about 2 a second, at most {args.max} this run)…")
+    done = empty = 0
+    for i, sym in enumerate(symbols, 1):
+        try:
+            recs = h.history(sym)
+        except Exception as e:  # noqa: BLE001
+            print(f"  {sym}: listing failed ({type(e).__name__})")
+            continue
+        done += 1
+        empty += not recs
+        if i % 10 == 0 or i == len(symbols):
+            print(f"  {i}/{len(symbols)} stocks, {h.downloads} downloaded this run", flush=True)
+        if h.refused >= 2:
+            print("NSE is refusing downloads for now; run this again in a few minutes to continue.")
+            break
+    left = h.downloads >= args.max or h.refused >= 2
+    print(f"Done: {done} stocks read, {empty} with no XBRL results, {h.downloads} filings downloaded. "
+          + ("Run again to continue." if left else "Cache complete for now."))
+    return 0
+
+
 def cmd_forward(args: argparse.Namespace) -> int:
     """Paper-trade the factor screen forward, month by month, against its index fund."""
     from .costs import cost_model_for
@@ -452,11 +491,24 @@ def cmd_factor_backtest(args: argparse.Namespace) -> int:
     print(f"Backtesting top {args.top} of {args.universe.upper()} over {args.years} years (monthly rebalance)…")
     membership = None if args.todays_members else point_in_time(
         args.universe, [m["symbol"] for m in members], settings.state_dir, changes_csv=args.changes, progress=print)
+    funds = None
+    if args.quality or args.value:
+        from .fundamentals_history import ResultsHistory
+        # cache only: run `fundamentals-history` first, so a half-filled cache is visible, not silent
+        funds = ResultsHistory(settings.state_dir / "cache", max_new_downloads=0)
     r = run_factor_backtest(members, free_prices(settings), top=args.top, years=args.years,
                             cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
                             require_above_200dma=not args.no_trend_filter, benchmark=args.benchmark,
-                            membership=membership, index_fund=INDEX_FUNDS.get(args.universe.upper()))
+                            membership=membership, index_fund=INDEX_FUNDS.get(args.universe.upper()),
+                            fundamentals=funds, quality=1.0 if args.quality else 0.0, value=1.0 if args.value else 0.0)
     print(format_factor_backtest(r))
+    fx = r.get("fundamentals")
+    if fx:
+        print(f"\nFundamentals ({fx['source']}): quality x{fx['quality']:g}, value x{fx['value']:g}; "
+              f"{fx['avg_coverage']*100:.0f}% of eligible names had results on an average rebalance. {fx['note']}")
+        if fx["avg_coverage"] < 0.8:
+            print(f"Coverage is low: run `python -m trading_agent fundamentals-history --universe {args.universe}` "
+                  "(repeat until it reports nothing left) and backtest again.")
     if args.json:
         print(json.dumps(r, indent=2, default=str))
     return 0
@@ -619,8 +671,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="index change log (date,added,removed) for point-in-time membership; NIFTY 50 is built in")
     sp.add_argument("--todays-members", action="store_true",
                     help="ignore membership history and use today's constituents (survivorship-biased)")
+    sp.add_argument("--quality", action="store_true", help="also rank on point-in-time quality (NSE results)")
+    sp.add_argument("--value", action="store_true", help="also rank on point-in-time value (NSE results)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_factor_backtest)
+    sp = sub.add_parser("fundamentals-history", help="download NSE quarterly results for a universe (resumable)")
+    sp.add_argument("--universe", default="NIFTYMIDCAP150")
+    sp.add_argument("--years", type=int, default=5, help="also cover stocks that were members this far back")
+    sp.add_argument("--max", type=int, default=3000, help="most new filings to download this run")
+    sp.set_defaults(func=cmd_fundamentals_history)
     sp = sub.add_parser("index-history", help="rebuild past index members from NSE press releases")
     sp.add_argument("index", nargs="+", help="e.g. NIFTYMIDCAP150 NIFTYSMALLCAP250")
     sp.add_argument("--since", default="2021-01-01")
