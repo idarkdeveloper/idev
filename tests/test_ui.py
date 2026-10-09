@@ -292,3 +292,21 @@ def test_live_orders_gtt_status_and_gtt_toggle(server):
     assert s["settings"]["groww_gtt_stops"] is True and s["connections"]["groww_gtt_active"] is False
     status, j = _post(base + "/api/settings", {"groww_live_orders": True})
     assert status == 200 and j["applied"] == {} and app.settings.groww_live_orders is False
+
+
+def test_serves_inter_fonts_only_from_the_whitelist(server):
+    base, app = server
+    with urllib.request.urlopen(base + "/fonts/inter-latin.woff2", timeout=5) as r:
+        assert r.status == 200 and r.headers["Content-Type"] == "font/woff2" and r.read(4) == b"wOF2"
+    for bad in ("/fonts/../ui.py", "/fonts/inter-latin.woff2x", "/fonts/LICENSE.txt"):
+        status, _ = _get(base + bad)
+        assert status == 404
+    _, html = _get(base + "/")
+    assert "fonts.googleapis.com" not in html and "/fonts/inter-latin.woff2" in html
+
+
+def test_page_is_served_as_utf8(server):
+    base, app = server
+    with urllib.request.urlopen(base + "/", timeout=5) as r:
+        html = r.read().decode("utf-8")
+    assert "Â" not in html and "â‚¹" not in html and "·" in html

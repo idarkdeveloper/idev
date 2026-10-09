@@ -4,97 +4,242 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trading Agent</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
-  :root{--bg:#F4F5F7;--card:#FFFFFF;--line:#E3E6EB;--line2:#EDEFF2;--ink:#16181D;--ink2:#3D4653;--mute:#5B6472;
-        --teal:#0F766E;--teal2:#115E59;--tealbg:#E6F4F1;--amber:#B45309;--amberbg:#FFF4E5;--ambertx:#9A4D00;
-        --red:#9F1D1D;--redbg:#FDECEC;--chip:#EEF0F3;--mono:'IBM Plex Mono',monospace}
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:14px;line-height:1.45}
-  a{color:var(--teal)} a:hover{color:var(--teal2)}
-  h1,h2,h3{margin:0} h1{font-size:24px;font-weight:700} h2{font-size:16px;font-weight:700} h3{font-size:14px;font-weight:700}
-  header{background:var(--card);border-bottom:1px solid var(--line)}
-  .wrap{max-width:1280px;margin:0 auto;padding:16px 24px}
-  .row{display:flex;flex-wrap:wrap;align-items:center;gap:12px}
-  .brand{display:flex;align-items:center;gap:12px}
-  .logo{width:36px;height:36px;border-radius:10px;background:var(--teal);display:flex;align-items:center;justify-content:center}
-  .pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--chip);color:var(--ink2);font-size:12px;font-weight:600}
-  .pill.ok{background:var(--tealbg);color:var(--teal2)} .pill.warn{background:var(--amberbg);color:var(--ambertx)} .pill.bad{background:var(--redbg);color:var(--red)}
-  .dot{width:8px;height:8px;border-radius:50%;background:var(--teal)}
-  button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 16px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;font-weight:600;cursor:pointer;text-decoration:none}
-  button.primary{background:var(--teal);border-color:var(--teal);color:#fff} button:disabled{opacity:.6;cursor:wait}
-  button.small{min-height:36px;padding:0 12px;font-size:13px} button.danger{border-color:var(--red);color:var(--red)}
-  button.on{background:var(--tealbg);border-color:var(--teal);color:var(--teal2)}
-  main{max-width:1280px;margin:0 auto;padding:24px;display:flex;flex-direction:column;gap:24px}
-  .tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px}
-  .tile{padding:18px 20px;display:flex;flex-direction:column;gap:6px}
-  .label{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--mute)}
-  .big{font-family:var(--mono);font-size:28px;font-weight:600;line-height:34px}
-  .sub{font-size:13px;color:var(--mute)} .up{color:var(--teal);font-weight:600} .down{color:var(--red);font-weight:600}
-  .cols{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
-  .main{flex:999 1 640px;min-width:0;display:flex;flex-direction:column;gap:24px}
-  .side{flex:1 1 360px;min-width:0;display:flex;flex-direction:column;gap:16px}
-  .cardhead{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line)}
-  .cardbody{padding:16px 20px;display:flex;flex-direction:column;gap:12px}
-  .scroll{overflow-x:auto}
-  table{width:100%;border-collapse:collapse;min-width:560px}
-  th{text-align:left;font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--mute);padding:10px 12px;border-bottom:1px solid var(--line)}
-  td{padding:12px;border-bottom:1px solid var(--line2);vertical-align:top} tr:last-child td{border-bottom:none}
-  td.num,th.num{text-align:right;font-family:var(--mono)} .mono{font-family:var(--mono)}
-  .side-chip{display:inline-flex;padding:3px 8px;border-radius:6px;font-size:12px;font-weight:700}
-  .side-chip.buy{background:var(--tealbg);color:var(--teal2)} .side-chip.sell{background:var(--redbg);color:var(--red)}
-  .rec{padding:18px 20px;display:flex;flex-direction:column;gap:10px;border-left:4px solid var(--teal)}
-  .rec.sell{border-left-color:var(--red)} .rec.watch{border-left-color:var(--amber)} .rec.hold{border-left-color:#5B6472} .rec.dismissed{opacity:.55}
-  .act{display:inline-flex;padding:4px 10px;border-radius:6px;background:var(--teal);color:#fff;font-size:12px;font-weight:700}
-  .act.sell{background:var(--red)} .act.watch{background:var(--amber)} .act.hold{background:#5B6472}
-  .headline{font-size:15px;font-weight:600;line-height:22px} .rationale{margin:0;color:var(--ink2);line-height:21px}
-  .runs{display:flex;flex-direction:column} .run{display:flex;flex-wrap:wrap;gap:16px;padding:10px 0;border-bottom:1px solid var(--line2)} .run:last-child{border-bottom:none}
-  .empty{padding:24px 20px;color:var(--mute)}
-  .regime{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:12px 20px}
-  .regime .sig{font-size:13px;color:var(--ink2)}
-  .mkts{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13px}
-  .mkts span b{font-family:var(--mono);font-weight:500}
-  .ann{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-bottom:1px solid var(--line2)} .ann:last-child{border-bottom:none}
-  .ann .meta{font-size:12px;color:var(--mute)}
-  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 16px;border-radius:10px;font-weight:600;display:none;max-width:90vw;z-index:9}
-  dialog{border:1px solid var(--line);border-radius:14px;padding:0;max-width:720px;width:calc(100vw - 32px)} dialog::backdrop{background:rgba(22,24,29,.4)}
-  .form{padding:20px;display:flex;flex-direction:column;gap:16px}
-  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px} .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
-  .field{display:flex;flex-direction:column;gap:6px} label{font-size:13px;font-weight:600;color:var(--ink2)}
-  input,select{font:inherit;color:var(--ink);min-height:44px;padding:0 12px;border:1px solid #D3D7DE;border-radius:10px;background:#fff;width:100%}
-  .radio{display:flex;align-items:flex-start;gap:14px;padding:14px;border:1px solid #D3D7DE;border-radius:12px} .radio input{width:20px;height:20px;min-height:20px;margin:2px 0 0;padding:0}
-  .conn{display:flex;align-items:center;gap:12px;padding:12px;border:1px solid var(--line);border-radius:10px} .conn .dot.off{background:var(--amber)}
-  footer{font-size:12px;color:var(--mute);padding:8px 0 24px}
-  .chart{position:relative;min-width:0} .chart svg{display:block;width:100%;height:auto;overflow:visible}
-  .chart svg text{font-family:var(--mono);font-size:11px;fill:var(--mute)}
-  .ctip{position:absolute;pointer-events:none;background:#16181D;color:#fff;font-size:12px;line-height:1.45;padding:7px 9px;border-radius:7px;white-space:nowrap;display:none;z-index:3}
-  .ctip b{font-weight:600}
-  .legend-row{display:flex;gap:6px 16px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
-  .legend-row span{display:inline-flex;align-items:center;gap:6px} .legend-row i{display:inline-block;width:16px;height:3px;border-radius:2px}
-  .chart-empty{padding:18px 0;color:var(--mute);font-size:13px}
-  .callout{padding:10px 12px;border-radius:10px;background:var(--chip);color:var(--ink);font-size:14px}
-  details.menu{position:relative} details.menu>summary{list-style:none} details.menu>summary::-webkit-details-marker{display:none}
-  details.menu .menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:5;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px;display:flex;flex-direction:column;gap:4px;min-width:260px;box-shadow:0 8px 24px rgba(22,24,29,.12)}
-  details.menu .menu-pop button{justify-content:flex-start;border:none;min-height:40px;font-weight:500}
-  details.menu .menu-pop button:hover{background:var(--chip)}
-  .kv{display:grid;grid-template-columns:1fr auto;gap:4px 16px;font-size:13px} .kv span:nth-child(even){font-family:var(--mono);text-align:right}
-  .seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden} .seg button{border:none;border-radius:0;min-height:40px} .seg button.on{background:var(--tealbg);color:var(--teal2)}
-  @media (max-width:900px){.tiles,.grid4{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap,main{padding:16px}.grid2{grid-template-columns:1fr}}
+  /* Nocturne: dark ground, one blurple accent, Inter, rules that fade at both ends.
+     Layout: header, regime strip, KPI strip, then a wide main column beside a narrow aside. */
+  @font-face { font-family: "Inter"; font-style: normal; font-weight: 400 700; font-display: swap;
+    src: url("/fonts/inter-latin.woff2") format("woff2");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+  @font-face { font-family: "Inter"; font-style: normal; font-weight: 400 700; font-display: swap;
+    src: url("/fonts/inter-latin-ext.woff2") format("woff2");
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+
+  :root {
+    color-scheme: dark;
+    --color-bg: #161826; --color-surface: #232532; --color-text: #e9e9ed;
+    --color-accent: #9184d9; --color-accent-2: #a7a1db;
+    --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
+    --color-rule: color-mix(in srgb, #e9e9ed 8%, transparent);
+    --color-muted: color-mix(in srgb, #e9e9ed 55%, transparent);
+    --color-neutral-100: #f3f5fe; --color-neutral-300: #cfd3e5; --color-neutral-400: #b2b6ca; --color-neutral-500: #9397ab;
+    --color-neutral-600: #75798c; --color-neutral-700: #595d6c; --color-neutral-800: #3f424d; --color-neutral-900: #292b31;
+    --color-accent-100: #f5f4ff; --color-accent-200: #e7e5fe; --color-accent-300: #d2cefd; --color-accent-400: #b5abfc;
+    --color-accent-600: #796cbf; --color-accent-800: #423a6a; --color-accent-900: #2b2741;
+    --font-heading: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif; --font-heading-weight: 500;
+    --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --space-1: 2.8px; --space-2: 5.6px; --space-3: 8.4px; --space-4: 11.2px;
+    --radius-sm: 4px; --radius-md: 8px; --radius-lg: 14px;
+    --shadow-sm: 0 0 0 1px #3f424d;
+    --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0,0,0,0.55);
+    --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0,0,0,0.65);
+    --fade-rule: linear-gradient(to right, transparent, var(--color-rule) 48px, var(--color-rule) calc(100% - 48px), transparent);
+    /* Names the page script already uses, pointed at Nocturne values. */
+    --bg: var(--color-bg); --card: var(--color-surface); --line: var(--color-divider); --line2: var(--color-rule);
+    --ink: var(--color-text); --ink2: var(--color-neutral-400); --mute: var(--color-muted);
+    --teal: var(--color-accent); --teal2: var(--color-accent-400); --tealbg: var(--color-accent-900);
+    --amber: var(--color-accent-2); --red: var(--color-accent-300); --redbg: var(--color-accent-900);
+    --chip: var(--color-neutral-800); --mono: var(--font-body);
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-body);
+         font-size: 14px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+  h1, h2, h3 { margin: 0; font-family: var(--font-heading); font-weight: var(--font-heading-weight);
+               line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
+  h1 { font-size: 34px; } h2 { font-size: 22px; } h3 { font-size: 16px; }
+  a { color: var(--color-accent); text-decoration: none; text-underline-offset: 3px; }
+  a:hover { color: var(--color-accent-600); }
+  :focus { outline: none; }
+  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
+
+  /* header */
+  header { background: transparent; }
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 16px 24px; }
+  #lastcheck { white-space: nowrap; }
+  .controls { margin-left: auto; gap: 8px; flex-wrap: nowrap; }
+  @media (max-width: 1100px) { .controls { flex-wrap: wrap; } }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-name { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 18px; line-height: 22px; }
+  .logo { width: 36px; height: 36px; border: 1px solid var(--color-accent); border-radius: var(--radius-md);
+          display: flex; align-items: center; justify-content: center; color: var(--color-accent); flex: none; }
+  header button, header .btn { min-height: 40px; }
+
+  /* tags (the page script calls them pills) */
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 6px; font-size: 11.5px;
+          letter-spacing: 0.02em; white-space: nowrap; background: var(--color-neutral-800); color: var(--color-neutral-100);
+          border: 1px solid transparent; }
+  .pill.ok { background: var(--color-accent-800); color: var(--color-accent-100); }
+  .pill.warn { background: transparent; border-color: var(--color-accent); color: var(--color-accent); }
+  .pill.bad { background: var(--color-accent-300); color: var(--color-bg); font-weight: 700; }
+  header .pill { font-size: 12px; }
+  .pill .dot, .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+  .side-chip, .act { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 6px; font-size: 11.5px;
+                     font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; border: 1px solid transparent; }
+  .side-chip.buy { border-color: var(--color-accent); color: var(--color-accent); }
+  .side-chip.sell { background: var(--color-accent-800); color: var(--color-accent-100); }
+  .act { background: var(--color-accent-800); color: var(--color-accent-100); }
+  .act.sell { background: transparent; border-color: var(--color-accent); color: var(--color-accent); }
+  .act.watch, .act.hold { background: var(--color-neutral-800); color: var(--color-neutral-100); }
+
+  /* buttons */
+  button, .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px;
+                 padding: 0 12px; cursor: pointer; font: inherit; font-family: var(--font-heading);
+                 font-weight: var(--font-heading-weight); font-size: 14px; line-height: 1.2; white-space: nowrap;
+                 color: var(--color-text); background: transparent; border: 1px solid var(--color-divider);
+                 border-radius: var(--radius-md); }
+  button:hover, .btn:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+  button:active, .btn:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
+  button.primary { color: var(--color-accent); border-color: var(--color-accent); }
+  button.primary:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+  button.primary:active { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
+  button.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
+  button.danger { color: var(--color-accent-300); border-color: var(--color-accent-300); }
+  button.on { color: var(--color-accent); border-color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button svg, .btn svg { display: block; flex: none; }
+  .split { display: flex; }
+  .split > button { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  details.menu { position: relative; }
+  details.menu > summary { list-style: none; color: var(--color-accent); border-color: var(--color-accent);
+    border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; padding: 0 10px; min-height: 40px; }
+  details.menu > summary::-webkit-details-marker { display: none; }
+  details.menu > summary:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+  details.menu .menu-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; min-width: 300px;
+    background: var(--color-surface); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); padding: 6px;
+    display: flex; flex-direction: column; }
+  details.menu .menu-pop button { justify-content: flex-start; border-color: transparent; font-weight: 400; min-height: 40px; }
+
+  /* layout */
+  main { max-width: 1320px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 32px; }
+  .cols { display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start; }
+  .main { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 32px; }
+  .side { flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 32px; }
+  .side-group { display: flex; flex-direction: column; gap: 16px; }
+
+  /* surfaces */
+  .card { background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); min-width: 0; }
+  .cardhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; padding: 12px 18px; }
+  .cardbody { padding: 12px 18px; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--color-divider); min-width: 0; }
+  .card > .scroll, .cardhead + .scroll { padding: 0 10px 6px; }
+  .scroll { overflow-x: auto; }
+
+  /* regime strip */
+  .regime-card { display: flex; flex-direction: column; }
+  .regime-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 18px; }
+  .regime { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; flex: 1 1 300px; min-width: 0; }
+  .regime .sig { font-size: 13px; color: var(--color-muted); flex: 1 1 300px; }
+  .mkts { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); border-top: 1px solid var(--color-divider); padding-left: 18px; }
+  .mkts:empty { display: none; }
+  .mkt { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px 10px 0; margin-right: 14px; border-right: 1px solid var(--color-divider); min-width: 0; }
+  .mkt:last-child { border-right: none; }
+  .mkt .k { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mkt .v { font-size: 17px; font-weight: 600; }
+  .mkt .c { font-size: 12px; font-weight: 600; }
+
+  /* KPI strip */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); background: var(--color-surface);
+           border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); padding-left: 20px; }
+  .tile { display: flex; flex-direction: column; gap: 6px; padding: 18px 20px 18px 0; margin-right: 20px; border-right: 1px solid var(--color-divider); min-width: 0; }
+  .tile:last-child { border-right: none; }
+  .label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-muted); }
+  .big { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 30px; line-height: 34px; overflow-wrap: anywhere; }
+  .sub { font-size: 13px; color: var(--color-muted); }
+  .up { color: var(--color-accent-300); font-weight: 600; } .down { color: var(--color-neutral-400); font-weight: 600; }
+
+  /* tables: row rules fade out at both ends */
+  table { width: 100%; border-collapse: collapse; min-width: 560px; font-size: 14px; }
+  th { text-align: left; font-weight: 400; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+       color: color-mix(in srgb, var(--color-text) 60%, transparent); padding: 8px; white-space: nowrap; }
+  td { padding: 8px; vertical-align: top; }
+  thead tr { background: linear-gradient(to right, transparent, var(--color-divider) 48px, var(--color-divider) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px; }
+  tbody tr { background: var(--fade-rule) no-repeat bottom / 100% 1px; }
+  tbody tr:last-child { background: none; }
+  tbody tr:hover { background: linear-gradient(color-mix(in srgb, var(--color-text) 4%, transparent), color-mix(in srgb, var(--color-text) 4%, transparent)) no-repeat 0 0 / 100% 100%, var(--fade-rule) no-repeat bottom / 100% 1px; }
+  td.num, th.num { text-align: right; } .mono { font-variant-numeric: tabular-nums; }
+
+  /* recommendations */
+  .rec { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; border-left: 2px solid var(--color-accent); }
+  .rec.dismissed { opacity: .5; }
+  .headline { font-size: 15px; font-weight: 600; line-height: 22px; }
+  .rationale { margin: 0; color: var(--color-neutral-400); line-height: 21px; text-wrap: pretty; }
+
+  .runs { display: flex; flex-direction: column; padding: 4px 18px 8px; border-top: 1px solid var(--color-divider); }
+  .run { display: flex; flex-wrap: wrap; gap: 16px; padding: 10px 0; background: var(--fade-rule) no-repeat bottom / 100% 1px; }
+  .run:last-child { background: none; }
+  .empty { padding: 20px 18px; color: var(--color-muted); }
+  .ann { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--color-divider); }
+  .ann .meta { font-size: 12px; color: var(--color-muted); }
+
+  /* forms */
+  .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  label { font-size: 12px; color: color-mix(in srgb, var(--color-text) 70%, transparent); }
+  input, select { width: 100%; min-height: 36px; padding: 6px 10px; font: inherit; font-size: 14px; color: var(--color-text);
+                  caret-color: var(--color-accent); background: var(--color-surface); border: 1px solid var(--color-divider);
+                  border-radius: var(--radius-md); }
+  input:hover, select:hover { border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+  input:focus-visible, select:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
+  input[type=checkbox], input[type=radio] { width: 18px; height: 18px; min-height: 18px; padding: 0; margin: 2px 0 0; flex: none; accent-color: var(--color-accent); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .side .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .seg { display: inline-flex; overflow: hidden; border: 1px solid var(--color-divider); border-radius: var(--radius-md); }
+  .seg button { border: none; border-radius: 0; min-height: 34px; padding: 0 12px; font-size: 13px; font-weight: 400; }
+  .seg button + button { border-left: 1px solid var(--color-divider); }
+  .seg button.on { color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; font-size: 13px; }
+  .kv span:nth-child(even) { text-align: right; }
+  .callout { padding: 10px 12px; border-radius: var(--radius-md); background: var(--color-neutral-900); font-size: 14px; }
+
+  /* settings dialog */
+  dialog { border: none; border-radius: var(--radius-lg); padding: 0; max-width: 760px; width: calc(100vw - 32px);
+           background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-lg); }
+  dialog::backdrop { background: rgba(10, 11, 18, 0.6); }
+  .form { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+  .dialog-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 20px; }
+  .group { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--color-divider); padding-top: 16px; }
+  .group-title { font-weight: 700; color: var(--color-text); font-size: 14px; }
+  .radio { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--color-divider); }
+  .radio:last-child { border-bottom: none; }
+  .radio label { color: var(--color-text); font-size: 14px; font-weight: 600; cursor: pointer; }
+  .conn { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--color-divider); }
+  .conn .dot { background: var(--color-accent); } .conn .dot.off { background: var(--color-neutral-500); }
+
+  /* charts */
+  .chart { position: relative; min-width: 0; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart svg text { font-family: var(--font-body); font-size: 11px; fill: var(--color-muted); }
+  .ctip { position: absolute; pointer-events: none; background: var(--color-neutral-900); color: var(--color-text);
+          box-shadow: var(--shadow-md); font-size: 12px; line-height: 1.45; padding: 7px 9px; border-radius: var(--radius-md);
+          white-space: nowrap; display: none; z-index: 3; }
+  .ctip b { font-weight: 600; }
+  .legend-row { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: 12px; color: var(--color-muted); }
+  .legend-row span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend-row i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; }
+  .chart-empty { padding: 18px 0; color: var(--color-muted); font-size: 13px; }
+
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--color-neutral-900);
+           color: var(--color-text); box-shadow: var(--shadow-lg); padding: 12px 16px; border-radius: var(--radius-md);
+           font-weight: 500; display: none; max-width: 90vw; z-index: 9; }
+  footer { font-size: 12px; color: var(--color-muted); padding: 12px 0 24px; border-top: 1px solid var(--color-divider); }
+
+  @media (max-width: 900px) { .wrap, main { padding-inline: 16px; } h1 { font-size: 28px; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 <header>
   <div class="wrap row">
     <div class="brand">
-      <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"></polyline><polyline points="15 7 21 7 21 13"></polyline></svg></div>
-      <div><div style="font-size:18px;font-weight:700;line-height:22px">Trading Agent</div><div class="sub" id="subtitle">loading…</div></div>
+      <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"></polyline><polyline points="15 7 21 7 21 13"></polyline></svg></div>
+      <div><div class="brand-name">Trading Agent</div><div class="sub" id="subtitle">loading…</div></div>
     </div>
-    <div class="row" id="pills"></div>
-    <div class="row" style="margin-left:auto">
+    <div class="row" id="pills" style="gap:6px;flex:1 1 0;min-width:240px"></div>
+    <div class="row controls">
       <div class="sub" id="lastcheck"></div>
       <button type="button" id="btn-watch" title="Poll deals and announcements every minute during market hours"><span>Start watch</span></button>
       <button type="button" id="btn-settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>Settings</button>
+      <div class="split">
       <button type="button" class="primary" id="btn-check"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg><span>Run check now</span></button>
       <details class="menu" id="check-menu">
         <summary class="btn" aria-label="More check options" style="padding:0 12px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
@@ -103,19 +248,23 @@
           <button type="button" data-check="dry">Dry run: fetch and compare only, no Claude</button>
         </div>
       </details>
+      </div>
     </div>
   </div>
 </header>
 
 <main>
-  <section class="card" style="display:flex;align-items:center;gap:8px;padding-right:12px">
-    <div class="regime" id="regime" style="flex:1 1 auto"><span class="sub">Loading global context…</span></div>
-    <button type="button" class="small" id="btn-regime" aria-label="Refresh global context" title="Refresh global context"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"></path></svg></button>
+  <section class="card regime-card">
+    <div class="regime-row">
+      <div class="regime" id="regime"><span class="sub">Loading global context…</span></div>
+      <button type="button" class="small" id="btn-regime" style="width:36px;padding:0" aria-label="Refresh global context" title="Refresh global context"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"></path></svg></button>
+    </div>
+    <div class="mkts" id="mkts"></div>
   </section>
 
-  <section class="row" style="align-items:baseline">
+  <section style="display:flex;flex-direction:column;gap:6px">
     <h1>Following <span style="color:var(--teal)" id="investor"></span></h1>
-    <div class="sub" id="summary"></div>
+    <div class="sub" id="summary" style="font-size:14px"></div>
   </section>
 
   <section class="tiles" id="tiles"></section>
@@ -206,7 +355,7 @@
       </div>
       <div class="card">
         <div class="cardhead"><h2>Recent runs</h2><span class="sub" id="runs-spend"></span></div>
-        <div class="runs" id="runs" style="padding:4px 20px"></div>
+        <div class="runs" id="runs"></div>
       </div>
     </div>
     <aside class="side">
@@ -235,8 +384,10 @@
           <div id="cs-result" class="sub">Brokerage, STT, exchange, SEBI, stamp duty, GST and DP charge for a buy and later sell.</div>
         </form>
       </div>
-      <div class="row"><h2>Recommendations</h2><span class="sub">from Claude, newest first</span></div>
-      <div id="recs" style="display:flex;flex-direction:column;gap:16px"></div>
+      <div class="side-group">
+        <div class="row" style="align-items:baseline;gap:10px"><h2>Recommendations</h2><span class="sub">from Claude, newest first</span></div>
+        <div id="recs" style="display:flex;flex-direction:column;gap:16px"></div>
+      </div>
     </aside>
   </section>
   <footer>Paper trading only. Bulk-deal client names can be brokers acting for someone else. Not financial advice.</footer>
@@ -244,7 +395,7 @@
 
 <dialog id="dlg">
   <form method="dialog" class="form" id="settings-form">
-    <div class="row"><h2>Settings</h2><button type="button" class="small" style="margin-left:auto" id="btn-close">Close</button></div>
+    <div class="row"><div class="dialog-title">Settings</div><button type="button" class="small" style="margin-left:auto" id="btn-close">Close</button></div>
     <div class="grid2">
       <div class="field"><label for="f-investor">Investor to follow</label><input id="f-investor" name="watch_investor"><div class="sub">Word order doesn't matter: NSE prints "KACHOLIA ASHISH"</div></div>
       <div class="field"><label for="f-source">Disclosures</label><select id="f-source" name="watch_source"></select></div>
@@ -253,23 +404,23 @@
       <div class="field"><label for="f-market">Market</label><select id="f-market" name="market"><option value="in">India · NSE · Groww</option><option value="us">United States · paper</option></select><div class="sub">Switching rebuilds data, prices and broker</div></div>
       <div class="field"><label for="f-cash">Paper starting cash</label><input id="f-cash" name="paper_starting_cash" type="number" min="1000" step="any"><div class="sub">Applies after Reset paper account</div></div>
     </div>
-    <div class="field"><label>Watch mode</label>
+    <div class="group"><span class="group-title">Watch mode</span>
       <div class="grid2">
         <div class="field"><label for="f-every">Poll every (seconds)</label><input id="f-every" type="number" min="15" max="3600" step="15" value="60"></div>
-        <div class="radio" style="align-items:center"><input type="checkbox" id="f-autoexit" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-autoexit" style="color:var(--ink)">Sell paper positions that hit their trailing stop</label></div>
+        <div class="radio" style="align-items:center;border:none;padding:0"><input type="checkbox" id="f-autoexit" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-autoexit" style="color:var(--ink)">Sell paper positions that hit their trailing stop</label></div>
       </div>
     </div>
-    <div class="field"><label>Stop-losses at Groww</label>
-      <div class="radio" style="align-items:center"><input type="checkbox" id="f-gtt" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-gtt" style="color:var(--ink)">Keep a GTT stop-loss at Groww for each live holding</label><div class="sub" id="f-gtt-note">A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Only acts when GROWW_LIVE_ORDERS=true.</div></div></div>
+    <div class="group"><span class="group-title">Stop-losses at Groww</span>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-gtt" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-gtt" style="color:var(--ink)">Keep a GTT stop-loss at Groww for each live holding</label><div class="sub" id="f-gtt-note">A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Only acts when GROWW_LIVE_ORDERS=true.</div></div></div>
     </div>
-    <div class="field"><label>Order mode</label>
+    <div class="group"><span class="group-title">Order mode</span>
       <div class="radio"><input type="radio" name="auto_trade" value="false" id="m-reco"><div><label for="m-reco" style="font-size:15px;color:var(--ink)">Recommendations only</label><div class="sub">Claude explains what changed. Nothing is bought or sold.</div></div></div>
       <div class="radio"><input type="radio" name="auto_trade" value="true" id="m-paper"><div><label for="m-paper" style="font-size:15px;color:var(--ink)">Paper trading</label><div class="sub">Claude places simulated orders, max 10% of equity each, whole shares.</div></div></div>
-      <div class="radio" style="opacity:.6"><input type="radio" disabled id="m-live"><div><label for="m-live" style="font-size:15px;color:var(--ink)">Live orders on Groww <span class="pill bad" style="padding:2px 8px;font-size:11px">REAL MONEY</span></label><div class="sub">Only via GROWW_LIVE_ORDERS=true in .env, never from here.</div></div></div>
+      <div class="radio" style="opacity:.6"><input type="radio" disabled id="m-live"><div><label for="m-live" style="font-size:15px;color:var(--ink)">Live orders on Groww <span class="pill bad" style="margin-left:6px">REAL MONEY</span></label><div class="sub">Only via GROWW_LIVE_ORDERS=true in .env, never from here.</div></div></div>
     </div>
-    <div class="field"><label>Connections</label><div id="conns" style="display:flex;flex-direction:column;gap:8px"></div>
+    <div class="group"><span class="group-title">Connections</span><div id="conns" style="display:flex;flex-direction:column"></div>
       <div class="row"><button type="button" class="small" id="btn-groww-test">Test Groww connection</button><span class="sub" id="groww-test-result"></span></div></div>
-    <div class="row"><button type="button" class="danger small" id="btn-reset">Reset paper account</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
+    <div class="row group" style="flex-direction:row"><button type="button" class="danger small" id="btn-reset">Reset paper account</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
   </form>
 </dialog>
 <div class="toast" id="toast"></div>
@@ -295,25 +446,30 @@
     if(!r.ok) throw new Error(j.error || r.statusText);
     return j;
   };
-  const tile = (l, v, s) => `<div class="card tile"><div class="label">${l}</div><div class="big">${v}</div><div class="sub">${s}</div></div>`;
+  const tile = (l, v, s) => `<div class="tile"><div class="label">${l}</div><div class="big">${v}</div><div class="sub">${s}</div></div>`;
 
   function renderRegime(){
-    const r = S.regime, el = $("regime");
+    const r = S.regime, el = $("regime"), mk = $("mkts");
+    mk.innerHTML = "";
     if(!r){ el.innerHTML = '<span class="sub">Global context not configured.</span>'; return; }
-    if(r.error){ el.innerHTML = `<span class="pill warn">Global context unavailable</span><span class="sub">${esc(r.error)}</span>`; return; }
+    if(r.error){ el.innerHTML = `<span class="pill warn">Global context unavailable</span><span class="sig">${esc(r.error)}</span>`; return; }
     const cls = r.regime === "risk_off" ? "bad" : r.regime === "risk_on" ? "ok" : "";
+    const label = {risk_on: "Risk-on", risk_off: "Risk-off", neutral: "Neutral"}[r.regime] || esc(r.regime);
+    el.innerHTML = `<span class="pill ${cls}" style="font-weight:600">${label} · score ${r.score>=0?"+":""}${r.score}</span>
+      <span class="sig">${esc((r.signals||[]).join(" · "))}${r.guidance ? " — " + esc(r.guidance) : ""}</span>`;
     const m = r.markets || {};
-    const mk = (k) => m[k] && m[k].last != null ? `<span>${esc(m[k].label)} <b>${k==="india_vix"?m[k].last.toFixed(1):k==="usdinr"?m[k].last.toFixed(2):Math.round(m[k].last).toLocaleString()}</b> <span class="${(m[k].ret_1d||0)>=0?"up":"down"}">${pct(m[k].ret_1d)}</span></span>` : "";
-    el.innerHTML = `<span class="pill ${cls}">${esc(r.regime.replace("_","-"))} · score ${r.score>=0?"+":""}${r.score}</span>
-      <div class="mkts">${["nifty50","sp500","nasdaq_fut","nikkei","india_vix","usdinr","brent"].map(mk).join("")}</div>
-      <span class="sig" style="flex-basis:100%">${esc((r.signals||[]).join(" · "))}${r.guidance ? " — " + esc(r.guidance) : ""}</span>`;
+    const fmt = (k, v) => k === "india_vix" ? v.toFixed(1) : k === "usdinr" ? v.toFixed(2) : Math.round(v).toLocaleString("en-IN");
+    mk.innerHTML = ["nifty50","sp500","nasdaq_fut","nikkei","india_vix","usdinr","brent"]
+      .filter(k => m[k] && m[k].last != null)
+      .map(k => `<div class="mkt"><span class="k" title="${esc(m[k].label)}">${esc(m[k].label)}</span><span class="v">${fmt(k, m[k].last)}</span>
+        <span class="c ${(m[k].ret_1d||0)>=0?"up":"down"}">${pct(m[k].ret_1d)}</span></div>`).join("");
   }
 
   function render(){
     const s = S.settings, a = S.account, c = S.connections, w = S.watch || {};
     $("subtitle").textContent = s.market === "in" ? "Groww · NSE bulk & block deals" : "Alpaca · QuiverQuant disclosures";
     $("investor").textContent = s.watch_investor;
-    const modePill = s.mode === "live" ? '<span class="pill bad"><span class="dot" style="background:var(--red)"></span>LIVE orders</span>'
+    const modePill = s.mode === "live" ? '<span class="pill bad"><span class="dot"></span>LIVE orders</span>'
                    : s.mode === "paper" ? '<span class="pill ok"><span class="dot"></span>Paper trading</span>'
                    : '<span class="pill ok"><span class="dot"></span>Recommendations only</span>';
     $("pills").innerHTML = modePill + `<span class="pill">${esc(s.broker)}</span>`
@@ -336,15 +492,15 @@
       tile("Model", esc(s.claude_model.replace("claude-","")), S.busy ? "job running…" : (S.jobs.length ? esc(S.jobs[S.jobs.length-1].message||"") : "idle")),
     ].join("");
 
-    $("newcount").textContent = `${newDeals} new`;
+    $("newcount").textContent = `${newDeals} new`; $("newcount").className = "pill ok"; $("newcount").style.fontWeight = "600";
     $("dealsrc").textContent = S.deals_error ? "fetch failed: " + S.deals_error : (s.data_source === "nse" ? "NSE, last 30 days" : "QuiverQuant");
     $("deals").innerHTML = S.deals.length ? S.deals.map(d => `<tr>
         <td class="mono" style="white-space:nowrap">${esc(d.transaction_date)}</td>
         <td><span class="side-chip ${d.transaction==="Sale"?"sell":"buy"}">${d.transaction==="Sale"?"SELL":d.transaction==="Purchase"?"BUY":esc(d.transaction)}</span></td>
         <td><div style="font-weight:600"><a href="#" data-lookup="${esc(d.ticker)}" style="text-decoration:none">${esc(d.ticker)}</a></div><div class="sub">${esc(d.investor)}</div></td>
         <td class="num">${esc(d.size)}</td><td>${esc(d.source)}</td>
-        <td><span class="pill" style="padding:3px 8px">${esc(WHO[d.client_type]||d.client_type||"")}</span></td>
-        <td><span class="pill ${d.status==="new"?"warn":""}" style="padding:3px 8px">${d.status==="new"?"New":"Analysed"}</span></td></tr>`).join("")
+        <td><span class="pill">${esc(WHO[d.client_type]||d.client_type||"")}</span></td>
+        <td><span class="pill ${d.status==="new"?"ok":""}">${d.status==="new"?"New":"Analysed"}</span></td></tr>`).join("")
       : `<tr><td colspan="7" class="empty">No disclosed deals by ${esc(s.watch_investor)} in the window.</td></tr>`;
 
     $("pricesrc").textContent = c.prices === "groww" ? "prices from Groww" : "prices via Yahoo Finance, delayed";
@@ -357,8 +513,8 @@
       : `<tr><td colspan="9" class="empty">No open positions. ${s.auto_trade ? "" : "Use a recommendation's paper-buy button, or switch to paper trading in Settings."}</td></tr>`;
 
     $("recs").innerHTML = S.recommendations.length ? S.recommendations.map(r => `<article class="card rec ${esc(r.action)} ${r.dismissed?"dismissed":""}">
-        <div class="row" style="gap:8px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><span style="font-size:16px;font-weight:700">${esc(r.ticker)}</span>
-          <span class="pill" style="padding:3px 8px">${esc(cap(r.confidence))} confidence</span><span class="sub" style="margin-left:auto">${when(r.at)}</span></div>
+        <div class="row" style="gap:8px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>
+          <span class="pill">${esc(cap(r.confidence))} confidence</span><span class="sub" style="margin-left:auto;font-size:12px">${when(r.at)}</span></div>
         <div class="headline">${esc(r.headline)}</div><p class="rationale">${esc(r.rationale)}</p>
         <div class="row" style="gap:8px">
           ${(r.action==="buy"||r.action==="sell") && r.suggested_notional_usd>0 && !r.dismissed && s.broker.startsWith("local-paper") ? `<button type="button" class="small primary" data-order="${r.index}">Paper ${esc(r.action)} ${money(r.suggested_notional_usd)}</button>` : ""}
@@ -368,8 +524,8 @@
 
     const spent = S.runs.map(r => r.usage && r.usage.cost_usd).filter(v => v != null);
     $("runs-spend").textContent = spent.length ? `Claude API spend: about $${spent.reduce((a, b) => a + b, 0).toFixed(2)} over ${spent.length} run${spent.length === 1 ? "" : "s"}` : "";
-    $("runs").innerHTML = S.runs.length ? S.runs.map(r => `<div class="run"><span class="mono sub" style="min-width:140px">${when(r.at)}</span>
-        <span style="font-weight:600">${r.new_trades ? r.new_trades+" new deal"+(r.new_trades===1?"":"s") : "nothing new"}</span>
+    $("runs").innerHTML = S.runs.length ? S.runs.map(r => `<div class="run"><span class="sub" style="font-size:14px;min-width:120px">${when(r.at)}</span>
+        <span style="font-weight:600;min-width:110px">${r.new_trades ? r.new_trades+" new deal"+(r.new_trades===1?"":"s") : "nothing new"}</span>
         <span style="color:var(--ink2)">${r.baseline ? "baseline: recorded as seen after lost state, Claude not called" : r.skipped ? "skipped, Claude not called" : r.dry_run ? "dry run" : `${r.recommendations??0} recommendations · ${r.orders??0} orders · ${esc(r.model||"")}${r.refusal?" · refused":""}${r.fallback_used?" · fallback model":""}${r.stop==="step_limit"?" · hit step limit":r.stop==="max_tokens"?" · reply cut short":""}${r.usage && r.usage.cost_usd!=null?` · $${r.usage.cost_usd.toFixed(3)} (${Math.round((r.usage.input_tokens+r.usage.cache_read_tokens+r.usage.cache_write_tokens+r.usage.output_tokens)/1000)}k tokens)`:""}`}</span></div>`).join("")
       : '<div class="empty">No runs recorded yet.</div>';
 
@@ -392,15 +548,15 @@
   function gttCell(p, c){
     if(!c.groww_gtt_active) return '<span class="sub">off</span>';
     const g = p.gtt;
-    if(!g) return '<span class="pill warn" style="padding:3px 8px">none yet</span>';
+    if(!g) return '<span class="pill warn">none yet</span>';
     const cls = g.last_error ? "bad" : (g.status === "ACTIVE" ? "ok" : "warn");
-    return `<span class="pill ${cls}" style="padding:3px 8px" title="${esc(g.last_error || g.smart_order_id || "")}">${esc(g.status || "?")} · ${money(g.trigger,2)}</span>`;
+    return `<span class="pill ${cls}" title="${esc(g.last_error || g.smart_order_id || "")}">${esc(g.status || "?")} · ${money(g.trigger,2)}</span>`;
   }
   function orderStatus(x){
-    if(!x.live) return '<span class="pill" style="padding:3px 8px">paper · filled</span>';
+    if(!x.live) return '<span class="pill">paper · filled</span>';
     const cls = x.status === "filled" ? "ok" : x.status === "failed" ? "bad" : "warn";
     const filled = x.status === "open" && x.filled_quantity ? ` · ${x.filled_quantity}/${x.qty}` : "";
-    return `<span class="pill ${cls}" style="padding:3px 8px" title="${esc(x.remark || x.error || x.groww_order_id || "")}">LIVE · ${esc(x.order_status || x.status || "?")}${filled}</span>`;
+    return `<span class="pill ${cls}" title="${esc(x.remark || x.error || x.groww_order_id || "")}">LIVE · ${esc(x.order_status || x.status || "?")}${filled}</span>`;
   }
   function renderOrders(){
     const o = S.orders || [], perf = S.performance;
@@ -418,7 +574,8 @@
       <div class="scroll"><table><thead><tr><th class="num">#</th><th>Stock</th><th class="num">12-1</th><th class="num">6m</th><th class="num">1m</th><th class="num">Vol</th><th class="num">vs 52w high</th><th class="num">Score</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   // ---- charts: plain SVG, one y-axis, hairline grid, crosshair tooltip ----
-  const C = {s1:"#2a78d6", s2:"#eb6834", s3:"#1baf7a", ctx:"#898781", grid:"#ECEEF1", base:"#c3c2b7", pos:"#2a78d6", neg:"#e34948", ring:"#ffffff"};
+  // Nocturne chart palette: the accent leads, the text color and a neutral support it.
+  const C = {s1:"#9184d9", s2:"#e9e9ed", s3:"#9397ab", ctx:"#75798c", grid:"rgba(233,233,237,.08)", base:"#595d6c", pos:"#9184d9", neg:"#75798c", ring:"#232532"};
   const NS = "http://www.w3.org/2000/svg";
   function niceTicks(min, max, n){
     n = n || 4; let span = max - min; if(!(span > 0)) span = Math.abs(max) || 1;
@@ -678,7 +835,7 @@
       const r = await api("/api/lookup?ticker=" + encodeURIComponent(t));
       const m = r.momentum || {}; const v = m.verdict || "n/a";
       const cls = v==="strong"?"ok":v==="weak"?"bad":"";
-      $("lk-result").innerHTML = `<div class="row" style="gap:8px"><span style="font-size:16px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div>
+      $("lk-result").innerHTML = `<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div>
         <div class="sub">${esc(r.momentum_summary)}</div>
         <div class="chart" id="lk-chart" style="margin-top:6px"></div>
         <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div>`;

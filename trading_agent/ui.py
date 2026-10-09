@@ -35,6 +35,8 @@ from .watch import Watcher
 log = logging.getLogger(__name__)
 
 DEALS_TTL_SECONDS = 600
+# The only static files besides the page: Inter, served locally so the page needs no network.
+FONT_FILES = {"/fonts/inter-latin.woff2", "/fonts/inter-latin-ext.woff2"}
 EDITABLE_ENV_KEYS = {
     "watch_investor": "WATCH_INVESTOR",
     "watch_source": "WATCH_SOURCE",
@@ -686,7 +688,7 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
 # HTTP
 # --------------------------------------------------------------------------- #
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
-    index_html = (resources.files("trading_agent") / "ui" / "index.html").read_text()
+    index_html = (resources.files("trading_agent") / "ui" / "index.html").read_text(encoding="utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "trading-agent-ui/1"
@@ -716,6 +718,14 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif path in FONT_FILES:
+                body = (resources.files("trading_agent") / "ui" / "fonts" / path.rsplit("/", 1)[-1]).read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "font/woff2")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "public, max-age=604800")
                 self.end_headers()
                 self.wfile.write(body)
             elif path == "/favicon.ico":
