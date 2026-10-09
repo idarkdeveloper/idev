@@ -15,6 +15,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from .config import Settings
+from .risk import check_stops
 from .state import State
 
 log = logging.getLogger(__name__)
@@ -26,8 +27,10 @@ class Watcher:
     def __init__(self, settings: Settings, *, every: int = 60, window: tuple[str, str] = ("08:45", "18:30"),
                  tz: ZoneInfo = IST, check_fn: Callable[[], Any] | None = None,
                  data: Any | None = None, broker: Any | None = None, notifier: Any | None = None,
-                 weekdays_only: bool = True):
+                 weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False):
         self.settings = settings
+        self._prices = prices  # object with .history(symbol, range) for ATR-based stops
+        self.auto_exit = auto_exit  # sell paper positions that hit their trailing stop
         self.every = max(15, int(every))
         self.window = (dtime.fromisoformat(window[0]), dtime.fromisoformat(window[1]))
         self.tz = tz
@@ -86,6 +89,40 @@ class Watcher:
                 self._notifier.send(f"[NEWS] {len(fresh)} new announcement(s)", body)
         return fresh
 
+    def check_trailing_stops(self) -> list[dict[str, Any]]:
+        if self._broker is None:
+            return []
+        try:
+            positions = self._broker.positions()
+        except Exception as e:  # noqa: BLE001
+            log.warning("positions unavailable for stop check: %s", e)
+            return []
+        bars_fn = (lambda sym: self._prices.history(sym, "1y")) if self._prices is not None else (lambda sym: [])
+        hits = check_stops(positions, bars_fn)
+        if not hits:
+            return []
+        st = State(self.settings.state_dir / "state.json")
+        alerted = st.data.setdefault("stop_alerts", {})
+        fresh = []
+        for h in hits:
+            key = f"{h['symbol']}:{round(h['stop'], 2)}"
+            if key in alerted:
+                continue
+            alerted[key] = h["price"]
+            if self.auto_exit and getattr(self._broker, "name", "").startswith("local-paper"):
+                try:
+                    h["order"] = self._broker.submit_order(h["symbol"], "sell", qty=h["qty"])
+                except Exception as e:  # noqa: BLE001
+                    h["order_error"] = str(e)
+            fresh.append(h)
+        st.save()
+        if fresh and self._notifier is not None:
+            body = "\n".join(f"{h['symbol']}: {h['price']:.2f} at/below trailing stop {h['stop']:.2f} "
+                             f"({h['drawdown_from_high']*100:+.1f}% from high)"
+                             + (" - paper SOLD" if h.get("order") else "") for h in fresh)
+            self._notifier.send(f"[STOP] {len(fresh)} position(s) hit trailing stop", body)
+        return fresh
+
     def tick(self, force: bool = False) -> dict[str, Any]:
         now = datetime.now(self.tz)
         info: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "in_window": self.market_window_open(now)}
@@ -101,6 +138,7 @@ class Watcher:
             log.exception("watch check failed")
             info["check_error"] = f"{type(e).__name__}: {e}"
         info["new_announcements"] = self.poll_announcements()
+        info["stop_hits"] = self.check_trailing_stops()
         self.ticks += 1
         self.last_tick = info
         return info

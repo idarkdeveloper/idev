@@ -76,6 +76,7 @@ class App:
         self.momentum = MomentumScreen(self.prices)
         self.watcher: Watcher | None = None
         self.last_backtest: dict[str, Any] | None = None
+        self.last_screen: dict[str, Any] | None = None
         self.demo_trades = demo_trades
         self._deals: list[DisclosedTrade] | None = demo_trades
         self._deals_at = time.time() if demo_trades else 0.0
@@ -135,6 +136,15 @@ class App:
         except Exception as e:  # noqa: BLE001
             acct, positions, broker_error = None, [], str(e)
         perf = self.broker.performance() if isinstance(self.broker, LocalPaperBroker) else None
+        for pos in positions:  # trailing-stop level for the table
+            try:
+                from .risk import atr, trailing_stop
+                bars = self.prices.history(pos["symbol"], "1y") if not self.demo_trades else []
+                a = atr(bars) if bars else None
+                high = pos.get("high_water") or pos.get("current_price") or pos["avg_entry_price"]
+                pos["stop"] = round(trailing_stop(high, a), 2)
+            except Exception:  # noqa: BLE001
+                pos["stop"] = None
         recs = []
         for i, r in enumerate(st.data["recommendations"]):
             recs.append({**r, "index": i})
@@ -157,6 +167,8 @@ class App:
             "regime": regime,
             "watch": self.watcher.status() if self.watcher else {"on": False, "every": 60},
             "backtest": self.last_backtest,
+            "screen": self.last_screen,
+            "costs": _cost_table(self.settings.market),
             "settings": {
                 "market": s.market, "currency": s.currency, "watch_investor": s.watch_investor,
                 "watch_source": s.watch_source, "data_source": s.data_source,
@@ -273,6 +285,33 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
+    def start_screen(self, universe: str, top: int) -> Job:
+        from .screen import load_universe, run_screen
+
+        job = Job(id=len(self.jobs) + 1, kind="screen")
+        self.jobs.append(job)
+        if self.busy:
+            job.ok, job.message, job.finished_at = False, "another job is running", _now()
+            return job
+        self.busy = True
+
+        def run() -> None:
+            try:
+                members = load_universe(universe)
+                result = run_screen(members, self.prices, top=top)
+                result.pop("all", None)
+                self.last_screen = {"at": _now(), "universe": universe.upper(), **result}
+                job.ok, job.message = True, f"{result['eligible']} eligible of {result['scored']} scored in {universe.upper()}"
+            except Exception as e:  # noqa: BLE001
+                log.exception("screen failed")
+                job.ok, job.message = False, f"{type(e).__name__}: {e}"
+            finally:
+                job.finished_at = _now()
+                self.busy = False
+
+        threading.Thread(target=run, daemon=True).start()
+        return job
+
     def set_watch(self, on: bool, every: int | None = None) -> dict[str, Any]:
         if on:
             if self.watcher is None or (every and every != self.watcher.every):
@@ -280,7 +319,8 @@ class App:
                     self.watcher.stop()
                 self.watcher = Watcher(
                     self.settings, every=every or 60, data=self.data, broker=self.broker,
-                    notifier=make_notifier(self.settings),
+                    notifier=make_notifier(self.settings), prices=self.prices,
+                    auto_exit=self.settings.auto_trade,
                     check_fn=lambda: check(self.settings, trades=self.deals(refresh=True), broker=self.broker,
                                            data=self.data, notifier=make_notifier(self.settings),
                                            momentum=self.momentum, context=self.context),
@@ -338,6 +378,15 @@ class App:
         if applied and self.dotenv is not None:
             _write_env(self.dotenv, applied)
         return applied
+
+
+def _cost_table(market: str) -> dict[str, Any]:
+    from .costs import cost_model_for
+    m = cost_model_for(market)
+    if not hasattr(m, "round_trip"):
+        return {"model": "flat", "round_trip_bps": m.round_trip_bps(0)}
+    return {"model": "india_delivery", "examples": {str(n): round(m.round_trip_bps(n), 1) for n in (10_000, 25_000, 100_000)},
+            "slippage_bps_one_way": m.slippage_bps}
 
 
 def _write_env(path: Path, values: dict[str, str]) -> None:
@@ -410,6 +459,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json(app.lookup(ticker))
             elif path == "/api/backtest":
                 self._json(app.last_backtest or {})
+            elif path == "/api/screen":
+                self._json(app.last_screen or {})
             else:
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -434,6 +485,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     job = app.start_backtest(str(body.get("investor") or app.settings.watch_investor),
                                              int(body.get("days", 365)), horizons or (5, 20, 60),
                                              float(body.get("cost_bps", 50)))
+                    self._json(job.to_dict(), HTTPStatus.ACCEPTED)
+                elif path == "/api/screen":
+                    job = app.start_screen(str(body.get("universe") or "NIFTY200"), int(body.get("top", 20)))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/watch":
                     self._json(app.set_watch(bool(body.get("on")), int(body["every"]) if body.get("every") else None))

@@ -48,3 +48,10 @@ def test_context_caches_and_tolerates_errors():
     g = GlobalContext(Src(), ttl=1000)
     r1 = g.fetch(); r2 = g.fetch()
     assert r1 is r2 and "brent" in r1["errors"] and len(calls) == len(SYMBOLS)
+
+
+def test_trend_state():
+    up = compute_regime(_series([100 + i * 0.2 for i in range(300)], [100.0] * 30, [12.0] * 30))
+    assert up["trend"] == "up" and "trend up" in up["summary"]
+    down = compute_regime(_series([300 - i * 0.5 for i in range(300)], [100.0] * 30, [12.0] * 30))
+    assert down["trend"] == "down" and any("downtrend" in s for s in down["signals"])

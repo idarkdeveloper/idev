@@ -29,6 +29,7 @@ class Position:
     qty: float
     avg_entry_price: float
     current_price: float | None = None
+    high_water: float | None = None  # highest price seen since entry (for trailing stops)
 
     @property
     def market_value(self) -> float | None:
@@ -48,6 +49,7 @@ class Position:
             "current_price": self.current_price,
             "market_value": self.market_value,
             "unrealized_pl": self.unrealized_pl,
+            "high_water": self.high_water,
         }
 
 
@@ -154,12 +156,14 @@ class LocalPaperBroker:
 
     def __init__(self, path: Path, starting_cash: float = 80_000.0,
                  price_fn: Any | None = None, currency: str = "USD",
-                 whole_shares: bool = False):
+                 whole_shares: bool = False, cost_model: Any | None = None):
         self.path = Path(path)
         self.price_fn = price_fn
         self.currency = currency
         self.whole_shares = whole_shares  # Indian equities trade in whole shares
+        self.cost_model = cost_model  # object with .charges(side, notional); None = free
         self._state = self._load(starting_cash)
+        self._state.setdefault("fees_paid", 0.0)
         if self._state.get("mirrors"):
             self.name = f"local-paper (mirrors {self._state['mirrors']})"
 
@@ -216,13 +220,19 @@ class LocalPaperBroker:
 
     def positions(self) -> list[Position]:
         out = []
+        dirty = False
         for sym, p in self._state["positions"].items():
             try:
                 px: float | None = self.latest_price(sym)
             except LookupError:
                 px = None
+            if px is not None and px > (p.get("high_water") or 0):
+                p["high_water"] = px
+                dirty = True
             out.append(Position(symbol=sym, qty=p["qty"], avg_entry_price=p["avg_entry_price"],
-                                current_price=px))
+                                current_price=px, high_water=p.get("high_water")))
+        if dirty:
+            self._save()
         return out
 
     def account(self) -> Account:
@@ -247,29 +257,33 @@ class LocalPaperBroker:
             if qty < 1:
                 raise ValueError(f"{symbol}: amount buys fewer than one whole share at {price}")
         cost = qty * price
+        fees = float(self.cost_model.charges(side, cost)) if self.cost_model else 0.0
         pos = self._state["positions"].get(symbol, {"qty": 0.0, "avg_entry_price": 0.0})
 
         if side == "buy":
-            if cost > self._state["cash"] + 1e-9:
-                raise ValueError(f"Insufficient cash: need {cost:.2f}, have {self._state['cash']:.2f}")
+            if cost + fees > self._state["cash"] + 1e-9:
+                raise ValueError(f"Insufficient cash: need {cost + fees:.2f}, have {self._state['cash']:.2f}")
             new_qty = pos["qty"] + qty
             pos["avg_entry_price"] = (pos["qty"] * pos["avg_entry_price"] + cost) / new_qty
             pos["qty"] = new_qty
-            self._state["cash"] -= cost
+            pos["high_water"] = max(pos.get("high_water") or 0.0, price)
+            self._state["cash"] -= cost + fees
             self._state["positions"][symbol] = pos
         else:
             if qty > pos["qty"] + 1e-9:
                 raise ValueError(f"Cannot sell {qty} {symbol}: only hold {pos['qty']}")
             pos["qty"] -= qty
-            self._state["cash"] += cost
+            self._state["cash"] += cost - fees
             if pos["qty"] <= 1e-9:
                 self._state["positions"].pop(symbol, None)
             else:
                 self._state["positions"][symbol] = pos
+        self._state["fees_paid"] = self._state.get("fees_paid", 0.0) + fees
 
         order = {
             "id": uuid.uuid4().hex[:12], "symbol": symbol, "side": side, "qty": qty,
-            "filled_avg_price": price, "notional": round(cost, 2), "status": "filled",
+            "filled_avg_price": price, "notional": round(cost, 2), "fees": round(fees, 2),
+            "status": "filled",
             "filled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         self._state["orders"].append(order)
@@ -289,4 +303,5 @@ class LocalPaperBroker:
             "pnl": round(acct.equity - start, 2),
             "pnl_pct": round((acct.equity - start) / start * 100, 2) if start else 0.0,
             "orders": len(self._state["orders"]),
+            "fees_paid": round(self._state.get("fees_paid", 0.0), 2),
         }

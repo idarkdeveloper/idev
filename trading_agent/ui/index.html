@@ -104,7 +104,18 @@
       </div>
       <div class="card">
         <div class="cardhead"><h2>Paper portfolio</h2><span class="sub" id="pricesrc"></span></div>
-        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th></tr></thead><tbody id="positions"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th><th class="num">Trailing stop</th></tr></thead><tbody id="positions"></tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Factor screen</h2><span class="sub">12-1 momentum + 6m return − volatility, above 200-day MA, liquid</span></div>
+        <form class="cardbody" id="sc-form">
+          <div class="row">
+            <select id="sc-universe" name="universe" style="flex:1 1 200px"><option>NIFTY50</option><option>NIFTY100</option><option selected>NIFTY200</option><option>NIFTY500</option><option>NIFTYMIDCAP150</option><option>NIFTYSMALLCAP250</option></select>
+            <input id="sc-top" name="top" type="number" value="20" min="5" max="100" style="flex:0 1 110px">
+            <button type="submit" class="primary small" id="sc-run">Run screen</button><span class="sub" id="sc-status"></span>
+          </div>
+          <div id="sc-result" class="sub">Ranks every constituent; takes a minute or two the first time while price history is cached.</div>
+        </form>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Backtest</h2><span class="sub">replay disclosed deals: entry next close, excess return vs NIFTY 50 after cost</span></div>
@@ -216,7 +227,7 @@
     const biggest = S.positions.slice().sort((x,y)=>(y.market_value||0)-(x.market_value||0))[0];
     $("tiles").innerHTML = [
       a ? tile("Paper equity", money(a.equity), perf ? `<span class="${perf.pnl>=0?"up":"down"}">${signed(perf.pnl)} (${perf.pnl_pct>=0?"+":""}${perf.pnl_pct}%) since start</span>` : "") : tile("Paper equity","n/a",esc(S.broker_error||"")),
-      a ? tile("Cash available", money(a.cash), esc(s.broker)) : tile("Cash","n/a",""),
+      a ? tile("Cash available", money(a.cash), esc(s.broker) + (perf && perf.fees_paid ? ` · fees paid ${money(perf.fees_paid)}` : "") + (S.costs && S.costs.examples ? ` · ~${S.costs.examples["25000"]} bps/round trip` : "")) : tile("Cash","n/a",""),
       tile("Open positions", String(S.positions.length), biggest && a ? `largest: ${esc(biggest.symbol)} ${Math.round(100*(biggest.market_value||0)/a.equity)}% of equity` : "none yet"),
       tile("Model", esc(s.claude_model.replace("claude-","")), S.busy ? "job running…" : (S.jobs.length ? esc(S.jobs[S.jobs.length-1].message||"") : "idle")),
     ].join("");
@@ -235,8 +246,9 @@
     $("pricesrc").textContent = c.prices === "groww" ? "prices from Groww" : "prices via Yahoo Finance, delayed";
     $("positions").innerHTML = S.positions.length ? S.positions.map(p => `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
-        <td class="num">${money(p.market_value)}</td><td class="num ${p.unrealized_pl>0?"up":p.unrealized_pl<0?"down":""}">${signed(p.unrealized_pl)}</td></tr>`).join("")
-      : `<tr><td colspan="6" class="empty">No open positions. ${s.auto_trade ? "" : "Use a recommendation's paper-buy button, or switch to paper trading in Settings."}</td></tr>`;
+        <td class="num">${money(p.market_value)}</td><td class="num ${p.unrealized_pl>0?"up":p.unrealized_pl<0?"down":""}">${signed(p.unrealized_pl)}</td>
+        <td class="num ${p.stop!=null && p.current_price!=null && p.current_price<=p.stop?"down":""}">${p.stop!=null?money(p.stop,2):"n/a"}</td></tr>`).join("")
+      : `<tr><td colspan="7" class="empty">No open positions. ${s.auto_trade ? "" : "Use a recommendation's paper-buy button, or switch to paper trading in Settings."}</td></tr>`;
 
     $("recs").innerHTML = S.recommendations.length ? S.recommendations.map(r => `<article class="card rec ${esc(r.action)} ${r.dismissed?"dismissed":""}">
         <div class="row" style="gap:8px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><span style="font-size:16px;font-weight:700">${esc(r.ticker)}</span>
@@ -255,10 +267,18 @@
 
     if(!$("bt-investor").value) $("bt-investor").value = s.watch_investor;
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
+    if(S.screen && S.screen.top) renderScreen(S.screen);
+    $("sc-run").disabled = S.busy;
     $("btn-check").disabled = S.busy; $("btn-check").querySelector("span").textContent = S.busy ? "Running…" : "Run check now";
     $("bt-run").disabled = S.busy;
   }
 
+  function renderScreen(sc){
+    const rows = sc.top.map(r => `<tr><td class="num">${r.rank}</td><td style="font-weight:600"><a href="#" data-lookup="${esc(r.symbol)}" style="text-decoration:none">${esc(r.symbol)}</a><div class="sub">${esc(r.name)}</div></td>
+      <td class="num ${r.ret_12_1>=0?"up":"down"}">${pct(r.ret_12_1)}</td><td class="num ${r.ret_6m>=0?"up":"down"}">${pct(r.ret_6m)}</td><td class="num">${pct(r.ret_1m)}</td><td class="num">${r.vol_60d!=null?Math.round(r.vol_60d*100)+"%":"n/a"}</td><td class="num">${pct(r.pct_from_52w_high)}</td><td class="num">${r.score.toFixed(2)}</td></tr>`).join("");
+    $("sc-result").innerHTML = `<div class="sub">${esc(sc.universe)} · ${sc.eligible} eligible of ${sc.scored} scored · ${sc.errors} without data · ${when(sc.at)}</div>
+      <div class="scroll"><table><thead><tr><th class="num">#</th><th>Stock</th><th class="num">12-1</th><th class="num">6m</th><th class="num">1m</th><th class="num">Vol</th><th class="num">vs 52w high</th><th class="num">Score</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
   function renderBacktest(b){
     const sm = b.summary, rows = [];
     for(const [side, perH] of Object.entries(sm.by_side||{})){
@@ -272,7 +292,7 @@
   }
 
   async function refresh(){ try { S = await api("/api/state"); render(); } catch(e){ toast("Could not load: "+e.message); } }
-  function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Failed: ":"Done: ")+j.message); $("bt-status").textContent=""; } }, 2500); }
+  function pollWhileBusy(){ clearInterval(pollTimer); pollTimer = setInterval(async()=>{ await refresh(); if(!S.busy){ clearInterval(pollTimer); const j=S.jobs[S.jobs.length-1]; if(j) toast((j.ok===false?"Failed: ":"Done: ")+j.message); $("bt-status").textContent=""; $("sc-status").textContent=""; } }, 2500); }
 
   $("btn-check").addEventListener("click", async () => {
     try { const j = await api("/api/check", {force:false, dry_run:!S.connections.claude}); toast(j.ok===false ? j.message : "Check started"); await refresh(); pollWhileBusy(); }
@@ -286,6 +306,12 @@
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target).entries());
     try { const j = await api("/api/backtest", f); if(j.ok===false){ toast(j.message); return; } $("bt-status").textContent = "Replaying deals and fetching price history…"; await refresh(); pollWhileBusy(); }
+    catch(e){ toast(e.message); }
+  });
+  $("sc-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = Object.fromEntries(new FormData(ev.target).entries());
+    try { const j = await api("/api/screen", f); if(j.ok===false){ toast(j.message); return; } $("sc-status").textContent = "Scoring the universe…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   async function lookup(t){

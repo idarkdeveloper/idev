@@ -54,3 +54,21 @@ def test_tick_outside_window_skips(settings, monkeypatch):
     w = Watcher(settings, every=60, check_fn=lambda: (_ for _ in ()).throw(AssertionError("should not run")))
     monkeypatch.setattr(w, "market_window_open", lambda now=None: False)
     assert w.tick()["skipped"] is True
+
+
+def test_stop_hits_notify_once_and_auto_exit(settings):
+    broker = LocalPaperBroker(settings.state_dir / "pb.json", starting_cash=10_000)
+    broker.set_price("X", 100); broker.submit_order("X", "buy", qty=10)
+    broker.set_price("X", 120); broker.positions()   # high-water 120
+    broker.set_price("X", 90)                        # below 15% / 3xATR stop
+    bars = [{"date": f"d{i}", "close": 100.0, "adj_close": 100.0, "high": 101.0, "low": 99.0, "volume": 1} for i in range(40)]
+
+    class Prices:
+        def history(self, s, r):
+            return bars
+    notifier = Notifier()
+    w = Watcher(settings, every=60, broker=broker, notifier=notifier, prices=Prices(), auto_exit=True)
+    hits = w.check_trailing_stops()
+    assert len(hits) == 1 and hits[0]["symbol"] == "X" and hits[0]["order"]["side"] == "sell"
+    assert broker.positions() == [] and notifier.sent[0]["subject"].startswith("[STOP]")
+    assert w.check_trailing_stops() == []  # position gone, nothing to alert

@@ -8,6 +8,7 @@ from typing import Any
 from .agent import AgentContext, RunResult, run_agent
 from .broker import AlpacaPaperBroker, Broker, LocalPaperBroker
 from .config import Settings
+from .costs import cost_model_for
 from .momentum import MomentumScreen
 from .notify import Notifier
 from .prices import YahooPrices
@@ -50,7 +51,8 @@ def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
             return groww
         # Paper mode: real holdings + live prices from Groww, simulated fills.
         sim = LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
-                               price_fn=groww.latest_price, currency="INR", whole_shares=True)
+                               price_fn=groww.latest_price, currency="INR", whole_shares=True,
+                               cost_model=cost_model_for("in"))
         if sim.is_fresh:
             try:
                 acct = groww.account()
@@ -64,7 +66,8 @@ def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
         return AlpacaPaperBroker(settings.alpaca_key_id, settings.alpaca_secret,
                                  settings.alpaca_base_url)
     return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash, price_fn=price_fn,
-                            currency=settings.currency, whole_shares=settings.market == "in")
+                            currency=settings.currency, whole_shares=settings.market == "in",
+                            cost_model=cost_model_for(settings.market))
 
 
 def make_data_source(settings: Settings) -> Any:

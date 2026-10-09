@@ -221,6 +221,60 @@ def cmd_momentum(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_screen(args: argparse.Namespace) -> int:
+    """Rank an NSE index universe on momentum, trend, low volatility and liquidity."""
+    from .runner import free_prices
+    from .screen import format_screen, load_universe, run_screen
+
+    settings = _settings(args)
+    members = load_universe(args.universe)
+    print(f"Scoring {len(members)} stocks in {args.universe.upper()} (price history via Yahoo, cached)…")
+    result = run_screen(members, free_prices(settings), top=args.top, workers=args.workers,
+                        require_above_200dma=not args.no_trend_filter)
+    print(format_screen(result, top=args.top))
+    if args.json:
+        result.pop("all", None)
+        print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+def cmd_costs(args: argparse.Namespace) -> int:
+    from .costs import cost_model_for
+    settings = _settings(args)
+    m = cost_model_for(settings.market)
+    if not hasattr(m, "round_trip"):
+        print(f"flat model: {m.round_trip_bps(0):.0f} bps round trip")
+        return 0
+    for n in args.amounts:
+        rt = m.round_trip(n)
+        print(f"₹{n:,.0f} delivery round trip: charges ₹{rt['charges']:.2f} ({rt['charges_bps']:.1f} bps), "
+              f"with {m.slippage_bps:.0f} bps/side slippage {rt['total_bps']:.1f} bps")
+        if args.verbose:
+            for side in ("buy", "sell"):
+                print(f"   {side}: " + ", ".join(f"{k} {v:.2f}" for k, v in rt[side].items() if k not in ("charges", "total")))
+    return 0
+
+
+def cmd_size(args: argparse.Namespace) -> int:
+    from .risk import atr, position_size
+    from .runner import free_prices, make_broker
+    settings = _settings(args)
+    broker = make_broker(settings)
+    prices = free_prices(settings)
+    equity = args.equity or broker.account().equity
+    for t in args.tickers:
+        try:
+            px = broker.latest_price(t)
+            a = atr(prices.history(t, "1y"))
+        except Exception as e:  # noqa: BLE001
+            print(f"{t.upper():<12} error: {e}")
+            continue
+        r = position_size(equity, px, a, whole_shares=settings.market == "in")
+        print(f"{t.upper():<12} price {px:,.2f}  ATR {a or 0:,.2f} ({(r['atr_pct'] or 0)*100:.1f}%)  "
+              f"-> {r['qty']} sh = {r['notional']:,.0f}  stop {r['stop']:,.2f}  [{r['basis']}]")
+    return 0
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """Always-on local mode: poll deals and announcements during market hours."""
     from .runner import make_broker, make_data_source, make_notifier
@@ -232,8 +286,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
     data = make_data_source(settings)
     broker = make_broker(settings)
     notifier = make_notifier(settings)
+    from .runner import free_prices
     w = Watcher(settings, every=args.every, window=(args.window_start, args.window_end),
-                data=data, broker=broker, notifier=notifier,
+                data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
+                auto_exit=settings.auto_trade,
                 check_fn=lambda: check(settings, broker=broker, data=data, notifier=notifier))
     print(f"Watching {settings.watch_investor} every {w.every}s, {args.window_start}-{args.window_end} IST, "
           f"weekdays. Ctrl+C to stop.")
@@ -291,6 +347,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("momentum", help="momentum stats for one or more tickers")
     sp.add_argument("tickers", nargs="+")
     sp.set_defaults(func=cmd_momentum)
+    sp = sub.add_parser("screen", help="rank an NSE index on momentum, trend, low vol, liquidity")
+    sp.add_argument("--universe", default="NIFTY200", help="NIFTY50 | NIFTY100 | NIFTY200 | NIFTY500 | NIFTYMIDCAP150 | NIFTYSMALLCAP250")
+    sp.add_argument("--top", type=int, default=20)
+    sp.add_argument("--workers", type=int, default=8)
+    sp.add_argument("--no-trend-filter", action="store_true", help="don't require price above 200-day MA")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_screen)
+    sp = sub.add_parser("costs", help="show the verified Indian delivery cost model")
+    sp.add_argument("amounts", nargs="*", type=float, default=[10_000, 25_000, 100_000])
+    sp.set_defaults(func=cmd_costs)
+    sp = sub.add_parser("size", help="volatility-based position size for tickers")
+    sp.add_argument("tickers", nargs="+")
+    sp.add_argument("--equity", type=float, help="override account equity")
+    sp.set_defaults(func=cmd_size)
     sp = sub.add_parser("watch", help="always-on local mode: poll deals + announcements in market hours")
     sp.add_argument("--every", type=int, default=60, help="seconds between polls")
     sp.add_argument("--window-start", default="08:45", help="IST, HH:MM")

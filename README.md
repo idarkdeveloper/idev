@@ -122,6 +122,27 @@ who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
 The dashboard surfaces all of it: regime strip, stock lookup (momentum, price,
 announcements), backtest form with results table, and the watch toggle.
 
+## What the big firms do, applied at retail size
+
+- **Factor screen** (`trading_agent/screen.py`, `python -m trading_agent screen --universe NIFTY200`):
+  ranks every constituent on 12-1 momentum, 6-month return and low 60-day volatility,
+  requires price above the 200-day MA and a liquidity floor. The dashboard has the same
+  panel. Quality and value factors need fundamentals and are not wired in yet.
+- **Volatility-based sizing** (`trading_agent/risk.py`, `python -m trading_agent size SENCO`):
+  risk 1% of equity on a 2x ATR(14) move, capped at 10% of equity, whole shares. Claude
+  must call `suggest_position_size` for every buy and quote the stop.
+- **Trailing stops**: the tighter of 3x ATR or 15% below the high since entry. The
+  simulator tracks the high-water mark; the portfolio table shows the stop; watch mode
+  alerts when a position breaks it and, with `AUTO_TRADE=true`, sells it in paper.
+- **Trend filter**: the regime strip now carries the Nifty trend (50-day vs 200-day MA).
+  In a downtrend Claude recommends no new buys.
+- **Verified cost model** (`trading_agent/costs.py`, `python -m trading_agent costs`): Groww
+  delivery brokerage (lower of ₹20 or 0.1%, min ₹5), STT 0.1% each side, NSE 0.00297%,
+  SEBI 0.0001%, stamp 0.015% on buys, 18% GST, ₹20 DP charge per sell, plus an assumed
+  15 bps slippage each way. Round trip is about 69 bps on ₹10,000 and 29 bps on ₹1,00,000
+  before slippage. The paper simulator deducts it on every fill and the backtest uses it
+  as the default cost.
+
 ## Momentum and "who traded"
 
 Two filters sit between a disclosure and a recommendation, based on what the evidence

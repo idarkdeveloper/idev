@@ -64,6 +64,17 @@ def compute_regime(series: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
         nifty["above_200dma"] = None
         nifty["pct_vs_200dma"] = None
     nifty["realised_vol_20d"] = _realised_vol(nbars)
+    if len(nbars) >= 200:
+        ma50 = sum(b["close"] for b in nbars[-50:]) / 50
+        ma200 = nifty.get("pct_vs_200dma")
+        nifty["ma50_above_ma200"] = ma50 > (nbars[-1]["close"] / (1 + ma200)) if ma200 is not None else None
+        # Trend: price vs 200dma and 50dma vs 200dma (the classic CTA / golden-cross filter).
+        above = nifty["above_200dma"]
+        nifty["trend"] = ("up" if above and nifty["ma50_above_ma200"] else
+                          "down" if (not above and not nifty["ma50_above_ma200"]) else "mixed")
+    else:
+        nifty["ma50_above_ma200"] = None
+        nifty["trend"] = None
 
     sp, nq, nk = mark("sp500"), mark("nasdaq_fut"), mark("nikkei")
     vix, inr, oil = mark("india_vix"), mark("usdinr"), mark("brent")
@@ -99,7 +110,10 @@ def compute_regime(series: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     if oil["ret_5d"] is not None and oil["ret_5d"] > 0.08:
         sig(f"Brent {oil['ret_5d']*100:+.1f}% in 5 days", -1)
 
+    if nifty.get("trend") == "down":
+        sig("Nifty in a downtrend (50-day MA below 200-day MA, price below both)", -1)
     out["score"] = score
+    out["trend"] = nifty.get("trend")
     out["regime"] = "risk_off" if score <= -2 else "risk_on" if score >= 2 else "neutral"
     out["guidance"] = {
         "risk_off": "No new buys; existing positions at most half size; prefer watch over buy.",
@@ -113,7 +127,7 @@ def compute_regime(series: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
 def regime_summary(r: dict[str, Any]) -> str:
     m = r["markets"]
     pct = lambda v: "n/a" if v is None else f"{v*100:+.1f}%"  # noqa: E731
-    parts = [f"{r['regime'].replace('_', '-')} (score {r['score']:+d})"]
+    parts = [f"{r['regime'].replace('_', '-')} (score {r['score']:+d}, trend {r.get('trend') or 'n/a'})"]
     if m.get("nifty50", {}).get("last"):
         n = m["nifty50"]
         parts.append(f"Nifty {n['last']:,.0f} {pct(n['ret_1d'])} 1d, {pct(n['ret_20d'])} 20d, "
