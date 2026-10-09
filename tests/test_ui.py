@@ -447,3 +447,22 @@ def test_old_paper_file_dates_itself_from_its_first_order(tmp_path):
     path.write_text(json.dumps({"cash": 1.0, "starting_cash": 1.0, "positions": {}, "prices": {},
                                 "orders": [{"filled_at": "2026-10-09T17:54:09+00:00"}]}))
     assert LocalPaperBroker(path).created_at == "2026-10-09T17:54:09+00:00"
+
+
+def test_static_files_and_tabs_are_served(settings):
+    import threading
+    import urllib.request
+    from trading_agent.ui import App, make_server
+
+    srv = make_server(App(settings, dotenv=None), port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        css = urllib.request.urlopen(base + "/static/nocturne.css").read().decode()
+        js = urllib.request.urlopen(base + "/static/common.js").read().decode()
+        page = urllib.request.urlopen(base + "/").read().decode()
+        assert ".tabs" in css and "window.TA" in js and "attachSuggest" in js
+        assert '/static/nocturne.css' in page and '/static/common.js' in page and 'href="/replay"' in page
+        assert "<style>" not in page  # the CSS lives in one shared file now
+    finally:
+        srv.shutdown()

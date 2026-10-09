@@ -6,250 +6,7 @@
 <title>Trading Agent</title>
 <meta name="description" content="Local dashboard for the trading agent: your Groww holdings, NSE disclosed deals, Claude's recommendations, the factor screen and backtests.">
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
-<style>
-  /* Nocturne: dark ground, one blurple accent, Inter, rules that fade at both ends.
-     Layout: header, regime strip, KPI strip, then a wide main column beside a narrow aside. */
-  @font-face { font-family: "Inter Fallback"; src: local("Arial"); ascent-override: 90.44%;
-    descent-override: 22.52%; line-gap-override: 0%; size-adjust: 106.5%; }
-  @font-face { font-family: "Inter"; font-style: normal; font-weight: 400 700; font-display: swap;
-    src: url("/fonts/inter-latin.woff2") format("woff2");
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-  @font-face { font-family: "Inter"; font-style: normal; font-weight: 400 700; font-display: swap;
-    src: url("/fonts/inter-latin-ext.woff2") format("woff2");
-    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-
-  :root {
-    color-scheme: dark;
-    --color-bg: #161826; --color-surface: #232532; --color-text: #e9e9ed;
-    --color-accent: #9184d9; --color-accent-2: #a7a1db;
-    --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
-    --color-rule: color-mix(in srgb, #e9e9ed 8%, transparent);
-    --color-muted: color-mix(in srgb, #e9e9ed 55%, transparent);
-    --color-neutral-100: #f3f5fe; --color-neutral-300: #cfd3e5; --color-neutral-400: #b2b6ca; --color-neutral-500: #9397ab;
-    --color-neutral-600: #75798c; --color-neutral-700: #595d6c; --color-neutral-800: #3f424d; --color-neutral-900: #292b31;
-    --color-accent-100: #f5f4ff; --color-accent-200: #e7e5fe; --color-accent-300: #d2cefd; --color-accent-400: #b5abfc;
-    --color-accent-600: #796cbf; --color-accent-800: #423a6a; --color-accent-900: #2b2741;
-    --font-heading: "Inter", "Inter Fallback", system-ui, -apple-system, "Segoe UI", sans-serif; --font-heading-weight: 500;
-    --font-body: "Inter", "Inter Fallback", system-ui, -apple-system, "Segoe UI", sans-serif;
-    --space-1: 2.8px; --space-2: 5.6px; --space-3: 8.4px; --space-4: 11.2px;
-    --radius-sm: 4px; --radius-md: 8px; --radius-lg: 14px;
-    --shadow-sm: 0 0 0 1px #3f424d;
-    --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0,0,0,0.55);
-    --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0,0,0,0.65);
-    --fade-rule: linear-gradient(to right, transparent, var(--color-rule) 48px, var(--color-rule) calc(100% - 48px), transparent);
-    /* Names the page script already uses, pointed at Nocturne values. */
-    --bg: var(--color-bg); --card: var(--color-surface); --line: var(--color-divider); --line2: var(--color-rule);
-    --ink: var(--color-text); --ink2: var(--color-neutral-400); --mute: var(--color-muted);
-    --teal: var(--color-accent); --teal2: var(--color-accent-400); --tealbg: var(--color-accent-900);
-    --amber: var(--color-accent-2); --red: var(--color-accent-300); --redbg: var(--color-accent-900);
-    --chip: var(--color-neutral-800); --mono: var(--font-body);
-  }
-  *, *::before, *::after { box-sizing: border-box; }
-  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
-             clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-  body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-body);
-         font-size: 14px; line-height: 1.5; font-variant-numeric: tabular-nums; }
-  h1, h2, h3 { margin: 0; font-family: var(--font-heading); font-weight: var(--font-heading-weight);
-               line-height: 1.15; letter-spacing: -0.015em; text-wrap: balance; }
-  h1 { font-size: 34px; } h2 { font-size: 22px; } h3 { font-size: 16px; }
-  a { color: var(--color-accent); text-decoration: none; text-underline-offset: 3px; }
-  a:hover { color: var(--color-accent-600); }
-  :focus { outline: none; }
-  :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-  ::selection { background: color-mix(in srgb, var(--color-accent) 30%, transparent); }
-
-  /* header */
-  header { background: transparent; }
-  .wrap { max-width: 1320px; margin: 0 auto; padding: 16px 24px; }
-  #lastcheck { white-space: nowrap; }
-  .controls { margin-left: auto; gap: 8px; flex-wrap: nowrap; }
-  @media (max-width: 1100px) { .controls { flex-wrap: wrap; } }
-  .row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-  .brand { display: flex; align-items: center; gap: 12px; }
-  .brand-name { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 18px; line-height: 22px; }
-  .logo { width: 36px; height: 36px; border: 1px solid var(--color-accent); border-radius: var(--radius-md);
-          display: flex; align-items: center; justify-content: center; color: var(--color-accent); flex: none; }
-  header button, header .btn { min-height: 40px; }
-
-  /* tags (the page script calls them pills) */
-  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 6px; font-size: 11.5px;
-          letter-spacing: 0.02em; white-space: nowrap; background: var(--color-neutral-800); color: var(--color-neutral-100);
-          border: 1px solid transparent; }
-  .pill.ok { background: var(--color-accent-800); color: var(--color-accent-100); }
-  .pill.warn { background: transparent; border-color: var(--color-accent); color: var(--color-accent); }
-  .pill.bad { background: var(--color-accent-300); color: var(--color-bg); font-weight: 700; }
-  header .pill { font-size: 12px; }
-  .pill .dot, .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
-  .side-chip, .act { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 6px; font-size: 11.5px;
-                     font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; border: 1px solid transparent; }
-  .side-chip.buy { border-color: var(--color-accent); color: var(--color-accent); }
-  .side-chip.sell { background: var(--color-accent-800); color: var(--color-accent-100); }
-  .act { background: var(--color-accent-800); color: var(--color-accent-100); }
-  .act.sell { background: transparent; border-color: var(--color-accent); color: var(--color-accent); }
-  .act.watch, .act.hold { background: var(--color-neutral-800); color: var(--color-neutral-100); }
-
-  /* buttons */
-  button, .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px;
-                 padding: 0 12px; cursor: pointer; font: inherit; font-family: var(--font-heading);
-                 font-weight: var(--font-heading-weight); font-size: 14px; line-height: 1.2; white-space: nowrap;
-                 color: var(--color-text); background: transparent; border: 1px solid var(--color-divider);
-                 border-radius: var(--radius-md); }
-  button:hover, .btn:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
-  button:active, .btn:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
-  button.primary { color: var(--color-accent); border-color: var(--color-accent); }
-  button.primary:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
-  button.primary:active { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
-  button.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
-  button.danger { color: var(--color-accent-300); border-color: var(--color-accent-300); }
-  button.on { color: var(--color-accent); border-color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
-  button:disabled { opacity: 0.45; cursor: not-allowed; }
-  button svg, .btn svg { display: block; flex: none; }
-  .split { display: flex; }
-  .split > button { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-  details.menu { position: relative; }
-  details.menu > summary { list-style: none; color: var(--color-accent); border-color: var(--color-accent);
-    border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; padding: 0 10px; min-height: 40px; }
-  details.menu > summary::-webkit-details-marker { display: none; }
-  details.menu > summary:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
-  details.menu .menu-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; min-width: 300px;
-    background: var(--color-surface); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); padding: 6px;
-    display: flex; flex-direction: column; }
-  details.menu .menu-pop button { justify-content: flex-start; border-color: transparent; font-weight: 400; min-height: 40px; }
-
-  /* layout */
-  main { max-width: 1320px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 32px; }
-  .cols { display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start; }
-  .main { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 32px; }
-  .side { flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 32px; }
-  .side-group { display: flex; flex-direction: column; gap: 16px; }
-
-  /* surfaces */
-  .card { background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); min-width: 0; }
-  .cardhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; padding: 12px 18px; }
-  .cardbody { padding: 12px 18px; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--color-divider); min-width: 0; }
-  .card > .scroll, .cardhead + .scroll { padding: 0 10px 6px; }
-  .scroll { overflow-x: auto; }
-
-  /* regime strip */
-  .regime-card { display: flex; flex-direction: column; }
-  .regime-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 18px; }
-  .regime { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; flex: 1 1 300px; min-width: 0; }
-  .regime .sig { font-size: 13px; color: var(--color-muted); flex: 1 1 300px; }
-  .mkts { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); border-top: 1px solid var(--color-divider); padding-left: 18px; }
-  .mkts:empty { display: none; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
-  .stats .mkt .v { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 22px; }
-  .mkt { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px 10px 0; margin-right: 14px; border-right: 1px solid var(--color-divider); min-width: 0; }
-  .mkt:last-child { border-right: none; }
-  .mkt .k { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .mkt .v { font-size: 17px; font-weight: 600; }
-  .mkt .c { font-size: 12px; font-weight: 600; }
-
-  /* KPI strip */
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); background: var(--color-surface);
-           border-radius: var(--radius-lg); box-shadow: var(--shadow-sm); padding-left: 20px; }
-  .tile { display: flex; flex-direction: column; gap: 6px; padding: 18px 20px 18px 0; margin-right: 20px; border-right: 1px solid var(--color-divider); min-width: 0; }
-  .tile:last-child { border-right: none; }
-  .label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-muted); }
-  .big { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 30px; line-height: 34px; overflow-wrap: anywhere; }
-  .sub { font-size: 13px; color: var(--color-muted); }
-  /* My Groww portfolio: profit in green, loss in red */
-  .pl-profit { color: #3ddc84; font-weight: 600; } .pl-loss { color: #ff6b6b; font-weight: 600; }
-  #mp-card tfoot td { font-weight: 700; border-top: 1px solid var(--color-divider); padding-top: 10px; }
-  .up { color: var(--color-accent-300); font-weight: 600; } .down { color: var(--color-neutral-400); font-weight: 600; }
-
-  /* tables: row rules fade out at both ends */
-  table { width: 100%; border-collapse: collapse; min-width: 560px; font-size: 14px; }
-  th { text-align: left; font-weight: 400; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-       color: color-mix(in srgb, var(--color-text) 60%, transparent); padding: 8px; white-space: nowrap; }
-  td { padding: 8px; vertical-align: top; }
-  thead tr { background: linear-gradient(to right, transparent, var(--color-divider) 48px, var(--color-divider) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px; }
-  tbody tr { background: var(--fade-rule) no-repeat bottom / 100% 1px; }
-  tbody tr:last-child { background: none; }
-  tbody tr:hover { background: linear-gradient(color-mix(in srgb, var(--color-text) 4%, transparent), color-mix(in srgb, var(--color-text) 4%, transparent)) no-repeat 0 0 / 100% 100%, var(--fade-rule) no-repeat bottom / 100% 1px; }
-  td.num, th.num { text-align: right; } .mono { font-variant-numeric: tabular-nums; }
-
-  /* recommendations */
-  .rec { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; border-left: 2px solid var(--color-accent); }
-  .rec.dismissed { opacity: .5; }
-  .headline { font-size: 15px; font-weight: 600; line-height: 22px; }
-  .rationale { margin: 0; color: var(--color-neutral-400); line-height: 21px; text-wrap: pretty; }
-
-  .runs { display: flex; flex-direction: column; padding: 4px 18px 8px; border-top: 1px solid var(--color-divider); }
-  .run { display: flex; flex-wrap: wrap; gap: 16px; padding: 10px 0; background: var(--fade-rule) no-repeat bottom / 100% 1px; }
-  .run:last-child { background: none; }
-  .empty { padding: 20px 18px; color: var(--color-muted); }
-  .ann { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--color-divider); }
-  .ann .meta { font-size: 12px; color: var(--color-muted); }
-
-  /* forms */
-  .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-  label { font-size: 12px; color: color-mix(in srgb, var(--color-text) 70%, transparent); }
-  input, select { width: 100%; min-height: 36px; padding: 6px 10px; font: inherit; font-size: 14px; color: var(--color-text);
-                  caret-color: var(--color-accent); background: var(--color-surface); border: 1px solid var(--color-divider);
-                  border-radius: var(--radius-md); }
-  input:hover, select:hover { border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
-  input:focus-visible, select:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
-  input[type=checkbox], input[type=radio] { width: 18px; height: 18px; min-height: 18px; padding: 0; margin: 2px 0 0; flex: none; accent-color: var(--color-accent); }
-  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
-  .side .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-  .seg { display: inline-flex; overflow: hidden; border: 1px solid var(--color-divider); border-radius: var(--radius-md); }
-  .seg button { border: none; border-radius: 0; min-height: 34px; padding: 0 12px; font-size: 13px; font-weight: 400; }
-  .seg button + button { border-left: 1px solid var(--color-divider); }
-  .seg button.on { color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
-  /* company suggestions under the ticker boxes */
-  .suggest { position: fixed; z-index: 30; display: none; background: var(--color-surface); border-radius: var(--radius-md);
-             box-shadow: var(--shadow-lg); padding: 4px; max-height: 340px; overflow-y: auto; overscroll-behavior: contain; }
-  .suggest.open { display: block; }
-  .suggest .opt { display: grid; grid-template-columns: minmax(84px, auto) minmax(0, 1fr); align-items: baseline; gap: 12px;
-                  padding: 7px 10px; border-radius: 6px; cursor: pointer; }
-  .suggest .opt .sym { font-weight: 600; font-size: 13px; letter-spacing: .02em; white-space: nowrap; }
-  .suggest .opt .nm { font-size: 13px; color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .suggest .opt[aria-selected="true"] { background: color-mix(in srgb, var(--color-accent) 16%, transparent); }
-  .suggest .opt[aria-selected="true"] .nm { color: var(--color-text); }
-  .suggest mark { background: none; color: var(--color-accent); font-weight: 600; }
-  .suggest .none, .suggest .hint { padding: 8px 10px; font-size: 12px; color: var(--color-muted); }
-  .suggest .hint { border-top: 1px solid var(--color-divider); margin-top: 4px; padding-bottom: 4px; }
-  .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; font-size: 13px; }
-  .kv span:nth-child(even) { text-align: right; }
-  .callout { padding: 10px 12px; border-radius: var(--radius-md); background: var(--color-neutral-900); font-size: 14px; }
-
-  /* settings dialog */
-  dialog { border: none; border-radius: var(--radius-lg); padding: 0; max-width: 760px; width: calc(100vw - 32px);
-           background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-lg); }
-  dialog::backdrop { background: rgba(10, 11, 18, 0.6); }
-  .form { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
-  .dialog-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 20px; }
-  .group { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--color-divider); padding-top: 16px; }
-  .group-title { font-weight: 700; color: var(--color-text); font-size: 14px; }
-  .radio { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--color-divider); }
-  .radio:last-child { border-bottom: none; }
-  .radio label { color: var(--color-text); font-size: 14px; font-weight: 600; cursor: pointer; }
-  .conn { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--color-divider); }
-  .conn .dot { background: var(--color-accent); } .conn .dot.off { background: var(--color-neutral-500); }
-
-  /* charts */
-  .chart { position: relative; min-width: 0; }
-  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
-  .chart svg text { font-family: var(--font-body); font-size: 11px; fill: var(--color-muted); }
-  .ctip { position: absolute; pointer-events: none; background: var(--color-neutral-900); color: var(--color-text);
-          box-shadow: var(--shadow-md); font-size: 12px; line-height: 1.45; padding: 7px 9px; border-radius: var(--radius-md);
-          white-space: nowrap; display: none; z-index: 3; }
-  .ctip b { font-weight: 600; }
-  .legend-row { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: 12px; color: var(--color-muted); }
-  .legend-row span { display: inline-flex; align-items: center; gap: 6px; }
-  .legend-row i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; }
-  .chart-empty { padding: 18px 0; color: var(--color-muted); font-size: 13px; }
-
-  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--color-neutral-900);
-           color: var(--color-text); box-shadow: var(--shadow-lg); padding: 12px 16px; border-radius: var(--radius-md);
-           font-weight: 500; display: none; max-width: 90vw; z-index: 9; }
-  footer { font-size: 12px; color: var(--color-muted); padding: 12px 0 24px; border-top: 1px solid var(--color-divider); }
-
-  @media (max-width: 900px) { .wrap, main { padding-inline: 16px; } h1 { font-size: 28px; } }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
-</style>
+<link rel="stylesheet" href="/static/nocturne.css">
 </head>
 <body>
 <header>
@@ -258,6 +15,7 @@
       <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"></polyline><polyline points="15 7 21 7 21 13"></polyline></svg></div>
       <div><div class="brand-name">Trading Agent</div><div class="sub" id="subtitle">loading…</div></div>
     </div>
+    <nav class="tabs" aria-label="Pages"><a href="/" data-tab="live">Live</a><a href="/replay" data-tab="replay">Replay</a><a href="/demo" data-tab="demo">Demo</a></nav>
     <div class="row" id="pills" style="gap:6px;flex:1 1 0;min-width:240px"></div>
     <div class="row controls">
       <div class="sub" id="lastcheck"></div>
@@ -278,6 +36,7 @@
 </header>
 
 <main>
+  <div class="mode-banner demo" id="demo-banner" hidden>Demo · sample data <span class="sub">Bundled sample deals and prices, its own practice account. Never touches Groww.</span><button type="button" class="small" id="btn-demo-reset" style="margin-left:auto">Reset demo</button></div>
   <section class="card regime-card">
     <div class="regime-row">
       <div class="regime" id="regime"><span class="sub">Loading global context…</span></div>
@@ -466,30 +225,26 @@
 <div class="suggest" id="suggest" role="listbox" aria-label="Matching companies"></div>
 <div class="toast" id="toast"></div>
 
+<script src="/static/common.js"></script>
 <script>
 (function(){
-  const $ = (id) => document.getElementById(id);
+  const {$, esc, money, signed, pct, when, cap, toast, api, tile, C, NS, niceTicks, shortDate, lineChart,
+         histogram, rupeesShort, inr, sinr, spct, daysAgo, shortDay, clip, lookupTakeaway, attachSuggest,
+         currency, sym} = TA;
   let S = null, pollTimer = null;
+  TA.setCurrency(() => (S && S.settings && S.settings.currency) || "INR");
+  const MODE = document.body.dataset.mode || "live";
+  document.querySelectorAll(".tabs a").forEach(a => { if(a.dataset.tab === MODE) a.setAttribute("aria-current", "page"); });
+  if(MODE === "demo"){
+    $("demo-banner").hidden = false;
+    $("btn-demo-reset").addEventListener("click", async () => {
+      if(!confirm("Put the demo back to its starting sample data?")) return;
+      try { await api("/api/reset", {}); toast("Demo reset"); await refresh(); } catch(e){ toast(e.message); }
+    });
+  }
   const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"]],
                    us:[["congress","Congress trades"],["insider","Insider filings"]]};
   const WHO = {promoter_insider:"Promoter", institution:"Institution", individual:"Individual", broker_desk:"Broker desk", corporate:"Corporate", unknown:"?"};
-  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-  // Rupees until the first /api/state answer says otherwise (a lookup can finish before it).
-  const currency = () => (S && S.settings && S.settings.currency) || "INR";
-  const sym = () => currency() === "INR" ? "₹" : "$";
-  const money = (v, d=0) => v == null ? "n/a" : sym() + Number(v).toLocaleString(currency() === "INR" ? "en-IN" : "en-US", {maximumFractionDigits:d, minimumFractionDigits:d});
-  const signed = (v, d=0) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + money(Math.abs(v), d);
-  const pct = (v, d=1) => v == null ? "n/a" : (v >= 0 ? "+" : "") + (v*100).toFixed(d) + "%";
-  const when = (iso) => { if(!iso) return ""; const dt = new Date(iso); return dt.toLocaleString(undefined,{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); };
-  const cap = (s) => s ? s[0].toUpperCase()+s.slice(1) : "";
-  const toast = (m) => { const t=$("toast"); t.textContent=m; t.style.display="block"; clearTimeout(t._t); t._t=setTimeout(()=>t.style.display="none",4500); };
-  const api = async (path, body) => {
-    const r = await fetch(path, body ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)} : {});
-    const j = await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(j.error || r.statusText);
-    return j;
-  };
-  const tile = (l, v, s) => `<div class="tile"><div class="label">${l}</div><div class="big">${v}</div><div class="sub">${s}</div></div>`;
 
   function renderRegime(){
     const r = S.regime, el = $("regime"), mk = $("mkts");
@@ -624,88 +379,8 @@
     $("sc-result").innerHTML = `<div class="sub">${esc(sc.universe)} · ${sc.eligible} eligible of ${sc.scored} scored · ${sc.errors} without data · ${when(sc.at)}${note}</div>
       <div class="scroll"><table><thead><tr><th class="num">#</th><th>Stock</th><th class="num">12-1</th><th class="num">6m</th><th class="num">1m</th><th class="num">Vol</th><th class="num">vs 52w high</th>${fx ? '<th class="num">ROE</th><th class="num">Debt/equity</th><th class="num">P/E</th>' : ""}<th class="num">Score</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
-  // ---- charts: plain SVG, one y-axis, hairline grid, crosshair tooltip ----
-  // Nocturne chart palette: the accent leads, the text color and a neutral support it.
-  const C = {s1:"#9184d9", s2:"#e9e9ed", s3:"#9397ab", ctx:"#75798c", grid:"rgba(233,233,237,.08)", base:"#595d6c", pos:"#9184d9", neg:"#75798c", ring:"#232532"};
-  const NS = "http://www.w3.org/2000/svg";
-  function niceTicks(min, max, n){
-    n = n || 4; let span = max - min; if(!(span > 0)) span = Math.abs(max) || 1;
-    const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), e = raw / mag;
-    const step = (e >= 7.5 ? 10 : e >= 3.5 ? 5 : e >= 1.5 ? 2 : 1) * mag;
-    const lo = Math.floor(min / step) * step, hi = Math.ceil(max / step) * step, out = [];
-    for(let v = lo; v <= hi + step / 2; v += step) out.push(+v.toFixed(10));
-    return out;
-  }
-  const shortDate = (d) => { const x = new Date(d + (d.length === 10 ? "T00:00:00" : "")); return isNaN(x) ? d : x.toLocaleDateString("en-IN", {day:"numeric", month:"short", year:"2-digit"}); };
-  function lineChart(el, cfg){
-    const xs = cfg.x, n = xs.length;
-    if(n < 2){ el.innerHTML = `<div class="chart-empty">${esc(cfg.empty || "Not enough data to draw yet.")}</div>`; return; }
-    const W = Math.max(280, el.clientWidth || 560), H = cfg.height || 200;
-    const m = {l: cfg.left || 60, r: cfg.endLabels ? 92 : 14, t: 10, b: 24}, pw = W - m.l - m.r, ph = H - m.t - m.b;
-    const vals = []; cfg.series.forEach(s => s.values.forEach(v => { if(v != null && isFinite(v)) vals.push(v); }));
-    (cfg.refs || []).forEach(r => vals.push(r.y));
-    const ticks = niceTicks(Math.min(...vals), Math.max(...vals), 4), y0 = ticks[0], y1 = ticks[ticks.length - 1];
-    const X = i => m.l + (n === 1 ? 0 : i / (n - 1) * pw), Y = v => m.t + ph - (v - y0) / ((y1 - y0) || 1) * ph;
-    const yF = cfg.yFmt || (v => v.toLocaleString());
-    let g = "";
-    ticks.forEach(t => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${t === y0 ? C.base : C.grid}" stroke-width="1"/><text x="${m.l - 8}" y="${Y(t) + 4}" text-anchor="end">${esc(yF(t))}</text>`; });
-    const xt = Math.max(2, Math.min(5, n, Math.floor(pw / 95)));
-    for(let k = 0; k < xt; k++){ const i = Math.round(k * (n - 1) / (xt - 1)); g += `<text x="${X(i)}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === xt - 1 ? "end" : "middle"}">${esc(shortDate(xs[i]))}</text>`; }
-    (cfg.refs || []).forEach(r => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(r.y)}" y2="${Y(r.y)}" stroke="${r.color || C.ctx}" stroke-width="1" stroke-dasharray="4 3"><title>${esc(r.label)} ${esc(yF(r.y))}</title></line>`; });
-    const placed = [];
-    cfg.series.forEach(s => {
-      let d = "", pen = false;
-      s.values.forEach((v, i) => { if(v == null || !isFinite(v)){ pen = false; return; } d += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1); pen = true; });
-      if(s.area && d){ const fi = s.values.findIndex(v => v != null), li = s.values.length - 1 - [...s.values].reverse().findIndex(v => v != null);
-        g += `<path d="${d}L${X(li).toFixed(1)} ${Y(y0)}L${X(fi).toFixed(1)} ${Y(y0)}Z" fill="${s.color}" fill-opacity="0.08"/>`; }
-      g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2}" stroke-linejoin="round" stroke-linecap="round"/>`;
-      const li = s.values.length - 1 - [...s.values].reverse().findIndex(v => v != null);
-      if(li >= 0 && li < n && s.values[li] != null){
-        g += `<circle cx="${X(li)}" cy="${Y(s.values[li])}" r="4" fill="${s.color}" stroke="${C.ring}" stroke-width="2"/>`;
-        const ly = Y(s.values[li]);
-        if(cfg.endLabels && !placed.some(py => Math.abs(py - ly) < 13)){ placed.push(ly); g += `<text x="${X(li) + 8}" y="${ly + 4}" style="fill:var(--ink2)">${esc(s.label || s.name)}</text>`; }
-      }
-    });
-    const refs = cfg.refs || [], showLegend = cfg.legend !== false && (cfg.series.length + refs.length) > 1;
-    el.innerHTML = (showLegend ? `<div class="legend-row" style="margin-bottom:6px">${cfg.series.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}${refs.map(r => `<span><i style="background:repeating-linear-gradient(90deg, ${r.color || C.ctx} 0 4px, transparent 4px 7px)"></i>${esc(r.label)} ${esc(yF(r.y))}</span>`).join("")}</div>` : "")
-      + `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "chart")}">${g}<line class="xh" x1="0" x2="0" y1="${m.t}" y2="${m.t + ph}" stroke="${C.base}" stroke-width="1" visibility="hidden"/><g class="dots"></g><rect x="${m.l}" y="${m.t}" width="${pw}" height="${ph}" fill="transparent" class="hit"/></svg><div class="ctip"></div>`;
-    const svg = el.querySelector("svg"), tip = el.querySelector(".ctip"), xh = svg.querySelector(".xh"), dots = svg.querySelector(".dots");
-    const at = (ev) => { const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width; return Math.max(0, Math.min(n - 1, Math.round((sx - m.l) / pw * (n - 1)))); };
-    svg.querySelector(".hit").addEventListener("mousemove", ev => {
-      const i = at(ev), x = X(i);
-      xh.setAttribute("x1", x); xh.setAttribute("x2", x); xh.setAttribute("visibility", "visible");
-      dots.innerHTML = cfg.series.map(s => s.values[i] == null ? "" : `<circle cx="${x}" cy="${Y(s.values[i])}" r="4" fill="${s.color}" stroke="${C.ring}" stroke-width="2"/>`).join("");
-      tip.innerHTML = `<b>${esc(shortDate(xs[i]))}</b>` + cfg.series.map(s => s.values[i] == null ? "" : `<br><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.color};margin-right:6px"></span>${esc(s.name)} ${esc(yF(s.values[i]))}`).join("");
-      tip.style.display = "block";
-      const r = svg.getBoundingClientRect(), px = x * r.width / W, tw = tip.offsetWidth;
-      tip.style.left = Math.max(0, Math.min(r.width - tw, px + 12 + tw > r.width ? px - tw - 12 : px + 12)) + "px"; tip.style.top = "8px";
-    });
-    svg.querySelector(".hit").addEventListener("mouseleave", () => { xh.setAttribute("visibility", "hidden"); dots.innerHTML = ""; tip.style.display = "none"; });
-  }
-  function histogram(el, values, cfg){
-    if(values.length < 2){ el.innerHTML = `<div class="chart-empty">${esc(cfg.empty || "Not enough data to draw yet.")}</div>`; return; }
-    const W = Math.max(280, el.clientWidth || 560), H = cfg.height || 170, m = {l:40, r:14, t:10, b:26}, pw = W - m.l - m.r, ph = H - m.t - m.b;
-    let lo = Math.min(...values, 0), hi = Math.max(...values, 0);
-    const bw = niceTicks(lo, hi, 8); const step = bw[1] - bw[0];
-    lo = bw[0]; hi = bw[bw.length - 1];
-    const bins = []; for(let b = lo; b < hi - step / 2; b += step) bins.push({lo:b, hi:b + step, n:0});
-    values.forEach(v => { const k = Math.min(bins.length - 1, Math.max(0, Math.floor((v - lo) / step))); bins[k].n++; });
-    const maxN = Math.max(...bins.map(b => b.n)), yt = niceTicks(0, maxN, 3).filter(t => Number.isInteger(t));
-    const X = v => m.l + (v - lo) / (hi - lo) * pw, Y = c => m.t + ph - c / (yt[yt.length - 1] || 1) * ph;
-    let g = "";
-    yt.forEach(t => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${t === 0 ? C.base : C.grid}"/><text x="${m.l - 8}" y="${Y(t) + 4}" text-anchor="end">${t}</text>`; });
-    bins.forEach((b, k) => { if(!b.n) return; const x0 = X(b.lo) + 1, x1 = X(b.hi) - 1, mid = (b.lo + b.hi) / 2;
-      g += `<path d="M${x0} ${Y(0)}V${Y(b.n) + 3}q0 -3 3 -3H${x1 - 3}q3 0 3 3V${Y(0)}Z" fill="${mid < 0 ? C.neg : C.pos}"><title>${pct(b.lo,0)} to ${pct(b.hi,0)}: ${b.n} deal${b.n === 1 ? "" : "s"}</title></path>`; });
-    g += `<line x1="${X(0)}" x2="${X(0)}" y1="${m.t}" y2="${m.t + ph}" stroke="var(--ink2)" stroke-width="1"/>`;
-    [lo, 0, hi].forEach((v, k) => { g += `<text x="${X(v)}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === 2 ? "end" : "middle"}">${pct(v,0)}</text>`; });
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "histogram")}">${g}</svg>`;
-  }
-  const rupeesShort = v => { const a = Math.abs(v); return (v < 0 ? "−" : "") + sym() + (a >= 1e7 ? (a / 1e7).toFixed(2) + " Cr" : a >= 1e5 ? (a / 1e5).toFixed(2) + " L" : Math.round(a).toLocaleString("en-IN")); };
 
   // ---- My Groww portfolio: real holdings, read-only ----
-  const inr = (v, d=0) => v == null ? "n/a" : "₹" + Number(v).toLocaleString("en-IN", {minimumFractionDigits:d, maximumFractionDigits:d});
-  const sinr = (v, d=0) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + inr(Math.abs(v), d);
-  const spct = (v) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + Math.abs(v * 100).toFixed(2) + "%";
   async function loadMyPortfolio(refresh){
     const btn = $("mp-refresh"); btn.disabled = true;
     try { renderMyPortfolio(await api("/api/my-portfolio" + (refresh ? "?refresh=1" : ""))); }
@@ -1053,129 +728,10 @@
     $("groww-test-result").textContent = "Testing…";
     try { const r = await api("/api/groww-test", {}); $("groww-test-result").textContent = r.message; } catch(e){ $("groww-test-result").textContent = e.message; }
   });
-  // Company suggestions under the ticker boxes: a small listbox in the page's own style
-  // (the browser's datalist can't be styled). Up/Down move, Enter picks, Esc closes.
-  const sug = $("suggest"), sugCache = new Map();
-  let sugFor = null, sugItems = [], sugActive = -1, sugTimer = null, sugSeq = 0;
-  const hl = (text, q) => {
-    const i = text.toLowerCase().indexOf(q.toLowerCase());
-    return i < 0 || !q ? esc(text) : esc(text.slice(0, i)) + "<mark>" + esc(text.slice(i, i + q.length)) + "</mark>" + esc(text.slice(i + q.length));
-  };
-  function placeSuggest(){
-    if(!sugFor) return;
-    const r = sugFor.getBoundingClientRect(), w = Math.min(Math.max(r.width, 340), window.innerWidth - 16);
-    sug.style.width = w + "px";
-    sug.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + "px";
-    const below = window.innerHeight - r.bottom;
-    if(below < 220 && r.top > below){ sug.style.top = ""; sug.style.bottom = (window.innerHeight - r.top + 4) + "px"; }
-    else { sug.style.bottom = ""; sug.style.top = (r.bottom + 4) + "px"; }
-  }
-  function closeSuggest(){
-    sug.classList.remove("open"); sugItems = []; sugActive = -1;
-    if(sugFor){ sugFor.setAttribute("aria-expanded", "false"); sugFor.removeAttribute("aria-activedescendant"); }
-  }
-  function renderSuggest(q){
-    if(!sugFor) return;
-    sug.innerHTML = sugItems.length
-      ? sugItems.map((h, i) => `<div class="opt" role="option" id="sug-${i}" data-i="${i}" aria-selected="${i === sugActive}"><span class="sym">${hl(h.symbol, q)}</span><span class="nm">${hl(h.name, q)}</span></div>`).join("")
-        + `<div class="hint">↑ ↓ to move · Enter to choose · Esc to close</div>`
-      : `<div class="none">No matching companies on NSE</div>`;
-    sug.classList.add("open"); placeSuggest();
-    sugFor.setAttribute("aria-expanded", "true");
-    if(sugActive >= 0){ sugFor.setAttribute("aria-activedescendant", "sug-" + sugActive); $("sug-" + sugActive).scrollIntoView({block: "nearest"}); }
-    else sugFor.removeAttribute("aria-activedescendant");
-  }
-  function setActive(i){  // move the highlight without rebuilding the list
-    sugActive = i;
-    sug.querySelectorAll(".opt").forEach(o => o.setAttribute("aria-selected", String(Number(o.dataset.i) === i)));
-    if(i >= 0){ sugFor.setAttribute("aria-activedescendant", "sug-" + i); $("sug-" + i).scrollIntoView({block: "nearest"}); }
-  }
-  function pickSuggest(i){
-    const h = sugItems[i], input = sugFor;
-    if(!h || !input) return;
-    input.value = h.symbol; closeSuggest();
-    if(input.id === "lk-ticker") lookup(h.symbol);
-    else input.focus();
-  }
-  async function fetchSuggest(q){
-    const seq = ++sugSeq;
-    let hits = sugCache.get(q.toLowerCase());
-    if(!hits){
-      try { hits = await api("/api/search?q=" + encodeURIComponent(q)); sugCache.set(q.toLowerCase(), hits); }
-      catch(e){ hits = []; }
-    }
-    if(seq !== sugSeq || !sugFor || sugFor.value.trim() !== q) return;  // a newer keystroke won
-    sugItems = hits; sugActive = hits.length ? 0 : -1; renderSuggest(q);
-  }
-  ["lk-ticker", "sz-ticker", "tk-symbol"].forEach(id => {
-    const input = $(id);
-    input.setAttribute("role", "combobox"); input.setAttribute("aria-autocomplete", "list");
-    input.setAttribute("aria-controls", "suggest"); input.setAttribute("aria-expanded", "false");
-    input.addEventListener("input", () => {
-      sugFor = input; const q = input.value.trim();
-      clearTimeout(sugTimer);
-      if(q.length < 2){ closeSuggest(); return; }
-      sugTimer = setTimeout(() => fetchSuggest(q), 150);
-    });
-    input.addEventListener("keydown", (ev) => {
-      if(sugFor !== input || !sug.classList.contains("open")) return;
-      if(ev.key === "ArrowDown" || ev.key === "ArrowUp"){
-        ev.preventDefault(); if(!sugItems.length) return;
-        setActive((sugActive + (ev.key === "ArrowDown" ? 1 : -1) + sugItems.length) % sugItems.length);
-      } else if(ev.key === "Enter" && sugActive >= 0){ ev.preventDefault(); pickSuggest(sugActive); }
-      else if(ev.key === "Escape"){ ev.preventDefault(); closeSuggest(); }
-      else if(ev.key === "Tab"){ closeSuggest(); }
-    });
-    input.addEventListener("blur", () => setTimeout(() => { if(document.activeElement !== input) closeSuggest(); }, 120));
-  });
-  sug.addEventListener("mousedown", (ev) => {  // mousedown, so the input keeps focus until the pick
-    const o = ev.target.closest(".opt"); if(!o) return;
-    ev.preventDefault(); pickSuggest(Number(o.dataset.i));
-  });
-  sug.addEventListener("mousemove", (ev) => {
-    const o = ev.target.closest(".opt"); if(!o || Number(o.dataset.i) === sugActive) return;
-    setActive(Number(o.dataset.i));
-  });
-  window.addEventListener("resize", placeSuggest);
-  window.addEventListener("scroll", () => { if(sug.classList.contains("open")) placeSuggest(); }, {passive: true});
+
+  attachSuggest(["lk-ticker", "sz-ticker", "tk-symbol"], (input, s) => { if(input.id === "lk-ticker") lookup(s); else input.focus(); });
 
   // ---- "What this means" for a looked-up stock and for a position size ----
-  const daysAgo = (at) => { const d = new Date(String(at).replace(" ", "T")); return isNaN(d) ? null : Math.floor((Date.now() - d) / 864e5); };
-  const shortDay = (at) => { const d = new Date(String(at).replace(" ", "T")); return isNaN(d) ? String(at).slice(0, 10) : d.toLocaleDateString("en-IN", {day: "numeric", month: "short"}); };
-  const clip = (t, n) => t.length <= n ? t : t.slice(0, t.lastIndexOf(" ", n) > n * 0.6 ? t.lastIndexOf(" ", n) : n).replace(/[,;:.]$/, "") + "…";
-  function lookupTakeaway(r){
-    const m = r.momentum || {}, out = [], name = r.name ? r.name.replace(/ Limited$/, "") : r.ticker;
-    if(m.error) return "";
-    const p6 = m.ret_6m, p12 = m.ret_12_1, hi = m.pct_from_52w_high;
-    const trend = m.verdict === "strong" ? "a strong uptrend" : m.verdict === "weak" ? "a weak, falling trend" : "no clear trend";
-    out.push(`${esc(name)} is in ${trend}: ${pct(p6)} over 6 months and ${pct(p12)} over the past year leaving out the latest month.`);
-    if(m.above_200dma === false) out.push("It trades below its 200-day average, so the strategy's rules make no new buy here.");
-    if(p6 != null && p6 > 0.5) out.push(`It has already risen ${pct(p6)} in six months: stocks this stretched often fall back sharply on any disappointment.`);
-    if(hi != null && hi > -0.03) out.push("It is right at its 52-week high.");
-    else if(hi != null && hi < -0.3) out.push(`It is ${Math.abs(hi * 100).toFixed(0)}% below its 52-week high.`);
-    const anns = (r.announcements || []).filter(a => { const d = daysAgo(a.at); return d == null || d <= 60; });
-    const find = (re) => anns.find(a => re.test((a.category || "") + " " + (a.text || "")));
-    const tw = find(/trading window/i), res = find(/financial result|outcome of board meeting/i);
-    if(res && daysAgo(res.at) != null && daysAgo(res.at) <= 14) out.push(`Results came out on ${shortDay(res.at)}: the price may still be reacting.`);
-    else if(tw) out.push(`It closed its insider trading window on ${shortDay(tw.at)}, which usually means quarterly results are due within a few weeks: a big move either way is possible around them.`);
-    const deal = find(/acquisition|amalgamation|merger|demerger|scheme of arrangement|takeover/i);
-    if(deal) out.push(`Corporate action on ${shortDay(deal.at)} ("${esc(clip((deal.text || deal.category).replace(/^.*?(informed the Exchange (about|regarding) )/i, "").replace(/Hon ble/g, "Hon'ble"), 90))}"): read it before buying.`);
-    const flags = [[/pledge/i, "a promoter pledge disclosure"], [/auditor/i, "a change of auditor"], [/credit rating/i, "a credit rating update"],
-                   [/buy ?back/i, "a share buyback"], [/bonus|split|sub-division/i, "a bonus issue or share split"],
-                   [/penalty|show cause|adjudicat|settlement order|sebi order|levied|fine imposed/i, "a regulatory order or penalty"]];
-    const hits = flags.filter(([re]) => find(re)).map(([, txt]) => txt);
-    if(hits.length) out.push(`Also in the last two months: ${hits.join(", ")}. Worth a look.`);
-    const pos = r.position;
-    if(pos && r.price){
-      const pl = r.price / pos.avg_entry_price - 1, room = pos.stop ? r.price / pos.stop - 1 : null;
-      out.push(`You hold ${pos.qty} at ${money(pos.avg_entry_price, 2)} (${pl >= 0 ? "+" : ""}${(pl * 100).toFixed(1)}%)${room != null ? `; its trailing stop at ${money(pos.stop, 2)} is ${(room * 100).toFixed(1)}% below the price` : ""}.`);
-    }
-    const strong = m.verdict === "strong" && m.above_200dma !== false;
-    out.push(strong ? `Bottom line: trend-wise it is the kind of stock the screen buys${tw || res || deal ? ", but there is event risk ahead, so keep any position small" : ""}${p6 != null && p6 > 0.5 ? " and expect big swings" : ""}.`
-                    : m.verdict === "weak" || m.above_200dma === false ? "Bottom line: the momentum rules say wait; a disclosed buy here would be a watch, not a buy."
-                    : "Bottom line: nothing decisive either way; it needs a reason beyond the price trend.");
-    return out.join(" ");
-  }
   function sizeTakeaway(r, riskPct, maxPct){
     if(!r || !r.price || !r.equity) return "";
     const out = [], share = r.notional / r.equity;
