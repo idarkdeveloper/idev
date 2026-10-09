@@ -300,3 +300,16 @@ def test_409_names_who_holds_the_replay(rapp):
     with r._guard(slug, "a look-up"):
         st, body = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
     assert st == 409 and body["error"] == "A look-up is running for this replay; try again when it finishes."
+
+
+def test_lookup_can_skip_news_and_news_comes_separately(rapp):
+    app, r = rapp
+    slug = create(app, r)
+    st, lk = r.route("GET", f"/replay/api/trial/{slug}/lookup", {"ticker": "A", "news": "0"}, None)
+    assert st == 200 and lk["announcements"] == [] and lk["announcements_pending"] is True
+    assert lk["history"][-1]["d"] == "2021-03-15"
+    st, nw = r.route("GET", f"/replay/api/trial/{slug}/news", {"ticker": "A"}, None)
+    assert st == 200 and nw["ticker"] == "A" and nw["announcements"][0]["text"] == "A update"
+    assert nw["today"] == "2021-03-15" and nw["announcements_error"] is None
+    st, bad = r.route("GET", f"/replay/api/trial/{slug}/news", {"ticker": "../x"}, None)
+    assert st == 400

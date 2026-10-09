@@ -159,3 +159,31 @@ def test_list_trials_skips_a_malformed_trial(tmp_path):
     (tmp_path / "replay" / "worse").mkdir()
     (tmp_path / "replay" / "worse" / "trial.json").write_text("[1]")
     assert [r["slug"] for r in list_trials(tmp_path / "replay")] == ["my-first"]
+
+
+def test_missing_member_names_are_filled_once_from_the_company_list():
+    from trading_agent.replay.trial import fill_names
+
+    calls = []
+
+    def lookup(symbols):
+        calls.append(sorted(symbols))
+        return {"OLDCO": {"name": "Old Company Limited"}, "GONE": {"name": None}}
+
+    names = {"A": {"name": "A Limited", "industry": "x"}}
+    fill_names(names, ["A", "OLDCO", "GONE"], lookup)
+    assert names["OLDCO"]["name"] == "Old Company Limited" and names["A"]["name"] == "A Limited"
+    assert names["GONE"]["name"] == "" and calls == [["GONE", "OLDCO"]]
+    fill_names(names, ["A", "OLDCO", "GONE"], lookup)  # nothing missing now: no second lookup
+    assert len(calls) == 1
+
+
+def test_names_lookup_failure_is_not_fatal():
+    from trading_agent.replay.trial import fill_names
+
+    def boom(symbols):
+        raise RuntimeError("NSE list unavailable")
+
+    names = {}
+    fill_names(names, ["X"], boom)
+    assert names["X"]["name"] == ""

@@ -539,3 +539,28 @@ def test_run_background_busy_check_is_atomic(settings):
     [t.join() for t in ts]
     gate.set()
     assert sum(1 for j in jobs if j in app.jobs) == 1
+
+
+def test_job_starters_claim_the_slot_under_the_lock(settings):
+    import threading
+    from trading_agent.ui import App
+
+    app = App(settings, dotenv=None)
+    held = threading.Event()
+    real = app._slot_lock
+
+    class Spy:
+        def __enter__(self):
+            held.set()
+            return real.__enter__()
+
+        def __exit__(self, *a):
+            return real.__exit__(*a)
+
+    app._slot_lock = Spy()
+    app.busy = True  # refused straight away, but only after taking the lock
+    for start in (lambda: app.start_backtest("x", 30, (5,), 50.0), lambda: app.start_screen("NIFTY50", 5),
+                  lambda: app.start_factor_backtest("NIFTY50", 5, 1), lambda: app.start_signal_lab("NIFTY50", 1, [5])):
+        held.clear()
+        job = start()
+        assert job.ok is False and held.is_set()

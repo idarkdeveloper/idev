@@ -192,11 +192,21 @@ class ReplayApp:
         end_trial(t)
         return self._snapshot(slug)
 
-    def lookup(self, slug: str, ticker: str) -> dict[str, Any]:
+    def lookup(self, slug: str, ticker: str, news: bool = True) -> dict[str, Any]:
         with self._guard(slug, "a look-up"):
-            return self._lookup(slug, ticker)
+            return self._lookup(slug, ticker, news)
 
-    def _lookup(self, slug: str, ticker: str) -> dict[str, Any]:
+    def news(self, slug: str, ticker: str) -> dict[str, Any]:
+        """NSE announcements for the 60 days before the replay date. Separate from the look-up,
+        because a company's first download can take half a minute."""
+        with self._guard(slug, "a news look-up"):
+            t = self.trial(slug)
+            sym = check_ticker(ticker)
+            n = self._news(t).for_symbol(sym, days=60)
+            return {"ticker": sym, "today": t.clock.today, "announcements": n["items"][:8],
+                    "announcements_error": n["error"]}
+
+    def _lookup(self, slug: str, ticker: str, news: bool = True) -> dict[str, Any]:
         t = self.trial(slug)
         sym = check_ticker(ticker)
         out: dict[str, Any] = {"ticker": sym, "name": None, "today": t.clock.today, "announcements": [],
@@ -212,8 +222,10 @@ class ReplayApp:
                 out["history"].append({"d": bars[i]["date"], "c": round(closes[i], 2), "ma200": round(ma, 2) if ma else None})
         except LookupError as e:
             out["momentum"], out["momentum_summary"] = {"error": str(e)}, str(e)
-        n = self._news(t).for_symbol(sym, days=60)
-        out["announcements"], out["announcements_error"] = n["items"][:8], n["error"]
+        out["announcements_pending"] = not news
+        if news:
+            n = self._news(t).for_symbol(sym, days=60)
+            out["announcements"], out["announcements_error"] = n["items"][:8], n["error"]
         pos = next((p for p in t.you.positions() if p.symbol == sym), None)
         if pos is not None:
             try:
@@ -360,7 +372,12 @@ class ReplayApp:
                 t = (query.get("ticker") or "").strip()
                 if not t:
                     raise ValueError("ticker required")
-                return 200, self.lookup(slug, t)
+                return 200, self.lookup(slug, t, news=(query.get("news") or "1") != "0")
+            if method == "GET" and action == "news":
+                t = (query.get("ticker") or "").strip()
+                if not t:
+                    raise ValueError("ticker required")
+                return 200, self.news(slug, t)
             if method == "GET" and action == "tools":
                 return 200, self.tools(slug)
             if method == "POST" and action == "order":

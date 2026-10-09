@@ -68,13 +68,15 @@ switched on from the page.
 The dashboard has three tabs: **Live** (today), **Replay** and **Demo**.
 
 **Replay** (`/replay`) starts a practice portfolio on a past date, from 4 January 2021 (where the record of
-index members begins). You, the agent's rules and the index fund each get the same practice money:
+index members begins). You, the agent's rules and the index fund each get the same practice money (₹1,00,000 by
+default; the agent holds 10 stocks by default and dividends are reinvested unless you choose cash):
 
 - **You** buy and sell at the replay day's closing price, in whole shares, with Indian delivery charges.
 - **The agent** buys the momentum screen's top N from the index members of that day and rebalances on the first
   trading day of each month (the forward-test rules), selling at a 3×ATR trailing stop. When it sells a holding at
   its trailing stop, it keeps the cash until the next monthly rebalance.
-- **The Nifty** line buys the index fund (MID150BEES for the Midcap 150, NIFTYBEES for Nifty 50/100/200/500) and holds.
+- **The Nifty** line buys the index fund (MID150BEES for the Midcap 150, NIFTYBEES for Nifty 50/100/200/500,
+  HDFCSML250 for the Smallcap 250) and holds.
 
 Step forward a week, a month or a year; every trading day in between is simulated. Prices, the screen, the signal
 lab, the factor backtest and NSE announcements only ever see data up to the replay date; asking for anything later

@@ -177,20 +177,35 @@
   async function lookup(t){
     $("rl-ticker").value = t; $("rl-result").innerHTML = `<span class="sub">Looking up ${esc(t)} as of ${esc(fmtDay(T.trial.clock))}…</span>`;
     try {
-      const r = await api(`/replay/api/trial/${slug}/lookup?ticker=${encodeURIComponent(t)}`);
+      const r = await api(`/replay/api/trial/${slug}/lookup?ticker=${encodeURIComponent(t)}&news=0`);
       const now = new Date(r.today + "T23:59:59").getTime(), note = lookupTakeaway(r, now);
       const v = (r.momentum || {}).verdict || "n/a";
       $("rl-result").innerHTML = `<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price != null ? `<span class="mono">${inr(r.price, 2)}</span>` : ""}<span class="pill ${v === "strong" ? "ok" : v === "weak" ? "bad" : ""}">${esc(v)} momentum</span></div>
         <div class="sub">${esc(r.momentum_summary || "")}</div>
-        ${note ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${note}</div>` : ""}
+        <div id="rl-note">${note ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${note}</div>` : ""}</div>
         <div class="chart" id="rl-chart" style="margin-top:6px"></div>
-        <h3 style="margin-top:6px">NSE announcements, last 60 days</h3>${r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file && /^https?:\/\//.test(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error || "none in the 60 days before the replay date")}</div>`}`;
+        <h3 style="margin-top:6px">NSE announcements, last 60 days</h3><div id="rl-news" aria-live="polite">${r.announcements_pending ? `<div class="sub">Loading NSE announcements… the first look-up of a company takes up to half a minute.</div>` : newsHtml(r)}</div>`;
       const h = r.history || [];
       lineChart($("rl-chart"), {x: h.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, label: `${r.ticker} price, year before the replay date`,
         yFmt: v => "₹" + Math.round(v).toLocaleString("en-IN"), empty: "No price history before this date.",
         refs: r.position ? [{y: r.position.avg_entry_price, label: "Your cost"}, {y: r.position.stop, label: "Stop", color: C.neg}] : [],
         series: [{name: "Price", color: C.s1, values: h.map(p => p.c)}, {name: "200-day average", color: C.ctx, width: 1.5, values: h.map(p => p.ma200)}]});
+      if(r.announcements_pending){
+        const want = r.ticker;
+        try {
+          const n = await api(`/replay/api/trial/${slug}/news?ticker=${encodeURIComponent(want)}`);
+          if($("rl-ticker").value.trim().toUpperCase() !== want || !$("rl-news")) return;  // a newer look-up won
+          Object.assign(r, {announcements: n.announcements, announcements_error: n.announcements_error, announcements_pending: false});
+          $("rl-news").innerHTML = newsHtml(r);
+          const note2 = lookupTakeaway(r, now);
+          $("rl-note").innerHTML = note2 ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${note2}</div>` : "";
+        } catch(e){ if($("rl-news")) $("rl-news").innerHTML = `<div class="sub">${esc(e.message)}</div>`; }
+      }
     } catch(e){ $("rl-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
+  }
+  function newsHtml(r){
+    return r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file && /^https?:\/\//.test(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
+      : `<div class="sub">${esc(r.announcements_error || "none in the 60 days before the replay date")}</div>`;
   }
   $("rl-form").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("rl-ticker").value.trim().toUpperCase(); if(t) lookup(t); });
   attachSuggest(["rl-ticker", "ro-symbol"], (input, s) => { if(input.id === "rl-ticker") lookup(s); else $("ro-amount").focus(); });

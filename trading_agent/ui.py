@@ -400,10 +400,11 @@ class App:
         from .backtest import run_backtest
 
         job = Job(id=len(self.jobs) + 1, kind="backtest")
-        if self.busy:
-            return self._refused(job)
-        self.jobs.append(job)
-        self.busy, self.running = True, job
+        with self._slot_lock:  # the check and the claim of the slot are one step
+            if self.busy:
+                return self._refused(job)
+            self.jobs.append(job)
+            self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -439,10 +440,11 @@ class App:
         from .screen import load_universe, run_screen
 
         job = Job(id=len(self.jobs) + 1, kind="screen")
-        if self.busy:
-            return self._refused(job)
-        self.jobs.append(job)
-        self.busy, self.running = True, job
+        with self._slot_lock:  # the check and the claim of the slot are one step
+            if self.busy:
+                return self._refused(job)
+            self.jobs.append(job)
+            self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -654,13 +656,14 @@ class App:
         from .screen import load_universe
 
         job = Job(id=len(self.jobs) + 1, kind="factor_backtest")
-        if self.busy:
-            return self._refused(job)
-        self.jobs.append(job)
-        if self.settings.market != "in":
-            job.ok, job.message, job.finished_at = False, "the factor backtest uses NSE indices; switch market to India", _now()
-            return job
-        self.busy, self.running = True, job
+        with self._slot_lock:  # the check and the claim of the slot are one step
+            if self.busy:
+                return self._refused(job)
+            self.jobs.append(job)
+            if self.settings.market != "in":
+                job.ok, job.message, job.finished_at = False, "the factor backtest uses NSE indices; switch market to India", _now()
+                return job
+            self.busy, self.running = True, job
 
         def run() -> None:
             try:
@@ -695,13 +698,14 @@ class App:
         from .signal_lab import run_signal_lab
 
         job = Job(id=len(self.jobs) + 1, kind="signal_lab")
-        if self.busy:
-            return self._refused(job)
-        self.jobs.append(job)
-        if self.settings.market != "in":
-            job.ok, job.message, job.finished_at = False, "the signal lab uses NSE indices; switch market to India", _now()
-            return job
-        self.busy, self.running = True, job
+        with self._slot_lock:  # the check and the claim of the slot are one step
+            if self.busy:
+                return self._refused(job)
+            self.jobs.append(job)
+            if self.settings.market != "in":
+                job.ok, job.message, job.finished_at = False, "the signal lab uses NSE indices; switch market to India", _now()
+                return job
+            self.busy, self.running = True, job
 
         def run() -> None:
             try:

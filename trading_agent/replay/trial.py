@@ -41,11 +41,36 @@ class ReplayUniverse:
         if self.membership is None:
             raise ValueError(f"no membership history for {self.name}; pick another universe")
         self._names = {m["symbol"]: m for m in self.current}
+        self._state_dir = Path(state_dir)
+        self._names_filled = False
+
+    def _lookup_names(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        from ..instruments import CompanyNames
+        return CompanyNames(self._state_dir / "cache").lookup(symbols)
 
     def members_on(self, day: str) -> list[dict[str, str]]:
+        if not self._names_filled:  # past members that have since left the index have no name in today's list
+            fill_names(self._names, sorted(self.membership.ever_members(EARLIEST_START)), self._lookup_names)
+            self._names_filled = True
         return [{"symbol": s, "name": self._names.get(s, {}).get("name", ""),
                  "industry": self._names.get(s, {}).get("industry", "")}
                 for s in sorted(self.membership.members_on(day))]
+
+
+def fill_names(names: dict[str, dict[str, Any]], symbols: list[str],
+               lookup: Callable[[list[str]], dict[str, dict[str, Any]]]) -> None:
+    """Give every symbol a name entry, asking ``lookup`` once for the ones missing.
+    Names are a nicety: a failed lookup leaves them blank instead of failing."""
+    missing = [s for s in symbols if not (names.get(s) or {}).get("name") and not (names.get(s) or {}).get("looked_up")]
+    if not missing:
+        return
+    try:
+        found = lookup(missing) or {}
+    except Exception:  # noqa: BLE001
+        found = {}
+    for s in missing:
+        names[s] = {**names.get(s, {}), "name": (found.get(s) or {}).get("name") or "",
+                    "industry": (names.get(s) or {}).get("industry", ""), "looked_up": True}
 
 
 def default_screen(members: list[dict[str, str]], prices: Any, top: int) -> list[dict[str, Any]]:
