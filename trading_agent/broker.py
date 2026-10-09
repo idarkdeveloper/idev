@@ -192,8 +192,8 @@ class LocalPaperBroker:
                 "positions": {}, "orders": [], "prices": {}, "created_at": _utc_now()}
 
     def _save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._state, indent=2))
+        from .state import atomic_write
+        atomic_write(self.path, json.dumps(self._state, indent=2))
 
     @property
     def created_at(self) -> str:

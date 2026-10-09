@@ -65,3 +65,30 @@ def test_whole_shares_mode_floors_quantity(tmp_path):
     assert order["qty"] == 14 and b.account().currency == "INR"
     with pytest.raises(ValueError):
         b.submit_order("SENCO", "buy", notional=100)
+
+
+def test_state_and_paper_broker_saves_are_atomic(tmp_path, monkeypatch):
+    import json
+    import os
+    from trading_agent.broker import LocalPaperBroker
+    from trading_agent.state import State
+
+    st = State(tmp_path / "state.json")
+    st.save()
+    b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=1000, price_fn=lambda s: 10.0)
+    b.set_price("X", 10.0)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["pb.json", "state.json"]  # no temp files left
+    before = {p.name: p.read_text() for p in tmp_path.iterdir()}
+
+    def dies(src, dst):
+        raise OSError("killed mid-swap")
+    monkeypatch.setattr(os, "replace", dies)
+    st.data["runs"].append({"x": 1})
+    with pytest.raises(OSError):
+        st.save()
+    with pytest.raises(OSError):
+        b.set_price("Y", 5.0)
+    monkeypatch.undo()
+    # a reader never sees a half-written file: the old content is intact and valid
+    assert {p.name: p.read_text() for p in tmp_path.iterdir() if not p.name.endswith(".tmp")} == before
+    assert json.loads((tmp_path / "state.json").read_text())["runs"] == []

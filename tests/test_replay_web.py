@@ -146,7 +146,7 @@ def test_actions_are_409_while_a_step_runs(gated):
     st, j = r.route("POST", f"/replay/api/trial/{slug}/step", {}, {"by": "month"})
     assert st == 202 and entered.wait(5)
     st, body = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
-    assert st == 409 and "step is running" in body["error"]
+    assert st == 409 and body["error"].startswith("A step is running for this replay")
     assert r.route("GET", f"/replay/api/trial/{slug}", {}, None)[0] == 409
     release.set()
     wait(app, app.jobs[-1])
@@ -224,3 +224,79 @@ def test_replay_page_is_served_with_the_shared_assets(settings):
         assert "/replay/api/trials" in js
     finally:
         srv.shutdown()
+
+
+class NoNetwork:
+    def history(self, *a, **k):
+        raise ConnectionError("offline")
+    dividends = history
+
+
+def test_ended_replay_opens_offline_with_a_next_error(rapp, settings):
+    app, r = rapp
+    slug = create(app, r)
+    st, _ = r.route("POST", f"/replay/api/trial/{slug}/end", {}, {})
+    assert st == 200
+    fresh = ReplayApp(App(settings, dotenv=None), source=NoNetwork(), universe_factory=lambda n: FakeUniverse(),
+                      news_client=FakeNews(), today_fn=lambda: "2026-10-09", screen_fn=top_by_6m)
+    st, snap = fresh.route("GET", f"/replay/api/trial/{slug}", {}, None)
+    assert st == 200 and snap["scorecard"]["you"]["final"] > 0
+    assert snap["next"]["error"].startswith("What happened next needs price data that could not be loaded:")
+    assert "offline" in snap["next"]["error"]
+
+
+def test_bad_tickers_are_400_and_write_nothing(rapp, settings, tmp_path):
+    app, r = rapp
+    slug = create(app, r)
+    r.news_client = __import__("trading_agent.nse", fromlist=["NSEClient"]).NSEClient(cache_dir=settings.state_dir / "cache")
+    before = sorted(p for p in tmp_path.rglob("*"))
+    for t in ("../../state", "..", "a/b", "x" * 21):
+        st, body = r.route("GET", f"/replay/api/trial/{slug}/lookup", {"ticker": t}, None)
+        assert st == 400 and "ticker" in body["error"], (t, st, body)
+        st, _ = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": t, "side": "buy", "qty": 1})
+        assert st == 400
+    settings.anthropic_api_key = "k"
+    st, _ = r.route("POST", f"/replay/api/trial/{slug}/ask", {}, {"ticker": "../../state"})
+    assert st == 400
+    assert sorted(p for p in tmp_path.rglob("*")) == before
+
+
+def test_nse_client_rejects_path_tickers(tmp_path):
+    from trading_agent.nse import NSEClient
+    c = NSEClient(cache_dir=tmp_path)
+    with pytest.raises(ValueError):
+        c.announcement_history("../../state")
+    assert list(tmp_path.rglob("*")) == []
+
+
+def test_auto_stop_is_refused_once_ended(rapp):
+    app, r = rapp
+    slug = create(app, r)
+    r.route("POST", f"/replay/api/trial/{slug}/end", {}, {})
+    st, body = r.route("POST", f"/replay/api/trial/{slug}/auto-stop", {}, {"on": True})
+    assert st == 400 and "read-only" in body["error"]
+    assert r.snapshot(slug)["trial"]["auto_stop"] is False
+
+
+def test_order_on_a_non_trading_day_adds_a_point_for_that_day(rapp):
+    app, r = rapp
+    slug = create(app, r, start="2021-03-13")  # a Saturday
+    j = wait(app, r.step(slug, {"by": "week"}))
+    assert j.ok, j.message
+    t = r.trial(slug)
+    assert t.clock.today == "2021-03-20" and t.data["equity"][-1]["date"] == "2021-03-19"
+    st, _ = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 5})
+    assert st == 200
+    snap = r.snapshot(slug)
+    assert snap["race"]["dates"][-1] == "2021-03-20" and snap["race"]["dates"][-2] == "2021-03-19"
+    assert snap["tiles"]["you"]["value"] == snap["you"]["equity"]
+    st, _ = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
+    assert r.snapshot(slug)["race"]["dates"].count("2021-03-20") == 1  # second order replaces, not appends
+
+
+def test_409_names_who_holds_the_replay(rapp):
+    app, r = rapp
+    slug = create(app, r)
+    with r._guard(slug, "a look-up"):
+        st, body = r.route("POST", f"/replay/api/trial/{slug}/order", {}, {"symbol": "D", "side": "buy", "qty": 1})
+    assert st == 409 and body["error"] == "A look-up is running for this replay; try again when it finishes."

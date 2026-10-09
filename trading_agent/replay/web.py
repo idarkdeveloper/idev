@@ -15,6 +15,7 @@ from .clock import EARLIEST_START
 from .engine import step, step_target
 from .news import ClockedNews
 from .scorecard import end_trial, what_happened_next
+from ..nse import check_ticker
 from .trial import BENCHMARKS, PORTFOLIOS, ReplayUniverse, Trial, list_trials
 
 log = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ class ReplayApp:
         self._tool_results: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
         self._trial_locks: dict[str, threading.Lock] = {}
+        self._holders: dict[str, str] = {}  # who holds each trial's lock, for the 409 message
 
     # -- helpers -------------------------------------------------------------------
     def _universe(self, name: str) -> Any:
@@ -76,21 +78,27 @@ class ReplayApp:
         with self._lock:
             return self._trial_locks.setdefault(slug, threading.Lock())
 
+    def _busy(self, slug: str) -> ReplayBusy:
+        who = self._holders.get(slug) or "a step"
+        return ReplayBusy(f"{who[0].upper()}{who[1:]} is running for this replay; try again when it finishes.")
+
     @contextmanager
-    def _guard(self, slug: str):
+    def _guard(self, slug: str, label: str = "a page load"):
         lk = self._trial_lock(slug)
         if not lk.acquire(blocking=False):
-            raise ReplayBusy("A step is running for this replay; try again when it finishes.")
+            raise self._busy(slug)
+        self._holders[slug] = label
         try:
             yield
         finally:
             lk.release()
 
-    def _background(self, slug: str, kind: str, fn: Callable[[Any], str]) -> Any:
+    def _background(self, slug: str, kind: str, fn: Callable[[Any], str], label: str = "a step") -> Any:
         """Run a job that holds the replay's lock for its whole run."""
         lk = self._trial_lock(slug)
         if not lk.acquire(blocking=False):
-            raise ReplayBusy("A step is running for this replay; try again when it finishes.")
+            raise self._busy(slug)
+        self._holders[slug] = label
 
         once = threading.Lock()  # held = release already done
 
@@ -145,10 +153,10 @@ class ReplayApp:
             job.result = r
             capped = " (stopped at today's date)" if r["to"] < step_target(r["from"], str(body.get("by") or "month"), "9999-12-31") else ""
             return f"Moved to {r['to']}: {r['days']} trading days, {len(r['rebalances'])} rebalance(s), {len(r['stops'])} stop(s){capped}"
-        return self._background(slug, "replay_step", run)
+        return self._background(slug, "replay_step", run, "a step")
 
     def order(self, slug: str, body: dict[str, Any]) -> dict[str, Any]:
-        with self._guard(slug):
+        with self._guard(slug, "an order"):
             return self._order(slug, body)
 
     def _order(self, slug: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -158,21 +166,25 @@ class ReplayApp:
                     qty=float(body["qty"]) if body.get("qty") else None)
         if t.data["equity"] and t.data["equity"][-1]["date"] == t.clock.today:
             t.data["equity"][-1] = t.point()  # today's value now includes the trade's charges
+        else:
+            t.data["equity"].append(t.point())  # a non-trading day: the curve ends on the account's real value
         t.save()
         return {"ok": True, "order": o}
 
     def set_auto_stop(self, slug: str, on: bool) -> dict[str, Any]:
-        with self._guard(slug):
+        with self._guard(slug, "a setting change"):
             return self._set_auto_stop(slug, on)
 
     def _set_auto_stop(self, slug: str, on: bool) -> dict[str, Any]:
         t = self.trial(slug)
+        if t.data["ended"]:
+            raise ValueError("this replay has ended; it is read-only")
         t.data["auto_stop"] = bool(on)
         t.save()
         return {"ok": True, "auto_stop": t.data["auto_stop"]}
 
     def end(self, slug: str) -> dict[str, Any]:
-        with self._guard(slug):
+        with self._guard(slug, "the end-of-replay scorecard"):
             return self._end(slug)
 
     def _end(self, slug: str) -> dict[str, Any]:
@@ -181,12 +193,12 @@ class ReplayApp:
         return self._snapshot(slug)
 
     def lookup(self, slug: str, ticker: str) -> dict[str, Any]:
-        with self._guard(slug):
+        with self._guard(slug, "a look-up"):
             return self._lookup(slug, ticker)
 
     def _lookup(self, slug: str, ticker: str) -> dict[str, Any]:
         t = self.trial(slug)
-        sym = ticker.strip().upper()
+        sym = check_ticker(ticker)
         out: dict[str, Any] = {"ticker": sym, "name": None, "today": t.clock.today, "announcements": [],
                                "announcements_error": None, "history": [], "price": None}
         try:
@@ -213,7 +225,7 @@ class ReplayApp:
         return out
 
     def ask(self, slug: str, body: dict[str, Any]) -> dict[str, Any]:
-        with self._guard(slug):
+        with self._guard(slug, "Claude"):
             return self._ask(slug, body)
 
     def _ask(self, slug: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -223,12 +235,13 @@ class ReplayApp:
         t = self.trial(slug)
         if t.data["ended"]:
             raise ValueError("this replay has ended; it is read-only")
+        lookup = check_ticker(body["ticker"]) if body.get("ticker") else None
         if self.client_factory:
             client = self.client_factory()
         else:
             from ..agent import make_client
             client = make_client(self.settings)
-        return ask(t, client, self.settings.claude_model, self._news(t), lookup=(body.get("ticker") or None))
+        return ask(t, client, self.settings.claude_model, self._news(t), lookup=lookup)
 
     def tool(self, slug: str, body: dict[str, Any]) -> Any:
         t = self.trial(slug)
@@ -252,7 +265,7 @@ class ReplayApp:
                 text = format_factor_backtest(r)
             self._tool_results.setdefault(slug, {})[kind] = {"date": t.clock.today, "years": years, "text": text}
             return f"{kind.replace('_', ' ')} as of {t.clock.today} finished"
-        return self._background(slug, "replay_tool", run)
+        return self._background(slug, "replay_tool", run, "a tool")
 
     def tools(self, slug: str) -> dict[str, Any]:
         with self._guard(slug):
@@ -310,9 +323,15 @@ class ReplayApp:
             "picks": picks, "stops": d["stops"][-20:], "claude": d["claude"],
             "claude_presses": d.get("claude_presses", 0), "claude_ready": bool(self.settings.anthropic_api_key),
             "scorecard": d.get("scorecard") if ended else None,
-            "next": what_happened_next(t, self.source, self.today_fn()) if ended else None,
+            "next": self._next(t) if ended else None,
             "universes": list(BENCHMARKS),
         }
+
+    def _next(self, t: Trial) -> dict[str, Any]:
+        try:
+            return what_happened_next(t, self.source, self.today_fn())
+        except Exception as e:  # noqa: BLE001 - an offline reopen must still show the stored scorecard
+            return {"error": f"What happened next needs price data that could not be loaded: {e}"}
 
     # -- routing -------------------------------------------------------------------
     def route(self, method: str, path: str, query: dict[str, str], body: dict[str, Any] | None) -> tuple[int, Any]:

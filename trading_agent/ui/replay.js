@@ -7,8 +7,20 @@
   const fall = v => v != null && v < 0 ? "worst fall " + spct(v) : "no fall yet";
 
   async function waitJob(id, statusEl){
+    let failures = 0;
     for(;;){
-      const j = await api(`/replay/api/job/${id}`);
+      let j;
+      try{
+        j = await api(`/replay/api/job/${id}`);
+        failures = 0;
+      }catch(e){
+        if(++failures >= 5){
+          toast("Lost contact with the dashboard; reload the page");
+          return {ok: false, finished_at: "lost", message: "Lost contact with the dashboard; reload the page"};
+        }
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
       if(statusEl) statusEl.textContent = j.message || "Working…";
       if(j.finished_at) return j;
       await new Promise(r => setTimeout(r, 1000));
@@ -120,8 +132,9 @@
     $("scorecard").innerHTML = `<div class="card"><div class="cardhead"><h2>Scorecard</h2><span class="sub">${esc(shortDate(T.trial.start))} to ${esc(shortDate(T.trial.ended))}${T.trial.dividends === "cash" ? " · dividends credited before tax" : ""}</span></div>
       <div class="cardbody"><div class="stats">${["you", "agent", "nifty"].map(col).join("")}</div>
       ${graded.length ? `<div class="sub">Claude's ${graded.length} buy/sell call${graded.length === 1 ? "" : "s"}: ${graded.filter(g => (g.action === "buy") === (g.return > 0)).length} went the way it said, by the end date (may include hindsight).</div>` : ""}
-      <h3 style="margin-top:8px">What happened next</h3><div class="chart" id="next-chart"></div>
-      <div class="sub">Each portfolio held unchanged from the end of the replay to today.</div></div></div>`;
+      <h3 style="margin-top:8px">What happened next</h3>${n.error ? `<div class="sub">${esc(n.error)}</div>` : `<div class="chart" id="next-chart"></div>
+      <div class="sub">Each portfolio held unchanged from the end of the replay to today.</div>`}</div></div>`;
+    if(n.error) return;
     lineChart($("next-chart"), {x: n.dates, height: 200, left: 64, legend: true, endLabels: false, yFmt: rupeesShort, label: "After the replay",
       series: [{name: "You", color: C.s1, values: n.you}, {name: "Agent", color: C.s2, values: n.agent}, {name: T.trial.benchmark, color: C.s3, values: n.nifty}]});
   }

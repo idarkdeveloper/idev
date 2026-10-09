@@ -3,11 +3,31 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from .quiver import DisclosedTrade
+
+
+def atomic_write(path: Path, text: str) -> None:
+    """Write beside the file, then swap it in, so a reader never sees half a file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:  # Windows: a reader has the file open for a moment
+            if attempt == 4:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.02 * (attempt + 1))
 
 
 class State:
@@ -19,8 +39,7 @@ class State:
             self.data = {"seen": {}, "runs": [], "recommendations": []}
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, indent=2))
+        atomic_write(self.path, json.dumps(self.data, indent=2))
 
     def new_trades(self, trades: Iterable[DisclosedTrade]) -> list[DisclosedTrade]:
         return [t for t in trades if t.key not in self.data["seen"]]
