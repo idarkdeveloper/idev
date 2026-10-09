@@ -333,7 +333,7 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
-    def start_screen(self, universe: str, top: int) -> Job:
+    def start_screen(self, universe: str, top: int, quality: bool = False, value: bool = False) -> Job:
         from .screen import load_universe, run_screen
 
         job = Job(id=len(self.jobs) + 1, kind="screen")
@@ -346,7 +346,12 @@ class App:
         def run() -> None:
             try:
                 members = load_universe(universe)
-                result = run_screen(members, self.prices, top=top)
+                funds = None
+                if quality or value:
+                    from .fundamentals import YahooFundamentals
+                    funds = YahooFundamentals(self.settings.state_dir / "cache")
+                result = run_screen(members, self.prices, top=top, fundamentals=funds,
+                                    quality=1.0 if quality else 0.0, value=1.0 if value else 0.0)
                 result.pop("all", None)
                 self.last_screen = {"at": _now(), "universe": universe.upper(), **result}
                 job.ok, job.message = True, f"{result['eligible']} eligible of {result['scored']} scored in {universe.upper()}"
@@ -829,7 +834,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                                              float(body.get("cost_bps", 50)))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/screen":
-                    job = app.start_screen(str(body.get("universe") or "NIFTY200"), int(body.get("top", 20)))
+                    job = app.start_screen(str(body.get("universe") or "NIFTY200"), int(body.get("top", 20)),
+                                           quality=body.get("quality") in (True, "on", "true", 1),
+                                           value=body.get("value") in (True, "on", "true", 1))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/watch":
                     self._json(app.set_watch(bool(body.get("on")), int(body["every"]) if body.get("every") else None,

@@ -313,6 +313,11 @@
             <button type="submit" class="primary small" id="sc-run">Run screen</button>
             <button type="button" class="small" id="sc-export">Export JSON</button><span class="sub" id="sc-status"></span>
           </div>
+          <div class="row" style="gap:18px">
+            <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--color-text);cursor:pointer"><input type="checkbox" name="quality" id="sc-quality">Add quality: ROE, low debt, earnings growth</label>
+            <label style="display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--color-text);cursor:pointer"><input type="checkbox" name="value" id="sc-value">Add value: earnings yield, book-to-price</label>
+            <span class="sub" style="font-size:12px">Today's numbers from Yahoo, not backtested</span>
+          </div>
           <div id="sc-result" class="sub">Ranks every constituent; takes a minute or two the first time while price history is cached.</div>
         </form>
         <form class="cardbody" id="fb-form" style="border-top:1px solid var(--line)">
@@ -575,10 +580,13 @@
       : `<tr><td colspan="8" class="empty">No orders yet.</td></tr>`;
   }
   function renderScreen(sc){
+    const fx = sc.fundamentals;
+    const fcols = r => fx ? `<td class="num">${pct(r.roe)}</td><td class="num">${r.financial ? '<span class="sub">bank/fin</span>' : r.debt_to_equity != null ? r.debt_to_equity.toFixed(2) + "×" : "n/a"}</td><td class="num">${r.pe ? r.pe.toFixed(1) : "n/a"}</td>` : "";
     const rows = sc.top.map(r => `<tr><td class="num">${r.rank}</td><td style="font-weight:600"><a href="#" data-lookup="${esc(r.symbol)}" style="text-decoration:none">${esc(r.symbol)}</a><div class="sub">${esc(r.name)}</div></td>
-      <td class="num ${r.ret_12_1>=0?"up":"down"}">${pct(r.ret_12_1)}</td><td class="num ${r.ret_6m>=0?"up":"down"}">${pct(r.ret_6m)}</td><td class="num">${pct(r.ret_1m)}</td><td class="num">${r.vol_60d!=null?Math.round(r.vol_60d*100)+"%":"n/a"}</td><td class="num">${pct(r.pct_from_52w_high)}</td><td class="num">${r.score.toFixed(2)}</td></tr>`).join("");
-    $("sc-result").innerHTML = `<div class="sub">${esc(sc.universe)} · ${sc.eligible} eligible of ${sc.scored} scored · ${sc.errors} without data · ${when(sc.at)}</div>
-      <div class="scroll"><table><thead><tr><th class="num">#</th><th>Stock</th><th class="num">12-1</th><th class="num">6m</th><th class="num">1m</th><th class="num">Vol</th><th class="num">vs 52w high</th><th class="num">Score</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      <td class="num ${r.ret_12_1>=0?"up":"down"}">${pct(r.ret_12_1)}</td><td class="num ${r.ret_6m>=0?"up":"down"}">${pct(r.ret_6m)}</td><td class="num">${pct(r.ret_1m)}</td><td class="num">${r.vol_60d!=null?Math.round(r.vol_60d*100)+"%":"n/a"}</td><td class="num">${pct(r.pct_from_52w_high)}</td>${fcols(r)}<td class="num">${r.score.toFixed(2)}</td></tr>`).join("");
+    const note = fx ? ` · with ${fx.quality ? "quality" : ""}${fx.quality && fx.value ? " and " : ""}${fx.value ? "value" : ""} (${esc(fx.source)}): ${fx.excluded} excluded for losses or debt, ${fx.missing} without data. Not backtested.` : "";
+    $("sc-result").innerHTML = `<div class="sub">${esc(sc.universe)} · ${sc.eligible} eligible of ${sc.scored} scored · ${sc.errors} without data · ${when(sc.at)}${note}</div>
+      <div class="scroll"><table><thead><tr><th class="num">#</th><th>Stock</th><th class="num">12-1</th><th class="num">6m</th><th class="num">1m</th><th class="num">Vol</th><th class="num">vs 52w high</th>${fx ? '<th class="num">ROE</th><th class="num">Debt/equity</th><th class="num">P/E</th>' : ""}<th class="num">Score</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
   // ---- charts: plain SVG, one y-axis, hairline grid, crosshair tooltip ----
   // Nocturne chart palette: the accent leads, the text color and a neutral support it.

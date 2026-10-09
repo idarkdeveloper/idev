@@ -193,7 +193,15 @@ these only ever touch the local paper account.
 - **Factor screen** (`trading_agent/screen.py`, `python -m trading_agent screen --universe NIFTY200`):
   ranks every constituent on 12-1 momentum, 6-month return and low 60-day volatility,
   requires price above the 200-day MA and a liquidity floor. The dashboard has the same
-  panel. Quality and value factors need fundamentals and are not wired in yet.
+  panel.
+- **Quality and value, opt-in** (`trading_agent/fundamentals.py`, `screen --quality --value`,
+  or the two checkboxes on the dashboard's factor screen): fundamentals come from Yahoo
+  Finance, cached for a day. Quality is return on equity (EPS ÷ book value per share),
+  low debt to equity (ignored for banks and other lenders) and earnings growth; value is
+  earnings yield and book-to-price. Loss-makers and non-financials with debt above 2×
+  equity are dropped. These are **today's** numbers only, so they can't be backtested
+  here; they are kept out of the factor backtest and the forward test, and with equal
+  weights they can outweigh momentum (a cheap stock with a flat trend can rank first).
 - **Volatility-based sizing** (`trading_agent/risk.py`, `python -m trading_agent size SENCO`):
   risk 1% of equity on a 2x ATR(14) move, capped at 10% of equity, whole shares. Claude
   must call `suggest_position_size` for every buy and quote the stop.

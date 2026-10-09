@@ -362,8 +362,14 @@ def cmd_screen(args: argparse.Namespace) -> int:
     settings = _settings(args)
     members = load_universe(args.universe)
     print(f"Scoring {len(members)} stocks in {args.universe.upper()} (price history via Yahoo, cached)…")
+    fundamentals = None
+    if args.quality or args.value:
+        from .fundamentals import YahooFundamentals
+        fundamentals = YahooFundamentals(settings.state_dir / "cache")
+        print("Adding fundamentals from Yahoo (cached for a day; the first run takes about a minute)…")
     result = run_screen(members, free_prices(settings), top=args.top, workers=args.workers,
-                        require_above_200dma=not args.no_trend_filter)
+                        require_above_200dma=not args.no_trend_filter, fundamentals=fundamentals,
+                        quality=1.0 if args.quality else 0.0, value=1.0 if args.value else 0.0)
     print(format_screen(result, top=args.top))
     if args.json:
         result.pop("all", None)
@@ -595,6 +601,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--top", type=int, default=20)
     sp.add_argument("--workers", type=int, default=8)
     sp.add_argument("--no-trend-filter", action="store_true", help="don't require price above 200-day MA")
+    sp.add_argument("--quality", action="store_true", help="add quality: ROE, low debt, earnings growth (not backtested)")
+    sp.add_argument("--value", action="store_true", help="add value: earnings yield, book-to-price (not backtested)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_screen)
     sp = sub.add_parser("scorecard", help="how Claude's past recommendations did vs the index")
