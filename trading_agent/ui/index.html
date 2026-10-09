@@ -769,6 +769,41 @@
       histogram(hEl, ex, {label: "Distribution of excess returns", empty: "Need at least two priced deals to show a spread."});
     }
   }
+  // Plain-English reading of the portfolio backtest, built from the numbers shown.
+  function factorTakeaway(r){
+    const st = r.stats, sg = st.strategy, ew = st.equal_weight;
+    const fund = st.index_fund, bench = fund || st.benchmark;
+    const benchName = fund ? `the ${r.index_fund_symbol} index fund` : /^NIFTYBEES/i.test(r.benchmark_symbol || "") ? "NIFTY 50 with dividends" : "NIFTY 50";
+    if(!sg || sg.total_return == null || !bench || bench.total_return == null) return "";
+    const yrs = r.months / 12, yrsTxt = yrs >= 1.5 ? `${yrs.toFixed(1)} years` : `${r.months} months`;
+    const rs = v => "₹" + Math.round(100 * (1 + v));
+    const pp = v => (v >= 0 ? "+" : "−") + Math.abs(v * 100).toFixed(1) + " points";
+    const out = [];
+    const beat = sg.total_return > bench.total_return;
+    out.push(`Over ${yrsTxt}, every ₹100 in the top-${r.top} ${esc(r.universe)} factor portfolio became ${rs(sg.total_return)} after ${money(r.costs_paid)} of charges, against ${rs(bench.total_return)} in ${benchName}. That is ${(sg.cagr * 100).toFixed(1)}% a year against ${(bench.cagr * 100).toFixed(1)}%.`);
+    if(ew && ew.cagr != null && !fund){
+      const screenAdds = sg.cagr - ew.cagr;
+      out.push(screenAdds > 0
+        ? `But just holding every ${esc(r.universe)} member equally, with no screen and no charges, made ${pct(ew.total_return)}. So most of the lead over NIFTY 50 came from ${esc(r.universe)} stocks as a group doing better than the 50 largest; the screen itself added about ${pp(screenAdds)} a year on top.`
+        : `Just holding every ${esc(r.universe)} member equally made ${pct(ew.total_return)}, more than the screen: picking the top ${r.top} cost money against owning them all.`);
+    }
+    if(sg.volatility && bench.volatility) out.push(`It was a much bumpier ride: ${(sg.volatility / bench.volatility).toFixed(1)}× the swings, with a worst fall of ${pct(sg.max_drawdown)} against ${pct(bench.max_drawdown)}.`);
+    const curve = r.strategy || [], bc = fund ? (r.index_fund || []) : (r.benchmark || []);
+    if(curve.length > 13){
+      let pk = 0; curve.forEach((v, i) => { if(v > curve[pk]) pk = i; });
+      const fromPeak = curve[curve.length - 1] / curve[pk] - 1;
+      const n = curve.length - 1, a = n - 12;
+      const last12 = curve[n] / curve[a] - 1, b12 = bc[a] && bc[n] ? bc[n] / bc[a] - 1 : null;
+      if(fromPeak < -0.1 && pk < n) out.push(`Most of the gain came early: it peaked in ${shortDate(r.dates[pk])} and is ${Math.abs(fromPeak * 100).toFixed(1)}% below that peak now.`);
+      if(b12 != null) out.push(`Over the last 12 months it returned ${pct(last12)} against ${pct(b12)} for ${benchName}${last12 < b12 ? ", so it has been lagging lately" : ""}.`);
+    }
+    if(!r.point_in_time) out.push("It ranks today's index members only, which flatters it: stocks that fell out of the index are missing.");
+    out.push(beat
+      ? `Bottom line: it beat ${benchName} in this one window, but with far bigger drops${ew && sg.cagr - ew.cagr < 0.03 && !fund ? ", much of the edge was the universe rather than the picks," : ""} and past results like this often fade. Worth forward-testing in paper money, not betting big on.`
+      : `Bottom line: after charges it did not beat ${benchName}; owning the index fund was simpler and better here.`);
+    return out.join(" ");
+  }
+
   function renderFactor(r){
     if(!r || !r.dates){ return; }
     const benchName = /^NIFTYBEES/i.test(r.benchmark_symbol||"") ? "NIFTY 50 with dividends (NIFTYBEES)" : "NIFTY 50";
@@ -776,6 +811,7 @@
     const row = (label, s) => `<tr><td>${label}</td><td class="num ${(s.total_return||0)>=0?"up":"down"}">${pct(s.total_return)}</td><td class="num">${pct(s.cagr)}</td><td class="num down">${pct(s.max_drawdown)}</td><td class="num">${pct(s.volatility)}</td></tr>`;
     $("fb-result").innerHTML = `<div class="sub">${esc(r.universe)} · top ${r.top} · ${r.months} monthly rebalances · ${shortDate(r.dates[0])} to ${shortDate(r.dates[r.dates.length-1])} · ${when(r.at)}</div>
       <div class="chart" id="fb-chart"></div>
+      ${factorTakeaway(r) ? `<div class="callout"><b style="color:var(--color-accent)">What this means.</b> ${factorTakeaway(r)}</div>` : ""}
       <div class="scroll"><table><thead><tr><th></th><th class="num">Total</th><th class="num">CAGR</th><th class="num">Max drawdown</th><th class="num">Volatility</th></tr></thead><tbody>
       ${row("Factor portfolio (after charges)", st.strategy)}${row(benchName, st.benchmark)}${row("Equal weight of members, no charges", st.equal_weight)}${st.index_fund ? row(`Index fund for this universe (${esc(r.index_fund_symbol)})`, st.index_fund) : ""}${st.price_index ? row("NIFTY 50 price index (no dividends)", st.price_index) : ""}</tbody></table></div>
       <div class="row" style="gap:6px">${r.point_in_time ? `<span class="pill">Point-in-time members</span>` : `<span class="pill">Today's members only</span>`}</div>
