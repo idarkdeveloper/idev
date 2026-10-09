@@ -307,11 +307,12 @@
       </div>
       <div class="card">
         <div class="cardhead"><h2>Paper portfolio</h2><span class="sub" id="pricesrc"></span></div>
+        <div class="cardbody" style="padding-top:0;border-top:none;border-bottom:1px solid var(--line)"><div class="stats" id="pp-stats"></div></div>
         <div class="cardbody" style="border-bottom:1px solid var(--line)">
           <div class="row" style="justify-content:space-between"><h3>Account value</h3><span class="sub" id="eq-note"></span></div>
           <div class="chart" id="eq-chart"></div>
         </div>
-        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Avg cost</th><th class="num">Now</th><th class="num">Value</th><th class="num">P&amp;L</th><th class="num">Trailing stop</th><th>GTT stop</th><th><span class="sr-only">Close position</span></th></tr></thead><tbody id="positions"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th class="num">Trailing stop</th><th>GTT stop</th><th><span class="sr-only">Close position</span></th></tr></thead><tbody id="positions"></tbody><tfoot id="pp-foot"></tfoot></table></div>
         <form class="cardbody" id="tk-form" style="border-top:1px solid var(--line)">
           <h3>Paper order</h3>
           <div class="row">
@@ -547,13 +548,16 @@
       : `<tr><td colspan="7" class="empty">No disclosed deals by ${esc(s.watch_investor)} in the window.</td></tr>`;
 
     $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
-    $("positions").innerHTML = S.positions.length ? S.positions.map(p => `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
+    renderPaperStats(a, perf);
+    const plTone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
+    $("positions").innerHTML = S.positions.length ? S.positions.map(p => { const inv = p.qty * p.avg_entry_price, pc = inv ? p.unrealized_pl / inv : null; return `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
-        <td class="num">${money(p.market_value)}</td><td class="num ${p.unrealized_pl>0?"up":p.unrealized_pl<0?"down":""}">${signed(p.unrealized_pl)}</td>
+        <td class="num">${money(inv)}</td><td class="num">${money(p.market_value)}</td>
+        <td class="num ${plTone(p.unrealized_pl)}">${signed(p.unrealized_pl)}</td><td class="num ${plTone(pc)}">${pc == null ? "n/a" : spctP(pc)}</td>
         <td class="num ${p.stop!=null && p.current_price!=null && p.current_price<=p.stop?"down":""}">${p.stop!=null?money(p.stop,2):"n/a"}</td>
         <td>${gttCell(p, c)}</td>
-        <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>`).join("")
-      : `<tr><td colspan="9" class="empty">No practice trades yet. ${s.auto_trade ? "The agent buys here when a check finds a good deal." : "Place a paper order below, or use a recommendation's paper-buy button."}</td></tr>`;
+        <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>`; }).join("")
+      : `<tr><td colspan="11" class="empty">No practice trades yet. ${s.auto_trade ? "The agent buys here when a check finds a good deal." : "Place a paper order below, or use a recommendation's paper-buy button."}</td></tr>`;
 
     $("recs").innerHTML = S.recommendations.length ? S.recommendations.map(r => `<article class="card rec ${esc(r.action)} ${r.dismissed?"dismissed":""}">
         <div class="row" style="gap:8px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>
@@ -766,6 +770,26 @@
       series: [{name: "Strategy", color: C.s1, values: h.map(p => p.equity)}, {name: esc(f.benchmark), color: C.s2, values: h.map(p => p.bench)}],
       refs: [{y: f.capital, label: "Capital"}], label: "Forward test value over time",
       empty: "The chart starts after the first daily point."});
+  }
+
+  // Paper account summary: what the open positions cost, what they are worth, and the
+  // whole account (cash + positions) against the practice money it started with.
+  const spctP = v => (v >= 0 ? "+" : "\u2212") + Math.abs(v * 100).toFixed(2) + "%";
+  function renderPaperStats(a, perf){
+    const el = $("pp-stats"), foot = $("pp-foot"), ps = S.positions || [];
+    const tone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
+    const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
+    if(!a){ el.innerHTML = ""; foot.innerHTML = ""; return; }
+    const inv = ps.reduce((t, p) => t + p.qty * p.avg_entry_price, 0);
+    const val = ps.reduce((t, p) => t + (p.market_value || 0), 0);
+    const pl = val - inv, plPct = inv ? pl / inv : null;
+    el.innerHTML = stat("Invested", money(inv), ps.length ? `in ${ps.length} stock${ps.length === 1 ? "" : "s"}` : "nothing bought yet")
+      + stat("Value now", money(val), "at current prices")
+      + stat("Profit / loss", signed(pl), plPct == null ? "on open positions" : `${spctP(plPct)} on open positions`, tone(pl))
+      + stat("Account total", money(a.equity), perf ? `cash ${money(a.cash)} · ${signed(perf.pnl)} since start, charges included` : `cash ${money(a.cash)}`, perf ? tone(perf.pnl) : "");
+    foot.innerHTML = ps.length ? `<tr><td>Total<div class="sub" style="font-weight:400;font-size:12px">${ps.length} position${ps.length === 1 ? "" : "s"}</div></td>
+        <td></td><td></td><td></td><td class="num">${money(inv)}</td><td class="num">${money(val)}</td>
+        <td class="num ${tone(pl)}">${signed(pl)}</td><td class="num ${tone(plPct)}">${plPct == null ? "n/a" : spctP(plPct)}</td><td></td><td></td><td></td></tr>` : "";
   }
 
   function renderEquity(){

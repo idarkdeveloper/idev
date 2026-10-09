@@ -424,3 +424,26 @@ def test_server_ignores_browser_closing_connection_early(capsys):
     except ValueError:
         srv.handle_error(None, ("127.0.0.1", 1))
     assert "real bug" in capsys.readouterr().err
+
+
+def test_equity_curve_ignores_points_from_before_the_paper_account(tmp_path):
+    from trading_agent.broker import LocalPaperBroker
+    from trading_agent.state import State
+
+    st = State(tmp_path / "state.json")
+    st.data["equity_history"] = [{"at": "2026-10-09T16:21:03+00:00", "equity": 179426.0, "cash": 0.0, "positions": 16}]
+    b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=100_000, price_fn=lambda s: 100.0)
+    assert b.created_at > "2026-10-09T16:21:03+00:00"
+    assert st.equity_history(b.created_at) == [] and st.equity_stats(b.created_at) is None
+    st.record_equity(100_000, 100_000, 0, since=b.created_at)
+    assert [p["equity"] for p in st.data["equity_history"]] == [100_000]
+
+
+def test_old_paper_file_dates_itself_from_its_first_order(tmp_path):
+    import json
+    from trading_agent.broker import LocalPaperBroker
+
+    path = tmp_path / "pb.json"
+    path.write_text(json.dumps({"cash": 1.0, "starting_cash": 1.0, "positions": {}, "prices": {},
+                                "orders": [{"filled_at": "2026-10-09T17:54:09+00:00"}]}))
+    assert LocalPaperBroker(path).created_at == "2026-10-09T17:54:09+00:00"

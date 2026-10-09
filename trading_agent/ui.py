@@ -165,6 +165,7 @@ class App:
         except Exception as e:  # noqa: BLE001
             acct, positions, broker_error = None, [], str(e)
         perf = self.broker.performance() if isinstance(self.broker, LocalPaperBroker) else None
+        since = self.broker.created_at if isinstance(self.broker, LocalPaperBroker) else None
         gtt = st.data.get("gtt_stops", {})
         for pos in positions:  # trailing-stop level and GTT status for the table
             g = gtt.get(pos["symbol"].upper())
@@ -206,8 +207,8 @@ class App:
             "screen": self.last_screen,
             "factor_backtest": self.last_factor_bt,
             "signal_lab": self.last_signal_lab,
-            "equity_history": st.data.get("equity_history", [])[-1000:],
-            "equity_stats": st.equity_stats(),
+            "equity_history": st.equity_history(since)[-1000:],
+            "equity_stats": st.equity_stats(since),
             "costs": _cost_table(self.settings.market),
             "settings": {
                 "market": s.market, "currency": s.currency, "watch_investor": s.watch_investor,

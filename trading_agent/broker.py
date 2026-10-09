@@ -23,6 +23,10 @@ from typing import Any, Protocol
 import requests
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 @dataclass
 class Position:
     symbol: str
@@ -172,6 +176,10 @@ class LocalPaperBroker:
         self.cost_model = cost_model  # object with .charges(side, notional); None = free
         self._state = self._load(starting_cash)
         self._state.setdefault("fees_paid", 0.0)
+        if not self._state.get("created_at"):
+            # Older files: the account is at least as old as its first order.
+            times = [o.get("filled_at") for o in self._state.get("orders", []) if o.get("filled_at")]
+            self._state["created_at"] = min(times) if times else _utc_now()
         if self._state.get("mirrors"):
             self.name = f"local-paper (mirrors {self._state['mirrors']})"
 
@@ -179,11 +187,16 @@ class LocalPaperBroker:
         if self.path.exists():
             return json.loads(self.path.read_text())
         return {"cash": float(starting_cash), "starting_cash": float(starting_cash),
-                "positions": {}, "orders": [], "prices": {}}
+                "positions": {}, "orders": [], "prices": {}, "created_at": _utc_now()}
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self._state, indent=2))
+
+    @property
+    def created_at(self) -> str:
+        """When this paper account started (UTC ISO time); earlier equity points are not its."""
+        return self._state["created_at"]
 
     @property
     def is_untouched_mirror(self) -> bool:

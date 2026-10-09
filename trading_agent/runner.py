@@ -114,7 +114,7 @@ def record_equity(state: State, broker: Any) -> None:
     try:
         acct = broker.account()
         n = len(broker.positions())
-        state.record_equity(acct.equity, acct.cash, n)
+        state.record_equity(acct.equity, acct.cash, n, since=getattr(broker, "created_at", None))
     except Exception as e:  # noqa: BLE001
         log.debug("equity point skipped: %s", e)
 

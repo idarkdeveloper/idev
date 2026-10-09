@@ -34,14 +34,15 @@ class State:
         info = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **info}
         self.data["runs"] = (self.data["runs"] + [info])[-200:]
 
-    def record_equity(self, equity: float, cash: float, positions: int, min_gap_s: int = 600) -> bool:
+    def record_equity(self, equity: float, cash: float, positions: int, min_gap_s: int = 600,
+                      since: str | None = None) -> bool:
         """Append an equity point for the paper-account curve.
 
         Points closer than ``min_gap_s`` to the previous one replace it, so frequent
         checks don't bloat the history while the latest value stays current.
         """
         now = datetime.now(timezone.utc)
-        hist = self.data.setdefault("equity_history", [])
+        hist = self.equity_history(since)
         point = {"at": now.isoformat(timespec="seconds"), "equity": round(float(equity), 2),
                  "cash": round(float(cash), 2), "positions": int(positions)}
         if hist:
@@ -56,8 +57,17 @@ class State:
         self.data["equity_history"] = hist[-5000:]
         return True
 
-    def equity_stats(self) -> dict[str, Any] | None:
-        return equity_stats(self.data.get("equity_history", []))
+    def equity_history(self, since: str | None = None) -> list[dict[str, Any]]:
+        """The curve, dropping points from before ``since`` (a reset or replaced paper account)."""
+        hist = self.data.setdefault("equity_history", [])
+        if since:
+            kept = [p for p in hist if _parse(p.get("at")) >= _parse(since)]
+            if len(kept) != len(hist):
+                hist = self.data["equity_history"] = kept
+        return hist
+
+    def equity_stats(self, since: str | None = None) -> dict[str, Any] | None:
+        return equity_stats(self.equity_history(since))
 
     def record_recommendation(self, rec: dict[str, Any]) -> None:
         rec = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **rec}
@@ -91,3 +101,12 @@ def equity_stats(hist: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"peak": peak, "peak_at": peak_at, "drawdown_now": last / peak - 1 if peak > 0 else 0.0,
             "max_drawdown": mdd, "max_drawdown_at": mdd_at, "max_drawdown_from": trough_peak,
             "points": len(hist)}
+
+
+
+def _parse(at: Any) -> datetime:
+    try:
+        d = datetime.fromisoformat(str(at))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
