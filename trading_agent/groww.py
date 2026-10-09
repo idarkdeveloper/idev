@@ -32,17 +32,16 @@ from datetime import datetime, timedelta, time as dtime
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
 
 import requests
 
 from .broker import Account, Position
+from .timezones import IST
 
 log = logging.getLogger(__name__)
 
 BASE_URL = "https://api.groww.in/v1"
 INSTRUMENT_CSV_URL = "https://growwapi-assets.groww.in/instruments/instrument.csv"
-IST = ZoneInfo("Asia/Kolkata")
 TOKEN_ROLLOVER = dtime(6, 0)  # Groww access tokens expire at 06:00 IST
 DEFAULT_TICK = 0.05
 SEGMENT = "CASH"

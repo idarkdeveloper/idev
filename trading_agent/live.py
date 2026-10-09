@@ -16,13 +16,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
 
 from .risk import atr, trailing_stop
 from .state import State
+from .timezones import IST
 
 log = logging.getLogger(__name__)
-IST = ZoneInfo("Asia/Kolkata")
 
 ORDER_FIELDS = ("id", "groww_order_id", "order_reference_id", "symbol", "side", "qty", "order_type",
                 "limit_price", "ltp", "order_status", "filled_quantity", "average_fill_price", "remark",

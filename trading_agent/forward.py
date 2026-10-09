@@ -28,13 +28,12 @@ import math
 from datetime import datetime, time as dtime
 from pathlib import Path
 from typing import Any, Callable
-from zoneinfo import ZoneInfo
 
 from .broker import LocalPaperBroker
 from .factor_backtest import INDEX_FUNDS
+from .timezones import IST
 
 log = logging.getLogger(__name__)
-IST = ZoneInfo("Asia/Kolkata")
 CLOSE_DONE = dtime(15, 40)  # NSE closes 15:30; prices settle a few minutes later
 TRIM_ABOVE = 1.25  # trim a kept name only above 125% of its target weight
 
