@@ -589,11 +589,11 @@ window.TA = (function(){
   function stockColors(){
     const c = (t, f) => resolveColor(t, f);
     const x = {
-      bg: c("--color-surface", "#232532"), text: c("--color-muted", "#9a9ba5"), grid: c("--color-rule", "#2c2e3b"),
-      border: c("--color-divider", "#3a3c4a"), ink: c("--color-text", "#e9e9ed"),
-      up: c("--color-profit", "#3ddc84"), down: c("--color-loss", "#ff6b6b"),
-      accent: c("--color-accent", "#9184d9"), amber: c("--color-replay", "#e0b354"), teal: c("--color-demo", "#56c2b0"),
-      accent2: c("--color-accent-2", "#a7a1db")
+      bg: c("--color-surface", "currentColor"), text: c("--color-muted", "currentColor"), grid: c("--color-rule", "currentColor"),
+      border: c("--color-divider", "currentColor"), ink: c("--color-text", "currentColor"),
+      up: c("--color-profit", "currentColor"), down: c("--color-loss", "currentColor"),
+      accent: c("--color-accent", "currentColor"), amber: c("--color-replay", "currentColor"), teal: c("--color-demo", "currentColor"),
+      accent2: c("--color-accent-2", "currentColor")
     };
     x.volUp = withAlpha(x.up, 0.35); x.volDown = withAlpha(x.down, 0.35);
     x.band = withAlpha(x.text, 0.8);

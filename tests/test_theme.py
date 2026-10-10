@@ -172,7 +172,9 @@ def test_light_tokens_actually_differ():
 
 # ---------- no colour literals in page code ----------
 LITERAL = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
-LITERAL_ALLOWLIST: dict[str, set[str]] = {}   # file -> literal strings allowed (none today)
+# file -> literal strings allowed. common.js formats the RESOLVED value of a CSS token for the chart canvas (the chart
+# library cannot read var() or color-mix()); the function names appear, no colour value does.
+LITERAL_ALLOWLIST: dict[str, set[str]] = {"common.js": {"rgb(", "rgba("}}
 
 
 @pytest.mark.parametrize("name", ["index.html", "replay.html", "common.js", "replay.js"])
