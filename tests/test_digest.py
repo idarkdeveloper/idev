@@ -1369,7 +1369,7 @@ def test_the_prompt_states_the_rule_and_the_regime_label_and_the_validator_holds
             "why": ["Nifty is in a downtrend (50-day average below the 200-day, price below both)"]}
     data = {"kind": "morning", "date": "2026-10-12", "mood": mood}
     prompt = digest_writer.build_prompt("morning", data)
-    assert "Market regime label: neutral." in prompt and "New buying is OFF" in prompt
+    assert "Market regime label: neutral." in prompt and "No new buys today" in prompt
     assert "the rule that fired: Nifty is in a downtrend" in prompt and "never call the regime risk-off or risk-on" in prompt
     assert not digest_writer.validate_summary("The market is risk-off, so there are no new buys.", data)[0]
     assert not digest_writer.validate_summary("It is a risk on day.", data)[0]
@@ -1567,7 +1567,7 @@ def test_the_writer_gets_only_the_headline_facts_and_a_short_answer_is_asked_for
     assert facts["deals"]["total"] == 15
     full = len(json.dumps(data))
     prompt = digest_writer.build_prompt("morning", data)
-    assert len(json.dumps(facts)) < full / 2 and len(prompt) < 4500, (full, len(prompt))
+    assert len(json.dumps(facts)) < full / 2 and len(prompt) < 5000, (full, len(prompt))
     assert "at most 5 plain sentences, under 700 characters" in digest_writer.SYSTEM and digest_writer.MAX_CHARS == 1200
     sess = ollama("The market is neutral and there are no new buys because Nifty is in a downtrend.")
     text, who = digest_writer.write_summary("morning", data, s, session=sess, client=Claude())
@@ -1639,7 +1639,7 @@ def test_symbols_stay_checked_in_any_case_and_name_words_only_when_capitalised_m
     word = only_names[0].capitalize()
     kn, ks = ctx.known, ctx.known_symbols
     assert not digest_writer.validate_summary(f"Today {word} looks steady.", MORNING_FACTS, kn, ks)[0]
-    assert digest_writer.validate_summary(f"{word} looks steady.", MORNING_FACTS, kn, ks)[0]               # sentence-initial: not checked
+    assert not digest_writer.validate_summary(f"{word} looks steady.", MORNING_FACTS, kn, ks)[0]           # sentence-initial is checked too
     assert digest_writer.validate_summary(f"Today {word.lower()} looks steady.", MORNING_FACTS, kn, ks)[0]  # lower case: not checked
     sym = next(x for x in sorted(ctx.known_symbols) if x not in ("INFY",) and x.lower() not in digest.english_words() and len(x) >= 5)
     assert not digest_writer.validate_summary(f"Today {sym.lower()} looks steady.", MORNING_FACTS, kn, ks)[0]   # a symbol, any case
@@ -1807,3 +1807,104 @@ def test_the_watch_list_is_cards_on_a_phone_and_the_mood_has_no_duplicated_indic
     assert "Nifty: 22,520, +1.3% today, −3.9% in 20 days, below its 200-day average" in mood_text
     for dup in ("S&P", "VIX", "USD/INR", "Brent"):
         assert dup not in mood_text and dup not in html.split("Market mood")[1].split("Holdings to watch")[0], dup
+
+
+# ===================== fix round 5 =====================
+def test_groww_and_the_apps_own_words_are_never_company_names():
+    ctx = fixture_ctx()
+    assert "GROWW" in ctx.known_symbols                                   # a real NSE symbol (Billionbrains Garage Ventures)
+    evening = {"kind": "evening", "date": "2026-10-12", "groww": {"value": 1000.0, "invested": 900.0, "pl": 100.0, "pl_pct": 11.1,
+                                                                   "day_pl": 50.0, "day_pct": 5.0}}
+    for text in ("Your Groww portfolio gained ₹50 today.", "Your Groww portfolio is worth ₹1,000.",
+                 "Nifty and Sensex were steady and your practice holdings are fine."):
+        ok, why = digest_writer.validate_summary(text, evening, ctx.known, ctx.known_symbols)
+        assert ok, (text, why)
+
+
+def test_the_prompts_own_sentences_pass_the_validator():
+    off = {"kind": "morning", "date": "2026-10-12", "mood": {"regime": "neutral", "no_new_buys": True,
+                                                              "why": ["Nifty is in a downtrend"], "rules": "no new buys when ..."}}
+    on = {**off, "mood": {**off["mood"], "no_new_buys": False}}
+    assert "No new buys today" in digest_writer.build_prompt("morning", off) and "New buys are allowed" in digest_writer.build_prompt("morning", on)
+    for text in ("No new buys today because Nifty is in a downtrend.", "No new buying is allowed today.", "Fresh buying is off today.",
+                 "The stop is below your buy price.", "There are no fresh buying signals."):
+        ok, why = digest_writer.validate_summary(text, off)
+        assert ok, (text, why)
+    assert digest_writer.validate_summary("New buys are allowed today.", on)[0]
+    for text in ("New buying is allowed.", "Buying is allowed today.", "New buys are allowed today.", "Purchases are fine today.",
+                 "Purchase is fine today."):
+        assert not digest_writer.validate_summary(text, off)[0], text
+
+
+@pytest.mark.parametrize("text", [
+    "Selling looks sensible.", "Exiting TCS now.", "Purchase INFY.", "INFY looks attractive.", "ABC is worth a look.",
+    "That makes sense.", "Go ahead.", "Picking up shares.", "Pick up ABC.", "It is a good time to act.", "A good day to look.",
+    "Switch to cash.", "Switching into gold.", "Swap into gold.", "ABC is poised.", "ABC is likely to rise.",
+    "Analysts expect shares to climb.", "Experts expected ABC to fall."])
+def test_more_advice_synonyms_and_forecasts_are_rejected(text):
+    data = {"kind": "morning", "date": "2026-10-12", "buy_ideas": {"ideas": [{"symbol": "ABC", "price": 1.0}]}}
+    assert not digest_writer.validate_summary(text, data, {"ABC", "INFY"})[0], text
+
+
+def test_wall_is_an_ordinary_opener():
+    ctx = fixture_ctx()
+    assert digest_writer.validate_summary("Wall Street was steady.", MORNING_FACTS, ctx.known, ctx.known_symbols)[0]
+
+
+def test_company_names_in_the_facts_let_the_summary_use_them(s):
+    data = {"kind": "morning", "date": "2026-10-12", "watch": {"items": [
+        {"symbol": "INFY", "name": "Infosys Limited", "source": "Groww", "reasons": ["fell 6.0% in the last session"]},
+        {"symbol": "COALINDIA", "name": "Coal India Limited", "source": "Practice", "reasons": ["x"]},
+        {"symbol": "VEDL", "name": "Vedanta Limited", "source": "Groww", "reasons": ["y"]}], "total": 3}}
+    facts = digest_writer.summary_facts("morning", data)
+    assert facts["watch"]["items"][0]["name"] == "Infosys Limited"
+    ctx = fixture_ctx()
+    ctx.known |= {"INFOSYS", "VEDANTA", "COAL"}
+    for text in ("Infosys fell 6.0% in the last session.", "Today Coal India and Vedanta are on the list."):
+        ok, why = digest_writer.validate_summary(text, facts, ctx.known, ctx.known_symbols | {"VEDANTA"})
+        assert ok, (text, why)
+    ev = digest_writer.summary_facts("evening", {"kind": "evening", "date": "d", "groww": {"value": 1.0, "holdings": [
+        {"symbol": "A", "name": "Alpha Limited", "day_pct": 1.0}, {"symbol": "B", "name": "Beta Limited", "day_pct": -1.0}],
+        "no_price": []}, "news": {"items": [{"symbol": "A", "name": "Alpha Limited", "title": "t", "sentiment": "negative"}], "total": 1}})
+    assert ev["groww"]["best"][0]["name"] == "Alpha Limited" and ev["news"]["items"][0]["name"] == "Alpha Limited"
+
+
+def test_a_validator_crash_is_a_rejection_never_a_lost_email(s, monkeypatch, caplog):
+    def boom(*a, **k):
+        raise RuntimeError("bug")
+    monkeypatch.setattr(digest_writer, "validate_summary", boom)
+    with caplog.at_level(logging.ERROR, logger="trading_agent"):
+        assert digest_writer.write_summary("morning", DATA, s, session=ollama(), client=Claude()) == (None, "none")
+    assert any("validation failed" in r.getMessage() for r in caplog.records)
+
+
+def test_nifty_it_and_nifty_bank_do_not_take_niftys_trend():
+    d = {"kind": "morning", "date": "2026-10-12", "world": {"region_lines": ["US: uptrend (1 of 1 up)"], "trends": {"Nifty": "UP"}}}
+    assert digest_writer.validate_summary("Nifty is in an uptrend.", d)[0]
+    assert digest_writer.validate_summary("Nifty IT is in a downtrend and Nifty Bank is mixed.", d)[0]
+    assert not digest_writer.validate_summary("Nifty is in a downtrend.", d)[0]
+
+
+def test_one_card_per_stock_when_it_is_in_both_groww_and_practice(s):
+    pb = LocalPaperBroker(s.state_dir / "lt.json", starting_cash=100_000, price_fn=lambda x: 100.0)
+    pb.seed([Position("LT", 10, 200.0, 100.0)])                          # a copy bought dearer: a reason only here
+    rows = [holding("LT", 10, 100.0, 100.0)]
+    ctx = ctx_for(s, prices=Prices({"LT": bars(100, step=0.002)}), groww=lambda: portfolio(rows), practice=pb)
+    w = digest._watch(ctx, MON.date())
+    lt = [i for i in w["items"] if i["symbol"] == "LT"]
+    assert len(lt) == 1 and lt[0]["source"] == "Groww" and lt[0]["also_practice"] is True and w["total"] == 1
+    assert any("well past any stop" in r for r in lt[0]["reasons"])
+    mail = digest_render.render({**digest._header(ctx, "morning"), "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"),
+                                 "watch": w, "deals": digest.unavailable("x")})
+    assert mail["html"].count("LT ₹100.00") == 1 and "Groww · also in practice" in mail["html"]
+
+
+def test_a_copy_matches_with_average_prices_within_a_tenth_of_a_percent(s):
+    after = lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST)
+    rows = [holding("VEDPOWER", 120, 47.76, 50.0), holding("BND", 2, 1000.0, None, kind="bond")]
+    for avg, same in ((47.75, True), (47.0, False)):
+        pb = LocalPaperBroker(s.state_dir / f"c{avg}.json", starting_cash=100_000, price_fn=lambda x: 50.0)
+        pb.seed([Position("VEDPOWER", 120, avg, 50.0), Position("BND", 2, 1000.0, None)])
+        e = evening_report(ctx_for(s, practice=pb, groww=lambda: portfolio(rows), prices=Prices({}), now=after))
+        assert bool(e["practice"]["same_as_groww"]) is same, avg
+        assert bool(e["practice"]["positions"]) is (not same)

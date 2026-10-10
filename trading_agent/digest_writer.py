@@ -18,7 +18,9 @@ log = logging.getLogger(__name__)
 OLLAMA_TIMEOUT = 90.0
 CLAUDE_TIMEOUT = 60.0
 MAX_CHARS = 1200
-ALLOWED_WORDS = {"DXY", "KOSPI", "ASX", "NASDAQ", "SPX", "NDX", "DJIA", "UP", "DOWN", "UK", "FUT", "NSE", "BSE", "IST", "INR", "ATR", "VIX", "USD", "GTT", "DMA", "ETF", "SEBI", "RBI", "US", "IT", "AI",
+# the app's own vocabulary is never a company name, even when a stock has the same name (GROWW is an NSE symbol)
+APP_WORDS = {"GROWW", "NIFTY", "SENSEX", "PRACTICE", "PORTFOLIO", "HOLDINGS", "HOLDING"}
+ALLOWED_WORDS = {"GROWW", "NIFTY", "SENSEX", "DXY", "KOSPI", "ASX", "NASDAQ", "SPX", "NDX", "DJIA", "UP", "DOWN", "UK", "FUT", "NSE", "BSE", "IST", "INR", "ATR", "VIX", "USD", "GTT", "DMA", "ETF", "SEBI", "RBI", "US", "IT", "AI",
                  "FII", "DII", "NIFTY", "PM", "AM"}
 ALLOWED_INTS = {50, 100, 200}  # "200-day average" style terms
 
@@ -70,7 +72,7 @@ def summary_facts(kind: str, data: dict[str, Any]) -> dict[str, Any]:
         items = w.get("items") or []
         out["watch"] = w if "unavailable" in w else {
             "total": w.get("total", len(items)), "healthy": w.get("healthy"), "checked": w.get("checked"),
-            "items": [{"symbol": i.get("symbol"), "source": i.get("source"), "reasons": (i.get("reasons") or [])[:3]}
+            "items": [{"symbol": i.get("symbol"), "name": i.get("name"), "source": i.get("source"), "reasons": (i.get("reasons") or [])[:3]}
                       for i in items[:5]]}
     g = data.get("groww")
     if isinstance(g, dict):
@@ -80,8 +82,8 @@ def summary_facts(kind: str, data: dict[str, Any]) -> dict[str, Any]:
             rows = [h for h in g.get("holdings") or [] if h.get("day_pct") is not None]
             out["groww"] = {**{k: g[k] for k in ("value", "invested", "pl", "pl_pct", "day_pl", "day_pct", "saved") if k in g},
                             "no_price": len(g.get("no_price") or []),
-                            "best": [{"symbol": h["symbol"], "day_pct": h["day_pct"]} for h in rows[:2]],
-                            "worst": [{"symbol": h["symbol"], "day_pct": h["day_pct"]} for h in rows[-2:]] if len(rows) > 2 else []}
+                            "best": [{"symbol": h["symbol"], "name": h.get("name"), "day_pct": h["day_pct"]} for h in rows[:2]],
+                            "worst": [{"symbol": h["symbol"], "name": h.get("name"), "day_pct": h["day_pct"]} for h in rows[-2:]] if len(rows) > 2 else []}
     p = data.get("practice")
     if isinstance(p, dict):
         out["practice"] = _take(p, ("equity", "day_change", "day_change_pct", "since", "since_change", "since_change_pct",
@@ -89,7 +91,7 @@ def summary_facts(kind: str, data: dict[str, Any]) -> dict[str, Any]:
     n = data.get("news")
     if isinstance(n, dict):
         out["news"] = n if "unavailable" in n else {"total": n.get("total", len(n.get("items") or [])),
-                                                     "items": [{"symbol": i.get("symbol"), "title": i.get("title"), "sentiment": i.get("sentiment")}
+                                                     "items": [{"symbol": i.get("symbol"), "name": i.get("name"), "title": i.get("title"), "sentiment": i.get("sentiment")}
                                                                for i in (n.get("items") or [])[:5]]}
     d = data.get("deals")
     if isinstance(d, dict):
@@ -108,7 +110,7 @@ def build_prompt(kind: str, data: dict[str, Any], trimmed: bool = False) -> str:
     if mood:
         label = str(mood.get("regime") or "unknown").replace("_", "-")
         why = "; ".join(mood.get("why") or []) or "none"
-        rule = (f"Market regime label: {label}. New buying is {'OFF' if mood.get('no_new_buys') else 'allowed'}; "
+        rule = (f"Market regime label: {label}. {'No new buys today' if mood.get('no_new_buys') else 'New buys are allowed'}; "
                 f"the rule that fired: {why}. Use exactly this label and reason; never call the regime risk-off or "
                 f"risk-on unless that is the label above.\n")
     what = ("the morning brief: the market mood, world markets and risk gauges (current readings, never a forecast), buy ideas, holdings to watch and new deals" if kind == "morning"
@@ -134,11 +136,14 @@ _ADVICE = [re.compile(p, re.I) for p in (
     r"\bwill\s+(rise|fall|double|triple|soar|crash|jump|drop|go\s+up|go\s+down)\b", r"\bshould\s+(buy|sell)\b",
     r"\b(?:will|going to|expected to|likely to|set to)\s+(?:open|gap|rally|climb|slide|jump)\b", r"\bforecast\w*",
     r"\b(?:may|could|might)\s+(?:rise|fall|rebound|bounce|recover)\b", r"\bmultibagger\b", r"\bsure[\s-]?shot\b", r"\b(buy|sell)\s+now\b", r"\bbuy\s+(more|aggressively)\b")]
-_FIXED_NOUNS = re.compile(r"\b(buy ideas?|no new buys?|new buys?|would pass|buys? appear|today's buys|stop[- ]loss sells?|sells? today)\b", re.I)
+_FIXED_NOUNS = re.compile(r"\b(buy ideas?|buy price|no new buys?|new buys?|would pass|buys? appear|today's buys|stop[- ]loss sells?|sells? today|"
+                          r"(?:no|fresh|new) buying is (?:off|allowed)|no (?:new|fresh) buying|new buying)\b", re.I)
 _REALLY_ADVICE = re.compile(
     r"\b(consider\w*|recommend\w*|advis\w*|prudent|may wish|might want|should|ought|suggest\w*|trim\w*|reduc\w*|"
     r"accumulat\w*|add to|avoid\w*|book(?:ing)? (?:profits?|gains?)|get out|step(?:ping)? away|off the table|"
-    r"on dips|strong (?:buy|sell)|load up|buy(?:ing)?|sell|take (?:some )?(?:money|profits?|gains?)|lighten\w*|hold off|cut|close your|let go|rotat\w+|"
+    r"on dips|strong (?:buy|sell)|load up|buy(?:ing)?|sell(?:ing)?|exiting|purchas\w*|attractive|worth a look|makes sense|sensible|go ahead|pick(?:ing)? up|"
+    r"good (?:day|time) to|switch(?:ing)? (?:to|into)|swap\w*|poised|likely to|expect\w*\s+(?:\w+\s+)?to|"
+    r"take (?:some )?(?:money|profits?|gains?)|lighten\w*|hold off|cut|close your|let go|rotat\w+|"
     r"entry point|rebound\w*|bounce\w*|oversold|overbought|wise|keep an eye|bullish|bearish|watch \w+ closely)\b", re.I)
 # "short" is advice only as a verb: "short TCS", "go short", "short-sell"; "short-term" is plain English
 _SHORT_VERB = re.compile(r"(?i:\bshort)\s+(?:the\s+)?[A-Z][A-Z0-9&]{2,}\b|(?i:\b(?:go|going|goes|went)\s+short\b|\bshort[- ]sell\w*)")
@@ -220,7 +225,12 @@ def _trend_conflict(text: str, data: dict[str, Any]) -> str | None:
         if not said:
             continue
         for name, want in expect.items():
-            hit = re.search(r"\bUS\b", clause) if name == "us" else re.search(rf"\b{re.escape(name)}\b", clause, re.I)
+            if name == "us":
+                hit = re.search(r"\bUS\b", clause)
+            elif name == "nifty":   # "Nifty IT" and "Nifty Bank" are other indices
+                hit = re.search(r"\bnifty\b(?!\s+(?:it|bank)\b)", clause, re.I)
+            else:
+                hit = re.search(rf"\b{re.escape(name)}\b", clause, re.I)
             if hit and want not in said:
                 return f"says {', '.join(sorted(said))} for {name}, but its trend is {want}"
     return None
@@ -275,7 +285,7 @@ def validate_summary(text: str | None, data: dict[str, Any], known: Any = None, 
     for tok in _TOKEN.findall(text):
         if tok not in symbols and tok not in names and tok not in ALLOWED_WORDS and tok not in textw and not tok.isdigit():
             return False, f"mentions {tok}, which is not a listed symbol"
-    allowed_ci = symbols | names | ALLOWED_WORDS
+    allowed_ci = symbols | names | ALLOWED_WORDS | APP_WORDS
     allowed_ci |= textw
     from .digest import COMMON_WORDS, english_words
     eng = english_words()
@@ -294,8 +304,8 @@ def validate_summary(text: str | None, data: dict[str, Any], known: Any = None, 
                     continue
                 if not (w.isupper() and len(w) > 1) and (w.lower() in eng or up in COMMON_WORDS):
                     continue   # "oil prices" is English; an upper-case OIL is still the stock
-                if in_names and (not w[0].isupper() or m.start() == first_at):
-                    continue   # a company-name word is only checked when capitalised in mid-sentence
+                if in_names and not w[0].isupper():
+                    continue   # a company-name word is only checked when it is capitalised
                 return False, f"mentions {w}, which is not in the data"
     if _NUMWORDS.search(text):
         return False, "spells out a number above ten"
@@ -333,9 +343,9 @@ def validate_summary(text: str | None, data: dict[str, Any], known: Any = None, 
             return False, f"calls the regime risk-{m.group(1).lower()}, but it is {str(regime or 'not known').replace('_', '-')}"
     mood0 = data.get("mood") if isinstance(data.get("mood"), dict) else {}
     if mood0.get("no_new_buys"):   # a no-buy day: the summary must not say buying is allowed
-        for m in re.finditer(r"\b(?:new\s+)?(?:buy|buys|buying)\b", text, re.I):
+        for m in re.finditer(r"\b(?:new\s+)?(?:buy|buys|buying|purchase|purchases|purchasing)\b", text, re.I):
             before, after = text[:m.start()].rstrip().lower(), text[m.end():].lstrip().lower()
-            if re.search(r"(?:\bno|\bnot|n't|\bwithout)$", before) or after.startswith(("idea", "ideas")) or "would pass" in after[:30]:
+            if re.search(r"(?:\bno|\bnot|n't|\bwithout)(?:\s+(?:new|fresh))?$", before) or after.startswith(("idea", "ideas", "price", "is off", "are off", "is not", "is switched off")) or "would pass" in after[:30]:
                 continue
             return False, "talks about buying on a day when new buying is off"
     why = _trend_conflict(text, data) or _direction_conflict(text, data)
@@ -400,7 +410,11 @@ def write_summary(kind: str, data: dict[str, Any], settings: Any, *, session: An
         if text is None:
             continue
         text = unicodedata.normalize("NFKC", text)
-        ok, why = validate_summary(text, facts, known, known_symbols)
+        try:
+            ok, why = validate_summary(text, facts, known, known_symbols)
+        except Exception as e:  # noqa: BLE001 - a validator bug must not cost the email: reject and carry on
+            ok, why = False, f"validator error {type(e).__name__}: {e}"
+            log.exception("digest summary validation failed")
         if ok:
             return " ".join(text.split()), name
         log.warning("digest summary from %s rejected: %s", name, why)

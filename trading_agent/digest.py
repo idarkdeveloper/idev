@@ -311,6 +311,7 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
 
 
 COMMON_WORDS = {
+    "WALL",
     "IDEA", "BANK", "POWER", "STEEL", "GOLD", "LIFE", "OIL", "GAS", "ENERGY", "FINANCE", "CAPITAL", "GLOBAL", "INDIA",
     "INDIAN", "NATIONAL", "STATE", "UNION", "INDUSTRIES", "LIMITED", "FIRST", "GENERAL", "NEXT", "SOUTH", "NORTH", "EAST",
     "WEST", "MARKET", "TRADE", "GROUP", "SERVICES", "TECH", "PHARMA", "CHEMICALS", "TEXTILES", "FOODS", "MOTORS", "HOUSING",
@@ -509,14 +510,20 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
         else:
             healthy += 1
     # one line per stock and place; a practice position with the same reasons as its Groww twin is shown once
+    groww_price = {h["symbol"]: h["price"] for h in holdings if h["source"] == "Groww"}
     groww = {i["symbol"]: i for i in items if i["source"] == "Groww"}
     kept = []
     for i in items:
-        twin = groww.get(i["symbol"]) if i["source"] == "Practice" else None
-        if twin is not None and set(twin["reasons"]) == set(i["reasons"]):
-            twin["also_practice"] = True
-        else:
+        if i["source"] != "Practice" or i["symbol"] not in groww_price:
             kept.append(i)
+            continue
+        twin = groww.get(i["symbol"])   # the same stock in both places is one card, with the reasons of both
+        if twin is None:
+            twin = {**i, "source": "Groww", "price": round(groww_price[i["symbol"]], 2), "reasons": []}
+            groww[i["symbol"]] = twin
+            kept.append(twin)
+        twin["also_practice"] = True
+        twin["reasons"] += [r for r in i["reasons"] if r not in twin["reasons"]]
     kept.sort(key=lambda i: (-len(i["reasons"]), i["loss_pct"]))   # most reasons first, then the biggest loss
     return {"items": kept[:MAX_WATCH], "total": len(kept), "more": max(0, len(kept) - MAX_WATCH), "healthy": healthy,
             "checked": len(holdings), "notes": [clean_text(n, 300) for n in notes]}
@@ -843,6 +850,7 @@ def _groww_close(ctx: DigestContext, today: date, closed: bool = True) -> dict[s
         except Exception:  # noqa: BLE001
             prev = None
         row = {"symbol": h["symbol"], "name": clean_text(h.get("name") or "", 80), "qty": h["qty"], "price": round(price, 2),
+               "avg": h.get("avg_price"),
                "value": round(h["qty"] * price, 2), "pl": h.get("pl"), "pl_pct": _pct(h.get("pl_pct")),
                "prev_close": None, "day_pct": None, "day_pl": None}
         if prev:
@@ -890,9 +898,12 @@ def _practice_close(ctx: DigestContext, today: date, closed: bool = True,
                           if p.current_price is not None and p.avg_entry_price else None})
     same = None
     if groww and positions and "holdings" in groww:
-        held = {(h["symbol"], float(h["qty"])) for h in groww["holdings"]}
-        if held and held == {(x["symbol"], float(x["qty"])) for x in positions} and \
-                len(groww["holdings"]) + len(groww.get("no_price") or []) >= len(positions):
+        g_rows = {h["symbol"]: h for h in groww["holdings"]}
+        unpriced = set(groww.get("no_price") or [])
+        p_rows = {x["symbol"]: x for x in positions}
+        if g_rows and set(g_rows) <= set(p_rows) and set(p_rows) <= set(g_rows) | unpriced and all(
+                float(g_rows[k]["qty"]) == float(p_rows[k]["qty"]) and g_rows[k].get("avg")
+                and abs(float(g_rows[k]["avg"]) - float(p_rows[k]["avg"])) <= 0.001 * float(g_rows[k]["avg"]) for k in g_rows):
             same = len(positions)
     st = _state(ctx)
     change = change_pct = since = since_change = since_pct = None
@@ -956,7 +967,8 @@ def _news_today(ctx: DigestContext, today: date) -> dict[str, Any]:
             for it in ctx.news.for_symbol(sym, name, background=True).get("items", []):
                 if not it.get("sentiment") or not _is_on(it.get("published"), today):
                     continue
-                items.append({"symbol": sym, "title": clean_text(it.get("title"), 160),
+                items.append({"symbol": sym, "name": clean_text(name or ctx.name_of.get(sym.upper()) or "", 80),
+                              "title": clean_text(it.get("title"), 160),
                               "source": clean_text(it.get("source"), 40), "sentiment": it["sentiment"],
                               "confidence": it.get("confidence"), "event": it.get("event")})
         except Exception as e:  # noqa: BLE001
