@@ -19,7 +19,7 @@ window.TA = (function(){
     if(!r.ok){ const err = new Error(j.error || r.statusText); err.data = j; err.status = r.status; throw err; }
     return j;
   };
-  const tile = (l, v, s) => `<div class="tile"><div class="label">${l}</div><div class="big">${v}</div><div class="sub">${s}</div></div>`;
+  const tile = (l, v, s, cls) => `<div class="tile"><div class="label">${l}</div><div class="big${cls ? " " + cls : ""}">${v}</div><div class="sub">${s}</div></div>`;
 
   // ---- charts: plain SVG, one y-axis, hairline grid, crosshair tooltip ----
   // Chart colours are theme tokens from nocturne.css (--chart-*), handed to SVG/CSS as var(...) strings, so a chart

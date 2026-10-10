@@ -464,7 +464,7 @@
     if(MODE === "demo"){
       const biggest = S.positions.slice().sort((x,y)=>(y.market_value||0)-(x.market_value||0))[0];
       t = [
-        a ? tile("Practice equity", money(a.equity), perf ? `<span class="${perf.pnl>=0?"up":"down"}">${signed(perf.pnl)} (${perf.pnl_pct>=0?"+":""}${perf.pnl_pct}%) since start</span>` : "") : tile("Practice equity","n/a",esc(S.broker_error||"")),
+        a ? tile("Practice equity", money(a.equity), perf ? `<span class="${perf.pnl>0?"pl-profit":perf.pnl<0?"pl-loss":""}">${signed(perf.pnl)} (${perf.pnl_pct>=0?"+":""}${perf.pnl_pct}%) since start</span>` : "") : tile("Practice equity","n/a",esc(S.broker_error||"")),
         a ? tile("Cash available", money(a.cash), esc(s.broker) + (perf && perf.fees_paid ? ` \u00b7 fees paid ${money(perf.fees_paid)}` : "") + (S.costs && S.costs.examples ? ` \u00b7 ~${S.costs.examples["25000"]} bps/round trip` : "")) : tile("Cash","n/a",""),
         tile("Open positions", String(S.positions.length), biggest && a ? `largest: ${esc(biggest.symbol)} ${Math.round(100*(biggest.market_value||0)/a.equity)}% of equity` : "none yet"),
       ];
@@ -474,10 +474,10 @@
       else if(!MP.linked) t = na("Groww isn't linked");
       else if(MP.error) t = na("Couldn't load: " + esc(MP.error));
       else {
-        const cls = MP.pl == null ? "" : MP.pl >= 0 ? "up" : "down";
+        const cls = MP.pl == null ? "" : MP.pl > 0 ? "pl-profit" : MP.pl < 0 ? "pl-loss" : "";
         const sv = MP.source === "saved" ? " (saved)" : "";   // the Groww message is shown once, on the My Groww portfolio card
         t = [tile("Holdings value" + sv, inr(MP.value), `invested ${inr(MP.invested)}`),
-             tile("Profit / loss" + sv, sinr(MP.pl), `<span class="${cls}">${spct(MP.pl_pct)} vs what you paid</span>`),
+             tile("Profit / loss" + sv, sinr(MP.pl), `<span class="${cls}">${spct(MP.pl_pct)} vs what you paid</span>`, cls),
              tile("Holdings" + sv, String(MP.holdings.length), MP.unpriced.length ? `${MP.unpriced.length} without a price` : "all priced")];
       }
     }
