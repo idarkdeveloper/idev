@@ -221,7 +221,7 @@ class Settings:
     digest_universe: str = "NIFTYMIDCAP150"
     digest_top: int = 10
     digest_writer: str = "claude"  # claude (default; the rules summary when it is unavailable or rejected) | auto (Ollama, then Claude) | ollama | rules | none
-    digest_claude_model: str = "claude-haiku-4-5"
+    digest_claude_model: str = "claude-haiku-5-5"
     digest_bulletin: bool = True  # the market bulletin (Nifty levels, global markets, commodities, concept) in the evening email
     digest_charts: bool = True  # its chart images (needs matplotlib); False sends the bulletin as text only
     # Dead-man's switch: the watch loop pings this https URL every 5 minutes (healthchecks.io style); the path is a secret.
@@ -385,7 +385,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         digest_universe=(env("DIGEST_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),
         digest_top=digest_top,
         digest_writer=digest_writer,
-        digest_claude_model=env("DIGEST_CLAUDE_MODEL") or "claude-haiku-4-5",
+        digest_claude_model=env("DIGEST_CLAUDE_MODEL") or "claude-haiku-5-5",
         digest_bulletin=_bool(env("DIGEST_BULLETIN"), True),
         digest_charts=_bool(env("DIGEST_CHARTS"), True),
         heartbeat_url=heartbeat_url,

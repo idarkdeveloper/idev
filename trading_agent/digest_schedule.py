@@ -64,6 +64,7 @@ def build_digest(kind: str, ctx: DigestContext, *, writer: str | None = None, se
 def telegram_summary(email: dict[str, Any]) -> str:
     """The short Telegram version of a built email (plain text; the notifier escapes it): the written summary and the
     key lines, buy ideas and holdings to watch. The subject (portfolio total, counts) is the message's heading."""
+    from .digest_rules import label
     lines: list[str] = []
     if email.get("summary"):
         lines += [str(email["summary"]), ""]
@@ -71,12 +72,12 @@ def telegram_summary(email: dict[str, Any]) -> str:
     ideas = data.get("buy_ideas") or {}
     if isinstance(ideas, dict) and not ideas.get("wait") and "unavailable" not in ideas and ideas.get("ideas"):
         lines.append("Buy ideas:")
-        lines += [f"- {i.get('symbol')} at {i.get('price')} ({i.get('qty')} shares, stop {i.get('stop')})"
+        lines += [f"- {label(i)} at {i.get('price')} ({i.get('qty')} shares, stop {i.get('stop')})"
                   for i in ideas["ideas"][:5]]
     watch = data.get("watch") or {}
     if isinstance(watch, dict) and "unavailable" not in watch and watch.get("items"):
         lines.append("To watch / consider selling:")
-        lines += [f"- {i.get('symbol')}: {'; '.join(str(r) for r in (i.get('reasons') or [])[:2])}" for i in watch["items"][:5]]
+        lines += [f"- {label(i)}: {'; '.join(str(r) for r in (i.get('reasons') or [])[:2])}" for i in watch["items"][:5]]
     return "\n".join(lines).strip()
 
 
