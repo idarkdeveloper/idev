@@ -53,7 +53,8 @@ const state = {
   runs: [], seen_count: 0, busy: false, running: null, jobs: [],
 };
 const portfolio = {linked: true, at: "2026-10-10T10:00:00+00:00", holdings: [{symbol: "TCS", qty: 1, sellable_qty: 1, avg_price: 100,
-  price: 110, invested: 100, value: 110, pl: 10, pl_pct: 0.1, kind: "equity"}], invested: 100, value: 110, pl: 10, pl_pct: 0.1, unpriced: []};
+  price: 110, invested: 100, value: 110, pl: 10, pl_pct: 0.1, kind: "equity"},
+  {symbol: "LAURUSLABS", qty: 50, sellable_qty: 50, avg_price: 90, price: 100, invested: 4500, value: 5000, pl: 500, pl_pct: 0.1, kind: "equity"}], invested: 100, value: 110, pl: 10, pl_pct: 0.1, unpriced: []};
 
 const preview = {symbol: "TCS", basis: "groww", in_practice: false, held: 1, qty: 1, price: 110, avg_price: 100, long_term: false,
   held_over_year: false, sale_value: 110, charges: 30, proceeds: 80, cost: 100, realised_pl: -20, fy: "2026-27",
@@ -110,6 +111,22 @@ setTimeout(async () => {
   const grammPanelAfterRefresh = el("mp-rows").innerHTML;
   await click({sellClose: ""});
   const grammClosed = el("mp-rows").innerHTML;
+  const fire = async (type, target) => { for (const fn of listeners[type] || []) await fn({target}); };
+  await click({sellOpen: "TCS", sellSrc: "groww"});          // tick on a row not yet copied, close, reopen: the tick is sent again
+  await fire("change", {id: "sp-held", checked: true});
+  await new Promise(r => setTimeout(r, 30));
+  await click({sellClose: ""});
+  requests.length = 0;
+  await click({sellOpen: "TCS", sellSrc: "groww"});
+  await new Promise(r => setTimeout(r, 30));
+  const reopenBodies = requests.filter(r => r[0].includes("sell-preview")).map(r => r[1]);
+  await click({sellClose: ""});
+  await click({sellOpen: "LAURUSLABS", sellSrc: "groww"});   // asks for 50, the practice account holds 10: the confirmation says 10
+  await fire("input", {id: "sp-qty", value: "50"});
+  await click({sellConfirm: ""});
+  const confirmText = el("sp-actions").innerHTML;
+  await click({sellClose: ""});
+  requests.length = 0;
   await click({sellOpen: "LAURUSLABS", sellSrc: "practice"});
   await new Promise(r => setTimeout(r, 30));
   const practicePanel = el("positions").innerHTML;
@@ -131,7 +148,7 @@ setTimeout(async () => {
     copy_hidden: el("mp-copy").hidden, reset_groww_hidden: el("btn-demo-reset-groww").hidden,
     mp_rows_before: mpRowsBefore, groww_panel: grammPanel, groww_panel_after_refresh: grammPanelAfterRefresh, groww_closed: grammClosed,
     practice_panel: practicePanel, practice_panel_after_refresh: practicePanelAfterRefresh,
-    preview_text: previewText,
+    preview_text: previewText, reopen_bodies: reopenBodies, confirm_text: confirmText,
     preview_requests: requests.filter(r => r[0].includes("sell-preview")).map(r => r[1]),
     order_stop_select: html.includes('id="tk-stop"'), stop_banner: el("stop-banner").textContent,
     check_hidden: el("check-split").hidden, settings_hidden: el("btn-settings").hidden, watch_hidden: el("btn-watch").hidden,

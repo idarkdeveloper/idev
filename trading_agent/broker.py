@@ -287,13 +287,28 @@ class LocalPaperBroker:
         process sees the empty account in between. It must not fetch prices."""
         with self._txn():
             existed = self.path.exists()
-            if existed:
-                self.path.unlink()
+            if then is None:
+                if existed:
+                    self.path.unlink()
+                self._state = self._fresh_state(starting_cash)
+                self._persisted = False
+                self.__dict__.pop("name", None)
+                return existed
+            # With a copy to make: build it on the fresh account first, so a copy that fails leaves the old account
+            # (memory and file) untouched. Its save replaces the file; if it saved nothing the old file is removed.
+            old, old_persisted, old_name = self._state, self._persisted, self.__dict__.get("name")
             self._state = self._fresh_state(starting_cash)
             self._persisted = False
-            self.__dict__.pop("name", None)
-            if then is not None:
+            try:
                 then()
+            except BaseException:
+                self._state, self._persisted = old, old_persisted
+                if old_name is not None:
+                    self.name = old_name
+                raise
+            self.__dict__.pop("name", None)
+            if not self._persisted and existed:
+                self.path.unlink()
             return existed
 
     @property
@@ -384,9 +399,18 @@ class LocalPaperBroker:
         """When a position was first bought: stored, else the earliest buy order of the symbol (older files)."""
         if raw.get("opened_at"):
             return raw["opened_at"]
-        buys = [o.get("filled_at") for o in self._state.get("orders", [])
-                if o.get("symbol") == sym and o.get("side") == "buy" and o.get("filled_at")]
-        return min(buys) if buys else None
+        first, held = None, 0.0   # the first buy of the current holding: buys after the last sale that emptied it
+        for o in self._state.get("orders", []):
+            if o.get("symbol") != sym or not o.get("filled_at"):
+                continue
+            if o.get("side") == "buy":
+                first = first or o["filled_at"]
+                held += float(o.get("qty") or 0)
+            elif o.get("side") == "sell":
+                held -= float(o.get("qty") or 0)
+                if held <= 1e-9:
+                    first, held = None, 0.0
+        return first
 
     def position(self, symbol: str) -> Position | None:
         """One open position with its latest price (no other price is fetched), or None."""
@@ -465,7 +489,7 @@ class LocalPaperBroker:
             pos["avg_entry_price"] = (pos["qty"] * pos["avg_entry_price"] + cost) / new_qty
             pos["qty"] = new_qty
             pos["high_water"] = max(pos.get("high_water") or 0.0, price)
-            pos.setdefault("opened_at", now)  # the first buy; used for the holding period
+            pos.setdefault("opened_at", self._opened_at(symbol, pos) or now)  # the first buy; used for the holding period
             if stop is not None:
                 pos["stop"] = {"type": stop["type"], "value": stop.get("value")}
             self._state["cash"] -= cost + fees

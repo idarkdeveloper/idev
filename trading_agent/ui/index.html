@@ -290,8 +290,8 @@
     $("btn-demo-yes").addEventListener("click", async () => {
       ask(false);
       try {
-        if(resetKind === "groww"){ const j = await api("/api/practice/reset-to-groww", {}); sellEdit = null; showCopyResult(j.message); toast("Practice account reset to your Groww portfolio"); }
-        else { await api("/api/reset", {}); sellEdit = null; $("copy-result").hidden = true; toast(SAMPLE ? "Demo reset" : "Practice account reset to cash only"); }
+        if(resetKind === "groww"){ const j = await api("/api/practice/reset-to-groww", {}); sellEdit = null; for(const k in heldFlags) delete heldFlags[k]; showCopyResult(j.message); toast("Practice account reset to your Groww portfolio"); }
+        else { await api("/api/reset", {}); sellEdit = null; for(const k in heldFlags) delete heldFlags[k]; $("copy-result").hidden = true; toast(SAMPLE ? "Demo reset" : "Practice account reset to cash only"); }
         await refresh();
       } catch(e){ toast(e.message); }
     });
@@ -532,11 +532,13 @@
       <div>${esc(v.tax_text)}</div><div>${esc(v.holding_note)}</div><div>${esc(v.cost_note)}</div>
       <div><i>${esc(v.disclaimer.charAt(0).toUpperCase() + v.disclaimer.slice(1))}.</i></div>`;
   }
+  // a Groww-row panel may ask for more than the practice account holds: the sale is capped there, so say that number
+  const sellQtyShown = (e) => { const p = (S.positions || []).find(x => x.symbol === e.symbol); const q = Number(e.qty); return e.source === "groww" && p && q > p.qty ? p.qty : e.qty; };
   function sellActions(){
     const e = sellEdit, mine = inPractice(e.symbol);
     let go;
     if(!mine) go = `<button type="button" class="small" disabled>Copy your portfolio first</button>`;
-    else if(e.confirming) go = `<span>Sell ${esc(e.qty)} ${esc(e.symbol)} in practice?</span> <button type="button" class="small danger" data-sell-do>Yes, sell in practice</button> <button type="button" class="small" data-sell-back>Not yet</button>`;
+    else if(e.confirming) go = `<span>Sell ${esc(sellQtyShown(e))} ${esc(e.symbol)} in practice?</span> <button type="button" class="small danger" data-sell-do>Yes, sell in practice</button> <button type="button" class="small" data-sell-back>Not yet</button>`;
     else go = `<button type="button" class="small primary" data-sell-confirm${e.pv ? "" : " disabled"}>Sell in practice</button>`;
     return go + ` <button type="button" class="small" data-sell-close>Close</button><span class="sub">Practice account only; Groww is never touched.</span>`;
   }
@@ -558,7 +560,7 @@
     const prev = sellEdit && sellEdit.source;
     const row = (S.positions || []).find(p => p.symbol === sym);   // the practice position, whichever row was clicked
     const held = heldFlags[sym] !== undefined ? heldFlags[sym] : !!(row && row.held_over_year);
-    sellEdit = {source: src, symbol: sym, qty: "", held, heldChanged: false, confirming: false, pv: null, err: null};
+    sellEdit = {source: src, symbol: sym, qty: "", held, heldChanged: heldFlags[sym] !== undefined, confirming: false, pv: null, err: null};
     sellEdit.qty = String(sellHeld(sellEdit));
     if(prev && prev !== src) redrawFor(prev);
     redrawFor(src); schedulePreview(true);

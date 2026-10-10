@@ -696,8 +696,10 @@ def test_tiles_and_recommendation_buttons_depend_on_mode():
             assert "not tax advice" in out["preview_text"] and "Estimated tax" in out["preview_text"] and "A loss, so no tax" in out["preview_text"]
             for k in ("practice_panel", "practice_panel_after_refresh"):
                 assert 'id="sp-qty"' in out[k] and "Sell in practice" in out[k], k
+            assert json.loads(out["reopen_bodies"][0])["held_over_year"] is True    # a ticked box that reopens is sent again
+            assert "Sell 10 LAURUSLABS in practice?" in out["confirm_text"]
             first = json.loads(out["preview_requests"][0])
-            assert first["symbol"] == "TCS" and first["source"] == "groww" and first["held_over_year"] is None   # untouched tick: nothing sent
+            assert first["symbol"] == "LAURUSLABS" and first["source"] == "practice" and first["held_over_year"] is None   # untouched tick: nothing sent
         else:
             assert "sp-qty" not in out["groww_panel"] and "sell-panel" not in out["practice_panel"]
         assert out["check_hidden"] is out["settings_hidden"] is out["watch_hidden"] is (mode == "demo"), mode
@@ -1406,3 +1408,35 @@ def test_scorecard_dividends_still_count_with_a_copy_credit(tmp_path):
     b.credit(25.0, "dividend X", "2026-01-01")
     b.copy_in([{"symbol": "X", "qty": 1, "avg_price": 5.0, "price": 10.0}])
     assert dividends(b) == 25.0
+
+
+def test_top_up_keeps_the_backfilled_opened_at_and_a_new_cycle_starts_fresh(tmp_path):
+    prices = {"X": 100.0}
+    clock = {"t": "2025-01-01T00:00:00+00:00"}
+    b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=1_000_000, price_fn=lambda s: prices[s], currency="INR",
+                         whole_shares=True, now_fn=lambda: clock["t"])
+    b.submit_order("X", "buy", qty=10)
+    del b._state["positions"]["X"]["opened_at"]            # an older file
+    clock["t"] = "2025-06-01T00:00:00+00:00"
+    b.submit_order("X", "buy", qty=5)                       # a top-up must not date the position from now
+    assert b.position("X").opened_at == "2025-01-01T00:00:00+00:00"
+    clock["t"] = "2025-07-01T00:00:00+00:00"
+    b.submit_order("X", "sell", qty=15)                     # emptied: the next buy starts a new holding
+    clock["t"] = "2026-03-01T00:00:00+00:00"
+    b.submit_order("X", "buy", qty=3)
+    del b._state["positions"]["X"]["opened_at"]
+    assert b.position("X").opened_at == "2026-03-01T00:00:00+00:00"
+
+
+def test_failing_copy_in_a_reset_leaves_the_old_account_untouched(tmp_path):
+    b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=1000, price_fn=lambda s: 10.0, currency="INR", whole_shares=True)
+    b.submit_order("X", "buy", qty=5)
+    before = (tmp_path / "pb.json").read_text()
+
+    def boom():
+        raise ValueError("copy failed")
+    with pytest.raises(ValueError):
+        b.reset(1000, then=boom)
+    assert (tmp_path / "pb.json").read_text() == before and b.position("X").qty == 5
+    assert b.reset(1000, then=lambda: b.copy_in([{"symbol": "Y", "qty": 1, "avg_price": 5.0, "price": 10.0}])) is True
+    assert b.position("X") is None and b.position("Y").qty == 1
