@@ -32,7 +32,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
 CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
-MODULES = "financialData,defaultKeyStatistics,summaryDetail"
+MODULES = "financialData,defaultKeyStatistics,summaryDetail,quoteType"
 MAX_DEBT_TO_EQUITY = 2.0
 FINANCIAL_WORDS = ("bank", "financial", "finance", "insurance", "nbfc", "capital markets")
 
@@ -57,9 +57,13 @@ def parse_summary(result: dict[str, Any]) -> dict[str, Any]:
     roe = eps / bvps if eps is not None and bvps and bvps > 0 else _raw(fd, "returnOnEquity")
     de = _raw(fd, "debtToEquity")  # Yahoo reports a percentage: 75.0 means 0.75x
     pe, pb = _raw(sd, "trailingPE"), _raw(ks, "priceToBook")
+    qt = (result.get("quoteType") or {}).get("quoteType")
     return {"roe": roe, "debt_to_equity": de / 100 if de is not None else None,
             "earnings_growth": _raw(fd, "earningsGrowth"), "profit_margin": _raw(fd, "profitMargins"),
             "pe": pe, "pb": pb, "eps": eps, "book_value": bvps,
+            "market_cap": _raw(sd, "marketCap"), "dividend_yield": _raw(sd, "dividendYield"),
+            "week52_low": _raw(sd, "fiftyTwoWeekLow"), "week52_high": _raw(sd, "fiftyTwoWeekHigh"),
+            "quote_type": qt if isinstance(qt, str) else None,
             "earnings_yield": 1 / pe if pe and pe > 0 else None,
             "book_to_price": 1 / pb if pb and pb > 0 else None}
 

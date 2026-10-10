@@ -163,6 +163,9 @@ class App:
         self._deals_at = time.time() if demo_trades else 0.0
         self._deals_error: str | None = None
         self._candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        from .fundamentals import YahooFundamentals
+        from .quote import QuoteService
+        self.quote_service = QuoteService(YahooFundamentals(None))  # P/E, market cap, 52-week range; 30 min per ticker
         self._bar_seen: str | None = None  # newest price-bar date a lookup used (shown in the freshness chip)
         self.jobs: list[Job] = []
         self.lock = threading.Lock()
@@ -715,6 +718,10 @@ class App:
         if error and not out["bars"]:
             out["error"] = error
         return out
+
+    def quote(self, ticker: str) -> dict[str, Any]:
+        """Quote-panel figures for a ticker. Separate from lookup() so a slow Yahoo call never delays the chart."""
+        return self.quote_service.get(self.resolve(ticker)[0])
 
     def backtest_names(self, investor: Any) -> list[str]:
         """Who a backtest covers: empty / "All followed" is every followed investor; otherwise the given name(s),
@@ -1788,6 +1795,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "range must be one of 1M, 3M, 6M, 1Y, 2Y, 5Y"}, HTTPStatus.BAD_REQUEST)
                 else:
                     self._json(app.candles(ticker, range_key))
+            elif path == "/api/quote":
+                from urllib.parse import parse_qs
+                ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip().upper()
+                if not ticker or not re.fullmatch(r"[A-Z0-9&.^=-]{1,25}", ticker):
+                    self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
+                else:
+                    self._json(app.quote(ticker))
             elif path == "/api/news":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()

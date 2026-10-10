@@ -132,6 +132,25 @@ window.TA = (function(){
   const sinr = (v, d=0) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + inr(Math.abs(v), d);
   const spct = (v) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + Math.abs(v * 100).toFixed(2) + "%";
 
+  // ---- Quote panel in Look up: P/E, market cap, dividend yield, 52-week range with a marker, NSE price band ----
+  // `q` is the /api/quote payload (null while it loads); `r` is the lookup (price, band). Funds hide the company ratios.
+  const quoteAge = (at, now) => { const m = Math.max(0, Math.round(((now == null ? Date.now() : now) / 1000 - at) / 60)); return m < 1 ? "just now" : m < 60 ? m + " min ago" : Math.round(m / 60) + " h ago"; };
+  const rangePos = (price, lo, hi) => price == null || lo == null || hi == null || !(hi > lo) ? null : Math.min(1, Math.max(0, (price - lo) / (hi - lo)));
+  function quoteHtml(q, r, now){
+    const cell = (label, value, extra) => `<div class="qcell"><div class="label">${esc(label)}</div><div class="qval">${value == null || value === "" ? "n/a" : esc(value)}${extra || ""}</div></div>`;
+    const fund = !!(q && q.fund), parts = [];
+    if(!fund){
+      parts.push(cell("P/E (trailing)", q && !q.error && q.pe != null ? q.pe.toFixed(1) : null));
+      parts.push(cell("Market cap", q && !q.error ? q.market_cap_text : null));
+      parts.push(cell("Dividend yield", q && !q.error ? q.dividend_yield_text : null));
+    }
+    parts.push(`<div class="qcell"><div class="label">NSE price band</div><div class="qval">${r.band ? `<span class="pill ${r.band_skip ? "bad" : ""}" title="${esc(r.band_note || "NSE daily price band")}" style="font-size:11px">${esc(r.band)}</span>` : "n/a"}</div></div>`);
+    const lo = q && !q.error ? q.week52_low : null, hi = q && !q.error ? q.week52_high : null, pos = rangePos(r.price, lo, hi);
+    const range = `<div class="qrange"><div class="label">52-week range</div>${lo != null && hi != null ? `<div class="qtrack" role="img" aria-label="52-week range ${esc(inr(lo, 2))} to ${esc(inr(hi, 2))}${pos != null ? ", price is " + Math.round(pos * 100) + "% of the way up" : ""}"><span class="qdot" style="left:${pos == null ? 50 : (pos * 100).toFixed(1)}%${pos == null ? ";display:none" : ""}"></span></div><div class="qends mono"><span>${esc(inr(lo, 2))}</span><span>${esc(inr(hi, 2))}</span></div>` : `<div class="qval">n/a</div>`}</div>`;
+    const foot = !q ? "Loading figures…" : q.error ? "Figures unavailable: " + q.error : `Figures from ${q.source}, fetched ${quoteAge(q.fetched_at, now)}. Price band from the NSE list.`;
+    return `<div class="quote">${parts.join("")}</div>${range}<div class="sub" style="font-size:12px">${esc(foot)}</div>`;
+  }
+
   // ---- "What this means" for a looked-up stock; `now` is the replay date on the Replay page ----
   const daysAgo = (at, now) => { const d = new Date(String(at).replace(" ", "T")); return isNaN(d) ? null : Math.floor(((now ?? Date.now()) - d) / 864e5); };
   const shortDay = (at) => { const d = new Date(String(at).replace(" ", "T")); return isNaN(d) ? String(at).slice(0, 10) : d.toLocaleDateString("en-IN", {day: "numeric", month: "short"}); };
@@ -816,7 +835,7 @@ window.TA = (function(){
   }
 
   return {$, esc, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
-          C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct,
+          C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct, quoteHtml, rangePos, quoteAge,
           daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart};
 })();
 window.TA.theme.init();
