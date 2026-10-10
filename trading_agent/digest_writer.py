@@ -445,6 +445,14 @@ def _ollama(settings: Any, prompt: str, session: Any) -> str | None:
     return str(r.json()["message"]["content"])
 
 
+def _thinks_by_default(model: str) -> bool:
+    """Current models (Haiku 5.5, Sonnet 5.5, Opus 5.x, Fable) always think and take an effort setting;
+    Haiku 4.5 and older 4.x models reject the effort setting, so they keep the old 800-token call."""
+    m = (model or "").lower()
+    return not (m.startswith("claude-haiku-4") or m.startswith("claude-sonnet-4") or m.startswith("claude-opus-4")
+                or m.startswith("claude-3"))
+
+
 def _claude(settings: Any, prompt: str, client: Any, usage: Any) -> str | None:
     if not settings.anthropic_api_key:
         log.info("digest summary: no ANTHROPIC_API_KEY, Claude not used")
@@ -453,8 +461,18 @@ def _claude(settings: Any, prompt: str, client: Any, usage: Any) -> str | None:
     client = client or make_client(settings)
     if hasattr(client, "with_options"):
         client = client.with_options(max_retries=1)   # a slow day is not worth minutes of retries
-    msg = client.messages.create(model=settings.digest_claude_model, max_tokens=800, system=SYSTEM,
-                                 messages=[{"role": "user", "content": prompt}], timeout=CLAUDE_TIMEOUT)
+    model = settings.digest_claude_model
+    kw: dict[str, Any] = {}
+    if _thinks_by_default(model):
+        # Haiku 5.5 / Sonnet 5.5 / Opus think before answering and the thinking counts against max_tokens:
+        # leave room for it, and a short summary needs only low effort.
+        kw["output_config"] = {"effort": "low"}
+    msg = client.messages.create(model=model, max_tokens=4000 if kw else 800, system=SYSTEM,
+                                 messages=[{"role": "user", "content": prompt}], timeout=CLAUDE_TIMEOUT, **kw)
+    stop = getattr(msg, "stop_reason", None)
+    if stop in ("refusal", "max_tokens"):
+        log.warning("digest summary by Claude %s stopped early (%s); the rules summary is used", model, stop)
+        return None
     u = usage if usage is not None else Usage()
     u.add(settings.digest_claude_model, getattr(msg, "usage", None))
     cost = "unknown" if u.cost_usd is None else f"${u.cost_usd:.4f}"

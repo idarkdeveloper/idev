@@ -386,9 +386,9 @@ def test_ollama_down_uses_claude_and_logs_the_cost(s, caplog):
     claude = Claude()
     with caplog.at_level(logging.INFO, logger="trading_agent"):
         text, who = digest_writer.write_summary("morning", DATA, s, session=ollama(up=False), client=claude)
-    assert text == GOOD and who == "claude:claude-haiku-4-5"
+    assert text == GOOD and who == f"claude:{s.digest_claude_model}"
     kw = claude.calls[0]
-    assert kw["model"] == "claude-haiku-4-5" and "temperature" not in kw and kw["timeout"] == 60
+    assert kw["model"] == s.digest_claude_model and "temperature" not in kw and kw["timeout"] == 60
     assert any("input / 100 output tokens" in r.getMessage() and "$" in r.getMessage() for r in caplog.records)
 
 
@@ -745,7 +745,7 @@ def test_load_settings_validates_digest_env(monkeypatch, tmp_path):
         monkeypatch.setenv(k, v)
     st = load_settings(None)
     assert st.digest_morning == "07:15" and st.digest_top == 5 and st.digest_writer == "claude"
-    assert st.digest_enabled and st.digest_universe == "NIFTYMIDCAP150" and st.digest_claude_model == "claude-haiku-4-5"
+    assert st.digest_enabled and st.digest_universe == "NIFTYMIDCAP150" and st.digest_claude_model == "claude-haiku-5-5"
     monkeypatch.setenv("DIGEST_EVENING", "25:00")
     with pytest.raises(SystemExit):
         load_settings(None)
@@ -1970,13 +1970,34 @@ def test_claude_haiku_is_the_default_writer_and_the_model_id_is_passed(monkeypat
     for k in ("DIGEST_WRITER", "DIGEST_CLAUDE_MODEL"):
         monkeypatch.delenv(k, raising=False)
     st = load_settings(None)
-    assert st.digest_writer == "claude" and st.digest_claude_model == "claude-haiku-4-5"
+    assert st.digest_writer == "claude" and st.digest_claude_model == "claude-haiku-5-5"
     claude = Claude()
     base = dataclasses_replace(st)
     base.anthropic_api_key = "test"
     text, who = digest_writer.write_summary("morning", DATA, base, session=ollama(), client=claude)
-    assert who == "claude:claude-haiku-4-5" and text == GOOD and claude.calls[0]["model"] == "claude-haiku-4-5"
+    assert who == "claude:claude-haiku-5-5" and text == GOOD and claude.calls[0]["model"] == "claude-haiku-5-5"
     assert "temperature" not in claude.calls[0]  # the installed SDK rejects it
+    # Haiku 5.5 always thinks: room for it, low effort
+    assert claude.calls[0]["max_tokens"] == 4000 and claude.calls[0]["output_config"] == {"effort": "low"}
+
+
+def test_haiku_4_5_keeps_the_old_call_without_effort(s):
+    s.digest_writer, s.digest_claude_model = "claude", "claude-haiku-4-5"
+    claude = Claude()
+    digest_writer.write_summary("morning", DATA, s, client=claude)
+    assert claude.calls[0]["max_tokens"] == 800 and "output_config" not in claude.calls[0]
+
+
+def test_a_refused_or_cut_off_summary_falls_back_to_the_rules(s):
+    s.digest_writer, s.digest_claude_model = "claude", "claude-haiku-5-5"
+    for stop in ("refusal", "max_tokens"):
+        claude = Claude()
+        orig = claude.create
+        def create(_orig=orig, _stop=stop, **kw):
+            m = _orig(**kw); m.stop_reason = _stop; return m
+        claude.create = create
+        text, who = digest_writer.write_summary("morning", DATA, s, client=claude)
+        assert who == "rules" and text and "buy idea" in text, stop   # the rules summary stands in
 
 
 def dataclasses_replace(st):
@@ -1998,7 +2019,7 @@ def test_the_rules_summary_is_used_when_claude_has_no_key_fails_or_is_rejected(s
     bad = Claude("Buy ZOMATO now and expect a ₹999 gain.")
     assert digest_writer.write_summary("morning", DATA, s, client=bad) == (rules, "rules")
     assert len(bad.calls) == 1
-    assert digest_writer.write_summary("morning", DATA, s, client=Claude()) == (GOOD, "claude:claude-haiku-4-5")
+    assert digest_writer.write_summary("morning", DATA, s, client=Claude()) == (GOOD, f"claude:{s.digest_claude_model}")
     s.digest_writer = "rules"
     assert digest_writer.write_summary("morning", DATA, s, client=bad) == (rules, "rules") and len(bad.calls) == 1   # no model call
     s.digest_writer = "none"
@@ -2006,7 +2027,7 @@ def test_the_rules_summary_is_used_when_claude_has_no_key_fails_or_is_rejected(s
 
 
 def test_the_cost_of_the_claude_haiku_call_is_logged(s, caplog):
-    s.digest_writer = "claude"
+    s.digest_writer, s.digest_claude_model = "claude", "claude-haiku-4-5"
     with caplog.at_level(logging.INFO, logger="trading_agent"):
         digest_writer.write_summary("morning", DATA, s, client=Claude())
     msg = [r.getMessage() for r in caplog.records if "Claude" in r.getMessage()][0]
@@ -2099,3 +2120,13 @@ def test_number_word_from_the_data_is_allowed_but_invented_ones_are_not():
     assert ok, why
     ok, why = digest_writer.validate_summary("Vedanta raised twenty million dollars.", data)
     assert not ok and "number above ten" in why
+
+
+def test_summaries_show_company_names_with_the_code():
+    from trading_agent.digest_rules import label, short_name
+    assert short_name("Vedanta Limited") == "Vedanta" and short_name("Tata Consultancy Services Ltd.") == "Tata Consultancy Services"
+    assert label({"symbol": "VEDL", "name": "Vedanta Limited"}) == "Vedanta (VEDL)"
+    assert label({"symbol": "INFY"}) == "INFY" and label({"symbol": "ITC", "name": "ITC Limited"}) == "ITC"
+    from trading_agent.digest_schedule import telegram_summary
+    email = {"summary": "S.", "data": {"watch": {"items": [{"symbol": "VEDL", "name": "Vedanta Limited", "reasons": ["down 29%"]}]}}}
+    assert "- Vedanta (VEDL): down 29%" in telegram_summary(email)

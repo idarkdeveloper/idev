@@ -328,7 +328,7 @@ dashboard) to your email (Resend) and/or webhook. They never place an order.
   `matplotlib` (in `requirements.txt`) and are sent as inline pictures through Resend; `DIGEST_CHARTS=false` sends the
   bulletin without them, and an email service that refuses inline pictures gets the email without them. Both switches are in Settings.
 - **"In short" summary on top.** The rules build a correct 3-5 sentence summary from the same data (so it is always
-  right about the numbers). By default **Claude Haiku** (`DIGEST_CLAUDE_MODEL=claude-haiku-4-5`, needs `ANTHROPIC_API_KEY`,
+  right about the numbers). By default **Claude Haiku** (`DIGEST_CLAUDE_MODEL=claude-haiku-5-5`, needs `ANTHROPIC_API_KEY`,
   about a cent a day; the token use and cost of each email are logged) rewrites it in plain English, and its text is used
   only if it passes the checks (no ticker, number or amount that is not in the data, no advice or forecast, "today"
   figures must be today's move, the market regime must match). With no key, an error, a timeout or a rejected text, the

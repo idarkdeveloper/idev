@@ -26,6 +26,20 @@ def _ok(sec: Any) -> bool:
     return isinstance(sec, dict) and "unavailable" not in sec
 
 
+def short_name(name: Any) -> str:
+    """'Vedanta Limited' -> 'Vedanta'; '' when there is no name."""
+    n = re.sub(r"\s+", " ", str(name or "")).strip()
+    n = re.sub(r"[\s,]+(limited|ltd\.?)$", "", n, flags=re.I).strip()
+    return n
+
+
+def label(item: dict[str, Any]) -> str:
+    """'Vedanta (VEDL)' when the company name is known, else the NSE symbol alone."""
+    sym = str(item.get("symbol") or "")
+    name = short_name(item.get("name"))
+    return f"{name} ({sym})" if name and name.upper() != sym.upper() else sym
+
+
 def _names(items: list[str]) -> str:
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
 
@@ -78,7 +92,7 @@ def _morning(d: dict[str, Any]) -> list[str]:
         out.append("; ".join(bits) + ".")
     ideas = d.get("buy_ideas")
     if _ok(ideas) and (ideas.get("ideas") or ideas.get("too_expensive")):
-        top = [i["symbol"] for i in ideas.get("ideas") or []][:3]
+        top = [label(i) for i in ideas.get("ideas") or []][:3]
         if ideas.get("wait"):
             out.append(f"{len(ideas.get('ideas') or [])} stocks would pass the screen, but the market filter says wait.")
         elif top:
@@ -94,9 +108,9 @@ def _morning(d: dict[str, Any]) -> list[str]:
                 tags = _tags(it)
                 same = None if any(t.endswith("%") for t in tags) else next((g for g in groups if g[1] == tags), None)
                 if same is not None:
-                    same[0].append(it["symbol"])
+                    same[0].append(label(it))
                 else:
-                    groups.append(([it["symbol"]], tags))
+                    groups.append(([label(it)], tags))
             def tagtext(t: list[str]) -> str:   # "−29%, negative news" or "below stop and 200-day average"
                 return ", ".join(t) if t and t[0].endswith("%") else _names(t)
             worries = "; ".join(f"{_names(n)} ({tagtext(t)})" if t else _names(n) for n, t in groups[:3])
