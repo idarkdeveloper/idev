@@ -30,7 +30,8 @@ def _check_status(resp: Any, ysym: str) -> None:
 class YahooPrices:
     def __init__(self, suffix: str = ".NS", session: requests.Session | None = None,
                  timeout: float = 20.0, cache_dir: Path | None = None,
-                 cache_ttl: float = 6 * 3600):
+                 cache_ttl: float = 6 * 3600, archive: Any | None = None):
+        self.archive = archive   # price_archive.PriceArchive: closed bars kept even if Yahoo drops or rewrites them
         self.suffix = suffix
         self.session = session or requests.Session()
         self.timeout = timeout
@@ -69,8 +70,23 @@ class YahooPrices:
 
 
     def history(self, symbol: str, range_: str = "2y") -> list[dict[str, Any]]:
-        """Daily bars, oldest first: {date, close, adj_close, volume}. Cached on disk."""
+        """Daily bars, oldest first: {date, close, adj_close, volume}. Cached on disk. ``close`` is split-adjusted by
+        Yahoo (a later split rescales old bars) but NOT dividend-adjusted: use it for every price LEVEL (stops, ATR, fills,
+        sizes). ``adj_close`` is split + dividend adjusted: use it only for returns and momentum (ratios inside a window).
+        With an ``archive``, closed bars Yahoo no longer serves (or rewrites) are kept and merged in."""
         ysym = self.yahoo_symbol(symbol)
+        if self.archive is None:
+            return self._history(ysym, range_)
+        try:
+            bars = self._history(ysym, range_)
+        except Exception:
+            merged = self.archive.merge(ysym, [], range_)   # Yahoo failed or has nothing for it: serve what we kept
+            if merged:
+                return merged
+            raise
+        return self.archive.merge(ysym, bars, range_) or bars
+
+    def _history(self, ysym: str, range_: str) -> list[dict[str, Any]]:
         cache = self.cache_dir / f"yahoo_{ysym.replace('^', 'IDX_')}_{range_}.json" if self.cache_dir else None
         if cache and cache.exists() and time.time() - cache.stat().st_mtime < self.cache_ttl:
             return json.loads(cache.read_text())

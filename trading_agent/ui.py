@@ -53,6 +53,8 @@ EDITABLE_ENV_KEYS = {
     "watch_investors": "INVESTORS",
     "watch_source": "WATCH_SOURCE",
     "bse_deals": "BSE_DEALS",  # also read BSE bulk/block deals beside NSE's
+    "flows_breadth": "FLOWS_BREADTH",  # FII/DII flows and market breadth lines in the morning email
+    "price_band_filter": "PRICE_BAND_FILTER",  # skip 2% and 5% price-band stocks for buys
     "auto_trade": "AUTO_TRADE",
     "notify_email_to": "NOTIFY_EMAIL_TO",
     "notify_webhook_url": "NOTIFY_WEBHOOK_URL",
@@ -407,6 +409,7 @@ class App:
                 "notify_webhook_url": s.notify_webhook_url or "",
                 "paper_starting_cash": s.paper_starting_cash,
                 "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,
+                "flows_breadth": s.flows_breadth, "price_band_filter": s.price_band_filter,
                 "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
                 "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
                 "digest_enabled": s.digest_enabled, "digest_writer": s.digest_writer,
@@ -426,6 +429,7 @@ class App:
                 "prices": "groww" if s.use_groww else "yahoo",
             },
             "account": acct, "positions": positions, "performance": perf,
+            "bands": self._bands_for([p["symbol"] for p in positions]),
             "broker_error": broker_error, "deals": deals, "deals_error": self._deals_error,
             "recommendations": recs, "runs": list(reversed(st.data["runs"][-20:])),
             "seen_count": st.seen_count, "busy": busy,
@@ -521,6 +525,17 @@ class App:
         except Exception:  # noqa: BLE001 - name list unavailable: treat the text as a ticker
             return text.strip().upper(), None
 
+    def _bands_for(self, symbols: list[str]) -> dict[str, str]:
+        """symbol -> price band label ("5%", "10%") for the pills; empty when the filter is off or no list is stored."""
+        from .bands import book_for
+        book = book_for(self.settings)
+        out = {}
+        for sym in symbols:
+            label = book.rule(sym)["label"]
+            if label and label != "no band":
+                out[sym] = label
+        return out
+
     def lookup(self, ticker: str) -> dict[str, Any]:
         typed = ticker
         ticker, company = self.resolve(ticker)
@@ -562,6 +577,9 @@ class App:
             out["position"] = {"qty": pos.qty, "avg_entry_price": pos.avg_entry_price,
                                "stop": round(st_["level"], 2) if st_["level"] is not None else None,
                                "stop_type": st_["type"], "stop_label": st_["label"]}
+        from .bands import book_for
+        rule = book_for(self.settings).rule(ticker)
+        out["band"], out["band_note"], out["band_skip"] = (rule["label"] if isinstance(rule["band"], int) else None), rule["reason"], rule["skip"]
         return out
 
     def backtest_names(self, investor: Any) -> list[str]:
@@ -619,6 +637,7 @@ class App:
         return job
 
     def start_screen(self, universe: str, top: int, quality: bool = False, value: bool = False) -> Job:
+        from .bands import book_for
         from .screen import load_universe, run_screen
 
         job = Job(id=len(self.jobs) + 1, kind="screen")
@@ -636,7 +655,8 @@ class App:
                     from .fundamentals import YahooFundamentals
                     funds = YahooFundamentals(self.settings.state_dir / "cache")
                 result = run_screen(members, self.prices, top=top, fundamentals=funds,
-                                    quality=1.0 if quality else 0.0, value=1.0 if value else 0.0)
+                                    quality=1.0 if quality else 0.0, value=1.0 if value else 0.0,
+                                    bands=book_for(self.settings))
                 result.pop("all", None)
                 self.last_screen = {"at": _now(), "universe": universe.upper(), **result}
                 job.ok, job.message = True, f"{result['eligible']} eligible of {result['scored']} scored in {universe.upper()}"
@@ -705,6 +725,10 @@ class App:
             from .risk import normalize_stop
             stop = normalize_stop(stop_type, stop_value, self.broker.latest_price(symbol))
         if side == "buy":
+            from .bands import book_for
+            blocked = book_for(self.settings).refuse_buy(symbol)
+            if blocked:
+                raise ValueError(blocked)
             self._check_topup_percent_stop(symbol, stop, qty, notional)
         if qty not in (None, "", 0, "0"):
             order = self.broker.submit_order(symbol, side, qty=float(qty), stop=stop)
@@ -1076,7 +1100,7 @@ class App:
             elif key in ("digest_morning", "digest_evening"):
                 value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
-            elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
+            elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
                 value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
@@ -1422,7 +1446,7 @@ def _check_type(key: str, value: Any) -> None:
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
+    elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
         _bool_setting(key, value)
     elif key in ("digest_morning", "digest_evening", "digest_writer"):
         if not isinstance(value, str):

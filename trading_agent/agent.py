@@ -257,6 +257,11 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             return json.dumps({"error": "action must be buy, sell, hold or watch"})
         if action == "buy" and ticker.strip().upper().endswith(".BO"):
             return json.dumps({"error": BSE_ONLY_MESSAGE + "; use action watch or hold"})
+        if action == "buy":   # 2% / 5% price-band stocks are not bought (sells and stops are never blocked)
+            from .bands import book_for
+            blocked = book_for(ctx.settings).refuse_buy(ticker.strip())
+            if blocked:
+                return json.dumps({"error": blocked + "; use action watch or hold"})
         rec = {"action": action, "ticker": ticker.upper(), "headline": headline,
                "rationale": rationale, "confidence": confidence.lower(),
                "suggested_notional_usd": float(suggested_notional_usd),
@@ -389,6 +394,11 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                 notional_usd: Amount to trade in the account currency (INR or USD).
             """
             live = ctx.live_money
+            if side.lower() == "buy":
+                from .bands import book_for
+                blocked = book_for(ctx.settings).refuse_buy(symbol.strip())
+                if blocked:
+                    return json.dumps({"error": blocked})
             try:
                 equity = ctx.broker.account().equity
                 if notional_usd > 0.10 * equity + 1e-6:

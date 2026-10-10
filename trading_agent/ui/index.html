@@ -418,7 +418,7 @@
     renderPracticeTax();
     noticeStopFills();
     const plTone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
-    if(!keepPositions) $("positions").innerHTML = S.positions.length ? S.positions.map(p => { const inv = p.qty * p.avg_entry_price, pc = inv ? p.unrealized_pl / inv : null; return `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a>${p.source === "groww" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">from Groww</span>' : ""}<div>${sellBtn("practice", p.symbol)}</div></td>
+    if(!keepPositions) $("positions").innerHTML = S.positions.length ? S.positions.map(p => { const inv = p.qty * p.avg_entry_price, pc = inv ? p.unrealized_pl / inv : null; return `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a>${p.source === "groww" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">from Groww</span>' : ""}${(S.bands || {})[p.symbol] ? ` <span class="pill" title="NSE daily price band" style="font-size:10px;padding:1px 6px">Band ${esc(S.bands[p.symbol])}</span>` : ""}<div>${sellBtn("practice", p.symbol)}</div></td>
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
         <td class="num">${money(inv)}</td><td class="num">${money(p.market_value)}</td>
         <td class="num ${plTone(p.unrealized_pl)}">${signed(p.unrealized_pl)}</td><td class="num ${plTone(pc)}">${pc == null ? "n/a" : spctP(pc)}</td>
@@ -1041,7 +1041,7 @@
       const m = r.momentum || {}; const v = m.verdict || "n/a";
       const cls = v==="strong"?"ok":v==="weak"?"bad":"";
       $("lk-ticker").value = r.ticker;
-      $("lk-result").innerHTML = `${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div>
+      $("lk-result").innerHTML = `${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span>${r.band ? `<span class="pill ${r.band_skip ? "bad" : ""}" title="${esc(r.band_note || "NSE daily price band")}" style="font-size:11px">Band ${esc(r.band)}</span>` : ""}</div>${r.band_note ? `<div class="sub" style="font-size:12px">${esc(r.band_note)}</div>` : ""}
         <div class="sub">${esc(r.momentum_summary)}</div>
         <div id="lk-take">${takeawayHtml(r)}</div>
         <div class="chart" id="lk-chart" style="margin-top:6px"></div>

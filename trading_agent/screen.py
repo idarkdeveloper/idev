@@ -94,7 +94,8 @@ def score_universe(stats_by_symbol: dict[str, dict[str, Any]], *, min_turnover: 
 
 def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20, workers: int = 8,
                min_turnover: float = 1e7, require_above_200dma: bool = True,
-               fundamentals: Any | None = None, quality: float = 0.0, value: float = 0.0) -> dict[str, Any]:
+               fundamentals: Any | None = None, quality: float = 0.0, value: float = 0.0,
+               bands: Any | None = None) -> dict[str, Any]:
     """``prices.history(symbol, '2y')`` per constituent, in parallel; returns ranked rows.
 
     With a ``fundamentals`` provider and a ``quality`` and/or ``value`` weight, the
@@ -119,6 +120,14 @@ def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20
     for r in rows:
         r["name"] = names.get(r["symbol"], {}).get("name", "")
         r["industry"] = names.get(r["symbol"], {}).get("industry", "")
+    band_skipped = 0
+    if bands is not None:   # bands.BandBook: 2% / 5% band stocks are not buy candidates, a 10% band is a caution
+        for r in rows:
+            rule = bands.rule(r["symbol"])
+            r["band"], r["band_note"] = rule["label"], rule["reason"]
+            if rule["skip"] and r["eligible"]:
+                r["eligible"], r["band_skipped"] = False, True
+                band_skipped += 1
     overlay = None
     if fundamentals is not None and (quality or value):
         from .fundamentals import apply_fundamentals, fetch_all
@@ -130,7 +139,7 @@ def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20
     eligible = [r for r in rows if r["eligible"]]
     return {"universe_size": len(members), "scored": len(rows), "eligible": len(eligible),
             "errors": sum(1 for s in stats.values() if "error" in s),
-            "top": eligible[:top], "all": rows, "fundamentals": overlay}
+            "top": eligible[:top], "all": rows, "fundamentals": overlay, "band_skipped": band_skipped}
 
 
 def format_screen(result: dict[str, Any], top: int = 20) -> str:

@@ -522,6 +522,30 @@ Exchange column, in alerts ("on BSE"), the Claude check, the daily emails and th
 `false` for NSE only (the Settings page has the same switch). A BSE failure is logged once a day and
 never stops the NSE read. Today's BSE deals are published after 16:00 IST, so they reach the next morning's email, not the 15:45 evening one.
 
+One client buying (or selling) the same stock on NSE and BSE the same day is one event for every signal: the who-traded
+counts, investor alerts, the agent's view and the deal backtest add the quantities, use the quantity-weighted average
+price and show "NSE + BSE". The records themselves stay separate. Client names are compared after normalising company forms
+(`PRIVATE LIMITED` = `PVT LTD`, `LLP` = `LIMITED LIABILITY PARTNERSHIP`); `LTD` and `PVT LTD` stay different clients.
+
+`FLOWS_BREADTH` (default `true`, India): the morning email's Risk gauges section adds a line with the latest FII and DII
+net flows (NSE's FII/DII report, provisional numbers, rupees crore) and the 5-day FII net, and a NIFTY 500 breadth line
+(share of stocks that rose, the run of days below 35%, share above their 50-day average). The watch service fetches both
+once per trading day after 19:00 IST from public NSE files (the FII/DII JSON and the full bhavcopy). Information only:
+neither is a trading rule. NSE serves only the latest FII/DII session, so the flow history starts the day the service
+first runs.
+
+`PRICE_BAND_FILTER` (default `true`, India): NSE's daily price band list is fetched once per trading day before 09:00 IST.
+Stocks with a 2% or 5% band are skipped by the screen, the agent's buy recommendations and orders, the email's buy ideas
+and practice buys ("price band 5%: liquidity can vanish in a fall; not bought"); a 10% band is a caution. Sells and
+stop exits are never blocked. The band shows as a small pill in Look up and the holdings table. No list for the day means
+no filtering. Both switches are on the Settings page.
+
+Closed daily bars are also kept in `state/prices/archive.sqlite`: if Yahoo drops or rewrites a ticker's history the saved
+bars are still served, and a split Yahoo applies later is detected and recorded (the bars as first seen are kept too).
+Filings are usable from the next trading day when disseminated at or after 15:00 IST (`filing_time.usable_from`); the
+fundamentals history, Replay's announcements and the insider backtest all use that one rule. Price levels (ATR, stops,
+fills) use Yahoo's `close` (split-adjusted); `adj_close` is for returns and momentum only.
+
 ## Configuration (`.env`)
 
 | Variable | Purpose |

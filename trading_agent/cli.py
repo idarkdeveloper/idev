@@ -572,6 +572,7 @@ def cmd_screen(args: argparse.Namespace) -> int:
     """Rank an NSE index universe on momentum, trend, low volatility and liquidity."""
     from .runner import free_prices
     from .screen import format_screen, load_universe, run_screen
+    from .bands import book_for
 
     settings = _settings(args)
     members = load_universe(args.universe)
@@ -583,7 +584,8 @@ def cmd_screen(args: argparse.Namespace) -> int:
         print("Adding fundamentals from Yahoo (cached for a day; the first run takes about a minute)…")
     result = run_screen(members, free_prices(settings), top=args.top, workers=args.workers,
                         require_above_200dma=not args.no_trend_filter, fundamentals=fundamentals,
-                        quality=1.0 if args.quality else 0.0, value=1.0 if args.value else 0.0)
+                        quality=1.0 if args.quality else 0.0, value=1.0 if args.value else 0.0,
+                        bands=book_for(settings))
     print(format_screen(result, top=args.top))
     if args.json:
         result.pop("all", None)

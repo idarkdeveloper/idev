@@ -256,6 +256,33 @@ class Watcher:
                     log.warning("broker unavailable, watching alerts only: %s", key)
         return self._broker
 
+    def poll_market_data(self, now: datetime) -> dict[str, Any]:
+        """Once-a-day public NSE reads: price bands (before 09:00), FII/DII flows and breadth (after 19:00). Each has its
+        own once-per-day guard in state and never raises; a quiet tick costs a few small file reads."""
+        out: dict[str, Any] = {}
+        if self._data is None or not hasattr(self._data, "session"):
+            return out
+        s = self.settings
+        try:
+            if getattr(s, "price_band_filter", False) and getattr(s, "market", "in") == "in":
+                from .bands import book_for
+                n = book_for(s).tick(self._data, now, self.holidays)
+                if n:
+                    out["price_bands"] = n
+            if getattr(s, "flows_breadth", False) and getattr(s, "market", "in") == "in":
+                from .breadth import BreadthStore, archive_bars_fn, nifty500_members
+                from .flows import FlowStore
+                row = FlowStore(s.state_dir).tick(self._data, now, self.holidays)
+                if row:
+                    out["flows"] = row["date"]
+                b = BreadthStore(s.state_dir).tick(self._data, now, lambda: nifty500_members(self._data.session),
+                                                   archive_bars_fn(s.state_dir), self.holidays)
+                if b:
+                    out["breadth"] = b["date"]
+        except Exception:  # noqa: BLE001 - market data never stops the watch
+            log.exception("market data poll failed")
+        return out
+
     def poll_deals_blocked(self) -> list[dict[str, Any]]:
         """Alerts-only mode: tell the user about new deals without analysing them (that needs the broker).
 
@@ -305,6 +332,7 @@ class Watcher:
                 info["digest"] = self._digest.tick(now)
             except Exception:  # noqa: BLE001 - the emails never stop the watch
                 log.exception("daily email check failed")
+        info["market_data"] = self.poll_market_data(now)
         if self._awake is not None and info["in_window"] != self._awake_on:
             self._awake(info["in_window"])
             self._awake_on = info["in_window"]

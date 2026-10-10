@@ -276,7 +276,8 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
         return unavailable(f"universe {name} is empty")
     for m in members:
         _remember(ctx, m["symbol"], m.get("name"))
-    res = run_screen(members, _Budget(ctx.prices, ctx.screen_budget_s, ctx), top=int(s.digest_top))
+    from .bands import book_for
+    res = run_screen(members, _Budget(ctx.prices, ctx.screen_budget_s, ctx), top=int(s.digest_top), bands=book_for(s))
     equity, basis = float(s.paper_starting_cash), "starting cash"
     if ctx.practice is not None:
         try:
@@ -303,9 +304,12 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
                       "qty": size["qty"], "notional": size["notional"],
                       "stop": round(stop["level"], 2) if stop["level"] is not None else None,
                       "ret_6m_pct": _pct(row.get("ret_6m")), "ret_12_1_pct": _pct(row.get("ret_12_1")),
-                      "rank": row.get("rank")})
+                      "rank": row.get("rank"), "band": row.get("band"), "band_note": row.get("band_note")})
+    # stocks that ranked in the top but sit in a 2% / 5% price band: shown with the reason, never bought
+    band_skipped = [{"symbol": r["symbol"], "reason": r["band_note"]} for r in res.get("all", [])
+                    if r.get("band_skipped") and (r.get("rank") or 10 ** 6) <= 2 * int(s.digest_top)][:5]
     return {"universe": name, "universe_size": res["universe_size"], "scored": res["scored"],
-            "eligible": res["eligible"], "errors": res["errors"], "ideas": ideas, "too_expensive": too_expensive, "wait": bool(no_new_buys),
+            "eligible": res["eligible"], "errors": res["errors"], "ideas": ideas, "too_expensive": too_expensive, "band_skipped": band_skipped, "wait": bool(no_new_buys),
             "equity": round(equity, 2), "equity_basis": basis,
             "sizing": "1% of equity at risk on a 2x ATR move, at most 10% of equity per stock"}
 
@@ -793,7 +797,32 @@ def _gauges(ctx: DigestContext) -> dict[str, Any]:
         return unavailable("none of the risk gauges could be read")
     return {"gauges": rows, "warnings": [r["gauge"] for r in rows if r["warning"]],
             "warning_texts": [WARN_TEXT[r["gauge"]] for r in rows if r["warning"] and r["gauge"] in WARN_TEXT], "skipped": skipped,
-            "note": "Readings from fixed rules over daily closes, not a forecast."}
+            "note": "Readings from fixed rules over daily closes, not a forecast.", **_flow_breadth_lines(ctx)}
+
+
+def _flow_breadth_lines(ctx: DigestContext) -> dict[str, Any]:
+    """FII/DII flows and NIFTY 500 breadth, from the series the watch service stores (no network here). Information only;
+    absent when FLOWS_BREADTH is off or nothing is stored yet."""
+    s = ctx.settings
+    if not getattr(s, "flows_breadth", False) or getattr(s, "market", "in") != "in":
+        return {}
+    out: dict[str, Any] = {}
+    today = ctx.now().date()
+    try:
+        from .flows import FlowStore, flows_line
+        line = flows_line(FlowStore(Path(s.state_dir)).rows(), today)
+        if line:
+            out["flows_line"] = line
+    except Exception:  # noqa: BLE001 - never stop the email
+        log.exception("flows line failed")
+    try:
+        from .breadth import BreadthStore, breadth_line
+        line = breadth_line(BreadthStore(Path(s.state_dir)).rows(), today)
+        if line:
+            out["breadth_line"] = line
+    except Exception:  # noqa: BLE001
+        log.exception("breadth line failed")
+    return out
 
 
 def _header(ctx: DigestContext, kind: str) -> dict[str, Any]:

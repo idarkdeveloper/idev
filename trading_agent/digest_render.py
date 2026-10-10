@@ -108,6 +108,11 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
                  f"Quantity: {ideas['sizing']}, on {inr(ideas['equity'])} ({ideas['equity_basis']})."]
         if pricey:
             lines.append("Too expensive for this account size (one share > 10% of equity): " + ", ".join(pricey) + ".")
+        for b in ideas.get("band_skipped") or []:
+            lines.append(f"{b['symbol']}: {b['reason']}.")
+        cautions = [i["symbol"] + " (" + i["band_note"] + ")" for i in ideas["ideas"] if i.get("band_note")]
+        if cautions:
+            lines.append("Caution: " + "; ".join(cautions) + ".")
         if not rows and not pricey:
             lines.append("Nothing passes the screen today.")
         table = {"head": ["Stock", "Price", "Qty", "Cost", "Stop", "6m", "Name"], "rows": rows, "num": [1, 2, 3, 4, 5],
@@ -168,6 +173,7 @@ def _gauge_block(g: dict[str, Any]) -> dict[str, Any]:
     if g["warnings"]:
         lines.append("⚠ Warning: " + "; ".join(WARN_TEXT.get(w, w) for w in g["warnings"]) + ".")
     lines.append(g["note"])
+    lines += [g[k] for k in ("flows_line", "breadth_line") if g.get(k)]
     if g["skipped"]:
         lines.append(f"{g['skipped']} gauge(s) could not be read and are left out.")
     rows = [[r["gauge"], (num if r["gauge"].startswith("Nifty") else num_intl)(r["value"], 2), pct_text(r["d20_pct"]), pct_text(r["vs_50d_pct"]), r["range"],
