@@ -429,9 +429,11 @@ def test_host_allowlist_stops_dns_rebinding_on_get_and_post(server):
     port = base.rsplit(":", 1)[1]
     body = json.dumps({"index": 0}).encode()
     js = {"Content-Type": "application/json"}
-    for host in (f"127.0.0.1:{port}", "127.0.0.1", "localhost", f"localhost:{port}", f"[::1]:{port}", "[::1]"):
+    for host in (f"127.0.0.1:{port}", "127.0.0.1", "localhost", f"localhost:{port}", f"[::1]:{port}", "[::1]",
+                 "localhost:8788", "127.0.0.1:8788"):            # an SSH tunnel keeps the laptop's port in Host
         assert _fetch(base, "/api/state", {"Host": host}) == 200, host
-    for host in ("evil.example", f"evil.example:{port}", "127.0.0.1.evil.example", f"127.0.0.1:{int(port) + 1}", "0.0.0.0"):
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Host": "localhost:8788", "Origin": "http://localhost:8788"}) == 200
+    for host in ("evil.example", f"evil.example:{port}", "127.0.0.1.evil.example", "localhost:99999", "localhost:abc", "0.0.0.0"):
         assert _fetch(base, "/api/state", {"Host": host}) == 421, host
         assert _fetch(base, "/", {"Host": host}) == 421, host
         assert _raw_post(base, "/api/dismiss", body, {**js, "Host": host}) == 421, host

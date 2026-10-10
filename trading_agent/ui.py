@@ -1742,12 +1742,15 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             return name, port or None
 
         def _host_allowed(self, host: str, *, forwarded: bool = False) -> bool:
-            """localhost / 127.0.0.1 / [::1] (with the server's port or none) and the TA_ALLOWED_HOSTS names."""
+            """localhost / 127.0.0.1 / [::1] on any port, and the TA_ALLOWED_HOSTS names.
+
+            Any port for the local names: an SSH tunnel (laptop 8788 -> server 8787) keeps the laptop's port in
+            Host. DNS rebinding needs a foreign name in Host, so a local name on another port is not a risk."""
             name, port = self._split_host(host)
             if not name:
                 return False
             if name in self._LOCAL_NAMES and not forwarded:
-                return port is None or port == str(self.server.server_address[1])
+                return port is None or (port.isdigit() and 0 < int(port) < 65536)
             for a in app.settings.allowed_hosts:
                 an, ap = self._split_host(a)
                 if name == an and (ap is None or ap == port):
