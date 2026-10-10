@@ -985,6 +985,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--case", action="append", metavar="DATE:TICKER", help="a specific case (repeatable)")
     sp.add_argument("--model", help="Claude model (default: CLAUDE_MODEL)")
     sp.add_argument("--yes", action="store_true", help="really send the calls (without it, only the estimate)")
+    sp.add_argument("--fresh", action="store_true", help="start a new run instead of resuming today's unfinished one")
     sp.set_defaults(func=cmd_replay_blind_test)
     sp = sub.add_parser("ui", help="open the local web dashboard")
     sp.add_argument("--host", default="127.0.0.1")

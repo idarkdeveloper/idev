@@ -120,9 +120,9 @@ def _res(un, ma, direction=1):
 
 def test_verdict_thresholds():
     same = [_res(("buy", "high"), ("buy", "high")) for _ in range(5)]
-    assert verdict(same)["verdict"] == "no sign of hindsight" and verdict(same)["stance_agreement"] == 1.0
+    assert verdict(same)["verdict"].endswith("no sign of hindsight") and verdict(same)["stance_agreement"] == 1.0
     one_flip = same[:4] + [_res(("buy", "high"), ("sell", "high"))]
-    assert verdict(one_flip)["verdict"] == "no sign of hindsight"            # 1 of 5 is below 2 of 5
+    assert verdict(one_flip)["verdict"].endswith("no sign of hindsight")            # 1 of 5 is below 2 of 5
     two_flips = same[:3] + [_res(("buy", "high"), ("hold", "high"))] * 2
     v = verdict(two_flips)
     assert v["verdict"] == "possible hindsight: 2 of 5 cases" and v["stance_flips"] == 2
@@ -201,9 +201,9 @@ def test_cli_with_yes_runs_saves_and_the_page_can_read_the_verdict(tmp_path):
     assert rc == 0 and len(client.calls) == 8
     saved = settings.state_dir / "research" / "blind_test_2026-10-09.json"
     rep = json.loads(saved.read_text())
-    assert rep["summary"]["verdict"] == "no sign of hindsight" and len(rep["results"]) == 2
+    assert rep["summary"]["verdict"].endswith("no sign of hindsight") and len(rep["results"]) == 2
     v = latest_verdict(settings.state_dir)
-    assert v["verdict"] == "no sign of hindsight" and v["cases"] == 2 and v["file"] == saved.name
+    assert v["verdict"].endswith("no sign of hindsight") and v["cases"] == 2 and v["file"] == saved.name
     run_cli(_args(yes=True, case=["2022-02-15:" + TICKER]), settings, source=source(), news_client=News(), universe=uni,
             client=Fake(masked=("sell", "high")), out=lines.append, today="2026-10-09")
     assert (settings.state_dir / "research" / "blind_test_2026-10-09_2.json").exists()
@@ -262,7 +262,7 @@ def test_noise_baseline_is_subtracted_from_the_identity_effect():
     s = rep["summary"]
     # U1 buy, U2 hold: 1 noise pair flips (of 2) = 0.5 per case; U1 buy vs M1 buy: no identity flip
     assert s["identity_flips"] == 0 and s["noise_flips"] == 2.5 and s["net_flips"] == -2.5
-    assert s["verdict"] == "no sign of hindsight"
+    assert s["verdict"].endswith("no sign of hindsight")
     # identity flips of 2 of 5 that noise explains are not hindsight; the same flips with no noise are
     noisy = [compare_case(Case("t", "d", "X"), _view("buy"), _view("hold"), None, _view("hold"), _view("hold"))] * 2
     quiet = [_res(("buy", "high"), ("buy", "high"))] * 3

@@ -40,6 +40,7 @@ from typing import Any, Callable
 from .claude import SYSTEM, build_context, request_view
 from .clock import EARLIEST_START, ClockedPrices, ReplayClock
 from .news import ClockedNews
+from ..scorecard import _ist_today
 
 ALIAS = "COMPANY_A"
 DEFAULT_CASES = 5
@@ -323,15 +324,26 @@ def verdict(results: list[dict[str, Any]]) -> dict[str, Any]:
     affected = sum(1 for r in results if r["stance_flip"] or r["confidence_gap"] >= CONF_GAP_POINTS)
     need = math.ceil(FLIP_FRACTION * m)
     flagged = net_flips >= need or net_gap >= CONF_GAP_POINTS
+    per_case_noise = noise_flips / m
     thresholds = (f"thresholds: (identity stance changes - noise stance changes) at least {need} of {m} cases "
                   f"({FLIP_FRACTION:.0%}), or (mean identity confidence gap - mean noise gap) at least "
-                  f"{CONF_GAP_POINTS:g} points")
-    text = (f"possible hindsight: {affected} of {m} cases" if flagged else "no sign of hindsight")
+                  f"{CONF_GAP_POINTS:g} points. Noise is the same input asked twice: on average about "
+                  f"{per_case_noise:.2f} changes per case from chance alone and a {noise_gap:g}-point gap")
+    # N counts net values: net stance changes, or the cases whose identity gap beats their own noise gap by 15 points
+    by_gap = sum(1 for r in results if r["confidence_gap"] - r.get("noise_gap", 0.0) >= CONF_GAP_POINTS)
+    n_net = min(m, max(round(net_flips) if net_flips >= need else 0, by_gap if net_gap >= CONF_GAP_POINTS else 0))
+    if flagged:
+        text = f"possible hindsight: {n_net} of {m} cases"
+    elif net_flips <= 0 and net_gap <= 0:
+        text = "noise explains all of the difference; no sign of hindsight"
+    else:
+        text = "no sign of hindsight"
     return {"cases": m, "verdict": text, "possible_hindsight": flagged, "thresholds": thresholds,
             "stance_agreement": round(1 - flips / m, 3), "stance_flips": flips, "identity_flips": flips,
             "noise_flips": round(noise_flips, 2), "net_flips": round(net_flips, 2),
             "mean_abs_confidence_gap": round(mean_gap, 2), "mean_identity_gap": round(mean_gap, 2),
             "mean_noise_gap": round(noise_gap, 2), "net_gap": round(net_gap, 2), "affected_cases": affected,
+            "noise_flips_per_case": round(per_case_noise, 3), "net_cases": n_net,
             "hindsight_signature_cases": sig, "scored_cases": len(scored),
             "note": ("Hindsight signature (graded afterwards with prices after the replay date): the unmasked answer "
                      f"was more confident than the masked one in the direction the stock went, in {sig} of "
@@ -355,10 +367,12 @@ def estimate_cost(model: str, pairs: list[dict[str, Any]], days: list[str]) -> d
 # -- running ---------------------------------------------------------------------------------
 def run_blind_test(cases: list[Case], pairs: list[dict[str, Any]], *, client: Any, model: str, source: Any,
                    field: str = "adj_close", progress: Callable[[str], None] | None = None,
-                   checkpoint: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+                   checkpoint: Callable[[dict[str, Any]], None] | None = None,
+                   prior: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Per case: unmasked twice and masked twice through record_view, then grade with the prices that came after.
     `checkpoint(report_so_far)` runs after every case, so a crash keeps what was already paid for."""
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = list(prior or [])   # cases already paid for in an earlier, interrupted run
+    total = len(results) + len(cases)
 
     def report(done: bool) -> dict[str, Any]:
         return {"run_at": datetime.now().isoformat(timespec="seconds"), "model": model, "complete": done,
@@ -378,7 +392,7 @@ def run_blind_test(cases: list[Case], pairs: list[dict[str, Any]], *, client: An
         u1, u2, m1, m2 = (stance_of(v, ticker) for v in views)
         results.append(compare_case(case, u1, m1, outcome_after(source, ticker, case.date, field), u2, m2))
         if checkpoint:
-            checkpoint(report(len(results) == len(cases)))
+            checkpoint(report(len(results) == total))
     return report(True)
 
 
@@ -390,7 +404,7 @@ def research_dir(state_dir: Any) -> Path:
 def new_report_path(state_dir: Any, today: str | None = None) -> Path:
     d = research_dir(state_dir)
     d.mkdir(parents=True, exist_ok=True)
-    day = today or date.today().isoformat()
+    day = today or _ist_today()
     path, n = d / f"blind_test_{day}.json", 1
     while path.exists():
         n += 1
@@ -411,22 +425,47 @@ def save_report(state_dir: Any, report: dict[str, Any], today: str | None = None
 
 
 def latest_verdict(state_dir: Any) -> dict[str, Any] | None:
-    """The newest saved blind test, for the Replay page: None when there is none or it is unreadable."""
-    files = sorted(research_dir(state_dir).glob("blind_test_*.json"), key=lambda p: p.stat().st_mtime)
-    for p in reversed(files):
+    """The newest COMPLETE saved blind test, for the Replay page; with only an interrupted one, that one labelled
+    partial. None when there is none or they are unreadable."""
+    files = sorted(research_dir(state_dir).glob("blind_test_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    partial = None
+    for p in files:
         try:
             r = json.loads(p.read_text(encoding="utf-8"))
             s = r["summary"]
-            return {"file": p.name, "run_at": r.get("run_at"), "model": r.get("model"), "verdict": s["verdict"],
-                    "cases": s.get("cases"), "stance_flips": s.get("stance_flips"),
-                    "mean_abs_confidence_gap": s.get("mean_abs_confidence_gap"),
-                    "net_flips": s.get("net_flips"), "net_gap": s.get("net_gap"),
-                    "noise_flips": s.get("noise_flips"), "mean_noise_gap": s.get("mean_noise_gap"),
-                    "possible_hindsight": s.get("possible_hindsight"),
-                    "hindsight_signature_cases": s.get("hindsight_signature_cases"),
-                    "scored_cases": s.get("scored_cases")}
+            out = {"file": p.name, "run_at": r.get("run_at"), "model": r.get("model"), "verdict": s["verdict"],
+                   "cases": s.get("cases"), "stance_flips": s.get("stance_flips"),
+                   "mean_abs_confidence_gap": s.get("mean_abs_confidence_gap"),
+                   "net_flips": s.get("net_flips"), "net_gap": s.get("net_gap"),
+                   "noise_flips": s.get("noise_flips"), "mean_noise_gap": s.get("mean_noise_gap"),
+                   "possible_hindsight": s.get("possible_hindsight"),
+                   "hindsight_signature_cases": s.get("hindsight_signature_cases"),
+                   "scored_cases": s.get("scored_cases"), "partial": False}
         except (OSError, ValueError, KeyError, TypeError):
             continue
+        if r.get("complete", True):
+            return out
+        if partial is None:
+            planned = len(r.get("planned") or []) or s.get("cases")
+            partial = {**out, "partial": True, "verdict": f"{out['verdict']} (partial, {s.get('cases')} of {planned} cases)"}
+    return partial
+
+
+def _same_cases(planned: Any, cases: list[Case]) -> bool:
+    return isinstance(planned, list) and planned == [c.to_dict() for c in cases]
+
+
+def find_resumable(state_dir: Any, cases: list[Case], model: str, today: str) -> tuple[Path, dict[str, Any]] | None:
+    """Today's newest report, if it is unfinished, for the same cases and model."""
+    files = sorted(research_dir(state_dir).glob(f"blind_test_{today}*.json"), key=lambda p: p.stat().st_mtime,
+                   reverse=True)
+    for p in files[:1]:
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if r.get("complete") is False and r.get("model") == model and _same_cases(r.get("planned"), cases):
+            return p, r
     return None
 
 
@@ -463,7 +502,7 @@ def run_cli(args: Any, settings: Any, *, source: Any | None = None, news_client:
         out(f"No replay called {args.slug} (looked for {trial_file}).")
         return 2
     data = json.loads(trial_file.read_text(encoding="utf-8"))
-    today = today or date.today().isoformat()
+    today = today or _ist_today()
     cases = []
     for spec in getattr(args, "case", None) or []:
         d, _, t = str(spec).partition(":")
@@ -506,6 +545,17 @@ def run_cli(args: Any, settings: Any, *, source: Any | None = None, news_client:
         out("No case could be masked cleanly, so nothing can be tested.")
         return 2
     cases, pairs = [c for c, _ in kept], [pr for _, pr in kept]
+    planned = [c.to_dict() for c in cases]
+    path, prior = None, []
+    if not getattr(args, "fresh", False):
+        found = find_resumable(settings.state_dir, cases, model, today)
+        if found:
+            path, old = found
+            prior = list(old.get("results") or [])
+            done = {(r["case"]["date"], r["case"]["ticker"]) for r in prior}
+            out(f"resuming {path}: {len(done)} of {len(cases)} cases already done")
+            kept = [(c, pr) for c, pr in zip(cases, pairs) if (c.date, c.ticker) not in done]
+            cases, pairs = [c for c, _ in kept], [pr for _, pr in kept]
     est = estimate_cost(model, pairs, [c.date for c in cases])
     cost = "cost unknown for this model" if est["usd"] is None else f"about ${est['usd']:.2f}"
     out(f"Blind-ticker test on {data['name']}: {len(cases)} cases, {est['calls']} Claude calls with {model}, "
@@ -518,14 +568,14 @@ def run_cli(args: Any, settings: Any, *, source: Any | None = None, news_client:
     if client is None:
         from ..agent import make_client
         client = make_client(settings)
-    path = new_report_path(settings.state_dir, today)
+    path = path or new_report_path(settings.state_dir, today)
 
     def keep(partial: dict[str, Any]) -> None:   # after every case: a crash loses nothing already paid for
-        partial["slug"], partial["estimate"] = data["slug"], est
+        partial["slug"], partial["estimate"], partial["planned"] = data["slug"], est, planned
         write_report(path, partial)
 
     report = run_blind_test(cases, pairs, client=client, model=model, source=source, field=field, progress=out,
-                            checkpoint=keep)
+                            checkpoint=keep, prior=prior)
     keep(report)
     out(format_report(report))
     out(f"Saved {path}")

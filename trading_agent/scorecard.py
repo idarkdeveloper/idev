@@ -63,6 +63,10 @@ def build_memberships(state_dir: Any, *, progress: Any = None, use_cache: bool =
     from .screen import load_universe
     out: dict[str, Any] = {}
     day = today_fn()
+    if use_cache:
+        with _CACHE_LOCK:   # earlier days are never read again
+            for k in [k for k in _CACHE if k[1] < day]:
+                del _CACHE[k]
     for key, _fund in BENCHMARK_UNIVERSES:
         ck = (str(state_dir), day, key)
         if use_cache:
