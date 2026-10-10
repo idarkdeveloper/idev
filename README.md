@@ -187,12 +187,30 @@ GTT smart orders) refuses with `LiveOrdersDisabled` before touching the network 
 against Groww's documented formats. `python -m trading_agent groww-check` reads your
 account to confirm the rest: token source and expiry, that holdings carry
 `demat_free_quantity` and `t1_quantity`, tick sizes, and that the order and GTT lists
-are readable. With `GROWW_LIVE_ORDERS=true`, `groww-check --live-test SYMBOL
---i-understand-real-orders` places **real** but harmless orders: a 1-share limit buy 3%
-below the last price (`--offset-pct`), read back by id and by reference, then cancelled.
+are readable. Every run also prints a **manual DDPI check** (below). With
+`GROWW_LIVE_ORDERS=true`, `groww-check --live-test [SYMBOL] --i-understand-real-orders`
+(SYMBOL defaults to ITC; `--symbol` overrides) first prints today's order list (count, open
+orders, any not placed by the agent), then places **real** but harmless orders: a 1-share limit
+buy 3% below the last price (`--offset-pct`), read back by id and by reference, its limit moved up
+0.5% through Groww's modify-order endpoint (still at least 2% below the price, so it cannot
+fill) and read back, then cancelled (the cancel runs even if the modify fails).
 If you hold a free share of SYMBOL, it also creates a 1-share GTT 20% below the price,
 raises it once and cancels it. Results go to `state/state.json` (`groww_checks`). If
 anything fails to cancel, the output says so and names the id to cancel in the Groww app.
+**DDPI (needed for sells).** A delivery SELL needs DDPI on your demat account (or a daily CDSL
+TPIN/OTP, which a headless agent cannot give). Groww's trade API has no DDPI status call, so
+confirm it yourself in the Groww app (Profile, Settings, Demat / DDPI authorisation) and tick
+"I confirmed DDPI" in Settings (`GROWW_DDPI_CONFIRMED=true`). While it is false, live sells are
+still allowed but alert once a day ("DDPI not confirmed: sells may be rejected"). A sell that
+Groww rejects for TPIN / e-DIS / DDPI / CDSL authorisation raises `GrowwAuthorisationError`
+("Groww rejected the sell: demat authorisation (DDPI/e-DIS) is missing. Enable DDPI in the Groww
+app.") and alerts once a day per symbol.
+
+**Free shares only.** Live sells use `demat_free_quantity` only. T1 shares (bought yesterday,
+not yet in the demat) are included only with `GROWW_SELL_T1=true`, which makes the sale a BTST
+sale with short-delivery / auction risk. A holding with only T1 shares is not sold; the agent
+alerts "only T1 shares; not sold until they settle". Paper and practice accounts are unchanged.
+
 For live orders from a fixed IP see `docs/hosting.md`; `groww-check --ip` (no credentials needed)
 prints this machine's public IP and whether it matches `GROWW_ALLOWED_IP`.
 
@@ -582,6 +600,8 @@ treated as missing (no filtering).
 | `GROWW_LIVE_ORDERS` | `false` (default) = paper fills with real holdings/prices. `true` = real orders. |
 | `MAX_SLIPPAGE_PCT` | Live limit price distance from the LTP, in percent (default `0.5`, max 5). |
 | `GROWW_GTT_STOPS` | `false` (default). `true` = keep a GTT stop-loss at Groww per live holding (needs `GROWW_LIVE_ORDERS=true`). |
+| `GROWW_DDPI_CONFIRMED` | `false` (default). Your own confirmation that DDPI is active in the Groww app; while false, live sells alert once a day that they may be rejected. |
+| `GROWW_SELL_T1` | `false` (default) = live sells use free demat shares only. `true` = also T1 shares (BTST: short-delivery / auction risk). |
 | *(prices)* | Yahoo Finance is used automatically when Groww Live Data is unavailable or no broker is linked. |
 | `AUTO_TRADE` | `false` (default) = recommendations only. `true` = Claude may place orders. |
 | `PAPER_STARTING_CASH` | Cash for the simulator when no brokerage is linked (default ₹5,00,000). |

@@ -76,6 +76,8 @@ EDITABLE_ENV_KEYS = {
     "digest_charts": "DIGEST_CHARTS",
     # Only has an effect when GROWW_LIVE_ORDERS=true, which the dashboard can never set.
     "groww_gtt_stops": "GROWW_GTT_STOPS",
+    "groww_ddpi_confirmed": "GROWW_DDPI_CONFIRMED",
+    "groww_sell_t1": "GROWW_SELL_T1",
 }
 
 
@@ -420,6 +422,7 @@ class App:
                 "paper_starting_cash": s.paper_starting_cash,
                 "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,
                 "flows_breadth": s.flows_breadth, "price_band_filter": s.price_band_filter,
+                "groww_ddpi_confirmed": s.groww_ddpi_confirmed, "groww_sell_t1": s.groww_sell_t1,
                 "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
                 "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
                 "digest_enabled": s.digest_enabled, "digest_writer": s.digest_writer,
@@ -1119,7 +1122,7 @@ class App:
                          "heartbeat_url": parse_heartbeat_url}[key]
                 value = parse(value) or ""
                 ops.append(lambda k=key, v=value: setattr(st, k, v or None))
-            elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
+            elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
                          "telegram_alerts"):
                 value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
@@ -1475,7 +1478,7 @@ def _check_type(key: str, value: Any) -> None:
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
+    elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
                  "telegram_alerts"):
         _bool_setting(key, value)
     elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url", "forward_start"):

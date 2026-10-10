@@ -416,6 +416,8 @@ def cmd_groww_check(args: argparse.Namespace) -> int:
     from .groww_check import format_rows, live_test, read_only_checks, save
     from .runner import make_groww, token_cache
     settings = _settings(args)
+    if args.symbol and not args.live_test:
+        print("--symbol only applies with --live-test; ignoring it.", file=sys.stderr)
     if args.ip:  # needs no credentials: what IP does Groww see from this machine?
         return _check_public_ip(settings)
     if not settings.has_groww_credentials:
@@ -441,11 +443,13 @@ def cmd_groww_check(args: argparse.Namespace) -> int:
         return 2
     ticks = InstrumentTicks(settings.state_dir / "cache")
     c = read_only_checks(broker, token_source=source, cache=cache, api_key=settings.groww_api_key,
-                         tick_fn=lambda sym: ticks.tick_size(sym, settings.groww_exchange))
+                         tick_fn=lambda sym: ticks.tick_size(sym, settings.groww_exchange),
+                         ddpi_confirmed=settings.groww_ddpi_confirmed)
     if args.live_test:
-        print(f"Placing a REAL 1-share limit BUY of {args.live_test.upper()} {args.offset_pct:g}% below "
-              "the last price, then cancelling it...")
-        live_test(broker, args.live_test, offset_pct=args.offset_pct, c=c)
+        sym = (args.symbol or args.live_test).upper()
+        print(f"Placing a REAL 1-share limit BUY of {sym} {args.offset_pct:g}% below "
+              "the last price, nudging its limit up 0.5%, then cancelling it...")
+        live_test(broker, sym, offset_pct=args.offset_pct, c=c)
     print(format_rows(c))
     st = State(settings.state_dir / "state.json")
     save(st, c, live=bool(args.live_test))
@@ -963,8 +967,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="with --rebuild-from: delete an existing forward account first")
     sp.set_defaults(func=cmd_forward)
     sp = sub.add_parser("groww-check", help="verify live-trading assumptions on your Groww account")
-    sp.add_argument("--live-test", metavar="SYMBOL",
-                    help="also place a REAL 1-share limit buy below market (then cancel) and a test GTT")
+    sp.add_argument("--live-test", metavar="SYMBOL", nargs="?", const="ITC",
+                    help="also place a REAL 1-share limit buy below market (modify, then cancel) and a test GTT; "
+                         "SYMBOL defaults to ITC")
+    sp.add_argument("--symbol", help="the stock for --live-test (overrides SYMBOL; default ITC)")
     sp.add_argument("--offset-pct", type=float, default=3.0, help="how far below the last price to rest the buy")
     sp.add_argument("--i-understand-real-orders", action="store_true")
     sp.add_argument("--force", action="store_true",

@@ -146,6 +146,8 @@ class GttStopManager:
             rec = self.stops.get(sym)
             price = p.current_price
             if qty < 1:  # everything pledged / locked: a GTT could not sell anything
+                if sym in getattr(self.broker, "t1_only_symbols", ()):
+                    self.broker.alert_t1_only(sym)  # only T1 shares and GROWW_SELL_T1 is false
                 if rec:
                     actions.append(self.cancel(sym, reason="no free shares"))
                 continue

@@ -56,6 +56,29 @@ class LiveOrdersDisabled(PermissionError):
     """Raised by every call that would place, modify or cancel a real order."""
 
 
+class GrowwAuthorisationError(RuntimeError):
+    """Groww rejected a sell because the demat account lacks DDPI / e-DIS authorisation."""
+
+
+AUTH_MESSAGE = ("Groww rejected the sell: demat authorisation (DDPI/e-DIS) is missing. "
+                "Enable DDPI in the Groww app.")
+_AUTH_RE = re.compile(
+    r"\bTPIN\b|\be-?DIS\b|\bDDPI\b|\bCDSL\b"
+    r"|\b(demat|holdings?|sell|DP)\b.{0,30}\bauthori[sz]\w*"
+    r"|\bauthori[sz]\w*\s+(required|pending|failed)\b.{0,30}\b(sell|demat|holdings?)\b", re.I)
+
+
+def is_authorisation_problem(text: Any) -> bool:
+    """True when a Groww response or error text says the sell lacks DDPI / e-DIS / TPIN authorisation."""
+    if not text:
+        return False
+    t = str(text)
+    if re.search(r"\bsegment\b|\bnot enabled for\b", t, re.I) and \
+            not re.search(r"\b(TPIN|e-?DIS|DDPI|CDSL|demat)\b", t, re.I):
+        return False  # a segment / permission rejection, not a missing demat authorisation
+    return bool(_AUTH_RE.search(t))
+
+
 class WrongIP(LiveOrdersDisabled):
     """Live order refused: this machine's public IP is not the one registered with Groww."""
 
@@ -115,13 +138,17 @@ def make_reference_id(prefix: str = "TA") -> str:
     return ref
 
 
-def sellable_quantity(holding: dict[str, Any]) -> float:
-    """Free shares only: demat_free_quantity + t1_quantity, capped at the holding.
+def sellable_quantity(holding: dict[str, Any], include_t1: bool = False) -> float:
+    """Free shares only: demat_free_quantity (plus t1_quantity when ``include_t1``), capped at the holding.
 
-    Pledged, repledged, demat-locked and Groww-locked shares are never counted. If
-    Groww leaves both fields out we treat nothing as sellable rather than guess.
+    T1 shares (bought yesterday, not yet in the demat) are left out by default: selling them is
+    a BTST sale with short-delivery / auction risk. Pledged, repledged, demat-locked and
+    Groww-locked shares are never counted. If Groww leaves both fields out we treat nothing as
+    sellable rather than guess.
     """
-    free = float(holding.get("demat_free_quantity") or 0) + float(holding.get("t1_quantity") or 0)
+    free = float(holding.get("demat_free_quantity") or 0)
+    if include_t1:
+        free += float(holding.get("t1_quantity") or 0)
     total = float(holding.get("quantity") or 0)
     return max(0.0, min(free, total))
 
@@ -584,8 +611,17 @@ class GrowwBroker:
                  sleep: Callable[[float], None] = time.sleep,
                  confirm_backoff: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0),
                  allowed_ip: str | None = None, ip_fn: Callable[[], str] | None = None,
-                 ip_cache_s: float = 600.0, clock: Callable[[], float] = time.time):
+                 ip_cache_s: float = 600.0, clock: Callable[[], float] = time.time,
+                 sell_t1: bool = False, ddpi_confirmed: bool = False,
+                 alert_fn: Callable[[str, str, str], Any] | None = None):
         self.token = access_token
+        # Live sells use demat_free_quantity only; T1 shares count only with sell_t1 (BTST risk).
+        # Paper / read-only brokers (live_orders False) keep counting them, as before.
+        self.sell_t1 = bool(sell_t1)
+        self.ddpi_confirmed = bool(ddpi_confirmed)
+        # alert_fn(key, subject, body): called for live-sell warnings; the caller de-duplicates per day.
+        self.alert_fn = alert_fn
+        self._t1_only: set[str] = set()
         # SEBI 2026: Groww accepts API orders only from the registered IP. With allowed_ip set,
         # every order-changing call first checks the public IP (through this client's own
         # session, so through the same proxy Groww sees) and refuses from any other address.
@@ -615,8 +651,52 @@ class GrowwBroker:
         if isinstance(data, dict) and data.get("status") == "FAILURE":
             err = data.get("error") or {}
             raise RuntimeError(f"Groww {err.get('code')}: {err.get('message')}")
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as e:
+            e.body = str(getattr(resp, "text", ""))[:500]  # kept so a sell's authorisation text can be recognised
+            raise
         return data.get("payload", data) if isinstance(data, dict) else data
+
+    @staticmethod
+    def _as_authorisation(e: BaseException) -> GrowwAuthorisationError | None:
+        """The GrowwAuthorisationError for a failed SELL whose error text is about DDPI / e-DIS, else None."""
+        if is_authorisation_problem(f"{e} {getattr(e, 'body', '')}"):
+            return GrowwAuthorisationError(f"{AUTH_MESSAGE} ({e})")
+        return None
+
+    # -- live-sell warnings (DDPI, T1) -------------------------------------------
+    def _alert(self, key: str, subject: str, body: str) -> None:
+        log.warning("%s: %s", subject, body)
+        if self.alert_fn is not None:
+            try:
+                self.alert_fn(key, subject, body)
+            except Exception as e:  # noqa: BLE001 - an alert must never block or break an order path
+                log.warning("alert not delivered: %s", e)
+
+    def warn_sell_without_ddpi(self, symbol: str = "") -> None:
+        """Live sells while GROWW_DDPI_CONFIRMED is false are allowed, but logged and alerted once a day."""
+        if self.live_orders and not self.ddpi_confirmed:
+            self._alert("ddpi-unconfirmed", "[DDPI] not confirmed",
+                        "DDPI not confirmed: sells may be rejected. Confirm DDPI in the Groww app, then set "
+                        f"GROWW_DDPI_CONFIRMED=true.{(' First affected sell: ' + symbol) if symbol else ''}")
+
+    def alert_authorisation(self, symbol: str, detail: str = "") -> None:
+        self._alert(f"auth-{symbol.upper()}", f"[DDPI/e-DIS] sell rejected: {symbol.upper()}",
+                    AUTH_MESSAGE + (f"\nGroww said: {detail}" if detail else ""))
+
+    def alert_t1_only(self, symbol: str) -> None:
+        self._alert(f"t1-{symbol.upper()}", f"[SELL SKIPPED] {symbol.upper()}",
+                    f"{symbol.upper()}: only T1 shares; not sold until they settle "
+                    "(GROWW_SELL_T1=false; T1 sells risk short delivery / auction).")
+
+    @property
+    def t1_only_symbols(self) -> set[str]:
+        """Symbols seen by the last positions()/sellable_qty() whose only sellable shares are T1."""
+        return set(self._t1_only)
+
+    def _include_t1(self) -> bool:
+        return self.sell_t1 or not self.live_orders
 
     def _require_live(self, what: str) -> None:
         if not self.live_orders:
@@ -661,14 +741,24 @@ class GrowwBroker:
                 continue
             sym = h["trading_symbol"]
             out.append(Position(symbol=sym, qty=qty, avg_entry_price=float(h.get("average_price") or 0),
-                                current_price=prices.get(sym), sellable_qty=sellable_quantity(h)))
+                                current_price=prices.get(sym), sellable_qty=self._sellable(h)))
         return out
+
+    def _sellable(self, h: dict[str, Any]) -> float:
+        """Sellable shares of one holding row; remembers holdings that have T1 shares only."""
+        sym = str(h.get("trading_symbol", "")).upper()
+        q = sellable_quantity(h, self._include_t1())
+        if q < 1 and not self._include_t1() and sellable_quantity(h, True) >= 1:
+            self._t1_only.add(sym)
+        else:
+            self._t1_only.discard(sym)
+        return q
 
     def sellable_qty(self, symbol: str) -> float:
         symbol = symbol.upper()
         for h in self.holdings():
             if str(h.get("trading_symbol", "")).upper() == symbol:
-                return sellable_quantity(h)
+                return self._sellable(h)
         return 0.0
 
     def account(self) -> Account:
@@ -801,6 +891,9 @@ class GrowwBroker:
             raise ValueError(f"{symbol}: amount buys fewer than one whole share")
         if side == "sell":
             free = self.sellable_qty(symbol)
+            if qty > free + 1e-9 and symbol in self._t1_only:
+                self.alert_t1_only(symbol)
+                raise ValueError(f"{symbol}: only T1 shares; not sold until they settle (GROWW_SELL_T1 is false)")
             if qty > free + 1e-9:
                 raise ValueError(f"Cannot sell {qty} {symbol}: only {free:g} free shares "
                                  "(pledged, locked and unsettled shares are excluded)")
@@ -815,7 +908,16 @@ class GrowwBroker:
             "product": self.product, "order_type": order_type,
             "transaction_type": side.upper(), "order_reference_id": ref,
         }
-        payload = self._place(body)
+        if side == "sell":
+            self.warn_sell_without_ddpi(symbol)
+        try:
+            payload = self._place(body)
+        except (RuntimeError, requests.HTTPError) as e:
+            auth = self._as_authorisation(e) if side == "sell" else None  # a buy never becomes an authorisation error
+            if auth is None:
+                raise
+            self.alert_authorisation(symbol, str(e))
+            raise auth from e
         order: dict[str, Any] = {
             "id": payload.get("groww_order_id"), "groww_order_id": payload.get("groww_order_id"),
             "order_reference_id": payload.get("order_reference_id") or ref,
@@ -829,6 +931,11 @@ class GrowwBroker:
         }
         if confirm and order["groww_order_id"]:
             order.update(self.confirm_order(order["groww_order_id"]))
+        if side == "sell" and order["status"] == "failed" and (
+                is_authorisation_problem(order.get("remark")) or is_authorisation_problem(payload.get("remark"))):
+            order["remark"] = AUTH_MESSAGE
+            order["authorisation_error"] = True
+            self.alert_authorisation(symbol, str(payload.get("remark") or ""))
         return order
 
     def _place(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -846,6 +953,19 @@ class GrowwBroker:
             except Exception:  # noqa: BLE001 - not found / still unreachable
                 pass
             return self._req("POST", "order/create", json=body)
+
+    def modify_order(self, groww_order_id: str, price: float, qty: int, order_type: str = "LIMIT") -> dict[str, Any]:
+        """Change the price of an open order (POST order/modify, as in the growwapi SDK)."""
+        self._require_live("modify an order")
+        body = {"quantity": int(qty), "price": float(price), "trigger_price": None,
+                "order_type": order_type.upper(), "segment": SEGMENT, "groww_order_id": groww_order_id}
+        return self._req("POST", "order/modify", json=body)
+
+    def order_list(self, page: int = 0, page_size: int = 100) -> list[dict[str, Any]]:
+        """Today's orders (read-only)."""
+        payload = self._req("GET", "order/list", params={"segment": SEGMENT, "page": page, "page_size": page_size})
+        rows = payload.get("order_list") or payload.get("orders") or payload.get("data") or []
+        return list(rows)
 
     def cancel_order(self, groww_order_id: str) -> dict[str, Any]:
         self._require_live("cancel an order")
@@ -871,7 +991,19 @@ class GrowwBroker:
             "order": {"order_type": "LIMIT", "price": _money_str(limit), "transaction_type": "SELL"},
             "product_type": self.product, "exchange": self.exchange, "duration": "DAY",
         }
-        out = self._req("POST", "order-advance/create", json=body)
+        self.warn_sell_without_ddpi(symbol)
+        try:
+            out = self._req("POST", "order-advance/create", json=body)
+        except (RuntimeError, requests.HTTPError) as e:
+            auth = self._as_authorisation(e)  # a GTT stop is always a sell
+            if auth is None:
+                raise
+            self.alert_authorisation(symbol, str(e))
+            raise auth from e
+        note = out.get("remark") or out.get("message") or out.get("status_message")
+        if is_authorisation_problem(note):
+            self.alert_authorisation(symbol, str(note))
+            raise GrowwAuthorisationError(AUTH_MESSAGE)
         return {**out, "reference_id": ref}
 
     def modify_gtt_stop(self, smart_order_id: str, qty: int, trigger: float, limit: float) -> dict[str, Any]:
