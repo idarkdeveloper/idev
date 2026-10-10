@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import re
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import requests
 
 log = logging.getLogger(__name__)
+_WARNED_INLINE = False   # the "Resend refused the inline images" warning is logged once per process
 
 
 def _mentions(text: str) -> str:
@@ -48,19 +50,37 @@ class Notifier:
             out.append("webhook")
         return out
 
-    def send(self, subject: str, body: str, html: str | None = None) -> list[str]:
+    def _post_email(self, subject: str, body: str, html: str | None, images: list[dict[str, Any]] | None) -> None:
+        payload: dict[str, Any] = {"from": self.email_from, "to": [self.email_to], "subject": subject, "text": body,
+                                   **({"html": html} if html else {})}
+        if images:   # inline pictures: <img src="cid:NAME"> in the HTML, content_id NAME here
+            payload["attachments"] = [
+                {"filename": i["filename"], "content": base64.b64encode(i["content"]).decode("ascii"),
+                 "content_type": i.get("content_type", "image/png"), "content_id": i["cid"]} for i in images]
+        r = self.session.post("https://api.resend.com/emails",
+                              headers={"Authorization": f"Bearer {self.resend_api_key}"}, json=payload, timeout=30)
+        r.raise_for_status()
+
+    def send(self, subject: str, body: str, html: str | None = None,
+             images: list[dict[str, Any]] | None = None) -> list[str]:
+        """``images``: [{"cid", "filename", "content" (bytes)}] shown inline in the HTML part through Resend's
+        attachments. If Resend refuses them, the email goes again without the pictures (their <img> tags removed);
+        webhooks get the text only."""
         delivered = ["console"]
         print(f"\n=== {subject} ===\n{body}\n")
         if "email" in self.channels:
             try:
-                r = self.session.post(
-                    "https://api.resend.com/emails",
-                    headers={"Authorization": f"Bearer {self.resend_api_key}"},
-                    json={"from": self.email_from, "to": [self.email_to], "subject": subject, "text": body,
-                          **({"html": html} if html else {})},
-                    timeout=30,
-                )
-                r.raise_for_status()
+                try:
+                    self._post_email(subject, body, html, images)
+                except requests.RequestException as e:
+                    if not images:
+                        raise
+                    global _WARNED_INLINE
+                    if not _WARNED_INLINE:
+                        _WARNED_INLINE = True
+                        log.warning("email with inline images failed (%s); sending without the images", e)
+                    plain = re.sub(r"<img\b[^>]*\bsrc=\"cid:[^\"]*\"[^>]*>", "", html) if html else html
+                    self._post_email(subject, body, plain, None)
                 delivered.append("email")
             except requests.RequestException as e:
                 log.warning("email delivery failed: %s", e)

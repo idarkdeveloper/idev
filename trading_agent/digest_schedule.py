@@ -51,10 +51,24 @@ def build_digest(kind: str, ctx: DigestContext, *, writer: str | None = None, se
     data = build_data(kind, ctx)
     summary, name = write_summary(kind, data, settings, session=session, client=client, known=ctx.known,
                                   cancelled=ctx.expired, known_symbols=ctx.known_symbols)
-    return {**render(data, summary, name), "writer": name, "summary": summary, "data": data}
+    images: list[dict[str, Any]] = []
+    if kind == "evening" and getattr(settings, "digest_charts", True) and isinstance(data.get("bulletin"), dict) and not ctx.expired():
+        try:
+            from .charts import bulletin_images   # matplotlib is loaded here, never at import time
+            images = bulletin_images(data["bulletin"])
+        except Exception as e:  # noqa: BLE001 - no pictures: the bulletin goes out as text
+            log.warning("bulletin charts unavailable: %s: %s", type(e).__name__, e)
+    return {**render(data, summary, name, images), "writer": name, "summary": summary, "data": data, "images": images}
 
 
 def send_digest(notifier: Any, email: dict[str, Any]) -> list[str]:
+    images = email.get("images") or None
+    if images:
+        try:
+            return notifier.send(email["subject"], email["text"], html=email["html"], images=images)
+        except TypeError:  # a notifier without inline-image support: the pictures are left out
+            from .digest_render import strip_cid_images
+            email = {**email, "html": strip_cid_images(email["html"])}
     try:
         return notifier.send(email["subject"], email["text"], html=email["html"])
     except TypeError:  # a notifier that takes no HTML part

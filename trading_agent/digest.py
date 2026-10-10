@@ -1017,6 +1017,9 @@ def evening_report(ctx: DigestContext) -> dict[str, Any]:
     data["groww"] = _section(_groww_close, "Groww portfolio", ctx, today, closed)
     data["practice"] = _section(_practice_close, "practice account", ctx, today, closed,
                                 (data["groww"] if "unavailable" not in data["groww"] else None))
+    if getattr(ctx.settings, "digest_bulletin", True):
+        from .bulletin import build_bulletin   # imported here: bulletin.py builds on this module
+        data["bulletin"] = build_bulletin(ctx)
     data["news"] = _section(_news_today, "news", ctx, today)
     data["deals"] = _section(_deals, "deals", ctx, "evening", today)
     return data

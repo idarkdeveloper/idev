@@ -63,6 +63,8 @@ EDITABLE_ENV_KEYS = {
     "digest_morning": "DIGEST_MORNING",
     "digest_evening": "DIGEST_EVENING",
     "digest_writer": "DIGEST_WRITER",
+    "digest_bulletin": "DIGEST_BULLETIN",
+    "digest_charts": "DIGEST_CHARTS",
     # Only has an effect when GROWW_LIVE_ORDERS=true, which the dashboard can never set.
     "groww_gtt_stops": "GROWW_GTT_STOPS",
 }
@@ -407,6 +409,7 @@ class App:
                 "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
                 "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
                 "digest_enabled": s.digest_enabled, "digest_writer": s.digest_writer,
+                "digest_bulletin": s.digest_bulletin, "digest_charts": s.digest_charts,
                 "digest_channel": bool(s.resend_api_key and s.notify_email_to) or bool(s.notify_webhook_url),
                 "max_slippage_pct": s.max_slippage_pct,
                 "demo": self.demo_trades is not None,
@@ -1072,7 +1075,7 @@ class App:
             elif key in ("digest_morning", "digest_evening"):
                 value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
-            elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
+            elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
                 value = "true" if value in (True, "true", "1", 1, "on") else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
@@ -1319,7 +1322,10 @@ class App:
             email = build_digest(kind, ctx, writer=writer)
         finally:
             root._preview_lock.release()
-        return {k: email[k] for k in ("subject", "text", "html", "writer")}
+        from .digest_render import inline_data_urls
+        out = {k: email[k] for k in ("subject", "text", "html", "writer")}
+        out["html"] = inline_data_urls(out["html"], email.get("images"))   # the preview iframe shows the charts as data: URLs
+        return out
 
     def groww_test(self) -> dict[str, Any]:
         """Check Groww credentials end to end without ever returning the token."""
@@ -1402,7 +1408,7 @@ def _check_type(key: str, value: Any) -> None:
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
+    elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
         if isinstance(value, (list, tuple, dict)):
             raise ValueError(f"{key} must be true or false")
     elif key in ("digest_morning", "digest_evening", "digest_writer"):

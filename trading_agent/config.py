@@ -143,6 +143,8 @@ class Settings:
     digest_top: int = 10
     digest_writer: str = "claude"  # claude (default; the rules summary when it is unavailable or rejected) | auto (Ollama, then Claude) | ollama | rules | none
     digest_claude_model: str = "claude-haiku-4-5"
+    digest_bulletin: bool = True  # the market bulletin (Nifty levels, global markets, commodities, concept) in the evening email
+    digest_charts: bool = True  # its chart images (needs matplotlib); False sends the bulletin as text only
 
     def __post_init__(self) -> None:
         self.watch_investors = list(self.watch_investors)  # never shared between copies of the settings
@@ -270,4 +272,6 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         digest_top=digest_top,
         digest_writer=digest_writer,
         digest_claude_model=env("DIGEST_CLAUDE_MODEL") or "claude-haiku-4-5",
+        digest_bulletin=_bool(env("DIGEST_BULLETIN"), True),
+        digest_charts=_bool(env("DIGEST_CHARTS"), True),
     )

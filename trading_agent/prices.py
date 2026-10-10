@@ -101,6 +101,50 @@ class YahooPrices:
             cache.write_text(json.dumps(bars))
         return bars
 
+    def _ohlc(self, symbol: str, range_: str, interval: str, ttl: float) -> list[dict[str, Any]]:
+        """Open/high/low/close/volume bars from the Yahoo chart API, oldest first: {ts, date, open, high, low, close,
+        volume}. ``ts`` is ISO 8601 in IST; ``date`` the IST date. Bars with a missing price are dropped. Cached on
+        disk for ``ttl`` seconds."""
+        from .timezones import IST
+        ysym = self.yahoo_symbol(symbol)
+        cache = (self.cache_dir / f"yahoo_{ysym.replace('^', 'IDX_').replace('=', '_')}_{range_}_{interval}_ohlc.json"
+                 if self.cache_dir else None)
+        if cache and cache.exists() and time.time() - cache.stat().st_mtime < ttl:
+            return json.loads(cache.read_text())
+        resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
+                                params={"range": range_, "interval": interval}, timeout=self.timeout)
+        _check_status(resp, ysym)
+        data: Any = resp.json()
+        try:
+            res = data["chart"]["result"][0]
+            ts = res["timestamp"]
+            q = res["indicators"]["quote"][0]
+            o, h, lo, c = q["open"], q["high"], q["low"], q["close"]
+            v = q.get("volume") or [0] * len(ts)
+        except (KeyError, IndexError, TypeError) as e:
+            raise LookupError(f"Yahoo returned no {interval} history for {ysym}") from e
+        bars = []
+        for i, t in enumerate(ts):
+            if None in (o[i], h[i], lo[i], c[i]):
+                continue
+            dt = datetime.fromtimestamp(t, tz=timezone.utc).astimezone(IST)
+            bars.append({"ts": dt.isoformat(timespec="seconds"), "date": dt.date().isoformat(), "open": float(o[i]),
+                         "high": float(h[i]), "low": float(lo[i]), "close": float(c[i]), "volume": float(v[i] or 0)})
+        if cache:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(json.dumps(bars))
+        return bars
+
+    def history_ohlc(self, symbol: str, range_: str = "1y", ttl: float | None = None) -> list[dict[str, Any]]:
+        """Daily OHLC bars (see ``_ohlc``). Cached for at most 15 minutes, so an evening read sees the day's final bar."""
+        return self._ohlc(symbol, range_, "1d", min(self.cache_ttl, 900.0) if ttl is None else ttl)
+
+    def history_intraday(self, symbol: str, interval: str = "15m", range_: str = "5d",
+                         ttl: float = 300.0) -> list[dict[str, Any]]:
+        """Intraday OHLC bars (15m, 1h ...), oldest first. Same cache conventions as ``history`` but a short TTL
+        (5 minutes), since the last session is what matters."""
+        return self._ohlc(symbol, range_, interval, ttl)
+
     def dividends(self, symbol: str, range_: str = "10y") -> list[dict[str, Any]]:
         """Dividends per share by ex-date, oldest first: [{date, amount}]. Cached on disk."""
         ysym = self.yahoo_symbol(symbol)
