@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -108,7 +108,8 @@ class ForwardTest:
                          "last_rebalance": None, "rebalances": [], "history": []}
         self.broker = LocalPaperBroker(self.dir / f"{self.universe.lower()}_broker.json",
                                        starting_cash=self.data["capital"], price_fn=price_fn,
-                                       currency="INR", whole_shares=True, cost_model=cost_model)
+                                       currency="INR", whole_shares=True, cost_model=cost_model,
+                                       now_fn=lambda: self.now().astimezone(timezone.utc).isoformat(timespec="seconds"))
 
     # -- state ------------------------------------------------------------------
     @property
@@ -241,3 +242,103 @@ def format_forward(s: dict[str, Any]) -> str:
     if s["days"] < 60:
         lines.append("Too early to judge: give it at least a few months before reading anything into the gap.")
     return "\n".join(lines)
+
+
+# -- rebuilding the account from its start date ---------------------------------------------------------
+class AsOfPrices:
+    """A price source as it stood at the close of ``asof`` (a date string): ``history`` stops at that day and
+    ``latest_price`` is that day's close. There is no fallback: a symbol with no bar dated exactly ``asof`` has no
+    price (LookupError), so a fill is never made at an older close."""
+
+    def __init__(self, prices: Any, asof: str):
+        self.prices, self.asof = prices, asof
+
+    def history(self, symbol: str, range_: str = "2y") -> list[dict[str, Any]]:
+        return [b for b in self.prices.history(symbol, range_) if b["date"] <= self.asof]
+
+    def has_bar(self, symbol: str) -> bool:
+        try:
+            bars = self.history(symbol, "2y")
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(bars) and bars[-1]["date"] == self.asof
+
+    def latest_price(self, symbol: str) -> float:
+        bars = self.history(symbol, "2y")
+        if not bars or bars[-1]["date"] != self.asof:
+            raise LookupError(f"no bar for {symbol} dated {self.asof}")
+        return float(bars[-1]["close"])
+
+    __call__ = latest_price
+
+
+def forward_exists(state_dir: Path, universe: str) -> bool:
+    d = Path(state_dir) / "forward"
+    return any((d / f"{universe.lower()}{suffix}.json").exists() for suffix in ("", "_broker"))
+
+
+def rebuild_from(state_dir: Path, asof: str, *, universe: str = "NIFTYMIDCAP150", top: int = 20,
+                 capital: float = 500_000.0, prices: Any, cost_model: Any | None,
+                 screen_fn: Callable[[Any, list[dict[str, str]]], dict[str, Any]],
+                 members_loader: Callable[[], list[dict[str, str]]], membership: Any,
+                 holidays: Any | None = None, force: bool = False,
+                 hour: int = 16, minute: int = 0) -> dict[str, Any]:
+    """Recreate the paper forward account as the first routine run made it on ``asof``, point in time.
+
+    The candidates are the index members on ``asof`` (``membership.members_on``; names from ``members_loader``), ranked
+    by ``screen_fn(as_of_prices, members)`` on prices up to ``asof``. Equal weights, the same charges, fills at that
+    day's close; the index fund is bought with the same capital. Everything needs a bar dated exactly ``asof``: a pick
+    without one is left out (listed in ``skipped_no_bar``), and a benchmark without one stops the rebuild. The
+    fills and the account start carry the ``asof`` date, not today's. ValueError for a weekend, an NSE holiday, an
+    unknown membership or one that only starts after ``asof``; FileExistsError when the account exists without
+    ``force`` (which deletes it first)."""
+    day = datetime.strptime(asof, "%Y-%m-%d")   # ValueError for anything but YYYY-MM-DD
+    if day.weekday() >= 5:
+        raise ValueError(f"{asof} is a weekend: there was no close to trade at")
+    if holidays is not None and not holidays.is_trading_day(day.date()):
+        raise ValueError(f"{asof} was an NSE holiday: there was no close to trade at")
+    if membership is None:
+        raise ValueError(f"no point-in-time membership history for {universe.upper()}; run index-history first")
+    if membership.known_since > asof:
+        raise ValueError(f"the {universe.upper()} membership is only known from {membership.known_since}, after {asof}: "
+                         "the candidates on that date would be guesses")
+    asof_prices = AsOfPrices(prices, asof)
+    bench = (INDEX_FUNDS.get(universe.upper()) or "^NSEI").upper()
+    if not asof_prices.has_bar(bench):
+        raise ValueError(f"the benchmark {bench} has no bar dated {asof}; cannot start the account that day")
+    if forward_exists(state_dir, universe):
+        if not force:
+            raise FileExistsError(f"a forward test for {universe.upper()} already exists in {state_dir}; "
+                                  "pass --force to delete it and rebuild")
+        for suffix in ("", "_broker"):
+            (Path(state_dir) / "forward" / f"{universe.lower()}{suffix}.json").unlink(missing_ok=True)
+    names = {m["symbol"].upper(): m for m in members_loader()}
+    members = [names.get(sym.upper(), {"symbol": sym, "name": "", "industry": ""}) for sym in sorted(membership.members_on(asof))]
+    skipped: list[str] = []
+
+    def screen() -> dict[str, Any]:
+        result = dict(screen_fn(asof_prices, members))
+        keep = []
+        for row in result.get("top", []):
+            if asof_prices.has_bar(row["symbol"]):
+                keep.append(row)
+            else:
+                skipped.append(row["symbol"])
+        result["top"] = keep
+        return result
+
+    clock = datetime(day.year, day.month, day.day, hour, minute, tzinfo=IST)
+    ft = ForwardTest(state_dir, universe=universe, top=top, capital=capital, price_fn=asof_prices.latest_price,
+                     cost_model=cost_model, now=lambda: clock)
+    ft.broker._state["created_at"] = clock.astimezone(timezone.utc).isoformat(timespec="seconds")   # not the wall clock
+    out = ft.run(screen)
+    return {**out, "skipped_no_bar": skipped, "members_on_asof": len(members)}
+
+
+def format_rebuild(summary: dict[str, Any]) -> str:
+    """The forward report plus what the rebuild left out."""
+    text = format_forward(summary)
+    if summary.get("skipped_no_bar"):
+        text += ("\nLeft out, no bar dated exactly that day: " + ", ".join(summary["skipped_no_bar"])
+                 + " (no older close was used).")
+    return text + f"\nCandidates: {summary.get('members_on_asof')} index members on that date (point in time)."
