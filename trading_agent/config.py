@@ -122,6 +122,8 @@ class Settings:
     # Live-order safety (Groww)
     max_slippage_pct: float = 0.5  # limit price = LTP +/- this percent
     groww_gtt_stops: bool = False  # keep a GTT stop-loss at Groww per live holding
+    groww_ddpi_confirmed: bool = False  # you confirmed DDPI is active in the Groww app (sells need it)
+    groww_sell_t1: bool = False  # live sells may include T1 shares (BTST: short-delivery / auction risk)
     groww_allowed_ip: str | None = None  # the static IP registered with Groww (SEBI 2026); live orders refuse elsewhere
     groww_proxy_url: str | None = None  # send Groww calls through this fixed-IP proxy (e.g. from GitHub Actions)
     # Needed when the API key is not scoped to one workspace (the API then asks for it).
@@ -263,6 +265,8 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         state_dir=Path(env("STATE_DIR") or "state"),
         max_slippage_pct=slippage,
         groww_gtt_stops=_bool(env("GROWW_GTT_STOPS"), False),
+        groww_ddpi_confirmed=_bool(env("GROWW_DDPI_CONFIRMED"), False),
+        groww_sell_t1=_bool(env("GROWW_SELL_T1"), False),
         groww_allowed_ip=env("GROWW_ALLOWED_IP") or None,
         groww_proxy_url=env("GROWW_PROXY_URL") or None,
         anthropic_workspace_id=env("ANTHROPIC_WORKSPACE_ID") or None,

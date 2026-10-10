@@ -6,8 +6,12 @@ holdings fields used for sellable quantity, tick sizes, and the order / GTT list
 ``groww-check --live-test SYMBOL --i-understand-real-orders`` (needs
 GROWW_LIVE_ORDERS=true) additionally places REAL but deliberately harmless orders:
 
+* first today's order list (count, open orders, and any order the agent did not place), so you can
+  compare it with the Groww app;
 * a 1-share DAY LIMIT BUY priced ``--offset-pct`` (default 3%) below the last price,
-  so it should rest unfilled, then reads it back by id and by reference and cancels it;
+  so it should rest unfilled, then reads it back by id and by reference, moves its limit price up
+  0.5% through Groww's modify-order endpoint (staying at least 2% below the last price, so it cannot
+  fill), reads the new price back and cancels it (the cancel is attempted even if the modify fails);
 * if you hold a free share of SYMBOL, a 1-share GTT SELL with its trigger 20% below the
   price, raised once, read back and cancelled.
 
@@ -24,6 +28,15 @@ from typing import Any, Callable
 from .groww import (IST, GrowwBroker, TokenCache, classify_status, limit_price, round_to_tick,
                     sellable_quantity)
 
+DEFAULT_LIVE_TEST_SYMBOL = "ITC"  # liquid large cap, 0.05 tick
+AGENT_REFERENCE_PREFIXES = ("TA-", "VT-", "SL-")  # make_reference_id prefixes used by this agent
+MODIFY_UP_PCT = 0.5
+MODIFY_MAX_PCT_OF_LTP = 98.0  # the modified price must stay at least 2% below LTP so it cannot fill
+
+DDPI_MANUAL_CHECK = ("confirm in the Groww app (Profile -> Settings -> Demat / DDPI authorisation) that DDPI is "
+                     "active; without it automated sells are rejected. Groww's API has no DDPI status call, so "
+                     "record your confirmation with GROWW_DDPI_CONFIRMED=true (Settings page).")
+
 
 class Check:
     def __init__(self) -> None:
@@ -35,8 +48,13 @@ class Check:
 
 
 def read_only_checks(broker: GrowwBroker, *, token_source: str, cache: TokenCache | None = None,
-                     api_key: str | None = None, tick_fn: Callable[[str], float | None] | None = None) -> Check:
+                     api_key: str | None = None, tick_fn: Callable[[str], float | None] | None = None,
+                     ddpi_confirmed: bool | None = None) -> Check:
     c = Check()
+    state = {True: "you have confirmed it (GROWW_DDPI_CONFIRMED=true)",
+             False: "NOT yet confirmed (GROWW_DDPI_CONFIRMED=false)",
+             None: "confirmation not recorded"}[ddpi_confirmed]
+    c.add("DDPI (manual check)", None, f"{DDPI_MANUAL_CHECK} Status: {state}.")
     expiry = None
     if cache is not None and cache.path.exists():
         try:
@@ -79,11 +97,68 @@ def read_only_checks(broker: GrowwBroker, *, token_source: str, cache: TokenCach
     return c
 
 
-def live_test(broker: GrowwBroker, symbol: str, *, offset_pct: float = 3.0, c: Check | None = None) -> Check:
+def _order_list_rows(broker: GrowwBroker, c: Check) -> None:
+    """Print today's order list: count, open orders, and orders not placed by the agent."""
+    try:
+        rows = broker.order_list()
+    except Exception as e:  # noqa: BLE001
+        c.add("live: today's orders", False, f"{type(e).__name__}: {e}")
+        return
+    open_rows = [r for r in rows if classify_status(r.get("order_status")) == "open"]
+    c.add("live: today's orders", True, f"{len(rows)} order(s) today, {len(open_rows)} open (compare with the Groww app)")
+    for r in open_rows:
+        ref = str(r.get("order_reference_id") or "")
+        mine = ref.startswith(AGENT_REFERENCE_PREFIXES)
+        c.add("live: open order", None,
+              f"{r.get('transaction_type')} {r.get('quantity')} {r.get('trading_symbol')} @ {r.get('price')} "
+              f"{r.get('order_status')} ref {ref or 'none'}" + ("" if mine else " - NOT placed by this agent"))
+    foreign = [r for r in rows if not str(r.get("order_reference_id") or "").startswith(AGENT_REFERENCE_PREFIXES)]
+    if foreign:
+        c.add("live: orders not from the agent", None,
+              f"{len(foreign)} of {len(rows)} today's order(s) carry no agent reference (placed in the app or elsewhere)")
+
+
+def _modify_price(price: float, ltp: float, tick: float) -> float | None:
+    """The resting price raised 0.5% (to the tick), capped at 98% of LTP; None when it cannot move up."""
+    new = round_to_tick(price * (1 + MODIFY_UP_PCT / 100), tick, "down")
+    cap = round_to_tick(ltp * MODIFY_MAX_PCT_OF_LTP / 100, tick, "down")
+    new = min(new, cap)
+    if new <= price + 1e-9:
+        new = round_to_tick(price + tick, tick, "down")  # a coarse tick: move one tick instead
+        if new > cap + 1e-9:
+            return None
+    return new
+
+
+def _modify_step(broker: GrowwBroker, c: Check, oid: str, price: float, ltp: float, tick: float) -> None:
+    new = _modify_price(price, ltp, tick)
+    if new is None:
+        c.add("live: modify order", None, f"no room to raise {price} and stay 2% below LTP {ltp}; skipped")
+        return
+    try:
+        broker.modify_order(oid, new, 1)
+        seen = None
+        for read in (broker.order_status, broker.order_detail):
+            try:
+                seen = (read(oid) or {}).get("price")
+            except Exception:  # noqa: BLE001
+                seen = None
+            if seen is not None:
+                break
+        ok = seen is not None and abs(float(seen) - new) < 1e-6
+        c.add("live: modify order", ok if seen is not None else None,
+              f"limit {price} -> {new} (+{MODIFY_UP_PCT:g}%, {new / ltp * 100:.2f}% of LTP); price read back: {seen}")
+    except Exception as e:  # noqa: BLE001 - the cancel below must still run
+        c.add("live: modify order", False, f"{type(e).__name__}: {e}")
+
+
+def live_test(broker: GrowwBroker, symbol: str = DEFAULT_LIVE_TEST_SYMBOL, *, offset_pct: float = 3.0,
+              c: Check | None = None) -> Check:
     """Real but harmless orders; see the module docstring. Refuses unless live."""
     c = c or Check()
     broker._require_live("run the live order test")
-    symbol = symbol.upper()
+    symbol = (symbol or DEFAULT_LIVE_TEST_SYMBOL).upper()
+    _order_list_rows(broker, c)
     ltp = broker.latest_price(symbol)
     tick = broker.tick_size(symbol)
     price = round_to_tick(ltp * (1 - offset_pct / 100), tick, "down")
@@ -113,6 +188,10 @@ def live_test(broker: GrowwBroker, symbol: str, *, offset_pct: float = 3.0, c: C
         detail = broker.order_detail(oid)
         c.add("live: order detail fields", "average_fill_price" in detail and "filled_quantity" in detail,
               ", ".join(sorted(detail)[:12]))
+        if st["status"] == "open":
+            _modify_step(broker, c, oid, price, ltp, tick)
+        else:
+            c.add("live: modify order", None, f"order is {st['order_status']}, not open; modify skipped")
     finally:
         try:
             now = (broker.order_status(oid) or {}).get("order_status")

@@ -73,7 +73,19 @@ def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool =
                        exchange=settings.groww_exchange, price_fallback=price_fn,
                        max_slippage_pct=settings.max_slippage_pct, session=session,
                        allowed_ip=settings.groww_allowed_ip,
+                       sell_t1=settings.groww_sell_t1, ddpi_confirmed=settings.groww_ddpi_confirmed,
+                       alert_fn=live_alert_fn(settings),
                        tick_size_fn=(lambda sym: ticks.tick_size(sym, settings.groww_exchange)) if ticks else None)
+
+
+def live_alert_fn(settings: Settings) -> Any:
+    """alert_fn for the live broker: DDPI / T1 warnings through the notifier, once a day per key."""
+    from .live_alerts import make_alert_fn
+
+    def send(subject: str, body: str) -> None:
+        make_notifier(settings).send(subject, body)
+
+    return make_alert_fn(settings.state_dir, send)
 
 
 def groww_session(settings: Settings) -> requests.Session:

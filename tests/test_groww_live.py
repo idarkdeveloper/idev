@@ -387,9 +387,10 @@ def test_resolve_token_env_wins_and_cache_reused(settings):
 # 6. sellable quantity
 # --------------------------------------------------------------------------- #
 def test_sellable_quantity_excludes_pledged_and_locked():
-    assert sellable_quantity({"quantity": 10, "demat_free_quantity": 5, "t1_quantity": 3, "pledge_quantity": 2}) == 8
+    h = {"quantity": 10, "demat_free_quantity": 5, "t1_quantity": 3, "pledge_quantity": 2}
+    assert sellable_quantity(h) == 5 and sellable_quantity(h, include_t1=True) == 8  # T1 only when asked
     assert sellable_quantity({"quantity": 10}) == 0  # fields missing: sell nothing rather than guess
-    assert sellable_quantity({"quantity": 4, "demat_free_quantity": 5, "t1_quantity": 3}) == 4  # capped
+    assert sellable_quantity({"quantity": 4, "demat_free_quantity": 5, "t1_quantity": 3}, include_t1=True) == 4  # capped
     b = GrowwBroker("tok", session=FakeSession(routes()))
     p = b.positions()[0]
     assert p.qty == 10 and p.sellable_qty == 8 and p.to_dict()["sellable_qty"] == 8
@@ -400,12 +401,12 @@ def test_sellable_quantity_excludes_pledged_and_locked():
 def test_live_sell_limited_to_free_shares():
     sess = FakeSession(routes())
     b = live_broker(sess)
-    with pytest.raises(ValueError, match="only 8 free shares"):
-        b.submit_order("RELIANCE", "sell", qty=9)
+    with pytest.raises(ValueError, match="only 5 free shares"):
+        b.submit_order("RELIANCE", "sell", qty=6)
     assert sess.writes() == []
-    order = b.submit_order("RELIANCE", "sell", qty=8)
+    order = b.submit_order("RELIANCE", "sell", qty=5)
     body = next(c[2]["json"] for c in sess.calls if c[1].endswith("/order/create"))
-    assert body["transaction_type"] == "SELL" and body["quantity"] == 8 and body["price"] == 2847.7
+    assert body["transaction_type"] == "SELL" and body["quantity"] == 5 and body["price"] == 2847.7
     assert order["side"] == "sell"
 
 
@@ -535,7 +536,7 @@ def test_groww_check_read_only_makes_no_writes(tmp_path):
     c = read_only_checks(GrowwBroker("tok", session=sess), token_source="cached token",
                          tick_fn=lambda s: 0.10)
     text = format_rows(c)
-    assert "[PASS] holdings" in text and "[PASS] sellable fields" in text and "sellable 8" in text
+    assert "[PASS] holdings" in text and "[PASS] sellable fields" in text and "sellable 5" in text
     assert "[PASS] tick RELIANCE: tick size 0.1" in text and "[PASS] GTT list" in text
     assert sess.writes() == []
 
