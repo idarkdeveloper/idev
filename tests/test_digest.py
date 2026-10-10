@@ -2090,3 +2090,12 @@ def test_the_saved_holdings_note_appears_once_near_the_top(s):
          "watch": digest._watch(ctx_for(s, prices=Prices({"X": bars(110, step=0.002)}), groww=saved), MON.date()), "deals": digest.unavailable("x")}
     mt = digest_render.render(m, "S.", "rules")["text"]
     assert mt.count("saved holdings from") == 1 and mt.index("saved holdings from") < mt.index("HOLDINGS TO WATCH")
+
+
+def test_number_word_from_the_data_is_allowed_but_invented_ones_are_not():
+    # Haiku copied "billion" from a real headline ("US$2.25 billion facility"); that is a fact, not an invented figure.
+    data = {"news": [{"symbol": "VEDL", "title": "Vedanta promoter shares encumbered for US$2.25 billion facility"}]}
+    ok, why = digest_writer.validate_summary("Vedanta shares were encumbered for a US$2.25 billion facility.", data)
+    assert ok, why
+    ok, why = digest_writer.validate_summary("Vedanta raised twenty million dollars.", data)
+    assert not ok and "number above ten" in why

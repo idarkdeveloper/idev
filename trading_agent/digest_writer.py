@@ -345,8 +345,10 @@ def validate_summary(text: str | None, data: dict[str, Any], known: Any = None, 
                 if in_names and not w[0].isupper():
                     continue   # a company-name word is only checked when it is capitalised
                 return False, f"mentions {w}, which is not in the data"
-    if _NUMWORDS.search(text):
-        return False, "spells out a number above ten"
+    facts_text = json.dumps(data, ensure_ascii=False).lower()
+    for m in _NUMWORDS.finditer(text):   # a number word copied from the data (a headline's "billion") is fine
+        if not re.search(r"\b" + re.escape(m.group(0).lower()) + r"\b", facts_text):
+            return False, "spells out a number above ten"
     if _SHORT_VERB.search(text) or _REALLY_ADVICE.search(_FIXED_NOUNS.sub(" ", text)):
         return False, "gives advice to the reader; the summary only restates the facts"
     for pat in _ADVICE:
@@ -362,8 +364,11 @@ def validate_summary(text: str | None, data: dict[str, Any], known: Any = None, 
         except ValueError:
             continue
         before, after = text[:m.start()], text[m.end():]
-        if _UNITS.match(after):
-            return False, f"uses a unit after {lit}"
+        um = _UNITS.match(after)
+        if um:
+            phrase = (lit + " " + um.group(1)).lower()   # "2.25 billion" copied from a headline is a fact
+            if phrase not in facts_text and (lit + um.group(1)).lower() not in facts_text:
+                return False, f"uses a unit after {lit}"
         money = bool(_MONEY_BEFORE.search(before))
         pct = bool(_PCT_AFTER.match(after))
         if re.fullmatch(r"\d{4}", lit) and 1900 <= n <= 2100 and not money and not pct:
