@@ -91,7 +91,7 @@ def summary_facts(kind: str, data: dict[str, Any]) -> dict[str, Any]:
     if "world" in data:
         out["world"] = _take(data["world"], ("region_lines", "trends", "futures_line", "vix_line", "note"))
     if "gauges" in data:
-        out["gauges"] = _take(data["gauges"], ("warnings", "warning_texts", "note", "flows_line", "breadth_line"))
+        out["gauges"] = _take(data["gauges"], ("warnings", "warning_texts", "note", "premarket_line", "flows_line", "breadth_line"))
     bi = data.get("buy_ideas")
     if isinstance(bi, dict):
         ideas = bi.get("ideas") or []
@@ -221,7 +221,7 @@ def _walk(obj: Any, nums: set[float], names: set[str], symbols: set[str]) -> Non
             _walk(v, nums, names, symbols)
 
 
-_TEXT_KEYS = {"region_lines", "futures_line", "vix_line", "flows_line", "breadth_line", "note", "reading", "range", "why", "guidance", "rules", "summary",
+_TEXT_KEYS = {"region_lines", "futures_line", "vix_line", "premarket_line", "flows_line", "breadth_line", "note", "reading", "range", "why", "guidance", "rules", "summary",
               "warning_texts", "sizing", "regime"}
 
 

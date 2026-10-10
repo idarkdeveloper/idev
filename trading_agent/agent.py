@@ -404,7 +404,8 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             live = ctx.live_money
             if side.lower() == "buy":
                 from .bands import book_for
-                blocked = book_for(ctx.settings).refuse_buy(symbol.strip())
+                from .integration import buy_block
+                blocked = book_for(ctx.settings).refuse_buy(symbol.strip()) or buy_block(ctx.settings)
                 if blocked:
                     return json.dumps({"error": blocked})
             try:

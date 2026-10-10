@@ -610,7 +610,7 @@ treated as missing (no filtering).
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Mirror every alert and daily email to Telegram (`TELEGRAM_ALERTS=false` = off). Runbook section 13. |
 | `HEARTBEAT_URL` | https ping URL called every 5 minutes by the watch service (healthchecks.io style dead-man's switch). Runbook section 12. |
 | `TA_ALLOWED_HOSTS` | Extra Host names the dashboard answers to besides localhost, as a comma list of exact names (for phone access over Tailscale: `box.tail1234.ts.net`). Any other Host gets HTTP 421. Runbook section 15. |
-| `INTEGRATION_CHECK`, `INTEGRATION_CLAUDE` | `true` / `false` (defaults). The daily read-only check of the live services at 08:35 IST, and whether it also makes one 5-token Claude call. See *Development*. |
+| `INTEGRATION_CHECK`, `INTEGRATION_CLAUDE` | `true` / `false` (defaults). The daily read-only check of the live services at 08:30 IST, and whether it also makes one 5-token Claude call. See *Development*. |
 | `QUIVER_API_KEY`, `ALPACA_*` | US mode only. |
 | `NEWS_TAGGER`, `OLLAMA_URL`, `OLLAMA_MODEL`, `NEWS_CLAUDE_MODEL` | Headline tagging: `auto` (default, local Ollama `qwen2.5:3b` if running) / `ollama` / `claude` / `none`. See *News headlines*. |
 
@@ -696,17 +696,24 @@ python -m trading_agent integration-check            # prints each step; exit co
 python -m trading_agent integration-check --claude   # also one 5-token Claude Haiku call
 ```
 
-Steps: NSE bulk/block deals CSV for the last trading day and one announcements call; BSE deals CSV (a request flow per
+Steps: the server clock (NTP synchronised, offset at most 1 s; Linux only); NSE bulk/block deals CSV for the last trading day and one announcements call; BSE deals CSV (a request flow per
 deal type, through the BSE client's throttle); Yahoo daily bars for `NIFTYBEES.NS` and `^NSEI`; NSE's price-band file and
 the last trading day's bhavcopy; Groww holdings and order list **only with a token that is already cached** (a new one
 is never requested, so the 150-a-day budget is untouched; with no cached token or an active cool-down the step says
 "skipped (no cached token)"); Claude only with `INTEGRATION_CLAUDE=true`; Resend and Telegram for configuration only
-(nothing is sent). The Groww client is wrapped so any HTTP method except GET, and any method except `holdings` and
-`order_list`, raises.
+(nothing is sent). The Groww client is wrapped so any HTTP method except GET, and any method except `holdings`,
+`order_list` and `available_cash`, raises.
 
-The server's watch service runs it at 08:35 IST on trading days (one run per day, claim-file guarded like the forward
+It doubles as a **pre-market canary**: when a step fails, or the check has not run by 09:10 on a trading day, automated
+buys are refused (reason `pre-market check failed: <steps>`; sells and stop exits are never blocked), the dashboard shows
+an amber banner, and the failure is alerted once a day by email and Telegram. A passing run (the watch service, the
+CLI or the Settings button) clears it. The morning email carries a one-line result. The service also keeps a
+`state/state.json.bak`, a daily 30-day backup in `state/backups/`, an NSE/Yahoo circuit breaker, and a 60-second
+heartbeat in market hours: see `docs/runbook.md` section 16.
+
+The server's watch service runs it at 08:30 IST on trading days (one run per day, claim-file guarded like the forward
 job) and stores `state/integration_check.json` (`{at, steps: [{name, ok, ms, detail}], ok}`). A failure sends one alert a
-day through the notifier; a clean run sends nothing. The dashboard shows `Integration: ok 08:35 · 8/8` beside the
+day through the notifier; a clean run sends nothing. The dashboard shows `Integration: ok 08:30 · 8/8` beside the
 freshness chip (red when the last run failed or is more than two trading days old) and Settings has a *Run integration
 check* button. `INTEGRATION_CHECK=true` (default) and `INTEGRATION_CLAUDE=false` are in Settings and `.env`.
 

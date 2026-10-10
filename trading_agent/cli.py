@@ -853,6 +853,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
                             practice=broker if isinstance(broker, LocalPaperBroker) else None)
     from .forward_schedule import ForwardScheduler, run_forward_due
     from .heartbeat import Heartbeat
+    from .backup import make_scheduler as make_backup_scheduler
+    from .clockcheck import startup_check
     from .integration import make_scheduler as make_integration_scheduler
     from .notify import install_log_redaction
     install_log_redaction()   # bot tokens and the heartbeat path never reach a log, even at -v
@@ -861,6 +863,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                                holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
                 integration=make_integration_scheduler(settings, notifier, holidays),
+                backup=make_backup_scheduler(settings, holidays),
                 heartbeat=Heartbeat(settings.heartbeat_url, fail_enabled=True if settings.heartbeat_fail else None),
                 window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
@@ -868,6 +871,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 holidays=holidays, broker_factory=lambda: make_broker(settings),
                 check_fn=lambda: check(settings, broker=w._broker, data=data, notifier=notifier,
                                        dry_run=not settings.anthropic_api_key))
+    startup_check(settings, notifier)   # TOTP logins need a correct clock: log it, alert once a day if it is wrong
     print(f"Watching {', '.join(settings.investors)} every {w.every}s, {args.window_start}-{args.window_end} IST, "
           f"NSE trading days. Ctrl+C to stop.")
     try:

@@ -176,6 +176,28 @@ class ForwardScheduler:
             t.join(timeout)
 
 
+class DailyJobScheduler(ForwardScheduler):
+    """A once-per-trading-day job with the forward test's claim-file guard and retries, under its own file names
+    (``<claim_prefix>_<day>.claim``). Subclasses set ``claim_prefix``, ``label`` and the run window."""
+
+    def _clean_old_claims(self, today: str) -> None:
+        marker = self.state_dir / f"prune_{self.claim_prefix}_{today}.done"
+        if marker.exists():
+            return
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            cutoff = (date.fromisoformat(today) - timedelta(days=PRUNE_DAYS)).isoformat()
+            start, end = len(self.claim_prefix) + 1, -len(".claim")
+            for f in self.state_dir.glob(f"{self.claim_prefix}_*.claim"):
+                if f.name[start:end] < cutoff:
+                    f.unlink(missing_ok=True)
+            for old in self.state_dir.glob(f"prune_{self.claim_prefix}_*.done"):
+                old.unlink(missing_ok=True)
+            marker.write_text("done", encoding="utf-8")
+        except (OSError, ValueError):
+            pass
+
+
 def rebuild_for_settings(settings: Any, prices: Any, holidays: Any, asof: str, *, universe: str | None = None,
                          top: int = 20, capital: float | None = None, force: bool = False,
                          progress: Callable[[str], Any] | None = None) -> dict[str, Any]:

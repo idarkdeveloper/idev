@@ -1,9 +1,11 @@
-"""Dead-man's switch: a heartbeat thread pings an https URL every 5 minutes while the watch loop is making progress.
+"""Dead-man's switch: a heartbeat thread pings an https URL every 5 minutes (every 60 seconds in the market window)
+while the watch loop is making progress.
 
 Works with healthchecks.io, Better Stack and UptimeRobot heartbeat URLs. The pings come from their own daemon thread
 (so one long tick cannot silence them) but are tied to the loop's progress: the watch loop stamps a monotonic time at
 the start and end of every iteration, and the thread pings "ok" only while that stamp is recent (3 loop intervals, at
-least 20 minutes). A stalled loop pings ``/fail`` with "watch loop stalled N min"; a tick that raised pings ``/fail``
+least 20 minutes). In the market window (09:15 to 15:30 IST on a trading day; the watch loop supplies the test) the ping goes every
+60 seconds and the loop counts as stalled after 3 minutes; outside it the 5 minute / 20 minute rules apply. A stalled loop pings ``/fail`` with "watch loop stalled N min"; a tick that raised pings ``/fail``
 with the error text at once. After a failure the next healthy moment pings "ok" at once.
 
 ``/fail`` (a POST with the error as body, the healthchecks.io convention) is only sent to hc-ping.com hosts, or when
@@ -28,6 +30,8 @@ PING_EVERY_S = 300.0
 TIMEOUT_S = 10.0
 RECOVER_POLL_S = 15.0   # while failing, look this often for the loop to be healthy again
 MIN_STALL_S = 1200.0
+WINDOW_PING_EVERY_S = 60.0   # in the market window
+WINDOW_STALL_S = 180.0
 
 
 def fail_url(url: str) -> str:
@@ -58,9 +62,25 @@ class Heartbeat:
         self._thread: threading.Thread | None = None
         self._progress: Callable[[], float | None] = lambda: None
         self._stall = MIN_STALL_S
+        self._loop_every = 60.0
+        self._window: Callable[[], bool] | None = None
         if self.url:
             from .notify import add_log_secret
             add_log_secret(self.url, urlsplit(self.url).path)
+
+    def _in_window(self) -> bool:
+        try:
+            return bool(self._window and self._window())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _every_now(self) -> float:
+        return min(self.every, WINDOW_PING_EVERY_S) if self._in_window() else self.every
+
+    def _stall_now(self) -> float:
+        """3 minutes in the market window (or 3 loop intervals when the loop is slower than a minute), else the
+        20 minute rule."""
+        return max(WINDOW_STALL_S, 3 * self._loop_every) if self._in_window() else self._stall
 
     # -- one request ---------------------------------------------------------------
     def ping(self, error: str | None = None) -> bool:
@@ -106,14 +126,14 @@ class Heartbeat:
         if not self.url:
             return "skip"
         err, self._error = self._error, None
-        if err is not None and self._last_fail is not None and self._clock() - self._last_fail < self.every:
+        if err is not None and self._last_fail is not None and self._clock() - self._last_fail < self._every_now():
             self._failing = True
             return "skip"   # rate limit: one reported fail per interval
         if err is None:
             stamp = self._progress()
             age = None if stamp is None else self._clock() - stamp
-            if age is not None and age >= self._stall:
-                if self._last_fail is not None and self._clock() - self._last_fail < self.every:
+            if age is not None and age >= self._stall_now():
+                if self._last_fail is not None and self._clock() - self._last_fail < self._every_now():
                     return "skip"   # still stalled, and a fail went out within the last interval
                 err = f"watch loop stalled {int(age // 60)} min"
         if err is not None:
@@ -128,17 +148,19 @@ class Heartbeat:
         self.ping()
         return "ok"
 
-    def start(self, progress: Callable[[], float | None], *, stall_s: float, stop: threading.Event) -> None:
+    def start(self, progress: Callable[[], float | None], *, stall_s: float, stop: threading.Event,
+              window: Callable[[], bool] | None = None, loop_every: float = 60.0) -> None:
         if not self.url or (self._thread and self._thread.is_alive()):
             return
         self._progress, self._stall = progress, stall_s
+        self._window, self._loop_every = window, float(loop_every)
         self._stop = stop
 
         def run() -> None:
             self.beat()   # the first one at once: the check turns green right after the start
             while not stop.is_set():
-                timeout = RECOVER_POLL_S if self._failing else self.every
-                if self._wake.wait(min(timeout, self.every)):
+                timeout = RECOVER_POLL_S if self._failing else self._every_now()
+                if self._wake.wait(min(timeout, self._every_now())):
                     self._wake.clear()
                     if stop.is_set():
                         break

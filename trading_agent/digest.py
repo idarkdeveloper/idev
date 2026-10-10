@@ -812,6 +812,13 @@ def _flow_breadth_lines(ctx: DigestContext) -> dict[str, Any]:
     out: dict[str, Any] = {}
     today = ctx.now().date()
     try:
+        from .integration import premarket_line
+        line = premarket_line(s, ctx.now())
+        if line:
+            out["premarket_line"] = line
+    except Exception:  # noqa: BLE001 - never stop the email
+        log.exception("pre-market line failed")
+    try:
         from .flows import FlowStore, flows_line
         line = flows_line(FlowStore(Path(s.state_dir)).rows(), today, calendar=ctx.calendar)
         if line:

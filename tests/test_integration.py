@@ -97,8 +97,8 @@ class FakePrices:
 
 
 class FakeGrowwReads:
-    def __init__(self, holdings=None, orders=None, error=None):
-        self.error = error
+    def __init__(self, holdings=None, orders=None, error=None, cash_error=None):
+        self.error, self.cash_error = error, cash_error
         self._h = [{"trading_symbol": "ITC", "quantity": 4, "average_price": 400.0}] if holdings is None else holdings
         self._o = [{"groww_order_id": "G1", "order_status": "OPEN"}] if orders is None else orders
 
@@ -109,6 +109,11 @@ class FakeGrowwReads:
 
     def order_list(self, page=0, page_size=100):
         return self._o
+
+    def available_cash(self):
+        if self.cash_error:
+            raise RuntimeError(self.cash_error)
+        return 12345.0
 
 
 def good(settings, **over):
@@ -134,12 +139,12 @@ def test_every_step_ok_with_good_answers(s):
     steps = by_name(r)
     assert r["ok"] is True and r["last_trading_day"] == LAST
     for name in ("NSE deals", "NSE announcements", "BSE deals", "Yahoo prices", "NSE price bands", "NSE bhavcopy",
-                 "Groww (read-only)", "Resend"):
+                 "Groww (read-only)", "Groww cash", "Resend"):
         assert steps[name]["ok"] and not steps[name].get("skipped"), name
     assert steps["Claude"]["skipped"] and steps["Telegram"]["skipped"]       # off / empty: ok but skipped
     assert steps["Resend"]["detail"] == "filled" and "empty" in steps["Telegram"]["detail"]
     assert all(set(x) >= {"name", "ok", "ms", "detail"} for x in r["steps"])
-    assert integration.counts(r) == (8, 8)
+    assert integration.counts(r) == (9, 9)
     assert "3 bulk, 1 block" in steps["NSE deals"]["detail"]
 
 
@@ -155,6 +160,7 @@ def test_every_step_ok_with_good_answers(s):
     ("Groww (read-only)", {"groww": lambda: FakeGrowwReads(holdings=[{"trading_symbol": "ITC"}])}, "lack"),
     ("Groww (read-only)", {"groww": lambda: FakeGrowwReads(error="HTTP 500")}, "HTTP 500"),
     ("Groww (read-only)", {"groww": lambda: FakeGrowwReads(orders=[{"groww_order_id": "G1"}])}, "order_status"),
+    ("Groww cash", {"groww": lambda: FakeGrowwReads(cash_error="the margin reply has none of")}, "margin reply"),
 ])
 def test_a_failing_step_is_reported_and_only_that_step(s, name, over, needle):
     r = good(s, **over)
@@ -288,8 +294,8 @@ def at(y, m, d, hh, mm):
 def test_scheduler_runs_once_per_trading_day_from_0835(tmp_path):
     runs = []
     sch = IntegrationScheduler(tmp_path, lambda: runs.append(1), holidays=Holidays(), threaded=False)
-    assert sch.tick(at(2026, 10, 12, 8, 34))["due"] is False and not runs          # too early
-    assert sch.tick(at(2026, 10, 12, 8, 35))["started"] and runs == [1]
+    assert sch.tick(at(2026, 10, 12, 8, 29))["due"] is False and not runs          # too early
+    assert sch.tick(at(2026, 10, 12, 8, 30))["started"] and runs == [1]
     sch.tick(at(2026, 10, 12, 9, 30))
     assert runs == [1]                                                              # not twice the same day
     again = IntegrationScheduler(tmp_path, lambda: runs.append(2), holidays=Holidays(), threaded=False)

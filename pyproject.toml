@@ -35,3 +35,17 @@ module = [
     "trading_agent.validation",       # Optional fields in the historical-signal validator
 ]
 ignore_errors = true
+
+# The modules that place or guard orders must annotate every function.
+[[tool.mypy.overrides]]
+module = [
+    "trading_agent.groww",
+    "trading_agent.broker",
+    "trading_agent.live",
+    "trading_agent.live_alerts",
+    "trading_agent.risk",
+    "trading_agent.stops",
+    "trading_agent.safety",
+    "trading_agent.integration",
+]
+disallow_untyped_defs = true

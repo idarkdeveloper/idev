@@ -74,8 +74,13 @@ def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool =
                        max_slippage_pct=settings.max_slippage_pct, session=session,
                        allowed_ip=settings.groww_allowed_ip,
                        sell_t1=settings.groww_sell_t1, ddpi_confirmed=settings.groww_ddpi_confirmed,
-                       alert_fn=live_alert_fn(settings),
+                       alert_fn=live_alert_fn(settings), buy_gate=lambda: _buy_block(settings),
                        tick_size_fn=(lambda sym: ticks.tick_size(sym, settings.groww_exchange)) if ticks else None)
+
+
+def _buy_block(settings: Settings) -> str | None:
+    from .integration import buy_block
+    return buy_block(settings)
 
 
 def live_alert_fn(settings: Settings) -> Any:
@@ -180,7 +185,7 @@ def make_data_source(settings: Settings) -> Any:
     if settings.data_source == "nse":
         from .nse import NSEClient
 
-        client = NSEClient(cache_dir=settings.state_dir / "cache")
+        client = NSEClient(cache_dir=settings.state_dir / "cache", breaker_file=settings.state_dir / "nse_breaker.json")
         if settings.bse_deals:
             from .bse import make_bse_client
             client.bse = make_bse_client(settings)  # BSE_DEALS=false: no BSE calls at all

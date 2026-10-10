@@ -497,7 +497,9 @@ class App:
         """The last integration-check result and the line shown near the freshness chip (a file read; the page polls)."""
         from . import integration
         root = self._parent or self
+        from .integration import buy_block
         return {"enabled": root.settings.integration_check, "running": root._integration_busy,
+                "canary": buy_block(root.settings),
                 "line": integration.status_line(root.settings.state_dir, self._now_dt(), holidays=self._safe_holidays()),
                 "last": integration.load_result(root.settings.state_dir)}
 

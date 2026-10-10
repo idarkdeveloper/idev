@@ -652,7 +652,7 @@ def test_watch_loop_stamps_progress_reports_tick_errors_and_never_depends_on_the
     log: list = []
 
     class HB:
-        def start(self, progress, *, stall_s, stop):
+        def start(self, progress, *, stall_s, stop, **kw):
             log.append(("start", stall_s, progress() > 0))
 
         def report_error(self, text):

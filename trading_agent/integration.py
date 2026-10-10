@@ -3,13 +3,18 @@
 The unit tests use fakes, so they cannot notice that NSE changed a CSV column or BSE moved a form. This module makes
 one small real request per service and checks the answer has the shape the code reads. It runs
 
-* from the watch service at 08:35 IST on trading days (``IntegrationScheduler``, claim-file guarded like the forward
+* from the watch service at 08:30 IST on trading days (``IntegrationScheduler``, claim-file guarded like the forward
   job, so a restart or a second process does not run it twice),
 * on demand: ``python -m trading_agent integration-check``, and the Settings button on the dashboard.
 
 Every step is independent and has its own timeout; one failing never hides another. The result is written to
 ``state/integration_check.json`` as ``{at, steps: [{name, ok, ms, detail}], ok}``. A failure sends ONE alert a day
 through the notifier (email, webhook, Telegram); a clean run sends nothing.
+
+It is also the pre-market canary. When a run fails, or the check did not run by 09:10 on a trading day, the state file
+``canary_failed.json`` is set and automated BUYS are refused (``buy_block``: the agent's paper/live buys and any live Groww
+buy) until a run passes; sells and stop exits are never blocked. The dashboard shows an amber banner meanwhile, and the
+morning email carries a one-line result.
 
 Safety: nothing here can place, change or cancel an order, or spend a Groww token.
 
@@ -34,18 +39,19 @@ from typing import Any, Callable
 
 import requests
 
-from .forward_schedule import ForwardScheduler
+from .forward_schedule import DailyJobScheduler
 from .state import atomic_write
 from .timezones import IST
 
 log = logging.getLogger(__name__)
 
 RESULT_FILE = "integration_check.json"
-RUN_AFTER = dtime(8, 35)        # IST; before the morning email (09:00) and the open (09:15)
+RUN_AFTER = dtime(8, 30)        # IST; before the morning email (09:00) and the open (09:15)
+OVERDUE_AFTER = dtime(9, 10)    # no run by now on a trading day: the canary counts as failed
+FLAG_FILE = "canary_failed.json"
 LATEST = dtime(12, 0)           # after this the day is skipped: the point is to know before the market is busy
 STEP_TIMEOUT_S = 45.0
 STALE_TRADING_DAYS = 2          # the dashboard line turns red when the last run is older than this
-PRUNE_DAYS = 7
 
 _UNSET: Any = object()
 
@@ -101,7 +107,7 @@ class ReadOnlySession:
 class ReadOnlyGroww:
     """The two Groww reads the check needs and nothing else; any other attribute raises ``OrderBlocked``."""
 
-    ALLOWED = ("holdings", "order_list")
+    ALLOWED = ("holdings", "order_list", "available_cash")
 
     def __init__(self, broker: Any):
         self._broker = broker
@@ -195,7 +201,8 @@ def claude_ping(settings: Any) -> dict[str, Any]:
 
 def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | None = None, session: Any | None = None,
               nse: Any | None = None, bse: Any = _UNSET, prices: Any | None = None, groww: Any = _UNSET,
-              claude: Callable[[Any], dict[str, Any]] | None = None, timeout: float = STEP_TIMEOUT_S) -> dict[str, Any]:
+              claude: Callable[[Any], dict[str, Any]] | None = None, clock: Callable[[], dict[str, Any]] | None = None,
+              timeout: float = STEP_TIMEOUT_S) -> dict[str, Any]:
     """Run every step once and return the result dict. Tests inject fakes for ``session`` (archive files), ``nse``,
     ``bse``, ``prices``, ``groww`` (a callable returning a read-only client, or None) and ``claude``."""
     from .bands import URL as BANDS_URL
@@ -220,6 +227,9 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
         def groww() -> Any:
             return cached_groww(settings)
     claude = claude or claude_ping
+    if clock is None:
+        from .clockcheck import check_clock
+        clock = check_clock
 
     def nse_deals() -> str:
         got = nse.probe_deals(last_day)
@@ -263,6 +273,15 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
             raise ValueError(f"bhavcopy is for {got_day}, not {last_day}")
         return f"bhavcopy for {got_day} parsed ({len(closes)} EQ symbols)"
 
+    def groww_cash() -> str:
+        client = groww()
+        if client is None:
+            raise Skip("skipped (no cached token)")
+        cash = client.available_cash()
+        if not isinstance(cash, (int, float)) or cash < 0:
+            raise ValueError(f"available cash is not a usable number ({cash!r})")
+        return "available cash read (the margin fields the code uses are present)"
+
     def groww_read() -> str:
         client = groww()
         if client is None:
@@ -287,6 +306,14 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
         r = claude(settings)
         return f"{r.get('model')} answered in {r.get('ms')} ms"
 
+    def clock_step() -> str:
+        res = clock()
+        if not res.get("checked"):
+            raise Skip(str(res.get("detail", "not checked")))
+        if not res.get("ok"):
+            raise ValueError(str(res.get("detail")) + "; TOTP logins need a correct clock")
+        return str(res.get("detail"))
+
     def presence(label: str, *filled: Any) -> Callable[[], str]:
         def check() -> str:
             if all(filled):
@@ -302,6 +329,8 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
         ("NSE price bands", bands),
         ("NSE bhavcopy", bhavcopy),
         ("Groww (read-only)", groww_read),
+        ("Groww cash", groww_cash),
+        ("Server clock", clock_step),
         ("Claude", claude_step),
         ("Resend", presence("Resend", getattr(settings, "resend_api_key", None), getattr(settings, "notify_email_to", None))),
         ("Telegram", presence("Telegram", getattr(settings, "telegram_bot_token", None),
@@ -359,12 +388,83 @@ def alert_once_a_day(state_dir: Path, notifier: Any, result: dict[str, Any], tod
                 old.unlink(missing_ok=True)
     except OSError:
         pass
-    body = "These live checks failed:\n" + "\n".join(f"- {s['name']}: {s['detail']}" for s in failed)
+    body = "The pre-market check failed, so new automated buys are paused until a check passes (sells and stops are not affected):\n" + "\n".join(f"- {s['name']}: {s['detail']}" for s in failed)
     try:
         notifier.send(f"[INTEGRATION] {len(failed)} live check{'s' if len(failed) != 1 else ''} failed", body)
     except Exception:  # noqa: BLE001
         log.warning("could not send the integration-check alert")
         return False
+    return True
+
+
+# --------------------------------------------------------------------------- the canary failsafe
+def flag_path(state_dir: Path) -> Path:
+    return Path(state_dir) / FLAG_FILE
+
+
+def load_flag(state_dir: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(flag_path(state_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def set_flag(state_dir: Path, reasons: list[str], at: datetime) -> None:
+    try:
+        atomic_write(flag_path(state_dir), json.dumps({"at": at.isoformat(timespec="seconds"), "steps": reasons}))
+    except OSError as e:
+        log.warning("could not store the canary flag: %s", e)
+
+
+def clear_flag(state_dir: Path) -> None:
+    try:
+        flag_path(state_dir).unlink()
+    except OSError:
+        pass
+
+
+def buy_block(settings: Any) -> str | None:
+    """The reason automated BUYS are refused right now, or None. Sells and stop exits never call this."""
+    if not getattr(settings, "integration_check", True) or getattr(settings, "market", "in") != "in":
+        return None
+    flag = load_flag(settings.state_dir)
+    if not flag:
+        return None
+    return "pre-market check failed: " + (", ".join(str(x) for x in flag.get("steps") or []) or "unknown")
+
+
+def premarket_line(settings: Any, now: datetime) -> str | None:
+    """One line for the morning email: today's canary result, or None when there is nothing to say yet."""
+    if not getattr(settings, "integration_check", True) or getattr(settings, "market", "in") != "in":
+        return None
+    res = load_result(settings.state_dir)
+    flag = load_flag(settings.state_dir)
+    if res is not None and str(res.get("at", ""))[:10] == now.astimezone(IST).date().isoformat():
+        if res.get("ok"):
+            passed, ran = counts(res)
+            return f"Pre-market check: ok {passed}/{ran}"
+        failed = ", ".join(s["name"] for s in res["steps"] if not s.get("ok"))
+        return f"Pre-market check: FAILED: {failed}. New buys are paused."
+    if flag:
+        return "Pre-market check: FAILED: " + ", ".join(str(x) for x in flag.get("steps") or []) + ". New buys are paused."
+    return None
+
+
+def mark_overdue(settings: Any, notifier: Any, now: datetime, holidays: Any | None = None) -> bool:
+    """On a trading day after 09:10 with no run today: set the flag and alert (once a day). True if newly set."""
+    now = now.astimezone(IST)
+    if not getattr(settings, "integration_check", True) or now.time() < OVERDUE_AFTER or not _trading(now.date(), holidays):
+        return False
+    res = load_result(settings.state_dir)
+    if (res is not None and str(res.get("at", ""))[:10] == now.date().isoformat()) or load_flag(settings.state_dir):
+        return False
+    reason = f"did not run by {OVERDUE_AFTER.strftime('%H:%M')}"
+    set_flag(settings.state_dir, [reason], now)
+    if callable(notifier) and not hasattr(notifier, "send"):
+        notifier = notifier()
+    alert_once_a_day(settings.state_dir, notifier,
+                     {"steps": [{"name": "Pre-market check", "ok": False, "detail": reason}]}, now.date().isoformat())
     return True
 
 
@@ -377,6 +477,10 @@ def run_and_record(settings: Any, *, notifier: Any | None = None, now: datetime 
         atomic_write(result_path(settings.state_dir), json.dumps(result, indent=1))
     except OSError as e:
         log.warning("could not store the integration-check result: %s", e)
+    if result["ok"]:
+        clear_flag(settings.state_dir)
+    else:
+        set_flag(settings.state_dir, [s["name"] for s in result["steps"] if not s.get("ok")], now)
     if callable(notifier) and not hasattr(notifier, "send"):
         notifier = notifier()   # a cached_notifier getter
     alert_once_a_day(settings.state_dir, notifier, result, now.date().isoformat())
@@ -417,7 +521,7 @@ def status_line(state_dir: Path, now: datetime, holidays: Any | None = None) -> 
 # --------------------------------------------------------------------------- #
 # The daily job
 # --------------------------------------------------------------------------- #
-class IntegrationScheduler(ForwardScheduler):
+class IntegrationScheduler(DailyJobScheduler):
     """Runs the check once per trading day from 08:35 IST, with the forward job's claim-file guard
     (``integration_<day>.claim``). The scheduler is ticked by the watch loop."""
 
@@ -426,25 +530,21 @@ class IntegrationScheduler(ForwardScheduler):
     latest = LATEST
 
     def __init__(self, state_dir: Path, run_fn: Callable[[], Any], *, holidays: Any = None,
-                 run_after: dtime = RUN_AFTER, threaded: bool = True, clock: Callable[[], float] = time.monotonic):
+                 run_after: dtime = RUN_AFTER, threaded: bool = True, clock: Callable[[], float] = time.monotonic,
+                 overdue_fn: Callable[[datetime], Any] | None = None):
         super().__init__(state_dir, run_fn, holidays=holidays, run_after=run_after, threaded=threaded, clock=clock)
+        self.overdue_fn = overdue_fn   # called on every tick: sets the canary flag when no run happened by 09:10
 
-    def _clean_old_claims(self, today: str) -> None:
-        marker = self.state_dir / f"prune_integration_{today}.done"
-        if marker.exists():
-            return
-        try:
-            self.state_dir.mkdir(parents=True, exist_ok=True)
-            cutoff = (date.fromisoformat(today) - timedelta(days=PRUNE_DAYS)).isoformat()
-            for f in self.state_dir.glob("integration_*.claim"):
-                if f.name[len("integration_"):-len(".claim")] < cutoff:
-                    f.unlink(missing_ok=True)
-            for old in self.state_dir.glob("prune_integration_*.done"):
-                old.unlink(missing_ok=True)
-            marker.write_text("done", encoding="utf-8")
-        except (OSError, ValueError):
-            pass
-
+    def tick(self, now: datetime | None = None) -> dict[str, Any]:
+        now = now or datetime.now(IST)
+        out = super().tick(now)
+        if self.overdue_fn is not None:
+            try:
+                if self.overdue_fn(now):
+                    out["overdue"] = True
+            except Exception:  # noqa: BLE001 - never stops the watch
+                log.exception("integration overdue check failed")
+        return out
 
 def make_scheduler(settings: Any, notifier: Any = None, holidays: Any = None) -> IntegrationScheduler | None:
     """The scheduler for the watch service, or None when INTEGRATION_CHECK is off (or the market is not India)."""
@@ -455,4 +555,5 @@ def make_scheduler(settings: Any, notifier: Any = None, holidays: Any = None) ->
         result = run_and_record(settings, notifier=notifier, holidays=holidays)
         log.info("%s", format_result(result).splitlines()[-1])
 
-    return IntegrationScheduler(Path(settings.state_dir), job, holidays=holidays)
+    return IntegrationScheduler(Path(settings.state_dir), job, holidays=holidays,
+                                overdue_fn=lambda now: mark_overdue(settings, notifier, now, holidays))

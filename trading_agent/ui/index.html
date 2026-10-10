@@ -45,6 +45,7 @@
       <button type="button" class="small" id="btn-demo-reset-groww" hidden>Reset to my Groww portfolio</button>
       <span id="demo-confirm" hidden><span id="demo-confirm-text" style="font-weight:400"></span> <button type="button" class="small danger" id="btn-demo-yes">Yes, reset</button> <button type="button" class="small" id="btn-demo-no">Cancel</button></span>
     </span></div>
+  <div id="canary-banner" role="alert" hidden style="border:1px solid var(--color-replay);border-radius:8px;padding:10px 14px;margin:0 0 12px;font-weight:600"></div>
   <section class="card regime-card">
     <div class="regime-row">
       <div class="regime" id="regime"><span class="sub">Loading global context…</span></div>
@@ -268,7 +269,7 @@
         <input type="checkbox" id="dg-summary" style="width:20px;height:20px;min-height:20px;margin:0"><label for="dg-summary" class="sub">with the AI summary (uses your Claude credit)</label></div>
     </div>
     <div class="group"><span class="group-title">Live checks</span>
-      <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-integ" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-integ" style="color:var(--ink)">Check the live services every trading morning (08:35 IST)</label><div class="sub">Reads NSE, BSE, Yahoo, NSE's archive files and, with a login token Groww already gave out, your holdings and order list. It never places an order and never asks Groww for a new token. A failure sends one alert a day. Takes effect when the watch service restarts.</div></div></div>
+      <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-integ" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-integ" style="color:var(--ink)">Check the live services every trading morning (08:30 IST)</label><div class="sub">Reads NSE, BSE, Yahoo, NSE's archive files and, with a login token Groww already gave out, your holdings and order list. It never places an order and never asks Groww for a new token. A failure sends one alert a day. Takes effect when the watch service restarts.</div></div></div>
         <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-integ-claude" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-integ-claude" style="color:var(--ink)">Include one tiny Claude call</label><div class="sub">A five-token "Reply OK" to Claude Haiku: costs a fraction of a paisa, off by default.</div></div></div></div>
       <div class="row"><button type="button" class="small" id="btn-integ">Run integration check</button><span class="sub" id="integ-note"></span></div>
       <div id="integ-steps" class="sub" style="display:flex;flex-direction:column;gap:2px;margin-top:6px"></div>
@@ -422,6 +423,7 @@
   function paintIntegration(j){
     try {
       const L = (j && j.line) || {level: "idle", text: "Integration: unknown", title: ""};
+      const cb = $("canary-banner"); if(cb){ cb.hidden = !(j && j.canary); cb.textContent = j && j.canary ? "New buys are paused. " + j.canary.charAt(0).toUpperCase() + j.canary.slice(1) + ". Sells and stops still work. Run the integration check in Settings (or the CLI) once it passes to resume." : ""; }
       const chip = $("integ-chip"); chip.className = "pill fresh " + L.level; chip.title = L.title || ""; $("integ-text").textContent = L.text;
       const box = $("integ-steps"); if(!box) return;
       const last = j && j.last;

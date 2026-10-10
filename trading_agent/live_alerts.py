@@ -13,6 +13,7 @@ import json
 import logging
 import threading
 import time
+from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -40,8 +41,7 @@ def _write(path: Path, marks: dict[str, Any]) -> None:
         log.warning("could not record the alert marks: %s", e)
 
 
-def _locked(path: Path):
-    from contextlib import ExitStack
+def _locked(path: Path) -> ExitStack:
     stack = ExitStack()
     stack.enter_context(_LOCK)
     try:

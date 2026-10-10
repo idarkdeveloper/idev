@@ -15,6 +15,8 @@ from typing import Any
 
 import requests
 
+from .circuit import CircuitBreaker, GuardedSession
+
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
@@ -33,7 +35,10 @@ class YahooPrices:
                  cache_ttl: float = 6 * 3600, archive: Any | None = None):
         self.archive = archive   # price_archive.PriceArchive: closed bars kept even if Yahoo drops or rewrites them
         self.suffix = suffix
-        self.session = session or requests.Session()
+        # Every fetch goes through a circuit breaker (3 refusals in a row: pause 30 s, 60 s, 300 s) that lives as long as
+        # this object, which the watch loop keeps for the whole run.
+        self.breaker = CircuitBreaker("Yahoo")
+        self.session = GuardedSession(session or requests.Session(), self.breaker)
         self.timeout = timeout
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.cache_ttl = cache_ttl

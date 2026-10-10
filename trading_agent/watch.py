@@ -59,7 +59,7 @@ class Watcher:
                  holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
                  news: Any | None = None, broker_factory: Callable[[], Any] | None = None,
                  digest: Any | None = None, forward: Any | None = None, heartbeat: Any | None = None,
-                 integration: Any | None = None):
+                 integration: Any | None = None, backup: Any | None = None):
         self.settings = settings
         self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
         self._blocked_until: datetime | None = None
@@ -79,8 +79,9 @@ class Watcher:
         self._news = news  # NewsService: negative headlines for held stocks
         self._digest = digest  # DigestScheduler: the morning and evening emails (own worker thread)
         self._forward = forward  # ForwardScheduler: the paper forward test, once a trading day after the close
+        self._backup = backup  # BackupScheduler: copies the state files once a trading day after the close
         self._integration = integration  # IntegrationScheduler: the read-only live-services check at 08:35 IST
-        self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every 5 minutes, whatever the market window
+        self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every 5 minutes (every minute in the market window)
         self._broker = broker
         self._notifier = notifier
         self._stop = threading.Event()
@@ -359,6 +360,11 @@ class Watcher:
                 info["forward"] = self._forward.tick(now)
             except Exception:  # noqa: BLE001 - the paper forward test never stops the watch
                 log.exception("forward test check failed")
+        if self._backup is not None:  # once a trading day after the close; its own worker thread
+            try:
+                info["backup"] = self._backup.tick(now)
+            except Exception:  # noqa: BLE001 - the backup never stops the watch
+                log.exception("backup scheduling failed")
         if self._integration is not None:  # once a trading day from 08:35; returns at once (its own worker thread)
             try:
                 info["integration"] = self._integration.tick(now)
@@ -416,7 +422,9 @@ class Watcher:
         if self._heartbeat is not None:   # its own thread: a long tick cannot silence it, a stalled loop is reported
             try:
                 from .heartbeat import stall_after
-                self._heartbeat.start(lambda: self._progress, stall_s=stall_after(self.every), stop=self._stop)
+                from .safety import market_open
+                self._heartbeat.start(lambda: self._progress, stall_s=stall_after(self.every), stop=self._stop,
+                                      window=lambda: market_open(datetime.now(IST), self.holidays), loop_every=self.every)
             except Exception:  # noqa: BLE001 - the dead-man ping never stops the watch
                 log.warning("heartbeat thread did not start")
         while not self._stop.is_set():
