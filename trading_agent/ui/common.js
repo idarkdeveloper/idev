@@ -302,8 +302,87 @@ window.TA = (function(){
     return {init, set, get: () => choice, resolved: () => resolve(choice), onChange: (fn) => { listeners.push(fn); }};
   })();
 
+  // One horizon of a signal-lab result as sorted rows, for the table and the plain-English reading.
+  function signalRows(r, h){
+    const res = (r.results || {})[h] || {}, label = k => (r.signals[k] || {}).label || k;
+    return Object.entries(res).filter(([, s]) => s.t_stat != null).map(([k, s]) => ({k, label: label(k), t: s.t_stat, verdict: s.verdict, model: k === "walk_forward_model", s}))
+      .sort((a, b) => b.t - a.t);
+  }
+  // Plain-English reading of the portfolio backtest, built from the numbers shown.
+  function factorTakeaway(r){
+    const st = r.stats, sg = st.strategy, ew = st.equal_weight;
+    const fund = st.index_fund, bench = fund || st.benchmark;
+    const benchName = fund ? `the ${r.index_fund_symbol} index fund` : /^NIFTYBEES/i.test(r.benchmark_symbol || "") ? "NIFTY 50 with dividends" : "NIFTY 50";
+    if(!sg || sg.total_return == null || !bench || bench.total_return == null) return "";
+    const yrs = r.months / 12, yrsTxt = yrs >= 1.5 ? `${yrs.toFixed(1)} years` : `${r.months} months`;
+    const rs = v => "₹" + Math.round(100 * (1 + v));
+    const pp = v => (v >= 0 ? "+" : "−") + Math.abs(v * 100).toFixed(1) + " points";
+    const out = [];
+    const beat = sg.total_return > bench.total_return;
+    out.push(`Over ${yrsTxt}, every ₹100 in the top-${r.top} ${esc(r.universe)} factor portfolio became ${rs(sg.total_return)} after ${money(r.costs_paid)} of charges, against ${rs(bench.total_return)} in ${benchName}. That is ${(sg.cagr * 100).toFixed(1)}% a year against ${(bench.cagr * 100).toFixed(1)}%.`);
+    if(ew && ew.cagr != null && !fund){
+      const screenAdds = sg.cagr - ew.cagr;
+      out.push(screenAdds > 0
+        ? `But just holding every ${esc(r.universe)} member equally, with no screen and no charges, made ${pct(ew.total_return)}. So most of the lead over NIFTY 50 came from ${esc(r.universe)} stocks as a group doing better than the 50 largest; the screen itself added about ${pp(screenAdds)} a year on top.`
+        : `Just holding every ${esc(r.universe)} member equally made ${pct(ew.total_return)}, more than the screen: picking the top ${r.top} cost money against owning them all.`);
+    }
+    if(sg.volatility && bench.volatility) out.push(`It was a much bumpier ride: ${(sg.volatility / bench.volatility).toFixed(1)}× the swings, with a worst fall of ${pct(sg.max_drawdown)} against ${pct(bench.max_drawdown)}.`);
+    const curve = r.strategy || [], bc = fund ? (r.index_fund || []) : (r.benchmark || []);
+    if(curve.length > 13){
+      let pk = 0; curve.forEach((v, i) => { if(v > curve[pk]) pk = i; });
+      const fromPeak = curve[curve.length - 1] / curve[pk] - 1;
+      const n = curve.length - 1, a = n - 12;
+      const last12 = curve[n] / curve[a] - 1, b12 = bc[a] && bc[n] ? bc[n] / bc[a] - 1 : null;
+      if(fromPeak < -0.1 && pk < n) out.push(`Most of the gain came early: it peaked in ${shortDate(r.dates[pk])} and is ${Math.abs(fromPeak * 100).toFixed(1)}% below that peak now.`);
+      if(b12 != null) out.push(`Over the last 12 months it returned ${pct(last12)} against ${pct(b12)} for ${benchName}${last12 < b12 ? ", so it has been lagging lately" : ""}.`);
+    }
+    if(!r.point_in_time) out.push("It ranks today's index members only, which flatters it: stocks that fell out of the index are missing.");
+    const vd = r.validation;
+    if(vd && vd.verdict) out.push(vd.verdict === "likely skill" ? "The luck checks below say this looks like skill rather than chance."
+      : vd.verdict === "no edge" ? "The luck checks below found no edge: treat the result above as luck."
+      : "The luck checks below say this could easily be luck.");
+    out.push(beat
+      ? `Bottom line: it beat ${benchName} in this one window, but with far bigger drops${ew && sg.cagr - ew.cagr < 0.03 && !fund ? ", much of the edge was the universe rather than the picks," : ""} and past results like this often fade. Worth forward-testing in paper money, not betting big on.`
+      : `Bottom line: after charges it did not beat ${benchName}; owning the index fund was simpler and better here.`);
+    return out.join(" ");
+  }
+  // Plain-English reading of one horizon's results, built from the numbers shown.
+  function signalTakeaway(rows, r, h){
+    const per = h === "5" ? "week" : h === "20" ? "month" : h === "60" ? "quarter" : h + " trading days";
+    const cost = r.round_trip_cost || 0, t2 = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2);
+    const gapOf = x => x.s.top_minus_bottom, fam = x => (r.signals[x.k] || {}).family || "";
+    const names = xs => xs.map(x => x.label).join(", ");
+    const by = v => rows.filter(x => x.verdict === v), signals = rows.filter(x => !x.model);
+    const pred = by("predictive"), rev = by("reversed"), luck = by("could be luck"), small = by("too small to trade");
+    const out = [];
+    if(pred.length){
+      out.push(`${names(pred)} predicted the next ${per} strongly enough to matter: t of 3 or more and a gap between the top and bottom fifth bigger than the ${(cost * 100).toFixed(2)}% charges. Treat it as a candidate, and check it holds on the other horizons too.`);
+    } else {
+      const best = rows[0];
+      out.push(`None of the ${signals.length} signals reliably predicted the next ${per}.`);
+      if(best) out.push(`The strongest, ${best.label} (t ${t2(best.t)}), ${best.t < 2 ? "is inside the range luck alone produces (under 2)" : "is borderline"}, and its top fifth beat the bottom fifth by ${pct(gapOf(best), 2)}, ${gapOf(best) != null && gapOf(best) < cost ? "less than" : "against"} the ${(cost * 100).toFixed(2)}% a round trip costs in charges.`);
+    }
+    if(luck.length || small.length) out.push(`${names(luck.concat(small))} looked promising but ${small.length && !luck.length ? "the gap is smaller than the charges" : "could still be luck (t between 2 and 3)"}.`);
+    const up = signals.filter(x => x.t > 0).length, down = signals.filter(x => x.t < 0).length;
+    if(!pred.length && Math.abs(up - down) <= 3) out.push(`${up} pointed the right way and ${down} the wrong way, about the split you'd get from coin tosses.`);
+    const avg = f => { const xs = signals.filter(x => fam(x) === f).map(x => x.t); return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null; };
+    const trend = avg("trend"), mr = avg("mean reversion");
+    if(trend != null && mr != null && trend < -0.5 && mr > 0.5) out.push(`Trend signals (recent winners, stocks near highs) leaned the wrong way and mean-reversion ones (recent losers) the right way: over a ${per}, winners in this index tended to give a little back. Too weak to trade on.`);
+    else if(trend != null && mr != null && trend > 0.5 && mr < -0.5) out.push(`Trend signals leaned the right way and mean-reversion ones the wrong way: over a ${per}, winners tended to keep going, though not reliably.`);
+    if(rev.length) out.push(`${names(rev)} came out reversed (t of −2 or below): doing the opposite would have worked, which may be real or chance.`);
+    const model = rows.find(x => x.model);
+    if(model && model.verdict !== "predictive") out.push(`The walk-forward model, which combines every signal and learns only from the past, did no better (t ${t2(model.t)}).`);
+    const all = [];
+    Object.entries(r.results || {}).forEach(([hh, res]) => Object.entries(res).forEach(([k, s]) => { if(s.deflated_sharpe != null) all.push({k, hh, s}); }));
+    all.sort((a, b) => b.s.deflated_sharpe - a.s.deflated_sharpe);
+    const odds = all[0];
+    if(odds && r.trials) out.push(`After charges and allowing for the ${r.trials} signal-and-horizon combinations tried, the best odds of a real edge across all horizons belong to ${esc((r.signals[odds.k] || {}).label || odds.k)} (${odds.hh}d) at ${Math.round(odds.s.deflated_sharpe * 100)}%, and that is the best of ${r.trials} tries, so some of it is just picking the winner.`);
+    out.push(pred.length ? "Bottom line: one possible edge worth watching, not yet a reason to trade."
+                         : `Bottom line: don't buy or sell ${esc(r.universe)} stocks on these signals alone over a ${per}.`);
+    return out.join(" ");
+  }
   return {$, esc, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct,
-          daysAgo, shortDay, clip, lookupTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme};
+          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme};
 })();
 window.TA.theme.init();

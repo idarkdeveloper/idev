@@ -1,5 +1,5 @@
 (function(){
-  const {$, esc, pct, toast, api, tile, C, lineChart, rupeesShort, inr, sinr, spct, lookupTakeaway, attachSuggest, shortDate} = TA;
+  const {$, esc, pct, toast, api, tile, C, lineChart, rupeesShort, inr, sinr, spct, lookupTakeaway, attachSuggest, shortDate, factorTakeaway, signalTakeaway, signalRows} = TA;
   let T = null, slug = null, side = "buy";
   const WHO = {you: "You", agent: "Agent (rules)", nifty: "Nifty"};
   const tone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
@@ -221,7 +221,18 @@
     let r;
     try { r = await api(`/replay/api/trial/${slug}/tools`); } catch(e){ toast(e.message); return; }
     const ks = Object.keys(r);
-    $("tools").innerHTML = ks.length ? ks.map(k => `<h3 style="margin-top:8px">${k === "signal_lab" ? "Signal lab" : "Factor backtest"} as of ${esc(shortDate(r[k].date))}, ${r[k].years} years</h3><pre class="mono" style="white-space:pre-wrap;font-size:12.5px">${esc(r[k].text)}</pre>`).join("") : `<div class="sub">Run a tool to see how the strategies looked with the data available on the replay date.</div>`;
+    $("tools").innerHTML = ks.length ? ks.map(k => `<h3 style="margin-top:8px">${k === "signal_lab" ? "Signal lab" : "Factor backtest"} as of ${esc(shortDate(r[k].date))}, ${r[k].years} years</h3>${toolMeaning(k, r[k].result)}<pre class="mono" style="white-space:pre-wrap;font-size:12.5px">${esc(r[k].text)}</pre>`).join("") : `<div class="sub">Run a tool to see how the strategies looked with the data available on the replay date.</div>`;
+  }
+  // The same "What this means" reading the Live page gives, from the result as it stood on the replay date.
+  function toolMeaning(kind, res){
+    if(!res) return "";
+    const box = (title, body) => body ? `<div class="callout" style="margin:6px 0"><b style="color:var(--color-accent)">${title}</b> ${body}</div>` : "";
+    try {
+      if(kind === "factor_backtest") return box("What this means.", factorTakeaway(res));
+      const hs = (res.horizons || []).map(String).filter(h => res.results && res.results[h]);
+      return hs.map(h => box(`What this means (next ${h === "5" ? "week" : h === "20" ? "month" : h === "60" ? "quarter" : h + " trading days"}).`,
+                             signalTakeaway(signalRows(res, h), res, h))).join("");
+    } catch(e){ return ""; }  // a reading that can't be built never hides the numbers below
   }
   document.addEventListener("click", async (ev) => {
     const o = ev.target.closest("[data-open]"); if(o){ ev.preventDefault(); location.hash = o.dataset.open; return; }

@@ -275,7 +275,9 @@ class ReplayApp:
                                         cost_model=cost_model_for("in"), capital=t.data["cash"],
                                         index_fund=BENCHMARKS[t.data["universe"]])
                 text = format_factor_backtest(r)
-            self._tool_results.setdefault(slug, {})[kind] = {"date": t.clock.today, "years": years, "text": text}
+            result = {**r, "universe": str(t.data["universe"]).upper(), "years": years}  # for the page's plain-English reading
+            self._tool_results.setdefault(slug, {})[kind] = {"date": t.clock.today, "years": years, "text": text,
+                                                             "result": result}
             return f"{kind.replace('_', ' ')} as of {t.clock.today} finished"
         return self._background(slug, "replay_tool", run, "a tool")
 

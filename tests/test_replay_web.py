@@ -313,3 +313,19 @@ def test_lookup_can_skip_news_and_news_comes_separately(rapp):
     assert nw["today"] == "2021-03-15" and nw["announcements_error"] is None
     st, bad = r.route("GET", f"/replay/api/trial/{slug}/news", {"ticker": "../x"}, None)
     assert st == 400
+
+
+def test_tool_run_keeps_the_full_result_for_the_plain_english_reading(rapp, monkeypatch):
+    import json
+    import trading_agent.signal_lab as sl
+    app, r = rapp
+    slug = create(app, r)
+    fake = {"summary": "nothing clears", "horizons": [20], "results": {"20": {}}, "signals": {}, "universe": "ignored"}
+    monkeypatch.setattr(sl, "run_signal_lab", lambda *a, **k: dict(fake))
+    monkeypatch.setattr(sl, "format_signal_lab", lambda res: "text report")
+    wait(app, r.tool(slug, {"kind": "signal_lab", "years": 3}))
+    st, body = r.route("GET", f"/replay/api/trial/{slug}/tools", {}, None)
+    got = body["signal_lab"]
+    assert st == 200 and got["text"] == "text report"
+    assert got["result"]["summary"] == "nothing clears" and got["result"]["universe"] == "NIFTYMIDCAP150"
+    json.dumps(body)  # the page receives it as JSON
