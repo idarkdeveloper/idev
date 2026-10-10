@@ -1,24 +1,24 @@
 """BSE India bulk and block deals: a second source beside NSE's (nse.py).
 
 Many mid and small-cap deals by the investors we follow happen only on BSE. The public page
-``markets/equity/EQReports/BulknBlockDeals.aspx`` (no login) offers a CSV download. It is an
-ASP.NET WebForms page, so the flow is the one a browser makes:
+``beta.bseindia.com/markets/equity/EQReports/BulknBlockDeals.aspx`` (no login) is an ASP.NET WebForms page
+(``www`` now serves a JavaScript app shell). Verified by hand on 10 Oct 2026. Per deal type (the
+``rblDT`` select: 1 = Bulk Deal, 2 = Block Deal) the flow is the one a browser makes:
 
-1. GET the page (browser-like headers, cookies kept) and read every form field, including the
-   hidden ``__VIEWSTATE`` / ``__VIEWSTATEGENERATOR`` / ``__EVENTVALIDATION`` ones;
-2. POST the form back with the "history" option, the dates (DD/MM/YYYY), "all markets" and the
-   download button; the answer is the CSV.
+1. GET the page (browser-like headers, cookies kept) and read its hidden fields;
+2. POST them back with ``rblDT``, ``chkAllMarket=on``, ``txtDate`` / ``txtToDate`` (DD/MM/YYYY) and
+   ``btnSubmit=Submit``;
+3. take the hidden fields of that answer and POST again with ``__EVENTTARGET=...btnDownload`` (no
+   ``btnSubmit``): the body is a plain CSV (sent as application/vnd.ms-excel):
+   ``Deal Date,Security Code,Company,Client Name,Deal Type,Quantity,Price`` with DD/MM/YYYY dates,
+   Deal Type P / S and Company = the BSE scrip ID (often the NSE symbol).
 
-"Today's deals" are the same page with the "today" option; BSE publishes them after the close, so
-they are only asked for after 16:00 IST. Past days never change, so each is cached on disk once.
+"Today's deals" are the same flow with today's date as from and to; BSE publishes them after the close,
+so they are only asked for after 16:00 IST. Past days never change, so each is cached on disk once.
 
 Nothing here needs a key or an account. If BSE changes the page, ``BSELayoutError`` says which part
 is missing; ``BSEClient.deals`` then logs it once a day and returns what is cached, so the watch loop
 carries on with NSE alone.
-
-UNVERIFIED: on 10 Oct 2026 the ``www`` host served a JavaScript app shell (no WebForms fields), so the
-control names below are from the page's documented layout and are matched by suffix, not exactly;
-see ``FIELD_SUFFIXES``. The ``beta`` host is tried when ``www`` does not answer with the form.
 """
 
 from __future__ import annotations
@@ -41,8 +41,8 @@ from .quiver import DisclosedTrade, followed_names
 log = logging.getLogger(__name__)
 
 PAGE_PATH = "/markets/equity/EQReports/BulknBlockDeals.aspx"
-DEFAULT_HOST = "www.bseindia.com"
-FALLBACK_HOST = "beta.bseindia.com"
+DEFAULT_HOST = "beta.bseindia.com"  # www.bseindia.com now serves a JavaScript shell, not this form
+FALLBACK_HOST = None
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
@@ -58,13 +58,15 @@ TODAY_TTL_S = 600.0
 
 # The page's control names, matched by their ending (ASP.NET prefixes them with ctl00$ContentPlaceHolder1$).
 FIELD_SUFFIXES = {
-    "mode": "rblDT",              # radio: 0 = today, 1 = history (date range)
+    "kind": "rblDT",              # <select>: deal type, "1" = Bulk Deal, "2" = Block Deal
     "all_market": "chkAllMarket",  # checkbox: every market segment
-    "download": "btnDownload",    # the CSV download postback
+    "from": "txtDate",            # DD/MM/YYYY
+    "to": "txtToDate",
+    "submit": "btnSubmit",        # step 1 button (value "Submit")
+    "download": "btnDownload",    # step 2: a __doPostBack link, so it is the __EVENTTARGET
 }
-MODE_TODAY, MODE_HISTORY = "0", "1"
-REQUIRED_HIDDEN = ("__VIEWSTATE",)
-HIDDEN_SEEN = ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION")
+KIND_VALUES = {"bulk": "1", "block": "2"}  # fallback when the option texts cannot be read
+REQUIRED_HIDDEN = ("__VIEWSTATE", "__EVENTVALIDATION")
 
 
 class BSEError(RuntimeError):
@@ -103,7 +105,9 @@ class _FormParser(HTMLParser):
         self._option: dict[str, Any] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        a = {k.lower(): (v if v is not None else "") for k, v in attrs}
+        a: dict[str, str] = {}
+        for k, v in attrs:  # the first of a repeated attribute wins, as in a browser (the real select has name twice)
+            a.setdefault(k.lower(), v if v is not None else "")
         if tag == "input" and a.get("name"):
             self.inputs.append({"name": a["name"], "type": a.get("type", "text").lower(),
                                 "value": a.get("value", ""), "checked": "checked" in a, "id": a.get("id", "")})
@@ -148,53 +152,16 @@ class Form:
                 return n
         return None
 
-    def date_inputs(self) -> list[str]:
-        """The two date boxes, in page order (from, to)."""
-        seen: list[str] = []
-        for i in self.inputs:
-            n = i["name"]
-            if i["type"] in ("text", "date", "") and "date" in n.lower() and "scrip" not in n.lower() and n not in seen:
-                seen.append(n)
-        return seen
+    def hidden(self) -> dict[str, str]:
+        """Every hidden field (``__VIEWSTATE``, ``__EVENTVALIDATION``, ...), as a browser would send them."""
+        return {i["name"]: i["value"] for i in self.inputs if i["type"] == "hidden"}
 
-    def kind_control(self) -> tuple[str, dict[str, str]] | None:
-        """A select / radio group that chooses bulk or block: (field name, {"bulk": value, "block": value})."""
-        mode = self.find(FIELD_SUFFIXES["mode"])
-        for name, options in self.selects.items():
-            found = {k: v for v, text, _ in options for k in ("bulk", "block") if k in f"{v} {text}".lower()}
-            if len(found) == 2:
-                return name, found
-        groups: dict[str, dict[str, str]] = {}
-        for i in self.inputs:
-            if i["type"] == "radio" and i["name"] != mode:
-                for k in ("bulk", "block"):
-                    if k in i["value"].lower():
-                        groups.setdefault(i["name"], {})[k] = i["value"]
-        for name, found in groups.items():
-            if len(found) == 2:
-                return name, found
-        return None
-
-    def base_data(self) -> dict[str, str]:
-        """The values a browser would send untouched: hidden fields, text, checked radios and boxes, selects."""
-        data: dict[str, str] = {}
-        for i in self.inputs:
-            t = i["type"]
-            if t in ("submit", "button", "image", "file", "reset"):
-                continue
-            if t in ("checkbox", "radio") and not i["checked"]:
-                continue
-            data[i["name"]] = i["value"]
-        for name, options in self.selects.items():
-            chosen = next((v for v, _, sel in options if sel), options[0][0] if options else "")
-            data[name] = chosen
-        return data
-
-    def button_value(self, name: str) -> str:
-        for i in self.inputs:
-            if i["name"] == name and i["value"]:
-                return i["value"]
-        return "Download"
+    def kind_value(self, kind: str) -> str:
+        """The deal-type select's value for "bulk" / "block", read from its option texts."""
+        for v, text, _ in self.selects.get(self.find(FIELD_SUFFIXES["kind"]) or "", []):
+            if kind in text.lower():
+                return v
+        return KIND_VALUES[kind]
 
 
 def parse_form(html: str) -> Form:
@@ -204,31 +171,33 @@ def parse_form(html: str) -> Form:
     form = Form(p.inputs, p.selects)
     names = set(form.names)
     missing = [h for h in REQUIRED_HIDDEN if h not in names]
-    missing += [f"{k} ({v})" for k, v in FIELD_SUFFIXES.items() if form.find(v) is None]
-    if len(form.date_inputs()) < 2:
-        missing.append("from/to date boxes")
+    missing += [f"{k} ({v})" for k, v in FIELD_SUFFIXES.items() if k != "download" and form.find(v) is None]
     if missing:
         raise BSELayoutError("BSE deals page layout changed: missing " + ", ".join(missing))
     return form
 
 
-def build_post(form: Form, mode: str, start: date | None = None, end: date | None = None,
-               kind: str | None = None) -> dict[str, str]:
-    """The postback body for the CSV download."""
-    data = form.base_data()
-    data["__EVENTTARGET"] = ""
-    data["__EVENTARGUMENT"] = ""
-    data[form.find(FIELD_SUFFIXES["mode"])] = mode  # type: ignore[index]
-    data[form.find(FIELD_SUFFIXES["all_market"])] = "on"  # type: ignore[index]
-    if mode == MODE_HISTORY and start and end:
-        from_box, to_box = form.date_inputs()[:2]
-        data[from_box] = start.strftime("%d/%m/%Y")
-        data[to_box] = end.strftime("%d/%m/%Y")
-    ctl = form.kind_control()
-    if kind and ctl:
-        data[ctl[0]] = ctl[1][kind]
-    btn = form.find(FIELD_SUFFIXES["download"])
-    data[btn] = form.button_value(btn)  # type: ignore[index,arg-type]
+def _fields(form: Form, kind: str, start: date, end: date) -> dict[str, str]:
+    f = FIELD_SUFFIXES
+    return {form.find(f["kind"]): form.kind_value(kind),  # type: ignore[dict-item]
+            form.find(f["all_market"]): "on",  # type: ignore[dict-item]
+            form.find(f["from"]): start.strftime("%d/%m/%Y"),  # type: ignore[dict-item]
+            form.find(f["to"]): end.strftime("%d/%m/%Y")}  # type: ignore[dict-item]
+
+
+def build_submit(form: Form, kind: str, start: date, end: date) -> dict[str, str]:
+    """Step 1: the hidden fields plus deal type, all markets, the dates and the Submit button."""
+    data = form.hidden()
+    data.update(_fields(form, kind, start, end))
+    data[form.find(FIELD_SUFFIXES["submit"])] = "Submit"  # type: ignore[index]
+    return data
+
+
+def build_download(result: Form, page: Form, kind: str, start: date, end: date) -> dict[str, str]:
+    """Step 2: the hidden fields of the Submit answer, the same choices, and the download postback (no Submit)."""
+    data = result.hidden()
+    data.update(_fields(page, kind, start, end))
+    data["__EVENTTARGET"] = "ctl00$ContentPlaceHolder1$" + FIELD_SUFFIXES["download"]
     return data
 
 
@@ -269,11 +238,10 @@ def parse_deals_csv(text: str, kind: str = "bulk") -> list[dict[str, Any]]:
         return None
 
     i_date, i_code = col("date"), col("security code", "scrip code", "code")
-    i_name, i_client = col("security name", "scrip name", "company"), col("client")
+    i_name, i_client = col("company", "security name", "scrip name"), col("client")
     i_side, i_qty, i_px = col("deal type", "buy", "b/s"), col("quantity", "qty"), col("price")
     if None in (i_date, i_code, i_client, i_side, i_qty, i_px):
         raise BSELayoutError("BSE deals CSV: unexpected columns " + ", ".join(header)[:200])
-    i_type = next((i for i, h in enumerate(header) if "bulk" in h or "block" in h), None)
     rows = []
     for r in reader:
         if len(r) <= max(i_date, i_code, i_client, i_side, i_qty, i_px):  # type: ignore[type-var]
@@ -281,13 +249,10 @@ def parse_deals_csv(text: str, kind: str = "bulk") -> list[dict[str, Any]]:
         d = _date(r[i_date])  # type: ignore[index]
         if not d:
             continue
-        row_kind = kind
-        if i_type is not None and "block" in r[i_type].lower():
-            row_kind = "block"
         rows.append({"date": d, "code": r[i_code].strip(), "name": r[i_name].strip() if i_name is not None else "",  # type: ignore[index]
                      "client": re.sub(r"\s+", " ", r[i_client]).strip(),  # type: ignore[index]
                      "side": r[i_side].strip(), "qty": _number(r[i_qty]), "price": _number(r[i_px]),  # type: ignore[index]
-                     "kind": row_kind})
+                     "kind": kind})
     return rows
 
 
@@ -312,7 +277,7 @@ def to_trade(row: dict[str, Any], ticker: str, nse_symbol: str | None = None) ->
         transaction_date=d,
         report_date=d,
         size=f"{qty} sh @ ₹{price}" if price else f"{qty} sh",
-        raw={"exchange": "BSE", "bse_code": row["code"], "bse_name": row["name"], "name": row["name"],
+        raw={"exchange": "BSE", "bse_code": row["code"], "bse_name": row["name"], "bse_scrip_id": row["name"], "name": row["name"],
              "nse_symbol": nse_symbol, "yahoo": f"{row['code']}.BO", "clientName": row["client"],
              "buySell": row["side"], "qty": qty, "watp": price, "date": d},
         exchange="BSE",
@@ -365,6 +330,12 @@ class ScripResolver:
         isin = (self._code_isin or {}).get(code)
         if isin:
             sym = self._isin_sym.get(isin) or None
+        if sym is None and name:  # BSE's Company column is its scrip ID, often the NSE symbol itself
+            try:
+                if name.upper() in self.names._nse_names():
+                    sym = name.upper()
+            except Exception as e:  # noqa: BLE001
+                log.debug("symbol list unavailable: %s", e)
         if sym is None and name:
             try:
                 hits = self.names.search(name, limit=1)
@@ -412,35 +383,42 @@ class BSEClient:
         self._last_request = self.monotonic()
         self.requests_made += 1
 
-    def _post_csv(self, url: str, form: Form, mode: str, start: date | None, end: date | None,
-                  kind: str | None) -> str:
+    def _fetch_kind(self, url: str, kind: str, start: date, end: date) -> list[dict[str, Any]]:
+        """One deal type: GET the form, POST Submit, POST the download; rows of the CSV."""
         self._throttle()
-        resp = self.session.post(url, data=build_post(form, mode, start, end, kind),
-                                 headers={**HEADERS, "Referer": url}, timeout=self.timeout)
-        resp.raise_for_status()
-        text = resp.content.decode("utf-8-sig", errors="replace")
+        page = self.session.get(url, headers=HEADERS, timeout=self.timeout)
+        page.raise_for_status()
+        form = parse_form(page.content.decode("utf-8-sig", errors="replace"))
+        post_headers = {**HEADERS, "Referer": url}
+        self._throttle()
+        step1 = self.session.post(url, data=build_submit(form, kind, start, end),
+                                  headers=post_headers, timeout=self.timeout)
+        step1.raise_for_status()
+        p = _FormParser()
+        p.feed(step1.content.decode("utf-8-sig", errors="replace"))
+        result = Form(p.inputs, p.selects)
+        if "__VIEWSTATE" not in result.hidden():
+            raise BSELayoutError("BSE deals page layout changed: no __VIEWSTATE after Submit")
+        self._throttle()
+        step2 = self.session.post(url, data=build_download(result, form, kind, start, end),
+                                  headers=post_headers, timeout=self.timeout)
+        step2.raise_for_status()
+        text = step2.content.decode("utf-8-sig", errors="replace")
         if "<html" in text[:500].lower() or "client" not in text[:400].lower():
             raise BSELayoutError("BSE deals: the download did not return a CSV")
-        return text
+        return parse_deals_csv(text, kind)
 
-    def _fetch(self, mode: str, start: date | None, end: date | None) -> list[dict[str, Any]]:
-        """GET the form once, then POST the download (once per deal kind when the page has that choice).
+    def _fetch(self, start: date, end: date) -> list[dict[str, Any]]:
+        """Bulk and block deals dated start..end (a request flow per deal type).
 
         Tries each host in turn and raises BSEError / BSELayoutError when none works."""
         errors: list[BaseException] = []
         for host in self.hosts:
             url = f"https://{host}{PAGE_PATH}"
             try:
-                self._throttle()
-                page = self.session.get(url, headers=HEADERS, timeout=self.timeout)
-                page.raise_for_status()
-                form = parse_form(page.content.decode("utf-8-sig", errors="replace"))
-                if form.kind_control() is None:
-                    # One file holds both; its own deal-type column says block, else it is read as bulk.
-                    return parse_deals_csv(self._post_csv(url, form, mode, start, end, None), "bulk")
                 rows: list[dict[str, Any]] = []
                 for kind in ("bulk", "block"):
-                    rows += parse_deals_csv(self._post_csv(url, form, mode, start, end, kind), kind)
+                    rows += self._fetch_kind(url, kind, start, end)
                 return rows
             except (requests.RequestException, BSEError) as e:
                 errors.append(e)
@@ -449,12 +427,13 @@ class BSEClient:
         raise cls("; ".join(str(e) for e in errors) or "no BSE host configured")
 
     def fetch_range(self, start: date, end: date) -> list[dict[str, Any]]:
-        """Rows (both kinds) from the history option for start..end, straight from BSE."""
-        return self._fetch(MODE_HISTORY, start, end)
+        """Rows (both kinds) for start..end, straight from BSE."""
+        return self._fetch(start, end)
 
     def fetch_today(self) -> list[dict[str, Any]]:
-        """Rows from the "today" option (published after the close)."""
-        return self._fetch(MODE_TODAY, None, None)
+        """Today's deals (published after the close): the same flow with today as from and to."""
+        today = self.clock().date()
+        return self._fetch(today, today)
 
     # -- cache ---------------------------------------------------------------
     def _day_path(self, d: date) -> Path | None:

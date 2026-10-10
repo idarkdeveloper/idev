@@ -1,4 +1,7 @@
-"""BSE bulk/block deals: form parsing, CSV parsing, symbol mapping, cache, keys, wiring. Fakes only, no network."""
+"""BSE bulk/block deals: form flow, CSV parsing, symbol mapping, cache, keys, wiring. Fakes only, no network.
+
+The fixtures are real public BSE data captured by hand on 10 Oct 2026 (trimmed): the GET form, the
+response after Submit, and the first rows of the bulk and block CSVs for 1-9 Oct."""
 import hashlib
 import json
 from datetime import date, datetime
@@ -8,18 +11,21 @@ import pytest
 import requests
 
 from trading_agent import bse
-from trading_agent.bse import (BSEClient, BSELayoutError, IST, ScripResolver, build_post, parse_deals_csv,
-                               parse_form, to_trade)
+from trading_agent.bse import (BSEClient, BSELayoutError, IST, ScripResolver, build_download, build_submit,
+                               parse_deals_csv, parse_form, to_trade)
 from trading_agent.nse import NSEClient, _dedupe, _norm_deal
-from trading_agent.quiver import DisclosedTrade
 from .conftest import FakeSession
 
 FX = Path(__file__).resolve().parents[1] / "trading_agent" / "fixtures"
 FORM = (FX / "bse_deals_form.html").read_text(encoding="utf-8")
-CSV = (FX / "bse_deals_sample.csv").read_text(encoding="utf-8")
+RESULT = (FX / "bse_deals_result.html").read_text(encoding="utf-8")
+BULK = (FX / "bse_bulk_sample.csv").read_text(encoding="utf-8")
+BLOCK = (FX / "bse_block_sample.csv").read_text(encoding="utf-8")
 MONDAY_MORNING = datetime(2026, 10, 12, 10, 0, tzinfo=IST)
 MONDAY_EVENING = datetime(2026, 10, 12, 17, 0, tzinfo=IST)
-URL = "bseindia.com/markets/equity/EQReports/BulknBlockDeals.aspx"
+P = "ctl00$ContentPlaceHolder1$"
+ALL = (date(2026, 10, 1), date(2026, 10, 9))
+N_BULK, N_BLOCK = 28, 12
 
 
 class Resp:
@@ -27,38 +33,37 @@ class Resp:
         self.content = body.encode("utf-8") if isinstance(body, str) else body
         self.status_code = status
 
-    @property
-    def text(self):
-        return self.content.decode("utf-8")
-
     def raise_for_status(self):
         if self.status_code >= 400:
             raise requests.HTTPError(f"HTTP {self.status_code}")
 
 
 class BseSession:
-    """GET answers the form page; POST answers the CSV. ``pages``/``csvs`` may differ by host."""
+    """GET answers the form; POST with btnSubmit answers the result page; POST with the download target
+    answers the CSV of the chosen deal type (rblDT 1 = bulk, 2 = block)."""
 
-    def __init__(self, page=FORM, csv_text=CSV, fail=None):
-        self.page, self.csv_text, self.fail = page, csv_text, fail
+    def __init__(self, page=FORM, bulk=BULK, block=BLOCK, fail=None):
+        self.page, self.bulk, self.block, self.fail = page, bulk, block, fail
         self.calls = []
 
-    def _answer(self, what, url):
+    def _page(self, url):
         if self.fail and self.fail in url:
             raise requests.ConnectionError("down")
-        if isinstance(what, dict):
-            what = next((v for k, v in what.items() if k in url), "")
-        return Resp(what)
+        return self.page if not isinstance(self.page, dict) else next(v for k, v in self.page.items() if k in url)
 
     def get(self, url, **kw):
         self.calls.append(("GET", url, kw))
-        return self._answer(self.page, url)
+        return Resp(self._page(url))
 
     def post(self, url, **kw):
         self.calls.append(("POST", url, kw))
-        if kw["data"].get("ctl00$ContentPlaceHolder1$rblDealType") == "block" and self.csv_text == CSV:
-            return Resp(CSV.splitlines()[0] + "\n")  # no block deals in this sample: header only
-        return self._answer(self.csv_text, url)
+        d = kw["data"]
+        if self.fail and self.fail in url:
+            raise requests.ConnectionError("down")
+        if P + "btnSubmit" in d:
+            return Resp(RESULT)
+        assert d["__EVENTTARGET"] == P + "btnDownload" and "RESULT-VIEWSTATE" in d["__VIEWSTATE"]
+        return Resp(self.bulk if d[P + "rblDT"] == "1" else self.block)
 
     def posts(self):
         return [c for c in self.calls if c[0] == "POST"]
@@ -79,28 +84,40 @@ def client(session, tmp_path=None, now=MONDAY_MORNING, resolver=None, **kw):
     return c
 
 
-# -- the form ------------------------------------------------------------------------------------
-def test_form_parsing_collects_hidden_fields_and_controls():
+# -- the form flow -------------------------------------------------------------------------------
+def test_form_parsing_collects_the_real_hidden_fields():
     form = parse_form(FORM)
-    data = form.base_data()
-    assert data["__VIEWSTATE"] == "VS-PLACEHOLDER==" and data["__EVENTVALIDATION"] == "EV-PLACEHOLDER=="
-    assert data["__VIEWSTATEGENERATOR"] == "1A2B3C4D" and data["ctl00$hdnFoo"] == "bar"
-    assert form.find("rblDT") == "ctl00$ContentPlaceHolder1$rblDT"
-    assert form.date_inputs() == ["ctl00$ContentPlaceHolder1$txtDate", "ctl00$ContentPlaceHolder1$txtToDate"]
-    assert form.kind_control() == ("ctl00$ContentPlaceHolder1$rblDealType", {"bulk": "bulk", "block": "block"})
-    assert "ctl00$ContentPlaceHolder1$btnSubmit" not in data  # buttons are only sent when pressed
+    h = form.hidden()
+    for name in ("__EVENTTARGET", "__EVENTARGUMENT", "__VIEWSTATE", "__VIEWSTATEGENERATOR", "__VIEWSTATEENCRYPTED",
+                 "__EVENTVALIDATION", P + "hf_scripcode", P + "DDate", P + "Hidden1", P + "SmartSearch$hdnCode"):
+        assert name in h, name
+    assert h["__VIEWSTATE"] == "VIEWSTATE-PLACEHOLDER" and h["__VIEWSTATEGENERATOR"] == "43DF1E00"
+    assert form.find("rblDT") == P + "rblDT" and form.find("txtToDate") == P + "txtToDate"
+    assert form.kind_value("bulk") == "1" and form.kind_value("block") == "2"
 
 
-def test_postback_for_history_has_dates_mode_all_markets_and_download():
+def test_submit_post_has_hidden_fields_deal_type_all_markets_dates_and_submit():
     form = parse_form(FORM)
-    d = build_post(form, bse.MODE_HISTORY, date(2026, 10, 1), date(2026, 10, 9), "block")
-    assert d["ctl00$ContentPlaceHolder1$rblDT"] == "1"
-    assert d["ctl00$ContentPlaceHolder1$chkAllMarket"] == "on"
-    assert d["ctl00$ContentPlaceHolder1$txtDate"] == "01/10/2026"
-    assert d["ctl00$ContentPlaceHolder1$txtToDate"] == "09/10/2026"
-    assert d["ctl00$ContentPlaceHolder1$rblDealType"] == "block"
-    assert d["ctl00$ContentPlaceHolder1$btnDownload"] == "Download"
-    assert d["__VIEWSTATE"] == "VS-PLACEHOLDER==" and d["__EVENTTARGET"] == ""
+    d = build_submit(form, "block", date(2026, 10, 1), date(2026, 10, 9))
+    assert d["__VIEWSTATE"] == "VIEWSTATE-PLACEHOLDER" and d["__EVENTTARGET"] == ""
+    assert d[P + "rblDT"] == "2" and d[P + "chkAllMarket"] == "on"
+    assert d[P + "txtDate"] == "01/10/2026" and d[P + "txtToDate"] == "09/10/2026"
+    assert d[P + "btnSubmit"] == "Submit"
+
+
+def test_download_post_uses_the_submit_answers_hidden_fields_and_no_submit_button():
+    page, result = parse_form(FORM), bse.Form(*_parse_hidden(RESULT))
+    d = build_download(result, page, "bulk", date(2026, 10, 1), date(2026, 10, 9))
+    assert d["__VIEWSTATE"] == "RESULT-VIEWSTATE-PLACEHOLDER"
+    assert d["__EVENTTARGET"] == P + "btnDownload"
+    assert d[P + "rblDT"] == "1" and d[P + "chkAllMarket"] == "on" and d[P + "txtToDate"] == "09/10/2026"
+    assert P + "btnSubmit" not in d
+
+
+def _parse_hidden(html):
+    p = bse._FormParser()
+    p.feed(html)
+    return p.inputs, p.selects
 
 
 def test_missing_hidden_field_is_a_clear_error():
@@ -115,25 +132,24 @@ def test_javascript_app_shell_is_a_layout_error():
 
 
 # -- the CSV -------------------------------------------------------------------------------------
-def test_csv_parsing_from_the_sample():
-    rows = parse_deals_csv(CSV, "bulk")
-    assert len(rows) == 7
-    r = rows[0]
-    assert r == {"date": "2026-10-09", "code": "500001", "name": "SAMPLE INDUSTRIES LTD",
-                 "client": "ASHISH KACHOLIA", "side": "B", "qty": "150000", "price": "245.60", "kind": "bulk"}
-    assert rows[3]["side"] == "S" and rows[4]["qty"] == "325000"
-    t = to_trade(r, "SAMPLEIND", "SAMPLEIND")
+def test_csv_parsing_from_the_real_samples():
+    rows = parse_deals_csv(BULK, "bulk")
+    assert len(rows) == N_BULK
+    assert rows[0] == {"date": "2026-10-01", "code": "544953", "name": "MONEYVIEW",
+                       "client": "IRAGE BROKING SERVICES LLP", "side": "P", "qty": "14880318", "price": "56.71",
+                       "kind": "bulk"}
+    assert rows[1]["side"] == "S" and rows[1]["qty"] == "10731778"
+    assert "AMIT AGRAWAL" in [r["client"] for r in rows]   # double space collapsed
+    block = parse_deals_csv(BLOCK, "block")
+    assert len(block) == N_BLOCK and {r["kind"] for r in block} == {"block"}
+    itc = [r for r in block if r["name"] == "ITC" and r["client"] == "SBI MUTUAL FUND"][0]
+    assert (itc["date"], itc["code"], itc["side"], itc["qty"], itc["price"]) == (
+        "2026-10-08", "500875", "P", "37604429", "257.35")
+    t = to_trade(itc, "ITC", "ITC")
     assert (t.exchange, t.source, t.transaction, t.transaction_date, t.investor) == (
-        "BSE", "bulk", "Purchase", "2026-10-09", "ASHISH KACHOLIA")
-    assert t.size == "150000 sh @ ₹245.60"
-    assert to_trade(rows[3], "X").transaction == "Sale"
-
-
-def test_csv_with_other_dates_and_words_still_parses():
-    text = ("Date,Scrip Code,Scrip Name,Client Name,Buy/Sell,Qty,Trade Price\r\n"
-            "09-Oct-2026,500002,ABC LTD,Some Client,Buy,\"1,000\",12.5\r\n")
-    r = parse_deals_csv(text)[0]
-    assert r["date"] == "2026-10-09" and r["qty"] == "1000" and r["side"] == "Buy"
+        "BSE", "block", "Purchase", "2026-10-08", "SBI MUTUAL FUND")
+    assert t.size == "37604429 sh @ ₹257.35"
+    assert to_trade(rows[1], "X").transaction == "Sale"
 
 
 def test_unexpected_csv_columns_are_a_layout_error():
@@ -143,93 +159,95 @@ def test_unexpected_csv_columns_are_a_layout_error():
 
 # -- symbol mapping ------------------------------------------------------------------------------
 def test_symbol_mapping_hit_and_miss(tmp_path):
-    mapping = {"500001": "SAMPLEIND"}
+    mapping = {"500875": "ITC"}
     c = client(BseSession(), tmp_path, resolver=lambda code, name: mapping.get(code))
-    deals = c.deals(date(2026, 10, 2), date(2026, 10, 9), investors=["Ashish Kacholia"])
-    by_code = {t.raw["bse_code"]: t for t in deals}
-    assert by_code["500001"].ticker == "SAMPLEIND" and by_code["500001"].raw["nse_symbol"] == "SAMPLEIND"
-    assert by_code["500001"].raw["bse_code"] == "500001" and by_code["500001"].exchange == "BSE"
-    miss = by_code["543210"]
-    assert miss.ticker == "543210.BO" and miss.raw["bse_name"] == "DEMO CHEMICALS LIMITED"
-    assert miss.raw["nse_symbol"] is None
+    deals = c.deals(*ALL, investors=["SBI Mutual Fund", "Amit Agrawal"])
+    itc = [t for t in deals if t.raw["bse_code"] == "500875"][0]
+    assert itc.ticker == "ITC" and itc.raw["nse_symbol"] == "ITC" and itc.exchange == "BSE" and itc.source == "block"
+    roopa = [t for t in deals if t.raw["bse_code"] == "544954"][0]
+    assert roopa.ticker == "544954.BO" and roopa.raw["bse_scrip_id"] == "ROOPA" and roopa.raw["nse_symbol"] is None
+    assert roopa.source == "bulk" and roopa.investor == "AMIT AGRAWAL"
 
 
 GROWW = ("exchange,exchange_token,trading_symbol,name,segment,series,isin\n"
-         "BSE,500001,SAMPLEIND,Sample Industries Ltd,CASH,A,INE000A01011\n"
-         "NSE,1111,SAMPLEIND,Sample Industries Limited,CASH,EQ,INE000A01011\n")
+         "BSE,500875,ITC,ITC Ltd,CASH,A,INE154A01025\n"
+         "NSE,1111,ITC,ITC Limited,CASH,EQ,INE154A01025\n"
+         "BSE,544954,ROOPA,Roopa Industries,CASH,A,INE0ROOPA001\n")
 
 
 class FakeNames:
     def _text(self, url, name):
         return GROWW
 
+    def _nse_names(self):
+        return {"ITC": "ITC Limited", "POLYPLEX": "Polyplex Corporation Limited"}
+
     def search(self, query, limit=1):
-        if query.upper().startswith("EXAMPLE PACKAGING"):
-            return [{"symbol": "EXAMPKG", "name": query, "score": 95}]
         return [{"symbol": "WRONG", "name": query, "score": 60}]
 
 
-def test_scrip_resolver_by_isin_then_exact_name_else_none():
+def test_scrip_resolver_by_code_then_scrip_id_then_none():
     r = ScripResolver(FakeNames())
-    assert r("500001", "SAMPLE INDUSTRIES LTD") == "SAMPLEIND"      # scrip code -> ISIN -> NSE symbol
-    assert r("539999", "EXAMPLE PACKAGING LTD") == "EXAMPKG"        # no ISIN hit, exact name match
-    assert r("543210", "DEMO CHEMICALS LIMITED") is None            # only a weak name match: not guessed
+    assert r("500875", "WHATEVER") == "ITC"          # scrip code -> ISIN -> NSE symbol
+    assert r("524051", "POLYPLEX") == "POLYPLEX"      # no code hit; the scrip ID is an NSE symbol
+    assert r("544954", "ROOPA") is None               # BSE only (ISIN has no NSE row); weak name match refused
 
 
 # -- cache and politeness ------------------------------------------------------------------------
 def test_past_days_are_cached_and_not_fetched_again(tmp_path):
     s = BseSession()
     c = client(s, tmp_path)
-    first = c.deals(date(2026, 10, 2), date(2026, 10, 9))
-    assert len(first) == 7
+    first = c.deals(*ALL)
+    assert len(first) == N_BULK + N_BLOCK
+    assert len(s.calls) == 6 and len(s.posts()) == 4   # per deal type: GET, Submit, Download
     n = len(s.calls)
-    assert n >= 2 and len(s.posts()) == 2          # one GET + a POST each for bulk and block
-    c2 = client(s, tmp_path)                        # a new client, same cache dir
-    again = c2.deals(date(2026, 10, 2), date(2026, 10, 9))
-    assert len(s.calls) == n and len(again) == 7   # no new requests
-    assert (tmp_path / "bse_deals" / "2026-10-09.json").exists()
+    again = client(s, tmp_path).deals(*ALL)             # a new client, same cache dir
+    assert len(s.calls) == n and len(again) == N_BULK + N_BLOCK
+    assert (tmp_path / "bse_deals" / "2026-10-08.json").exists()
 
 
 def test_requests_are_at_least_two_seconds_apart(tmp_path):
     c = client(BseSession(), tmp_path)
-    c.deals(date(2026, 10, 2), date(2026, 10, 9))
-    assert c.requests_made == 3 and len(c.sleeps) >= 2 and all(s >= 2.0 - 1e-9 for s in c.sleeps[:2])
+    c.deals(*ALL)
+    assert c.requests_made == 6 and len(c.sleeps) == 5 and all(s >= 2.0 - 1e-9 for s in c.sleeps)
 
 
-def test_today_is_only_read_after_the_close(tmp_path):
+def test_today_is_only_read_after_the_close_with_today_as_from_and_to(tmp_path):
     s = BseSession()
-    before = client(s, tmp_path, now=MONDAY_MORNING)
-    before.deals(date(2026, 10, 12), date(2026, 10, 12))
+    client(s, tmp_path, now=MONDAY_MORNING).deals(date(2026, 10, 12), date(2026, 10, 12))
     assert s.calls == []                            # nothing published yet: no request at all
-    after = client(s, tmp_path, now=MONDAY_EVENING)
-    after.deals(date(2026, 10, 12), date(2026, 10, 12))
-    assert s.posts() and s.posts()[0][2]["data"]["ctl00$ContentPlaceHolder1$rblDT"] == "0"
+    client(s, tmp_path, now=MONDAY_EVENING).deals(date(2026, 10, 12), date(2026, 10, 12))
+    first = s.posts()[0][2]["data"]
+    assert first[P + "txtDate"] == first[P + "txtToDate"] == "12/10/2026"
     assert not (tmp_path / "bse_deals" / "2026-10-12.json").exists()   # today is never final
 
 
-def test_falls_back_to_the_beta_host_when_www_serves_no_form(tmp_path):
-    s = BseSession(page={"www.bseindia": "<html><app-root></app-root></html>", "beta.bseindia": FORM})
-    deals = client(s, tmp_path).deals(date(2026, 10, 2), date(2026, 10, 9))
-    assert len(deals) == 7
-    assert any("beta.bseindia.com" in c[1] for c in s.calls) and s.posts()[0][1].startswith("https://beta.")
+def test_default_host_is_beta_and_a_fallback_host_is_tried(tmp_path):
+    s = BseSession()
+    client(s, tmp_path).deals(*ALL)
+    assert all(c[1].startswith("https://beta.bseindia.com/") for c in s.calls)
+    s2 = BseSession(page={"beta.": "<html><app-root></app-root></html>", "www.": FORM})
+    c2 = client(s2, tmp_path / "x", fallback_host="www.bseindia.com")
+    assert len(c2.deals(*ALL)) == N_BULK + N_BLOCK
+    assert s2.posts()[0][1].startswith("https://www.")
 
 
 def test_failure_does_not_raise_and_is_not_retried_at_once(tmp_path):
     s = BseSession(fail="bseindia")
     c = client(s, tmp_path)
-    assert c.deals(date(2026, 10, 2), date(2026, 10, 9)) == []
+    assert c.deals(*ALL) == []
     assert c.last_error
     n = len(s.calls)
-    c.deals(date(2026, 10, 2), date(2026, 10, 9))
+    c.deals(*ALL)
     assert len(s.calls) == n                         # backing off
     c.t[0] += 3600
-    c.deals(date(2026, 10, 2), date(2026, 10, 9))
+    c.deals(*ALL)
     assert len(s.calls) > n
 
 
 def test_download_that_is_not_a_csv_is_reported_not_crashing(tmp_path):
-    c = client(BseSession(csv_text="<html><body>Error</body></html>"), tmp_path)
-    assert c.deals(date(2026, 10, 2), date(2026, 10, 9)) == []
+    c = client(BseSession(bulk="<html><body>Error</body></html>"), tmp_path)
+    assert c.deals(*ALL) == []
     assert "CSV" in (c.last_error or "")
 
 
@@ -240,12 +258,16 @@ def _old_key(t):
     return hashlib.sha1(material.encode()).hexdigest()[:16]
 
 
+def _itc_block_row():
+    return [r for r in parse_deals_csv(BLOCK, "block") if r["client"] == "SBI MUTUAL FUND"][0]
+
+
 def test_nse_keys_are_unchanged_and_bse_keys_are_distinct():
-    nse = _norm_deal({"buySell": "BUY", "clientName": "ASHISH KACHOLIA", "date": "09-Oct-2026",
-                      "symbol": "SAMPLEIND", "qty": "150000", "watp": "245.60"}, "bulk")
+    nse = _norm_deal({"buySell": "BUY", "clientName": "SBI MUTUAL FUND", "date": "08-Oct-2026",
+                      "symbol": "ITC", "qty": "37604429", "watp": "257.35"}, "block")
     assert nse.exchange == "NSE" and nse.key == _old_key(nse)
-    b = to_trade(parse_deals_csv(CSV)[0], "SAMPLEIND", "SAMPLEIND")
-    assert b.size == "150000 sh @ ₹245.60" == nse.size and b.ticker == nse.ticker
+    b = to_trade(_itc_block_row(), "ITC", "ITC")
+    assert b.size == "37604429 sh @ ₹257.35" == nse.size and b.ticker == nse.ticker
     assert b.key != nse.key
     assert len(_dedupe([nse, b])) == 2               # two real trades on two exchanges
     assert len(_dedupe([nse, nse])) == 1
@@ -255,7 +277,7 @@ def test_nse_keys_are_unchanged_and_bse_keys_are_distinct():
 # -- NSEClient wiring ----------------------------------------------------------------------------
 NSE_CSV = ('"Date ","Symbol ","Security Name ","Client Name ","Buy / Sell ","Quantity Traded ",'
            '"Trade Price / Wght. Avg. Price ","Remarks "\r\n'
-           '"09-OCT-2026","SAMPLEIND","Sample Industries","ASHISH KACHOLIA","BUY","1,50,000","245.60","-"\r\n')
+           '"08-OCT-2026","ITC","ITC Limited","SBI MUTUAL FUND","BUY","3,76,04,429","257.35","-"\r\n')
 
 
 def nse_with(bse_client):
@@ -267,10 +289,10 @@ def nse_with(bse_client):
 
 def test_nse_client_adds_bse_deals_with_both_exchanges(tmp_path, monkeypatch):
     monkeypatch.setattr("trading_agent.nse.date", type("D", (date,), {"today": staticmethod(lambda: date(2026, 10, 12))}))
-    n, _ = nse_with(client(BseSession(), tmp_path, resolver=lambda c, nm: {"500001": "SAMPLEIND"}.get(c)))
-    got = n.trades_for_investors(["Ashish Kacholia"], "deals", days=10)
+    n, _ = nse_with(client(BseSession(), tmp_path, resolver=lambda c, nm: {"500875": "ITC"}.get(c)))
+    got = n.trades_for_investors(["SBI Mutual Fund", "Amit Agrawal"], "deals", days=12)
     pairs = {(t.exchange, t.ticker) for t in got}
-    assert ("NSE", "SAMPLEIND") in pairs and ("BSE", "SAMPLEIND") in pairs and ("BSE", "543210.BO") in pairs
+    assert ("NSE", "ITC") in pairs and ("BSE", "ITC") in pairs and ("BSE", "544954.BO") in pairs
     assert len({t.key for t in got}) == len(got)
 
 
@@ -292,7 +314,7 @@ def test_setting_off_means_no_bse_calls(tmp_path):
 def test_off_client_makes_no_bse_requests():
     s = BseSession()
     n, _ = nse_with(None)
-    assert [t.exchange for t in n.trades_for_investors(["Ashish Kacholia"], "deals", days=10)] == ["NSE"]
+    assert [t.exchange for t in n.trades_for_investors(["SBI Mutual Fund", "Amit Agrawal"], "deals", days=12)] == ["NSE"]
     assert s.calls == []
 
 
@@ -303,7 +325,7 @@ def test_bse_failure_leaves_nse_deals_and_warns_once(tmp_path, caplog):
     bse._warned.clear()
     n, _ = nse_with(Boom())
     for _ in range(3):
-        got = n.trades_for_investors(["Ashish Kacholia"], "deals", days=10)
+        got = n.trades_for_investors(["SBI Mutual Fund", "Amit Agrawal"], "deals", days=12)
         assert [t.exchange for t in got] == ["NSE"]
     assert len([r for r in caplog.records if "BSE deals unavailable" in r.message]) == 1
 
@@ -332,9 +354,9 @@ def test_bse_deals_setting_defaults_on_and_reads_env(tmp_path):
 def test_dashboard_deals_show_the_exchange_column(settings):
     from trading_agent.ui import App
     settings.market = "in"
-    nse = _norm_deal({"buySell": "BUY", "clientName": "ASHISH KACHOLIA", "date": "09-Oct-2026",
-                      "symbol": "SAMPLEIND", "qty": "1", "watp": "2"}, "bulk")
-    b = to_trade(parse_deals_csv(CSV)[0], "SAMPLEIND", "SAMPLEIND")
+    nse = _norm_deal({"buySell": "BUY", "clientName": "SBI MUTUAL FUND", "date": "08-Oct-2026",
+                      "symbol": "ITC", "qty": "37604429", "watp": "257.35"}, "block")
+    b = to_trade(_itc_block_row(), "ITC", "ITC")
     app = App(settings, demo_trades=[nse, b], dotenv=settings.state_dir / ".env")
     deals = app.snapshot()["deals"]
     assert sorted(d["exchange"] for d in deals) == ["BSE", "NSE"]
