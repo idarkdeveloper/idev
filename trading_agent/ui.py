@@ -1768,6 +1768,8 @@ def sample_app(settings: Settings, context: Any | None) -> App:
 def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: int = 8787,
           open_browser: bool = True, demo: bool = False) -> None:
     settings = settings or load_settings()
+    from .notify import install_log_redaction
+    install_log_redaction()
     from .regime import GlobalContext
     from .prices import YahooPrices
 

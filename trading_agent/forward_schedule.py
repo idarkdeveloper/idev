@@ -14,7 +14,7 @@ import logging
 import os
 import threading
 import time
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,6 +26,7 @@ RUN_AFTER = dtime(16, 10)   # IST; the 15:30 close plus the daily-email slot and
 LATEST = dtime(23, 30)      # after this the day is skipped
 RETRY_AFTER_S = 600.0
 MAX_TRIES = 3
+PRUNE_DAYS = 7
 STALE_AFTER_S = 30 * 60.0   # a claim older than this whose process is gone is a crashed run
 
 
@@ -101,11 +102,24 @@ class ForwardScheduler:
             pass
 
     def _clean_old_claims(self, today: str) -> None:
+        """Once a day: forward claim files and Telegram send markers older than 7 days are removed."""
+        marker = self.state_dir / f"prune_{today}.done"
+        if marker.exists():
+            return
         try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            cutoff = (date.fromisoformat(today) - timedelta(days=PRUNE_DAYS)).isoformat()
             for f in self.state_dir.glob("forward_*.claim"):
-                if f.name[len("forward_"):-len(".claim")] < today:
+                if f.name[len("forward_"):-len(".claim")] < cutoff:
                     f.unlink(missing_ok=True)
-        except OSError:
+            limit = time.time() - PRUNE_DAYS * 86400
+            for f in (self.state_dir / "telegram_sent").glob("*"):
+                if f.is_file() and f.stat().st_mtime < limit:
+                    f.unlink(missing_ok=True)
+            for old in self.state_dir.glob("prune_*.done"):
+                old.unlink(missing_ok=True)
+            marker.write_text("done", encoding="utf-8")
+        except (OSError, ValueError):
             pass
 
     def due(self, now: datetime) -> bool:

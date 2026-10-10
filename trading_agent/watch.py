@@ -377,6 +377,7 @@ class Watcher:
             self._progress = time.monotonic()
             self._tick_started = datetime.now(self.tz).isoformat(timespec="seconds")
             error: str | None = None
+            raised: str | None = None
             self._write_alive(self._last_error)
             try:
                 result = self.tick()
@@ -384,15 +385,18 @@ class Watcher:
                     error = str(result["check_error"])
             except Exception as e:  # noqa: BLE001
                 log.exception("watch tick failed")
-                error = f"{type(e).__name__}: {e}"
+                error = raised = f"{type(e).__name__}: {e}"
             self._progress = time.monotonic()
             self._tick_finished = datetime.now(self.tz).isoformat(timespec="seconds")
             self._last_error = error
-            self._write_alive(error)
-            if error is not None and self._heartbeat is not None:   # a tick error: a fail ping at once
+            self._write_alive(error, force=True)
+            if self._heartbeat is not None:
                 try:
-                    from .notify import redact
-                    self._heartbeat.report_error(redact(error, getattr(self.settings, "telegram_bot_token", None)))
+                    if raised is not None:   # only an unexpected exception is a heartbeat fail
+                        from .notify import redact
+                        self._heartbeat.report_error(redact(raised, getattr(self.settings, "telegram_bot_token", None)))
+                    else:   # a routine check_error (Groww or NSE down) is an alerted condition, the loop is alive
+                        self._heartbeat.report_clean()
                 except Exception:  # noqa: BLE001
                     pass
             self._stop.wait(self.every)

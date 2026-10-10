@@ -328,7 +328,7 @@ def test_scheduler_runs_once_per_trading_day_after_1610(tmp_path):
     assert again.tick(at(2026, 10, 12, 17, 0)) == {"due": True, "claimed": False} and len(runs) == 1
     # the next trading day runs; old claims are cleaned
     assert again.tick(at(2026, 10, 13, 16, 30))["started"] is True and len(runs) == 2
-    assert [f.name for f in tmp_path.glob("forward_*.claim")] == ["forward_2026-10-13.claim"]
+    assert sorted(f.name for f in tmp_path.glob("forward_*.claim")) == ["forward_2026-10-12.claim", "forward_2026-10-13.claim"]
 
 
 def test_scheduler_skips_weekends_holidays_and_late_nights(tmp_path):
@@ -607,6 +607,9 @@ def test_fail_goes_only_to_hc_ping_unless_enabled():
     h.beat()
     assert s.calls == []   # no /fail to another provider: it only sees the pings stop
     h.beat()
+    assert s.calls == []   # and no ok ping until a tick has finished cleanly
+    h.report_clean()
+    h.beat()
     assert s.calls[-1][0] == "GET"
     s2 = Session()
     h2 = Heartbeat(other, session=s2, clock=lambda: now[0], fail_enabled=True)
@@ -635,6 +638,9 @@ def test_heartbeat_thread_pings_on_its_own_and_fails_at_once_on_a_reported_error
         h.report_error("RuntimeError: x")
         assert wait_for(lambda: any(c[0] == "POST" for c in s.calls))
         n = len(s.calls)
+        time.sleep(0.2)
+        assert not [c for c in s.calls[n:] if c[0] == "GET"]   # no ok ping until a tick finished cleanly
+        h.report_clean()
         assert wait_for(lambda: len([c for c in s.calls[n:] if c[0] == "GET"]) >= 1)   # recovered
     finally:
         stop.set()
@@ -711,3 +717,123 @@ def test_watch_alive_file_is_written_atomically_throttled_and_never_breaks_the_l
     w2.run_forever()
     d = json.loads(path.read_text())
     assert d["tick_started"] and d["last_error"] is None
+
+
+# -- fix round 2
+def test_ten_check_errors_give_no_fail_a_raising_tick_gives_one_and_a_clean_tick_gives_ok(settings):
+    sess = Session()
+    now = [0.0]
+    h = Heartbeat(HB_URL, session=sess, clock=lambda: now[0])
+    w = Watcher(settings, every=15, awake=None, heartbeat=h)
+    h._progress, h._stall = (lambda: now[0]), 1200
+    seq = [{"check_error": "GrowwTokenUnavailable: down"}] * 10 + [RuntimeError("bug")] + [{}] * 2
+    n = {"i": 0}
+
+    def tick(force=False):
+        item = seq[n["i"]]
+        n["i"] += 1
+        if n["i"] >= len(seq):
+            w._stop.set()
+        if isinstance(item, Exception):
+            raise item
+        return item
+    w.tick = tick
+    # run the loop without waiting between iterations, beating the heartbeat by hand after each one
+    w._stop.wait = lambda t=None: None
+    beats = []
+    orig = h.report_error, h.report_clean
+
+    def rec_err(t):
+        orig[0](t)
+        beats.append(("err", h.beat()))
+
+    def rec_clean():
+        orig[1]()
+        beats.append(("clean", h.beat()))
+    h.report_error, h.report_clean = rec_err, rec_clean
+    w._stop = threading.Event()
+    real_wait = w._stop.wait
+    w.run_forever()
+    posts = [c for c in sess.calls if c[0] == "POST"]
+    assert len(posts) == 1 and posts[0][2]["data"].startswith(b"RuntimeError: bug")
+    kinds = [b for b in beats]
+    first_err = next(i for i, b in enumerate(kinds) if b[0] == "err")
+    assert all(b[0] == "clean" for b in kinds[:first_err])   # the ten check errors only ever produced clean ticks
+    assert not [c for c in sess.calls[:sess.calls.index(posts[0])] if c[0] == "POST"]
+    # after the raising tick: no ok until a clean tick, then ok
+    after = sess.calls[sess.calls.index(posts[0]) + 1:]
+    assert after and after[0][0] == "GET"
+
+
+def test_heartbeat_fail_is_rate_limited_to_one_per_five_minutes():
+    now = [0.0]
+    s = Session()
+    h = hb(s, now, lambda: now[0])
+    h.report_error("one")
+    assert h.beat() == "fail"
+    now[0] += 120
+    h.report_error("two")
+    assert h.beat() == "skip" and len([c for c in s.calls if c[0] == "POST"]) == 1
+    now[0] += 200
+    h.report_error("three")
+    assert h.beat() == "fail" and len([c for c in s.calls if c[0] == "POST"]) == 2
+
+
+def test_the_end_of_iteration_alive_write_is_forced(settings):
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    w = Watcher(settings, every=15, awake=None)
+
+    def tick(force=False):
+        w._stop.set()
+        raise RuntimeError("late failure")
+    w.tick = tick
+    w.run_forever()
+    d = json.loads((settings.state_dir / "watch_alive.json").read_text())
+    assert d["tick_finished"] and d["last_error"].startswith("RuntimeError: late failure")   # inside the 30 s throttle
+
+
+def test_old_telegram_markers_and_forward_claims_are_pruned_once_a_day(tmp_path):
+    (tmp_path / "telegram_sent").mkdir()
+    old, new = tmp_path / "telegram_sent" / "morning_2026-09-01", tmp_path / "telegram_sent" / "morning_2026-10-11"
+    for f in (old, new):
+        f.write_text("sent")
+    t = time.time() - 9 * 86400
+    os.utime(old, (t, t))
+    (tmp_path / "forward_2026-10-01.claim").write_text("1 1")
+    (tmp_path / "forward_2026-10-10.claim").write_text("1 1")
+    sch = ForwardScheduler(tmp_path, lambda: None, holidays=Holidays(), threaded=False)
+    sch.tick(at(2026, 10, 12, 9, 0))
+    assert not old.exists() and new.exists()
+    assert not (tmp_path / "forward_2026-10-01.claim").exists() and (tmp_path / "forward_2026-10-10.claim").exists()
+    again = tmp_path / "telegram_sent" / "x"
+    again.write_text("s")
+    os.utime(again, (t, t))
+    sch.tick(at(2026, 10, 12, 9, 5))
+    assert again.exists()   # the prune ran once for that day
+    sch.tick(at(2026, 10, 13, 9, 5))
+    assert not again.exists()
+
+
+def test_log_redaction_scrubs_exception_text_and_is_installed_in_every_entry_point(caplog, monkeypatch):
+    import io
+    from trading_agent import cli, notify
+    notify.install_log_redaction()
+    notify.install_log_redaction()   # the guard: no second wrap
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    lg = logging.getLogger("exc.test")
+    lg.addHandler(handler)
+    lg.propagate = False
+    try:
+        try:
+            raise requests.ConnectionError(f"HTTPSConnectionPool: Max retries with url: /bot{TOKEN}/sendMessage")
+        except requests.ConnectionError:
+            lg.exception("telegram call failed")
+    finally:
+        lg.removeHandler(handler)
+    out = stream.getvalue()
+    assert "bot***" in out and TOKEN not in out and "AAH_fake" not in out and "Traceback" in out
+    import inspect
+    from trading_agent import ui
+    assert "install_log_redaction()" in inspect.getsource(cli.main) and "install_log_redaction()" in inspect.getsource(ui.serve)

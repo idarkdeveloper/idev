@@ -63,6 +63,11 @@ def install_log_redaction() -> None:
     if _FACTORY_INSTALLED:
         return
     _FACTORY_INSTALLED = True
+    old_fmt = logging.Formatter.formatException
+
+    def format_exception(self: logging.Formatter, ei: Any) -> str:   # log.exception(...) text and tracebacks
+        return _scrub(old_fmt(self, ei))
+    logging.Formatter.formatException = format_exception  # type: ignore[method-assign]
     old = logging.getLogRecordFactory()
 
     def factory(*a: Any, **kw: Any) -> logging.LogRecord:

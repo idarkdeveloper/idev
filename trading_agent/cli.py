@@ -1039,6 +1039,8 @@ def _utf8_output() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _utf8_output()
+    from .notify import install_log_redaction
+    install_log_redaction()   # bot tokens and the heartbeat path never reach a log, even at -v (guarded: once)
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")

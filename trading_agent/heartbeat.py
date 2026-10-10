@@ -52,6 +52,7 @@ class Heartbeat:
         self._last_ok: bool | None = None
         self._failing = False
         self._last_fail: float | None = None
+        self._unclean = False
         self._error: str | None = None
         self._wake = threading.Event()
         self._thread: threading.Thread | None = None
@@ -87,15 +88,27 @@ class Heartbeat:
 
     # -- the loop's side ---------------------------------------------------------------
     def report_error(self, text: str) -> None:
-        """A watch tick raised: the next beat (at once) is a fail with this text."""
+        """A watch tick raised an unexpected exception: the next beat (at once) is a fail with this text, at most one
+        per 5 minutes. No ok ping follows until ``report_clean`` says a tick finished without an exception. (A routine
+        check error, such as Groww or NSE being down, is not reported here: the loop is alive and alerts already say it.)"""
         self._error = text
+        self._unclean = True
         self._wake.set()
+
+    def report_clean(self) -> None:
+        """A tick finished without an exception: ok pings may resume, at once."""
+        if self._unclean:
+            self._unclean = False
+            self._wake.set()
 
     def beat(self) -> str:
         """One decision: returns "fail", "ok" or "skip" (nothing to do yet). Synchronous, for the thread and tests."""
         if not self.url:
             return "skip"
         err, self._error = self._error, None
+        if err is not None and self._last_fail is not None and self._clock() - self._last_fail < self.every:
+            self._failing = True
+            return "skip"   # rate limit: one reported fail per interval
         if err is None:
             stamp = self._progress()
             age = None if stamp is None else self._clock() - stamp
@@ -108,6 +121,9 @@ class Heartbeat:
             self._last_fail = self._clock()
             self.ping(err)
             return "fail"
+        if self._unclean:   # an exception was reported and no clean tick has finished since
+            self._failing = True
+            return "skip"
         self._failing = False
         self.ping()
         return "ok"
