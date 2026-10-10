@@ -1186,8 +1186,13 @@ class App:
         recs = st.data.get("recommendations", [])
         bench = "^NSEI" if self.settings.market == "in" else "^GSPC"
         cm = cost_model_for(self.settings.market)
+        memberships = None
+        if self.settings.market == "in":
+            from .scorecard import build_memberships
+            memberships = build_memberships(self.settings.state_dir)
         return score_recommendations(recs, self.prices, benchmark=bench,
-                                     cost_model=cm if hasattr(cm, "round_trip") else None)
+                                     cost_model=cm if hasattr(cm, "round_trip") else None,
+                                     memberships=memberships)
 
     def start_factor_backtest(self, universe: str, top: int, years: int) -> Job:
         from .costs import cost_model_for

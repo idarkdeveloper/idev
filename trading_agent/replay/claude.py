@@ -7,6 +7,7 @@ from typing import Any
 
 from ..momentum import momentum_stats
 from ..risk import atr, trailing_stop
+from ..untrusted import UNTRUSTED_RULE, wrap_json
 
 TOOL = {
     "name": "record_view",
@@ -30,6 +31,7 @@ Use ONLY the data in the user's message. Do not use anything you know about even
 results after {date}: the point of the replay is to decide as one could have on that day. If the
 data is not enough to judge a stock, say so and choose "watch". Recommendations are suggestions;
 the person decides. Indian delivery charges are about 0.25% per round trip plus ₹20 per sale."""
+SYSTEM += "\n" + UNTRUSTED_RULE
 
 
 def _stock(trial: Any, news: Any, sym: str) -> dict[str, Any]:
@@ -43,8 +45,8 @@ def _stock(trial: Any, news: Any, sym: str) -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         out["error"] = str(e)
     n = news.for_symbol(sym, days=60)
-    out["announcements"] = [{"date": a["at"][:10], "category": a.get("category", ""),
-                             "text": (a.get("text") or "")[:300]} for a in n["items"][:5]]
+    out["announcements"] = wrap_json([{"date": a["at"][:10], "category": a.get("category", ""),
+                                       "text": (a.get("text") or "")[:300]} for a in n["items"][:5]], "announcements")
     if n["error"]:
         out["announcements_error"] = n["error"]
     return out

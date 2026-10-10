@@ -601,9 +601,12 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
     settings = _settings(args)
     st = State(settings.state_dir / "state.json")
     cm = cost_model_for(settings.market)
+    from .scorecard import build_memberships
     r = score_recommendations(st.data.get("recommendations", []), free_prices(settings),
                               benchmark="^NSEI" if settings.market == "in" else "^GSPC",
-                              cost_model=cm if hasattr(cm, "round_trip") else None)
+                              cost_model=cm if hasattr(cm, "round_trip") else None,
+                              memberships=build_memberships(settings.state_dir, progress=print)
+                              if settings.market == "in" else None)
     print(format_scorecard(r))
     if args.json:
         print(json.dumps(r, indent=2, default=str))
