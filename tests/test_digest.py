@@ -2094,7 +2094,7 @@ def test_the_watch_count_is_unique_stocks_not_groww_plus_practice(s):
     assert w["checked"] == 3 and w["healthy"] + len({i["symbol"] for i in w["items"]}) == 3 and w["places"] == ["Groww", "Practice"]
     text = digest_render.render({**digest._header(ctx, "morning"), "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"),
                                  "watch": w, "deals": digest.unavailable("x")})["text"]
-    assert "3 stocks checked (Groww and practice);" in text and "with nothing to flag." in text
+    assert "3 stocks checked (Groww and practice);" in text and "with nothing to flag" in text
 
 
 def test_the_saved_holdings_note_appears_once_near_the_top(s):

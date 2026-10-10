@@ -57,10 +57,10 @@ def test_values_escaped_unpriced_and_short_flags():
 
 def test_no_buy_day_puts_holdings_after_mood_and_candidates_last_in_grey():
     t = digest_render.render(data(wait=True))["text"]
-    assert t.index("MARKET MOOD") < t.index("HOLDINGS TO WATCH") < t.index("CANDIDATE SCREEN: 7 PASS, HELD BACK BY THE MARKET FILTER")
+    assert t.index("MARKET MOOD") < t.index("HOLDINGS TO WATCH") < t.index("HELD BACK BY THE MARKET FILTER")
     assert t.index("CANDIDATE SCREEN") > t.index("HOLDINGS TO WATCH")
     html = digest_render.render(data(wait=True))["html"]
-    i = html.index("Candidate screen: 7 pass, HELD BACK by the market filter")
+    i = html.index("HELD BACK by the market filter")
     assert "#d1d5db" in html[:i + 200] and "#15803d" not in html[i - 400:]
     assert "Would pass, but" not in t
 
@@ -89,3 +89,25 @@ def test_premarket_line_leads_the_email_and_both_venues_show_and_flags_keep_the_
     e = evening()
     e["data"]["deals"]["deals"][0]["exchange"] = "NSE + BSE"
     assert "(NSE + BSE)" in telegram_brief(e)["html"]
+
+
+def test_stops_breached_and_trend_caution_are_separate_and_worst_first():
+    from trading_agent.digest_render import _watch_blocks
+    items = [
+        {"symbol": "VEDL", "price": 264.0, "stop": 354.12, "ma200": 456.19, "loss_pct": -28.7, "reasons": ["down 29%"]},
+        {"symbol": "VOGL", "price": 30.1, "stop": 149.68, "loss_pct": -80.2, "reasons": ["down 80%"]},
+        {"symbol": "JSWSTEEL", "price": 1168.0, "stop": 1147.16, "ma200": 1233.83, "loss_pct": -2.7,
+         "reasons": ["below its 200-day average (1,233.83)"]},
+    ]
+    watch = {"items": items, "total": 3, "checked": 15, "healthy": 2, "places": ["Groww"],
+             "notes": ["1 Groww holding(s) without a market price (bonds or unlisted) were not checked",
+                       "Practice account: unavailable (no practice account yet)"],
+             "portfolio": {"value": 168993.2, "pl": -21721.6, "pl_pct": -11.39, "holdings": 16}}
+    blocks = _watch_blocks(watch)
+    assert blocks[0]["title"].startswith("Holdings to watch: stops breached") and "(2)" in blocks[0]["title"]
+    assert [r[0] for r in blocks[0]["table"]["rows"]] == ["VOGL", "VEDL"]          # worst loss first
+    assert blocks[1]["title"].startswith("Holdings to watch: trend caution") and "(1)" in blocks[1]["title"]
+    assert "(₹21 above stop)" in blocks[1]["table"]["rows"][0][5]
+    assert ("Total P&L", "−₹21,722 (−11.4%)") in blocks[0]["kv"] and ("Invested", "₹1,90,715") in blocks[0]["kv"]
+    meta = blocks[0]["lines"][1]
+    assert "15 stocks checked; 2 with nothing to flag" in meta and "1 unpriced" in meta and "Practice: none" in meta

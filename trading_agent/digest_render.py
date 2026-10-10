@@ -107,7 +107,9 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
     title = "Would pass, but the market filter says wait" if wait else "Buy ideas"
     if wait and "unavailable" not in ideas:
         n = ideas.get("eligible") if isinstance(ideas.get("eligible"), int) else len(ideas.get("ideas") or [])
-        title = f"Candidate screen: {n} pass, HELD BACK by the market filter"
+        shown = len(ideas.get("ideas") or [])
+        title = (f"Candidate screen: top {shown} sized of {n} that pass, HELD BACK by the market filter" if shown and shown < (n or 0)
+                 else f"Candidate screen: {n} pass, HELD BACK by the market filter")
     if "unavailable" in ideas:
         blocks.append(_unavail(title, ideas))
     else:
@@ -137,21 +139,81 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
     if "unavailable" in watch:
         blocks.append(_unavail("Holdings to watch or consider selling", watch))
     else:
-        both = " (Groww and practice)" if len(watch.get("places") or []) > 1 else ""
-        lines = [STOP_RULE] if watch["items"] else []   # said once, under the heading
-        lines += [f"{watch['checked']} stock{'s' if watch['checked'] != 1 else ''} checked{both}; "
-                  f"{watch['healthy']} with nothing to flag."] if watch["checked"] else []
-        lines += [f"Note: {n}" for n in watch.get("notes", []) if not n.startswith("Using ")]   # the saved-holdings note is at the top
-        if watch.get("more"):
-            lines.append(f"and {watch['more']} more not shown.")
-        if not watch["items"] and watch["checked"]:
-            lines.insert(0, "Nothing to watch today.")
-        blocks.append(_block("Holdings to watch or consider selling", lines, _watch_table(watch["items"]),
-                             tone="warn" if watch["items"] else None))
+        blocks += _watch_blocks(watch)
     deals = [_deals_block(d["deals"], "New deals by followed investors")]
     if wait:
         return mood_blocks[:lead + 1] + blocks + mood_blocks[lead + 1:] + deals + ideas_blocks
     return mood_blocks + ideas_blocks + blocks + deals
+
+
+def _breached(i: dict[str, Any]) -> bool:
+    p, st = i.get("price"), i.get("stop")
+    if isinstance(p, (int, float)) and isinstance(st, (int, float)):
+        return p < st
+    return any(str(r).lower().startswith("below the stop level") or "well past any stop" in str(r).lower()
+               for r in i.get("reasons") or [])
+
+
+def _meta_line(watch: dict[str, Any]) -> str | None:
+    """'Checked 15 holdings (2 clean) · 1 unpriced not checked · Practice: none' — the notes in one muted line."""
+    parts: list[str] = []
+    if watch.get("checked"):
+        both = " (Groww and practice)" if len(watch.get("places") or []) > 1 else ""
+        parts.append(f"{watch['checked']} stock{'s' if watch['checked'] != 1 else ''} checked{both}; "
+                     f"{watch.get('healthy', 0)} with nothing to flag")
+    for n in watch.get("notes", []):
+        if n.startswith("Using "):
+            continue   # the saved-holdings note is at the top of the email
+        m = re.match(r"(\d+) Groww holding\(s\) without a market price", n)
+        if m:
+            parts.append(f"{m.group(1)} unpriced (bonds or unlisted) not checked")
+        elif n.lower().startswith("practice account: unavailable"):
+            parts.append("Practice: none")
+        else:
+            parts.append(n)
+    if watch.get("more"):
+        parts.append(f"and {watch['more']} more not shown.")
+    return " · ".join(parts) or None
+
+
+def _portfolio_kv(watch: dict[str, Any]) -> list[tuple[str, str]]:
+    p = watch.get("portfolio")
+    if not isinstance(p, dict) or not isinstance(p.get("value"), (int, float)):
+        return []
+    kv = []
+    if isinstance(p.get("pl"), (int, float)):
+        kv.append(("Invested", inr(p["value"] - p["pl"])))
+    kv.append(("Value now", inr(p["value"])))
+    if isinstance(p.get("pl"), (int, float)):
+        pct = f" ({pct_text(p['pl_pct'])})" if isinstance(p.get("pl_pct"), (int, float)) else ""
+        kv.append(("Total P&L", f"{'−' if p['pl'] < 0 else '+'}{inr(abs(p['pl']))}{pct}"))
+    return kv
+
+
+def _watch_blocks(watch: dict[str, Any]) -> list[dict[str, Any]]:
+    """Your portfolio in one line, then the flagged holdings split by what they need: stops breached (review for exit)
+    and trend caution (stop intact, below the 200-day average), each worst loss first."""
+    out: list[dict[str, Any]] = []
+    items = watch.get("items") or []
+    key = lambda i: i["loss_pct"] if isinstance(i.get("loss_pct"), (int, float)) else 0.0   # noqa: E731
+    breached = sorted([i for i in items if _breached(i)], key=key)
+    caution = sorted([i for i in items if not _breached(i)], key=key)
+    meta = _meta_line(watch)
+    kv = _portfolio_kv(watch)
+    if not items:
+        lines = (["Nothing to watch today."] if watch.get("checked") else []) + ([meta] if meta else [])
+        out.append(_block("Holdings to watch or consider selling", lines, kv=kv))
+        return out
+    head = [STOP_RULE] + ([meta] if meta else [])
+    if breached:
+        out.append(_block(f"Holdings to watch: stops breached, review for exit ({len(breached)})", head, _watch_table(breached),
+                          tone="bad", kv=kv))
+        head, kv = [], []
+    if caution:
+        out.append(_block(f"Holdings to watch: trend caution, stops intact ({len(caution)})",
+                          head + ["Below the 200-day average or other warnings, but still above the stop."],
+                          _watch_table(caution, show_gap=True), tone="warn", kv=kv))
+    return out
 
 
 def _flags(i: dict[str, Any]) -> str:
@@ -171,7 +233,7 @@ def _flags(i: dict[str, Any]) -> str:
     return ", ".join(out)
 
 
-def _watch_table(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _watch_table(items: list[dict[str, Any]], show_gap: bool = False) -> dict[str, Any] | None:
     """One table of every flagged holding. The text part has six columns; the phone layout keeps five and puts the
     flags under the stock, so nothing is squeezed at 360 px."""
     from .digest_rules import label
@@ -186,6 +248,8 @@ def _watch_table(items: list[dict[str, Any]]) -> dict[str, Any] | None:
         stop = num(i["stop"], 2) if isinstance(i.get("stop"), (int, float)) else "n/a"
         avg = num(i["ma200"], 2) if isinstance(i.get("ma200"), (int, float)) else "n/a"
         flags = _flags(i) or "flagged"
+        if show_gap and priced and isinstance(i.get("stop"), (int, float)) and i["price"] >= i["stop"]:
+            flags += f" (₹{num(i['price'] - i['stop'], 0)} above stop)"
         name = label(i) + (" (also in practice)" if i.get("also_practice") else "")
         rows.append([name, price, pl, stop, avg, flags])
         hrows.append([name, price, pl, stop, avg])
