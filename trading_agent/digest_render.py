@@ -180,7 +180,7 @@ def _deals_block(sec: dict[str, Any], title: str) -> dict[str, Any]:
         return _unavail(title, sec)
     if not sec["deals"]:
         return _block(title, [f"No deals by {', '.join(sec['following'])} since {sec['since']}."])
-    rows = [[x["ticker"], x["transaction"], x["size"], ", ".join(x["who"]) or x["investor"], x["reported"]] for x in sec["deals"]]
+    rows = [[x["ticker"] + (" (BSE)" if x.get("exchange") == "BSE" else ""), x["transaction"], x["size"], ", ".join(x["who"]) or x["investor"], x["reported"]] for x in sec["deals"]]
     lines = [f"{sec['total']} deal(s) since {sec['since']}" + (f"; the first {len(rows)} are shown." if sec["total"] > len(rows) else ".")]
     return _block(title, lines, {"head": ["Stock", "Deal", "Size", "Who", "Reported"], "rows": rows, "num": []})
 

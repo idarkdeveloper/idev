@@ -169,30 +169,6 @@ def test_symbol_mapping_hit_and_miss(tmp_path):
     assert roopa.source == "bulk" and roopa.investor == "AMIT AGRAWAL"
 
 
-GROWW = ("exchange,exchange_token,trading_symbol,name,segment,series,isin\n"
-         "BSE,500875,ITC,ITC Ltd,CASH,A,INE154A01025\n"
-         "NSE,1111,ITC,ITC Limited,CASH,EQ,INE154A01025\n"
-         "BSE,544954,ROOPA,Roopa Industries,CASH,A,INE0ROOPA001\n")
-
-
-class FakeNames:
-    def _text(self, url, name):
-        return GROWW
-
-    def _nse_names(self):
-        return {"ITC": "ITC Limited", "POLYPLEX": "Polyplex Corporation Limited"}
-
-    def search(self, query, limit=1):
-        return [{"symbol": "WRONG", "name": query, "score": 60}]
-
-
-def test_scrip_resolver_by_code_then_scrip_id_then_none():
-    r = ScripResolver(FakeNames())
-    assert r("500875", "WHATEVER") == "ITC"          # scrip code -> ISIN -> NSE symbol
-    assert r("524051", "POLYPLEX") == "POLYPLEX"      # no code hit; the scrip ID is an NSE symbol
-    assert r("544954", "ROOPA") is None               # BSE only (ISIN has no NSE row); weak name match refused
-
-
 # -- cache and politeness ------------------------------------------------------------------------
 def test_past_days_are_cached_and_not_fetched_again(tmp_path):
     s = BseSession()
@@ -288,7 +264,7 @@ def nse_with(bse_client):
 
 
 def test_nse_client_adds_bse_deals_with_both_exchanges(tmp_path, monkeypatch):
-    monkeypatch.setattr("trading_agent.nse.date", type("D", (date,), {"today": staticmethod(lambda: date(2026, 10, 12))}))
+    monkeypatch.setattr("trading_agent.nse.datetime", type("DT", (datetime,), {"now": classmethod(lambda cls, tz=None: MONDAY_MORNING)}))
     n, _ = nse_with(client(BseSession(), tmp_path, resolver=lambda c, nm: {"500875": "ITC"}.get(c)))
     got = n.trades_for_investors(["SBI Mutual Fund", "Amit Agrawal"], "deals", days=12)
     pairs = {(t.exchange, t.ticker) for t in got}
@@ -373,3 +349,159 @@ def test_settings_switch_saves_and_turns_bse_off(settings, tmp_path):
     app.update_settings({"bse_deals": False})
     assert app.data.bse is None and "BSE_DEALS=false" in env.read_text(encoding="utf-8")
     assert settings.bse_deals is False
+
+
+# =================================================================================================
+# Fix round 1
+# =================================================================================================
+EMPTY = (FX / "bse_empty_day.csv").read_text(encoding="utf-8")
+TUESDAY_MORNING = datetime(2026, 10, 13, 10, 0, tzinfo=IST)
+MONDAY = date(2026, 10, 12)
+
+
+def test_real_empty_day_csv_parses_to_nothing_without_a_layout_error():
+    assert parse_deals_csv(EMPTY, "bulk") == []
+
+
+def test_an_older_empty_day_is_cached_as_empty(tmp_path):
+    s = BseSession(bulk=EMPTY, block=EMPTY)
+    day = date(2026, 10, 5)  # a Monday a week back
+    assert client(s, tmp_path).deals(day, day) == []
+    assert (tmp_path / "bse_deals" / "2026-10-05.json").exists()
+    n = len(s.calls)
+    assert client(s, tmp_path).deals(day, day) == [] and len(s.calls) == n
+
+
+def test_empty_yesterday_is_asked_for_once_an_hour_not_every_call(tmp_path):
+    s = BseSession(bulk=EMPTY, block=EMPTY)
+    c = client(s, tmp_path, now=TUESDAY_MORNING)
+    assert c.deals(MONDAY, MONDAY) == [] and c.last_error is None
+    n = len(s.calls)
+    assert n == 6
+    c.deals(MONDAY, MONDAY)
+    c.deals(MONDAY, MONDAY)
+    assert len(s.calls) == n                          # a quiet day costs one round per hour
+    assert not (tmp_path / "bse_deals" / "2026-10-12.json").exists()   # and is never final on disk
+    c.t[0] += 3601
+    c.deals(MONDAY, MONDAY)
+    assert len(s.calls) == 2 * n
+
+
+class Closed:
+    def holiday(self, d):
+        return "Diwali" if d == MONDAY else None
+
+
+def test_exchange_holiday_and_weekend_make_no_request(tmp_path):
+    s = BseSession()
+    c = client(s, tmp_path, now=TUESDAY_MORNING, holidays=Closed())
+    assert c.deals(MONDAY, MONDAY) == []
+    assert c.deals(date(2026, 10, 10), date(2026, 10, 11)) == []   # Saturday, Sunday
+    assert s.calls == []
+
+
+def test_resolver_is_exact_only_never_fuzzy():
+    groww = ("exchange,exchange_token,trading_symbol,name,segment,series,isin\n"
+             "BSE,500875,ITC,ITC Ltd,CASH,A,INE154A01025\n"
+             "NSE,1,ITC,ITC Limited,CASH,EQ,INE154A01025\n"
+             "BSE,500777,CLASH,Clash Textiles Ltd,CASH,A,INE000A00001\n"      # same ID as an NSE stock ...
+             "NSE,2,CLASH,Clash Of Titans Limited,CASH,EQ,INE000B00002\n"     # ... but another company
+             "BSE,500999,FOOBSE,Foo Industries Ltd,CASH,A,INE000C00003\n"
+             "NSE,3,FOOIND,Foo Industries Limited,CASH,EQ,INE000D00004\n"     # exact company-name match
+             "BSE,544954,ROOPA,Roopa Industries,CASH,A,INE0ROOPA001\n")
+
+    class N:
+        def _text(self, url, name):
+            return groww
+
+        def search(self, *a, **k):
+            raise AssertionError("fuzzy search must not be used")
+
+    r = ScripResolver(N())
+    assert r("500875", "WHATEVER") == "ITC"            # scrip code -> ISIN -> NSE symbol
+    assert r("500777", "CLASH") is None                # same ID, different ISIN: not the same company
+    assert r("500999", "FOOBSE") == "FOOIND"           # exact normalised company name
+    assert r("544954", "ROOPA") is None                # BSE only
+    assert r("999999", "ITC") is None                  # unknown code: an ID alone proves nothing
+
+
+def test_client_names_are_capped_and_stripped_of_control_characters():
+    text = ("Deal Date,Security Code,Company,Client Name,Deal Type,Quantity,Price\r\n"
+            f"09/10/2026,1,ABC,\"EVIL\x07\x1b[31m NAME {'X' * 300}\",P,1,2\r\n")
+    c = parse_deals_csv(text)[0]["client"]
+    assert len(c) <= 120 and "\x07" not in c and "\x1b" not in c and c.startswith("EVIL")
+
+
+def test_warning_key_is_day_plus_error_class_only(caplog):
+    bse._warned.clear()
+    bse.warn_once_per_day(BSELayoutError("one thing"), date(2026, 10, 12))
+    bse.warn_once_per_day(BSELayoutError("another detail"), date(2026, 10, 12))
+    assert len([r for r in caplog.records if "BSE deals unavailable" in r.message]) == 1
+    bse.warn_once_per_day(BSELayoutError("next day"), date(2026, 10, 13))
+    assert len([r for r in caplog.records if "BSE deals unavailable" in r.message]) == 2
+
+
+def test_requests_are_split_into_at_most_30_day_ranges(tmp_path):
+    assert bse.MAX_SPAN_DAYS == 30
+    s = BseSession()
+    client(s, tmp_path).deals(date(2026, 8, 3), date(2026, 10, 9))
+    submits = [c[2]["data"] for c in s.posts() if P + "btnSubmit" in c[2]["data"]]
+    spans = {(d[P + "txtDate"], d[P + "txtToDate"]) for d in submits}
+    assert len(spans) == 3 and ("03/08/2026", "01/09/2026") in spans
+
+
+def test_evening_digest_deals_row_shows_bse():
+    from trading_agent.digest_render import _deals_block
+    sec = {"deals": [{"ticker": "ITC", "exchange": "BSE", "transaction": "Purchase", "size": "1 sh", "who": [],
+                      "investor": "X", "reported": "2026-10-08"},
+                     {"ticker": "ITC", "exchange": "NSE", "transaction": "Purchase", "size": "1 sh", "who": [],
+                      "investor": "X", "reported": "2026-10-08"}], "total": 2, "since": "2026-10-08", "following": ["X"]}
+    blk = _deals_block(sec, "Deals")
+    rows = (blk.get("table") or blk.get("kv") or blk)["rows"]
+    assert [r[0] for r in rows] == ["ITC (BSE)", "ITC"]
+
+
+# -- BSE-only tickers are information, never orders ----------------------------------------------
+def test_bo_ticker_is_refused_by_paper_broker_and_practice_buy(settings, tmp_path):
+    from trading_agent.broker import BSE_ONLY_MESSAGE, LocalPaperBroker
+    b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=100_000, price_fn=lambda s: 100.0)
+    for side in ("buy", "sell"):
+        with pytest.raises(ValueError, match="BSE-only stock, no NSE listing"):
+            b.submit_order("544954.BO", side, notional=1000)
+    assert BSE_ONLY_MESSAGE.endswith("not tradable here") and b.account().cash == 100_000
+    from trading_agent.ui import App
+    settings.market = "in"
+    app = App(settings, broker=b, demo_trades=[], dotenv=settings.state_dir / ".env")
+    with pytest.raises(ValueError, match="BSE-only"):
+        app.paper_order("544954.BO", "buy", notional=1000)   # the practice (dashboard) buy
+
+
+def test_bo_ticker_is_refused_by_groww_order_and_gtt():
+    from trading_agent.groww import GrowwBroker
+    g = GrowwBroker.__new__(GrowwBroker)    # refused before any state or network is touched
+    with pytest.raises(ValueError, match="BSE-only"):
+        g.submit_order("544954.BO", "buy", qty=1)
+    with pytest.raises(ValueError, match="BSE-only"):
+        g.create_gtt_stop("544954.BO", 1, 10.0, 9.9)
+
+
+def test_agent_tools_refuse_a_bo_ticker(settings, sample_rows):
+    from .test_agent import FakeRunner, _make
+    from trading_agent.runner import check
+    trades, broker, notifier = _make(settings, sample_rows, auto_trade=True)
+    script = [("send_recommendation", {"action": "buy", "ticker": "544954.BO", "headline": "h",
+                                       "rationale": "r", "confidence": "high", "suggested_notional_usd": 1000}),
+              ("place_paper_order", {"symbol": "544954.BO", "side": "buy", "notional_usd": 1000})]
+    holder = {}
+
+    def factory(**kw):
+        holder["r"] = FakeRunner(script, **kw)
+        return holder["r"]
+
+    result = check(settings, trades=trades, broker=broker, notifier=notifier, runner_factory=factory)
+    log = holder["r"].tool_log
+    assert "BSE-only stock" in log[0][1]["error"] and "BSE-only stock" in log[1][1]["error"]
+    assert result.orders == [] and result.recommendations == []
+    from trading_agent.agent import MARKET_NOTES
+    assert ".BO" in MARKET_NOTES["in"] and "never order it" in MARKET_NOTES["in"]
+

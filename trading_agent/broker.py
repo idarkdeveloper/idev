@@ -101,6 +101,15 @@ class Account:
         return {"cash": self.cash, "equity": self.equity, "currency": self.currency, "paper": self.paper}
 
 
+BSE_ONLY_MESSAGE = "BSE-only stock, no NSE listing: tracked for information, not tradable here"
+
+
+def refuse_bse_only(symbol: Any) -> None:
+    """A BSE deal with no NSE listing is tracked as ``<code>.BO``; it is information only, never an order."""
+    if str(symbol or "").strip().upper().endswith(".BO"):
+        raise ValueError(BSE_ONLY_MESSAGE)
+
+
 class Broker(Protocol):
     name: str
 
@@ -168,6 +177,7 @@ class AlpacaPaperBroker:
 
     def submit_order(self, symbol: str, side: str, notional: float | None = None,
                      qty: float | None = None) -> dict[str, Any]:
+        refuse_bse_only(symbol)
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
         if (notional is None) == (qty is None):
@@ -448,6 +458,7 @@ class LocalPaperBroker:
     def submit_order(self, symbol: str, side: str, notional: float | None = None, qty: float | None = None,
                      stop: dict[str, Any] | None = None, extra: dict[str, Any] | None = None,
                      extra_fn: Any | None = None) -> dict[str, Any]:
+        refuse_bse_only(symbol)
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
         if (notional is None) == (qty is None):
@@ -464,6 +475,7 @@ class LocalPaperBroker:
         ``extra_fn(order, orders_so_far)`` runs inside the transaction and returns more fields for the order (the
         practice tax estimate needs the account's earlier sales, read at the moment of the sale)."""
         symbol = symbol.upper()
+        refuse_bse_only(symbol)
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
         if (notional is None) == (qty is None):

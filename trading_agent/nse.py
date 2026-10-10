@@ -32,13 +32,14 @@ import logging
 import re
 import time
 import xml.etree.ElementTree as ET
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
 import requests
 
 from .quiver import DisclosedTrade, filter_by_investor, filter_by_investors
+from .timezones import IST
 
 log = logging.getLogger(__name__)
 
@@ -481,7 +482,7 @@ class NSEClient:
         if getattr(self, "bse", None) is None or not kinds:  # off, or insider filings (BSE has no equivalent here)
             return []
         try:
-            end = date.today()
+            end = datetime.now(IST).date()  # the exchange's calendar day, not the server's
             return self.bse.deals(end - timedelta(days=days), end, kinds=kinds,
                                   investors=None if investors is None else list(investors))
         except Exception as e:  # noqa: BLE001

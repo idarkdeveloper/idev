@@ -28,6 +28,7 @@ import io
 import json
 import logging
 import re
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
@@ -49,12 +50,13 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
-IST = timezone(timedelta(hours=5, minutes=30))
+from .timezones import IST  # noqa: E402  (re-exported for callers and tests)
 PUBLISHED_AFTER = (16, 0)  # IST: today's deals are on the page after the close
-MAX_SPAN_DAYS = 90
+MAX_SPAN_DAYS = 30  # until a 90-day range is confirmed not to be capped by BSE
 MIN_INTERVAL_S = 2.0
 RETRY_AFTER_FAILURE_S = 900.0
 TODAY_TTL_S = 600.0
+PROVISIONAL_TTL_S = 3600.0  # an empty yesterday / today is asked for at most once an hour
 
 # The page's control names, matched by their ending (ASP.NET prefixes them with ctl00$ContentPlaceHolder1$).
 FIELD_SUFFIXES = {
@@ -85,7 +87,7 @@ _warned: set[str] = set()
 
 def warn_once_per_day(error: BaseException, today: date | None = None) -> None:
     day = (today or datetime.now(IST).date()).isoformat()
-    key = f"{day}:{type(error).__name__}:{str(error)[:80]}"
+    key = f"{day}:{type(error).__name__}"
     if key in _warned:
         return
     _warned.clear() if len(_warned) > 50 else None
@@ -217,6 +219,11 @@ def _date(text: str) -> str:
     return ""
 
 
+def _clean(text: str, limit: int = 120) -> str:
+    """A client name from an outside source: control characters out, spaces collapsed, at most ``limit`` long."""
+    return re.sub(r"\s+", " ", re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text or "")).strip()[:limit]
+
+
 def _number(text: str) -> str:
     return re.sub(r"[,\s]", "", text or "")
 
@@ -250,7 +257,7 @@ def parse_deals_csv(text: str, kind: str = "bulk") -> list[dict[str, Any]]:
         if not d:
             continue
         rows.append({"date": d, "code": r[i_code].strip(), "name": r[i_name].strip() if i_name is not None else "",  # type: ignore[index]
-                     "client": re.sub(r"\s+", " ", r[i_client]).strip(),  # type: ignore[index]
+                     "client": _clean(r[i_client]),  # type: ignore[index]
                      "side": r[i_side].strip(), "qty": _number(r[i_qty]), "price": _number(r[i_px]),  # type: ignore[index]
                      "kind": kind})
     return rows
@@ -287,22 +294,34 @@ def to_trade(row: dict[str, Any], ticker: str, nse_symbol: str | None = None) ->
 # ---------------------------------------------------------------------------
 # BSE scrip -> NSE ticker
 # ---------------------------------------------------------------------------
+def _company_key(name: str) -> str:
+    t = re.sub(r"[^a-z0-9& ]+", " ", (name or "").lower())
+    t = re.sub(r"\b(limited|ltd|the|of|and|co|company|corporation|corp|pvt|private)\b", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
 class ScripResolver:
-    """BSE scrip code (+ name) -> NSE ticker, or None when the company is not listed on NSE.
+    """BSE scrip code (+ scrip ID) -> NSE ticker, or None when the company is not known to be on NSE.
 
-    Uses the public Groww instrument list (BSE row's token = scrip code -> ISIN -> NSE row), then the
-    NSE equity list by exact company name. Both files are public and cached by CompanyNames."""
+    1. scrip code -> ISIN (public Groww instrument list, BSE rows) -> the NSE symbol with that ISIN;
+    2. the scrip ID, only if it is an NSE symbol carrying the SAME ISIN;
+    3. an exact (normalised) company-name match between the BSE and NSE instrument names.
+    No fuzzy matching: a wrong ticker would attach a stranger's price and orders to the deal."""
 
-    def __init__(self, names: Any, load_groww: bool = True):
+    def __init__(self, names: Any = None, load_groww: bool = True):
         self.names = names
         self.load_groww = load_groww
-        self._code_isin: dict[str, str] | None = None
+        self._loaded = False
+        self._code_isin: dict[str, str] = {}
+        self._code_name: dict[str, str] = {}
         self._isin_sym: dict[str, str] = {}
+        self._sym_isin: dict[str, str] = {}
+        self._name_sym: dict[str, str] = {}
         self._memo: dict[tuple[str, str], str | None] = {}
 
     def _load(self) -> None:
-        self._code_isin = {}
-        if not self.load_groww:
+        self._loaded = True
+        if not self.load_groww or self.names is None:
             return
         try:
             from .groww import INSTRUMENT_CSV_URL
@@ -311,38 +330,36 @@ class ScripResolver:
                 if (r.get("segment") or "").upper() != "CASH":
                     continue
                 isin, exch = (r.get("isin") or "").strip().upper(), (r.get("exchange") or "").upper()
-                if not isin:
-                    continue
                 if exch == "BSE":
-                    self._code_isin[(r.get("exchange_token") or "").strip()] = isin
+                    code = (r.get("exchange_token") or "").strip()
+                    if isin:
+                        self._code_isin[code] = isin
+                    self._code_name[code] = r.get("name") or ""
                 elif exch == "NSE" and (r.get("series") or "EQ").upper() in ("EQ", "BE", "BZ", "SM", "ST"):
-                    self._isin_sym.setdefault(isin, (r.get("trading_symbol") or "").strip().upper())
-        except Exception as e:  # noqa: BLE001 - mapping is a nicety; names still work
+                    sym = (r.get("trading_symbol") or "").strip().upper()
+                    if sym:
+                        if isin:
+                            self._isin_sym.setdefault(isin, sym)
+                            self._sym_isin.setdefault(sym, isin)
+                        self._name_sym.setdefault(_company_key(r.get("name") or ""), sym)
+        except Exception as e:  # noqa: BLE001 - mapping is a nicety; an unmapped deal stays <code>.BO
             log.warning("instrument list unavailable for the BSE->NSE map: %s", e)
 
     def __call__(self, code: str, name: str = "") -> str | None:
         key = (code, name)
         if key in self._memo:
             return self._memo[key]
-        if self._code_isin is None:
+        if not self._loaded:
             self._load()
         sym = None
-        isin = (self._code_isin or {}).get(code)
+        isin = self._code_isin.get(code)
         if isin:
-            sym = self._isin_sym.get(isin) or None
-        if sym is None and name:  # BSE's Company column is its scrip ID, often the NSE symbol itself
-            try:
-                if name.upper() in self.names._nse_names():
-                    sym = name.upper()
-            except Exception as e:  # noqa: BLE001
-                log.debug("symbol list unavailable: %s", e)
-        if sym is None and name:
-            try:
-                hits = self.names.search(name, limit=1)
-                if hits and hits[0]["score"] >= 95:
-                    sym = hits[0]["symbol"]
-            except Exception as e:  # noqa: BLE001
-                log.debug("name lookup failed for %s: %s", name, e)
+            sym = self._isin_sym.get(isin)
+        sid = (name or "").strip().upper()
+        if sym is None and isin and sid and self._sym_isin.get(sid) == isin:
+            sym = sid
+        if sym is None and self._code_name.get(code):
+            sym = self._name_sym.get(_company_key(self._code_name[code]))
         self._memo[key] = sym
         return sym
 
@@ -359,8 +376,11 @@ class BSEClient:
                  resolver: Callable[[str, str], str | None] | None = None,
                  clock: Callable[[], datetime] | None = None,
                  sleep: Callable[[float], None] = time.sleep,
-                 monotonic: Callable[[], float] = time.monotonic):
+                 monotonic: Callable[[], float] = time.monotonic, holidays: Any | None = None):
         self.session = session or requests.Session()
+        self.holidays = holidays  # NSEHolidays-like (.holiday(day)): no request for an exchange holiday
+        self._lock = threading.RLock()  # one fetch at a time: the throttle and the back-off are shared state
+        self._provisional: dict[date, float] = {}  # empty recent days: not asked for again until this time
         self.cache_dir = Path(cache_dir) / "bse_deals" if cache_dir else None
         self.hosts = list(dict.fromkeys(h for h in (host, fallback_host) if h))
         self.timeout = timeout
@@ -463,8 +483,31 @@ class BSEClient:
                 self._day_path(d).write_text(json.dumps({"rows": day_rows}), encoding="utf-8")  # type: ignore[union-attr]
             d += timedelta(days=1)
 
+    def _note_provisional(self, start: date, end: date, rows: list[dict[str, Any]], today: date) -> None:
+        """An empty recent day is not final (BSE may publish late) but is asked for at most once an hour."""
+        have = {r["date"] for r in rows}
+        d = start
+        while d <= end:
+            if d.isoformat() not in have and (today - d).days < 2:
+                self._provisional[d] = self.monotonic() + PROVISIONAL_TTL_S
+            d += timedelta(days=1)
+
+    def _is_trading_day(self, d: date) -> bool:
+        if d.weekday() >= 5:
+            return False
+        if self.holidays is None:
+            return True
+        try:
+            return self.holidays.holiday(d) is None
+        except Exception:  # noqa: BLE001 - no holiday list: weekdays count, as in holidays.py
+            return True
+
     # -- public --------------------------------------------------------------
     def raw_rows(self, start: date, end: date) -> list[dict[str, Any]]:
+        with self._lock:
+            return self._raw_rows(start, end)
+
+    def _raw_rows(self, start: date, end: date) -> list[dict[str, Any]]:
         now = self.clock()
         today = now.date()
         rows: list[dict[str, Any]] = []
@@ -474,7 +517,7 @@ class BSEClient:
             cached = self._cached_day(d)
             if cached is not None:
                 rows += cached
-            elif d.weekday() < 5:
+            elif self._is_trading_day(d) and self._provisional.get(d, -1.0) <= self.monotonic():
                 missing.append(d)
             d += timedelta(days=1)
         if missing and self.monotonic() >= self._fail_until:
@@ -484,17 +527,19 @@ class BSEClient:
                     hi = min(lo + timedelta(days=MAX_SPAN_DAYS - 1), missing[-1])
                     got = self.fetch_range(lo, hi)
                     self._store_days(lo, hi, got, today)
+                    self._note_provisional(lo, hi, got, today)
                     rows += got
                     lo = hi + timedelta(days=1)
                 self.last_error = None
             except Exception as e:  # noqa: BLE001 - a second source never breaks the first
                 self._fail(e)
-        if end >= today and today.weekday() < 5 and (now.hour, now.minute) >= PUBLISHED_AFTER:
+        if end >= today and self._is_trading_day(today) and (now.hour, now.minute) >= PUBLISHED_AFTER:
             rows += self._today_rows()
         return rows
 
     def _today_rows(self) -> list[dict[str, Any]]:
-        if self._today_cache and self.monotonic() - self._today_cache[0] < TODAY_TTL_S:
+        if self._today_cache and self.monotonic() - self._today_cache[0] < (
+                TODAY_TTL_S if self._today_cache[1] else PROVISIONAL_TTL_S):  # a quiet day: once an hour
             return self._today_cache[1]
         if self.monotonic() < self._fail_until:
             return []
@@ -546,5 +591,6 @@ def make_bse_client(settings: Any) -> BSEClient | None:
         return None
     from .instruments import CompanyNames
     cache = Path(settings.state_dir) / "cache"
+    from .holidays import NSEHolidays
     return BSEClient(cache_dir=cache, host=getattr(settings, "bse_host", None) or DEFAULT_HOST,
-                     resolver=ScripResolver(CompanyNames(cache)))
+                     resolver=ScripResolver(CompanyNames(cache)), holidays=NSEHolidays(cache_dir=cache))

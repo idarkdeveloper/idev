@@ -10,7 +10,7 @@ from typing import Any
 import anthropic
 from anthropic import beta_tool
 
-from .broker import Broker
+from .broker import BSE_ONLY_MESSAGE, Broker
 from .config import Settings
 from .investors import classify_client, describe
 from .momentum import momentum_summary
@@ -67,6 +67,7 @@ MARKET_NOTES = {
     "in": """\
 Market: India (NSE). Prices and amounts are in rupees (INR). Orders are in whole shares.
 The disclosed trades come from NSE and BSE bulk deals, block deals and SEBI insider (PIT) filings (each deal says its exchange).
+A ticker ending in .BO is a BSE-only stock with no NSE listing: it is information only, never recommend it as a buy and never order it.
 Bulk/block deals are published the same evening, so they are fresh. The client name in a
 bulk deal can be an investor, a fund, or a broker/prop desk acting for a client; weigh the
 name accordingly. A bulk deal has a counterparty: a SELL by a followed investor is as
@@ -253,6 +254,8 @@ def build_tools(ctx: AgentContext) -> list[Any]:
         action = action.lower().strip()
         if action not in {"buy", "sell", "hold", "watch"}:
             return json.dumps({"error": "action must be buy, sell, hold or watch"})
+        if action == "buy" and ticker.strip().upper().endswith(".BO"):
+            return json.dumps({"error": BSE_ONLY_MESSAGE + "; use action watch or hold"})
         rec = {"action": action, "ticker": ticker.upper(), "headline": headline,
                "rationale": rationale, "confidence": confidence.lower(),
                "suggested_notional_usd": float(suggested_notional_usd),

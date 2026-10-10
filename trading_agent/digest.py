@@ -286,7 +286,7 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
     ideas, too_expensive = [], []
     for row in res["top"][:int(s.digest_top)]:
         price = row.get("last_close")
-        if not price:
+        if not price or str(row.get("symbol", "")).upper().endswith(".BO"):  # BSE-only stocks are never buy ideas
             continue
         try:
             bars = ctx.prices.history(row["symbol"], "2y")
