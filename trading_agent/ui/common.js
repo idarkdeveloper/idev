@@ -70,7 +70,8 @@ window.TA = (function(){
       + `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "chart")}">${g}<line class="xh" x1="0" x2="0" y1="${m.t}" y2="${m.t + ph}" stroke="${C.base}" stroke-width="1" visibility="hidden"/><g class="dots"></g><rect x="${m.l}" y="${m.t}" width="${pw}" height="${ph}" fill="transparent" class="hit"/></svg><div class="ctip"></div>`;
     const svg = el.querySelector("svg"), tip = el.querySelector(".ctip"), xh = svg.querySelector(".xh"), dots = svg.querySelector(".dots");
     const at = (ev) => { const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width; return Math.max(0, Math.min(n - 1, Math.round((sx - m.l) / pw * (n - 1)))); };
-    svg.querySelector(".hit").addEventListener("mousemove", ev => {
+    const hit = svg.querySelector(".hit");
+    const show = (ev) => {
       const i = at(ev), x = X(i);
       xh.setAttribute("x1", x); xh.setAttribute("x2", x); xh.setAttribute("visibility", "visible");
       dots.innerHTML = cfg.series.map(s => s.values[i] == null ? "" : `<circle cx="${x}" cy="${Y(s.values[i])}" r="4" fill="${s.color}" stroke="${C.ring}" stroke-width="2"/>`).join("");
@@ -78,8 +79,35 @@ window.TA = (function(){
       tip.style.display = "block";
       const r = svg.getBoundingClientRect(), px = x * r.width / W, tw = tip.offsetWidth;
       tip.style.left = Math.max(0, Math.min(r.width - tw, px + 12 + tw > r.width ? px - tw - 12 : px + 12)) + "px"; tip.style.top = "8px";
+      return i;
+    };
+    const hide = () => { xh.setAttribute("visibility", "hidden"); dots.innerHTML = ""; tip.style.display = "none"; };
+    // Mouse: follow the pointer. Touch: a tap (no movement) shows the nearest point, a tap elsewhere hides it; the hit
+    // area is touch-action: pan-y so a vertical swipe always scrolls the page, and there is no drag-to-scrub.
+    hit.addEventListener("mousemove", ev => { if(!touch.recent()) show(ev); });
+    hit.addEventListener("mouseleave", () => { if(!touch.recent()) hide(); });
+    let down = null, shown = -1;
+    hit.addEventListener("pointerdown", ev => { down = ev.pointerType === "touch" ? {x: ev.clientX, y: ev.clientY} : null; });
+    hit.addEventListener("pointerup", ev => {
+      if(ev.pointerType !== "touch" || !down) return;
+      const moved = Math.hypot(ev.clientX - down.x, ev.clientY - down.y); down = null;
+      if(moved > 10) return;   // a swipe, not a tap
+      touch.stamp();
+      if(shown === at(ev) && tip.style.display === "block"){ hide(); shown = -1; touch.open = null; return; }
+      if(touch.open) touch.open();
+      shown = show(ev); touch.open = () => { hide(); shown = -1; };
     });
-    svg.querySelector(".hit").addEventListener("mouseleave", () => { xh.setAttribute("visibility", "hidden"); dots.innerHTML = ""; tip.style.display = "none"; });
+    hit.addEventListener("pointercancel", () => { down = null; });
+  }
+  // One document-level listener hides an open touch tooltip when the next tap lands anywhere but on a chart's hit area.
+  const touch = {at: 0, open: null, stamp(){ this.at = Date.now(); }, recent(){ return Date.now() - this.at < 800; }};
+  if(typeof document !== "undefined" && document.addEventListener){
+    document.addEventListener("pointerup", ev => {
+      if(ev.pointerType !== "touch" || !touch.open) return;
+      const t = ev.target;
+      if(t && t.classList && t.classList.contains && t.classList.contains("hit")) return;
+      touch.open(); touch.open = null;
+    });
   }
   function histogram(el, values, cfg){
     if(values.length < 2){ el.innerHTML = `<div class="chart-empty">${esc(cfg.empty || "Not enough data to draw yet.")}</div>`; return; }
@@ -402,8 +430,121 @@ window.TA = (function(){
     if(c) out.push(`Buying and selling costs about ${money(c.total)} (${(c.total_bps / 100).toFixed(2)}%), so it must rise ${(c.total_bps / 100).toFixed(2)}% just to break even${c.total_bps > 70 ? "; at this size the flat ₹20 charges weigh heavily, and a bigger, rarer trade costs less in percent" : ""}.`);
     return out.join(" ");
   }
+
+  // ---- safety and freshness: mode strip, freshness chip, protection line, URL state (pure functions + small painters) ----
+  const safety = (function(){
+    const P = {
+      lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+      alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+      flask: '<path d="M9 2h6"/><path d="M10 2v6L4.5 18a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 8V2"/>',
+      rewind: '<polygon points="11 19 2 12 11 5 11 19"/><polygon points="22 19 13 12 22 5 22 19"/>',
+      shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/>',
+      shieldoff: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="3" y1="3" x2="21" y2="21"/>',
+    };
+    const icon = (n) => `<svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ""}</svg>`;
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const day = (iso, withYear) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}${withYear ? " " + m[1] : ""}` : ""; };
+
+    // The strip under the header. mode: "live" | "demo" | "replay"; o.liveOrders: true | false | undefined (not loaded yet);
+    // o.date: the replay clock date (ISO).
+    function modeStrip(mode, o){
+      o = o || {};
+      if(mode === "replay") return {kind: "replay", icon: "rewind",
+        text: o.date ? `REPLAY · past data up to ${day(o.date, true)} · practice money` : "REPLAY · past data only · practice money"};
+      if(mode === "demo") return {kind: "practice", icon: "flask", text: "PRACTICE · practice money only · no real orders possible"};
+      if(o.liveOrders === "unknown") return {kind: "unknown", icon: "alert", text: "LIVE · your real Groww account · live-orders setting unknown (could not read the server state)"};
+      if(o.liveOrders === true) return {kind: "liveon", icon: "alert", text: "LIVE · real Groww account · live orders ON (agent/watch can trade)"};
+      if(o.liveOrders === false) return {kind: "live", icon: "lock", text: "LIVE · your real Groww account · read-only on this page · live orders OFF"};
+      return {kind: "live", icon: "lock", text: "LIVE · your real Groww account · read-only on this page · checking the live-orders setting"};
+    }
+    function paintStrip(res){
+      try {
+        const el = $("modestrip"); if(!el) return;
+        el.className = "modestrip " + res.kind;
+        $("modestrip-icon").innerHTML = icon(res.icon);
+        $("modestrip-text").textContent = res.text;
+        if(document.documentElement && document.documentElement.dataset) document.documentElement.dataset.strip = res.kind;
+      } catch(e){}
+    }
+
+    const ageText = (s) => s >= 7200 ? Math.floor(s / 3600) + " h" : s >= 90 ? Math.round(s / 60) + " min" : Math.max(0, Math.round(s)) + " s";
+    const closeText = (iso) => { const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(String(iso || "")); return m ? `${day(m[1])} ${m[2]}` : ""; };
+    // The freshness chip from the /api/freshness pieces: {level: "ok" | "warn" | "bad" | "idle", text, title}.
+    function freshnessChip(f){
+      if(!f) return {level: "idle", text: "Freshness unknown", title: ""};
+      const w = f.watch || {}, p = f.prices || {}, d = f.deals || {};
+      let level, text;
+      if(!f.market_open){
+        level = "idle"; text = p.last_close ? `Prices from ${closeText(p.last_close)} close` : "Market closed";
+      } else if(!w.seen){
+        level = f.live_orders ? "warn" : "idle"; text = "Watch service: not seen";
+      } else if(w.level === "bad"){ level = "bad"; text = `Watch not seen for ${ageText(w.age_s)}`; }
+      else if(w.level === "warn"){ level = "warn"; text = `Watch not seen for ${ageText(w.age_s)}`; }
+      else { level = "ok"; text = `Data live · watch ${ageText(w.age_s)} ago`; }
+      if(w.seen && w.last_error && f.market_open) text += " · last tick had an error";
+      const bits = [];
+      bits.push(f.market_open ? "NSE open (09:15 to 15:30 IST)" : "NSE closed");
+      bits.push(w.seen ? `watch service last seen ${ageText(w.age_s)} ago` + (w.every ? ` (ticks every ${w.every} s)` : "") : "watch service: not seen");
+      if(w.last_error) bits.push("watch error: " + w.last_error);
+      if(p.bar_at) bits.push("newest price bar " + p.bar_at);
+      if(d.age_s != null) bits.push(`deals fetched ${ageText(d.age_s)} ago`);
+      return {level, text, title: bits.join(" · ")};
+    }
+    function paintChip(res){
+      try {
+        const el = $("freshness"); if(!el) return;
+        el.className = "pill fresh " + res.level; el.title = res.title || "";
+        $("fresh-text").textContent = res.text;
+      } catch(e){}
+    }
+
+    // Protection line for one holding (safety.protection from the server): icon + words + optional warning.
+    function protectionHtml(p){
+      if(!p) return "";
+      const ic = p.kind === "gtt" ? "shield" : p.kind === "server" ? (p.tone === "neutral" ? "shield" : "alert") : (p.tone === "bad" ? "alert" : "shieldoff");
+      return `<span class="prot ${esc(p.tone)}">${icon(ic)}<span>${esc(p.text)}</span></span>` + (p.warning ? `<span class="prot-warn">${icon("alert")}<span>${esc(p.warning)}</span></span>` : "");
+    }
+
+    // ---- URL state: investor filter, signal-lab horizon, open section ----
+    const slug = (n) => String(n == null ? "" : n).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    const HORIZONS = [5, 20, 60];
+    // known: {investors: [names], anchors: [names]}. Unknown values are ignored; "all" is an explicit empty selection.
+    function parseUrl(search, hash, known){
+      known = known || {};
+      const out = {}, q = new URLSearchParams(String(search || "").replace(/^\?/, ""));
+      const inv = q.get("investor");
+      if(inv !== null){
+        if(inv.toLowerCase() === "all") out.investor = [];
+        else {
+          const names = known.investors || [], picked = [];
+          inv.split(",").map(slug).forEach(sg => { const n = names.find(x => slug(x) === sg); if(n && !picked.includes(n)) picked.push(n); });
+          if(picked.length) out.investor = picked;
+        }
+      }
+      const h = q.get("h");
+      if(h !== null && /^\d+$/.test(h) && HORIZONS.includes(Number(h))) out.h = Number(h);
+      const a = String(hash || "").replace(/^#/, "");
+      if(a && (known.anchors || []).includes(a)) out.anchor = a;
+      return out;
+    }
+    // st: {investor: [names] | undefined (leave out), h: number | undefined, anchor: string | undefined}
+    function buildUrl(pathname, st){
+      st = st || {};
+      const q = [];
+      if(st.investor !== undefined) q.push("investor=" + (st.investor.length ? st.investor.map(slug).join(",") : "all"));
+      if(st.h && HORIZONS.includes(Number(st.h))) q.push("h=" + Number(st.h));
+      return (pathname || "/") + (q.length ? "?" + q.join("&") : "") + (st.anchor ? "#" + st.anchor : "");
+    }
+    // The section to name in the URL: the one whose box holds the line `line` px below the viewport top ("" when none does).
+    function pickSection(tops, line){
+      let best = null;   // the section under the line; where two columns both are, the one that started last
+      (tops || []).forEach(t => { if(t.top <= line && (t.bottom == null || t.bottom > line) && (!best || t.top > best.top)) best = t; });
+      return best ? best.anchor : "";
+    }
+    return {modeStrip, paintStrip, freshnessChip, paintChip, ageText, protectionHtml, icon, slug, parseUrl, buildUrl, pickSection, day};
+  })();
   return {$, esc, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct,
-          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme};
+          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety};
 })();
 window.TA.theme.init();

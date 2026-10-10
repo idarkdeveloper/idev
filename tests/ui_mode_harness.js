@@ -9,6 +9,7 @@ const sample = process.argv[3] === "sample";
 const mpFail = process.argv[3] === "mpfail";
 const savedMode = process.argv[3] === "saved";   // Groww refusing logins: the saved holdings, priced from Yahoo
 const noMarker = process.argv[3] === "nomarker";
+const liveOrders = process.argv[3] === "liveorders";   // GROWW_LIVE_ORDERS on: the strip warns, holdings show which stop protects them
 const multi = process.argv[3] === "multi" || process.argv[3] === "multi-saved";   // several followed investors
 const intervals = [], stored = process.argv[3] === "multi-saved" ? {dealFilter: JSON.stringify(["VIJAY KEDIA"])} : {};
 const ui = path.join(__dirname, "..", "trading_agent", "ui");
@@ -43,12 +44,18 @@ const state = {
   now: "2026-10-10T10:00:00+00:00", page: mode, regime: null, watch: {on: false, every: 60, auto_exit: false}, orders: [],
   forward: null, backtest: null, screen: null, factor_backtest: null, signal_lab: null, equity_history: [], equity_stats: null,
   costs: {examples: {"25000": 40}}, settings: baseSettings, market_day: null,
-  connections: {claude: true, groww: true, groww_credentials: true, groww_live_orders: false, groww_gtt_active: false, data: "nse", prices: "groww"},
+  connections: {claude: true, groww: true, groww_credentials: true, groww_live_orders: liveOrders, groww_gtt_active: false, data: "nse", prices: "groww"},
   account: {cash: 99000, equity: 100000, currency: "INR"}, positions: [{symbol: "LAURUSLABS", qty: 10, avg_entry_price: 100,
     current_price: 100, market_value: 1000, unrealized_pl: 0, high_water: 100, stop: 90, stop_type: "percent", stop_label: "−8% from buy",
     stop_value: 8, gtt: null},
     {symbol: "NOSTOP", qty: 5, avg_entry_price: 50, current_price: 40, market_value: 200, unrealized_pl: -50, high_water: 50, stop: null,
      stop_type: "none", stop_label: "none", stop_value: null, gtt: null}],
+  live_orders: mode === "demo" ? false : liveOrders,
+  protection: mode === "demo" ? null : liveOrders
+    ? {live_orders: true, default: {kind: "none", tone: "bad", text: "No stop set: nothing sells this holding", warning: null}, by_symbol: {
+        TCS: {kind: "gtt", tone: "solid", text: "GTT at Groww ₹99.00 (#gtt_1)", warning: "GTT problem: modify refused"},
+        LAURUSLABS: {kind: "server", tone: "warn", text: "Server stop ₹90.00: alert only, nothing sells automatically (needs the watch service running) · server not seen for 7 min", warning: null}}}
+    : {live_orders: false, default: {kind: "none", tone: "neutral", text: "Not protected (live orders off — stop is advisory)", warning: null}, by_symbol: {}},
   stop_fills: [{at: "2026-10-10T09:30:00+05:30", symbol: "OLD", qty: 3, price: 92, stop: 95, type: "fixed", label: "fixed"}],
   performance: {pnl: 0, pnl_pct: 0, fees_paid: 0, starting_cash: 100000, orders: 1}, broker_error: null, deals_error: null,
   deals: multi ? [
@@ -70,7 +77,9 @@ const preview = {symbol: "TCS", basis: "groww", in_practice: false, held: 1, qty
   tax: {estimate: 0, fy: "2026-27"}, tax_text: "A loss, so no tax on this sale.", holding_note: "Groww gives no buy date.",
   cost_note: "Average price is your Groww buy average.", disclaimer: "estimate — not tax advice; surcharge, other income and grandfathering are ignored"};
 const requests = [];
-const answers = (url) => url.includes("/api/practice/sell-preview") ? preview : url.includes("/api/state") ? state : url.includes("/api/my-portfolio") ? portfolio
+const freshness = {now: "2026-10-10T10:00:00+00:00", market_open: true, live_orders: liveOrders, watch: {seen: true, at: "2026-10-10T09:59:20+00:00", age_s: 40,
+  every: 60, last_error: null, level: "ok"}, prices: {last_close: "2026-10-09T15:30:00+05:30", bar_at: "2026-10-09"}, deals: {age_s: 120}};
+const answers = (url) => url.includes("/api/freshness") ? freshness : url.includes("/api/practice/sell-preview") ? preview : url.includes("/api/state") ? state : url.includes("/api/my-portfolio") ? portfolio
   : url.includes("/api/scorecard") ? {summary: {by_action: {}, horizons: [5], pending: 0, benchmark: "^NSEI"}, rows: []} : {};
 
 const listeners = {};
@@ -174,6 +183,9 @@ setTimeout(async () => {
     deals_all: dealsAll, filter_all: filterAll, filter_hidden: filterHidden, deals_kedia: dealsKedia, filter_kedia: filterKedia,
     stored_after_kedia: storedAfterKedia, deals_two: dealsTwo, deals_back: dealsBack, stored_after_all: storedAfterAll,
     deals_html: el("deals").innerHTML, bt_options: el("bt-investor").innerHTML,
+    strip_text: el("modestrip-text").textContent, strip_class: el("modestrip").className, strip_icon: el("modestrip-icon").innerHTML,
+    strip_theme: document.documentElement.dataset.strip, fresh_text: el("fresh-text").textContent, fresh_class: el("freshness").className,
+    prot_th_hidden: el("mp-prot-th").hidden,
     check_hidden: el("check-split").hidden, settings_hidden: el("btn-settings").hidden, watch_hidden: el("btn-watch").hidden,
   }));
   process.exit(0);
