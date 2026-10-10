@@ -443,7 +443,7 @@
   let fillsSeen = null;
   function stopCell(p){
     const type = p.stop_type || "trailing", label = p.stop_label || type;
-    if(p.stop == null) return `<div>No stop</div><div class="sub">${esc(label)} \u00b7 nothing sells it automatically</div>${stopBtn(p)}`;
+    if(p.stop == null) return `<div title="${esc(label)} · nothing sells it automatically">No stop</div><div class="sub">no auto-sell</div>${stopBtn(p)}`;
     const dist = p.current_price != null ? 1 - p.stop / p.current_price : null, hit = p.current_price != null && p.current_price <= p.stop;
     return `<div class="${hit ? "down" : ""}" style="font-weight:600">${money(p.stop, 2)}</div>
       <div class="sub">${esc(label)}${dist != null ? ` \u00b7 ${hit ? "at or below the stop" : (dist * 100).toFixed(1) + "% below the price"}` : ""}</div>${stopBtn(p)}`;
@@ -1075,7 +1075,7 @@
         pollNews(r, seq, Date.now());
       }).catch(e => { if(seq === lookupSeq && $("lk-news")) $("lk-news").innerHTML = `<div class="sub">News unavailable: ${esc(e.message)}</div>`; });
       const hist = r.history || [], pos = r.position, refs = [];
-      if(pos){ refs.push({y: pos.avg_entry_price, label: "Your cost"}); refs.push({y: pos.stop, label: "Stop", color: C.neg}); }
+      if(pos){ refs.push({y: pos.avg_entry_price, label: "Your cost"}); if(pos.stop != null) refs.push({y: pos.stop, label: "Stop", color: C.neg}); }
       lineChart($("lk-chart"), {x: hist.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, refs,
         yFmt: v => sym() + Math.round(v).toLocaleString("en-IN"), label: `${r.ticker} price, last year`,
         empty: r.history_error ? "Price history unavailable: " + r.history_error : "No price history.",

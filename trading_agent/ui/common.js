@@ -36,6 +36,7 @@ window.TA = (function(){
   }
   const shortDate = (d) => { const x = new Date(d + (d.length === 10 ? "T00:00:00" : "")); return isNaN(x) ? d : x.toLocaleDateString("en-IN", {day:"numeric", month:"short", year:"2-digit"}); };
   function lineChart(el, cfg){
+    cfg = Object.assign({}, cfg, {refs: (cfg.refs || []).filter(r => r && r.y != null && isFinite(r.y))});   // no level, no line or legend entry
     const xs = cfg.x, n = xs.length;
     if(n < 2){ el.innerHTML = `<div class="chart-empty">${esc(cfg.empty || "Not enough data to draw yet.")}</div>`; return; }
     const W = Math.max(280, el.clientWidth || 560), H = cfg.height || 200;

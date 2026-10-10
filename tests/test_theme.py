@@ -127,7 +127,7 @@ PAIRS = [
     ("input border on card", "--color-input-border", "--color-surface", NONTEXT),
 ]
 # Dark mode must keep its existing look, and these dark values were already under the bar before the light theme.
-DARK_BASELINE_EXCEPTIONS = {"input border on card", "chart negative bars", "chart context line", "link hover on card"}
+DARK_BASELINE_EXCEPTIONS = {"input border on card", "link hover on card"}
 
 
 def table(tokens, skip=()):
@@ -220,3 +220,43 @@ def test_theme_switch_in_node_harness():
         assert o["other_tab"] == "dark"
         assert o["switch_markup"] is True
     assert out["chart_colours"] == {"s1": "var(--chart-s1)", "grid": "var(--chart-grid)", "ring": "var(--chart-ring)"}
+
+
+# ---------- fix round 1 ----------
+def test_segmented_controls_keep_a_visible_focus_ring_and_a_3_to_1_border():
+    assert re.search(r"\.seg button:focus-visible\s*\{[^}]*outline-offset:\s*-\d+px", CSS)   # .seg clips, so the ring goes inside
+    assert re.search(r"\.seg \{[^}]*border:\s*1px solid var\(--color-input-border\)", CSS)
+    assert re.search(r"\.seg button \+ button \{[^}]*var\(--color-input-border\)", CSS)
+    assert ratio(LIGHT, "--color-input-border", "--color-bg") >= NONTEXT   # the control sits on the page too
+
+
+def test_scroll_container_contains_sr_only_cells():
+    assert re.search(r"\.scroll \{[^}]*position:\s*relative", CSS)   # else an absolute .sr-only widens the page on phones
+
+
+def test_no_stop_line_without_a_stop_level_and_compact_stop_cell():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    js = """
+const fs=require('fs'),vm=require('vm');
+const ctx={document:{getElementById:()=>null,body:{dataset:{}}},console,Intl,Date,Math,JSON};ctx.window=ctx;
+vm.createContext(ctx);vm.runInContext(fs.readFileSync(process.argv[1],'utf8'),ctx);
+const stub=()=>new Proxy({},{get:(o,k)=>()=>stub()});
+const el={clientWidth:600,innerHTML:'',querySelector:()=>stub()};
+const mk=refs=>{ctx.TA.lineChart(el,{x:['2026-01-01','2026-01-02','2026-01-03'],series:[{name:'Price',color:'x',values:[100,110,120]}],refs});return el.innerHTML;};
+const none=mk([{y:100,label:'Your cost'},{y:null,label:'Stop'},{y:undefined,label:'Stop'}]), withStop=mk([{y:100,label:'Your cost'},{y:90,label:'Stop'}]);
+console.log(JSON.stringify({noneHasStop:none.includes('Stop'),noneHasCost:none.includes('Your cost'),stopShown:withStop.includes('Stop'),zero:/₹0|NaN/.test(none)}));
+"""
+    ui = ROOT / "trading_agent" / "ui"
+    r = subprocess.run([node, "-e", js, str(ui / "common.js")], capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == {"noneHasStop": False, "noneHasCost": True, "stopShown": True, "zero": False}
+    for src in ("index.html", "replay.js"):
+        text = (ui / src).read_text(encoding="utf-8")
+        assert "stop != null" in text, src      # callers also skip the Stop reference when there is no level
+    h = subprocess.run([node, str(Path(__file__).parent / "ui_mode_harness.js"), "demo"], capture_output=True, text=True, encoding="utf-8")
+    assert h.returncode == 0, h.stderr
+    rows = json.loads(h.stdout)["positions_html"]
+    assert "No stop" in rows and "no auto-sell" in rows and "nothing sells it automatically" in rows   # long text kept as a title
+    assert 'class="sub">none' not in rows and 'class="sub">None' not in rows

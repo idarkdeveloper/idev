@@ -188,7 +188,7 @@
       const h = r.history || [];
       lineChart($("rl-chart"), {x: h.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, label: `${r.ticker} price, year before the replay date`,
         yFmt: v => "₹" + Math.round(v).toLocaleString("en-IN"), empty: "No price history before this date.",
-        refs: r.position ? [{y: r.position.avg_entry_price, label: "Your cost"}, {y: r.position.stop, label: "Stop", color: C.neg}] : [],
+        refs: r.position ? [{y: r.position.avg_entry_price, label: "Your cost"}].concat(r.position.stop != null ? [{y: r.position.stop, label: "Stop", color: C.neg}] : []) : [],
         series: [{name: "Price", color: C.s1, values: h.map(p => p.c)}, {name: "200-day average", color: C.ctx, width: 1.5, values: h.map(p => p.ma200)}]});
       if(r.announcements_pending){
         const want = r.ticker;

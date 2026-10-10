@@ -68,7 +68,7 @@
     --color-row-hover: color-mix(in srgb, #1a1c28 4%, transparent);
     --color-profit: #0a7a3c; --color-loss: #c1272d;
     --color-scrim: rgba(26, 28, 40, 0.45);
-    --color-replay: #8a5a00; --color-demo: #0b6b5c;
+    --color-replay: #7d5200; --color-demo: #0b6b5c;
     --color-neutral-100: #1a1c28; --color-neutral-300: #343848; --color-neutral-400: #474b5e; --color-neutral-500: #6a6e82;
     --color-neutral-600: #7d8196; --color-neutral-700: #a9adbd; --color-neutral-800: #e4e6ee; --color-neutral-900: #eceef5;
     --color-accent-100: #2a2066; --color-accent-200: #cfc9f3; --color-accent-300: #4a3a9e; --color-accent-400: #5f50c8;
@@ -175,7 +175,7 @@
   .cardhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; padding: 12px 18px; }
   .cardbody { padding: 12px 18px; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--color-divider); min-width: 0; }
   .card > .scroll, .cardhead + .scroll { padding: 0 10px 6px; }
-  .scroll { overflow-x: auto; }
+  .scroll { overflow-x: auto; position: relative; }   /* relative: a .sr-only cell inside must not widen the page */
 
   /* regime strip */
   .regime-card { display: flex; flex-direction: column; }
@@ -241,9 +241,11 @@
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
   .side .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .grid4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
-  .seg { display: inline-flex; overflow: hidden; border: 1px solid var(--color-divider); border-radius: var(--radius-md); }
+  .seg { display: inline-flex; overflow: hidden; border: 1px solid var(--color-input-border); border-radius: var(--radius-md); }
   .seg button { border: none; border-radius: 0; min-height: 34px; padding: 0 12px; font-size: 13px; font-weight: 400; }
-  .seg button + button { border-left: 1px solid var(--color-divider); }
+  .seg button + button { border-left: 1px solid var(--color-input-border); }
+  /* .seg clips its children, so the focus ring is drawn inside the button */
+  .seg button:focus-visible { outline-offset: -3px; }
   .seg button.on { color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
   /* company suggestions under the ticker boxes */
   .suggest { position: fixed; z-index: 30; display: none; background: var(--color-surface); border-radius: var(--radius-md);
