@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from .broker import LocalPaperBroker
-from .config import load_settings
-from .quiver import _norm_congress, filter_by_investor
+from .config import load_settings, parse_investors
+from .quiver import _norm_congress, fetch_followed, filter_by_investors
 from .runner import check, make_broker
 from .state import State
 
@@ -32,7 +32,7 @@ def _demo_inputs(settings):
     else:
         rows = [_norm_congress(r) for r in json.loads((fx / "congress_sample.json").read_text())]
         prices = json.loads((fx / "prices.json").read_text())
-    trades = filter_by_investor(rows, settings.watch_investor)
+    trades = filter_by_investors(rows, settings.investors)
     broker = LocalPaperBroker(settings.state_dir / "paper_broker.json",
                               starting_cash=settings.paper_starting_cash,
                               price_fn=lambda s: prices[s], currency=settings.currency,
@@ -64,6 +64,17 @@ def _print_result(result) -> None:
         print(f"\n{result.final_text}")
 
 
+def _investor_names(args: argparse.Namespace) -> list[str] | None:
+    """--investor values (repeatable, each may be a comma list) as one validated list; None when not given."""
+    given = getattr(args, "investor", None)
+    if not given:
+        return None
+    try:
+        return parse_investors(given)
+    except ValueError as e:
+        raise SystemExit(f"--investor: {e}") from None
+
+
 def _settings(args: argparse.Namespace):
     if getattr(args, "market", None):
         import os
@@ -87,8 +98,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         if name:
             print(f"NSE is closed today ({name}): nothing to check.")
             return 0
-    if args.investor:
-        settings.watch_investor = args.investor
+    names = _investor_names(args)
+    if names:
+        settings.investors = names
     if args.auto_trade:
         settings.auto_trade = True
     kwargs: dict[str, Any] = {}
@@ -411,11 +423,11 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
 def cmd_backtest(args: argparse.Namespace) -> int:
     """Replay an investor's disclosed deals against subsequent returns vs NIFTY 50."""
-    from .backtest import format_summary, run_backtest
+    from .backtest import format_summary, run_backtest, run_backtest_followed
     from .runner import free_prices, make_data_source
 
     settings = _settings(args)
-    investor = args.investor or settings.watch_investor
+    names = _investor_names(args) or settings.investors
     horizons = tuple(int(h) for h in args.horizons.split(","))
     if args.demo:
         import dataclasses
@@ -428,12 +440,16 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         prices = _DemoHistory(broker.price_fn)
     else:
         data = make_data_source(settings)
-        deals = data.trades_for_investor(investor, settings.watch_source, days=args.days) \
-            if settings.data_source == "nse" else data.trades_for_investor(investor, settings.watch_source)
+        deals = fetch_followed(data, names, settings.watch_source,
+                               days=args.days if settings.data_source == "nse" else None)
         prices = free_prices(settings)
-    print(f"{len(deals)} disclosed deals by {investor} in the last {args.days} days; pricing…")
-    result = run_backtest(investor, deals, prices, horizons=horizons, cost_bps=args.cost_bps,
-                          benchmark=args.benchmark)
+    print(f"{len(deals)} disclosed deals by {', '.join(names)} in the last {args.days} days; pricing…")
+    if len(names) == 1:
+        result = run_backtest(names[0], deals, prices, horizons=horizons, cost_bps=args.cost_bps,
+                              benchmark=args.benchmark)
+    else:
+        result = run_backtest_followed(names, deals, prices, horizons=horizons, cost_bps=args.cost_bps,
+                                       benchmark=args.benchmark)
     print(format_summary(result.summary()))
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, default=str))
@@ -722,7 +738,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 holidays=_market_holidays(settings),
                 check_fn=lambda: check(settings, broker=broker, data=data, notifier=notifier,
                                        dry_run=not settings.anthropic_api_key))
-    print(f"Watching {settings.watch_investor} every {w.every}s, {args.window_start}-{args.window_end} IST, "
+    print(f"Watching {', '.join(settings.investors)} every {w.every}s, {args.window_start}-{args.window_end} IST, "
           f"NSE trading days. Ctrl+C to stop.")
     try:
         w.run_forever()
@@ -747,7 +763,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     def add_check_args(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--investor", help="override WATCH_INVESTOR")
+        sp.add_argument("--investor", action="append", metavar="NAME[,NAME...]",
+                        help="follow these investors this run instead of INVESTORS (comma list; repeatable)")
         sp.add_argument("--force", action="store_true", help="run Claude even with no new trades")
         sp.add_argument("--dry-run", action="store_true", help="fetch & diff only; don't call Claude")
         sp.add_argument("--demo", action="store_true", help="use bundled sample trades/prices")
@@ -797,7 +814,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--sync", action="store_true")
     sp.set_defaults(func=cmd_gtt)
     sp = sub.add_parser("backtest", help="replay an investor's disclosed deals vs NIFTY 50")
-    sp.add_argument("--investor", help="override WATCH_INVESTOR")
+    sp.add_argument("--investor", action="append", metavar="NAME[,NAME...]",
+                    help="investors to replay (comma list; repeatable); default: all followed (INVESTORS)")
     sp.add_argument("--days", type=int, default=365, help="how far back to fetch deals")
     sp.add_argument("--horizons", default="5,20,60", help="holding periods in trading days")
     sp.add_argument("--cost-bps", type=float, default=50.0, help="round-trip cost in basis points")

@@ -16,13 +16,14 @@ from .investors import classify_client, describe
 from .momentum import momentum_summary
 from .notify import Notifier
 from .risk import atr, position_size
-from .quiver import DisclosedTrade
+from .quiver import DisclosedTrade, followed_names, matches_investor
 from .state import State
 
 log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """\
-You are a trading research agent that follows one investor's publicly disclosed trades.
+You are a trading research agent that follows the publicly disclosed trades of one or more investors
+(the user's followed list; every trade below says which followed investor it belongs to).
 
 Your job each run:
 1. Read the NEW disclosed trades you are given (trades you have not analysed before).
@@ -68,7 +69,7 @@ Market: India (NSE). Prices and amounts are in rupees (INR). Orders are in whole
 The disclosed trades come from NSE bulk deals, block deals and SEBI insider (PIT) filings.
 Bulk/block deals are published the same evening, so they are fresh. The client name in a
 bulk deal can be an investor, a fund, or a broker/prop desk acting for a client; weigh the
-name accordingly. A bulk deal has a counterparty: a SELL by the watched investor is as
+name accordingly. A bulk deal has a counterparty: a SELL by a followed investor is as
 informative as a BUY. Trading hours are 09:15-15:30 IST, Monday-Friday.
 """,
     "us": """\
@@ -125,8 +126,9 @@ class Usage:
 
 @dataclass
 class RunResult:
-    investor: str
+    investor: str  # the followed names, joined with ", "
     new_trades: list[DisclosedTrade]
+    investors: list[str] = field(default_factory=list)
     recommendations: list[dict[str, Any]] = field(default_factory=list)
     orders: list[dict[str, Any]] = field(default_factory=list)
     final_text: str = ""
@@ -141,6 +143,7 @@ class RunResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "investor": self.investor,
+            "investors": self.investors or ([self.investor] if self.investor else []),
             "new_trades": [t.to_dict() for t in self.new_trades],
             "recommendations": self.recommendations,
             "orders": self.orders,
@@ -198,27 +201,37 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             return json.dumps({"symbol": symbol.upper(), "error": str(e)})
 
     @beta_tool
-    def get_investor_trade_history(ticker: str) -> str:
-        """Get the watched investor's previously disclosed trades in one ticker, newest first,
+    def get_investor_trade_history(ticker: str, investor: str = "") -> str:
+        """Get a followed investor's previously disclosed trades in one ticker, newest first,
         to judge whether a new trade continues a pattern or reverses one.
 
         Args:
             ticker: Stock ticker symbol.
+            investor: Which investor (a name from the followed list). Leave empty for all followed investors.
         """
         if ctx.data is None:
             return json.dumps({"error": "market data client not configured"})
+        followed = ctx.settings.investors
+        names = [investor.strip()] if investor.strip() else followed
+        merged: dict[str, DisclosedTrade] = {}
         try:
-            rows = ctx.data.history_for_ticker(ctx.settings.watch_investor, ticker)
+            for n in names:
+                for t in ctx.data.history_for_ticker(n, ticker):
+                    merged.setdefault(t.key, t)
         except Exception as e:  # noqa: BLE001
             return json.dumps({"error": str(e)})
-        mine = [t.to_dict() for t in rows][:25]
-        for t in mine:
-            t.pop("raw", None)
-        return json.dumps({"ticker": ticker.upper(), "trades": mine}, default=str)
+        rows = sorted(merged.values(), key=lambda t: (t.report_date, t.transaction_date), reverse=True)
+        mine = []
+        for t in rows[:25]:
+            d = t.to_dict()
+            d.pop("raw", None)
+            d["followed_investor"] = ", ".join(followed_names(t.investor, names)) or names[0]
+            mine.append(d)
+        return json.dumps({"ticker": ticker.upper(), "investors": names, "trades": mine}, default=str)
 
     @beta_tool
     def send_recommendation(action: str, ticker: str, headline: str, rationale: str,
-                            confidence: str, suggested_notional_usd: float = 0.0) -> str:
+                            confidence: str, suggested_notional_usd: float = 0.0, investor: str = "") -> str:
         """Send the user a recommendation. Call once per ticker (or once with action "hold").
 
         Args:
@@ -229,6 +242,8 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             confidence: One of "low", "medium", "high".
             suggested_notional_usd: Amount in the account currency (INR for India, USD for
                 the US) to buy/sell if the user acts (0 if n/a).
+            investor: The followed investor whose trade prompted this (as named on the trade);
+                leave empty for a general note.
         """
         action = action.lower().strip()
         if action not in {"buy", "sell", "hold", "watch"}:
@@ -237,11 +252,13 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                "rationale": rationale, "confidence": confidence.lower(),
                "suggested_notional_usd": float(suggested_notional_usd),
                "currency": ctx.settings.currency,
-               "investor": ctx.settings.watch_investor}
+               "investor": _rec_investor(ctx, investor, ticker)}
         ctx.result.recommendations.append(rec)
         ctx.state.record_recommendation(rec)
-        subject = f"[{action.upper()} {rec['ticker']}] {headline}"
-        body = (f"Investor watched: {ctx.settings.watch_investor}\n"
+        who = rec["investor"]
+        subject = (f"[DEAL] {who}: {action.upper()} {rec['ticker']} - {headline}" if who
+                   else f"[{action.upper()} {rec['ticker']}] {headline}")
+        body = (f"Investor: {who or 'n/a'}\n"
                 f"Action: {action.upper()} {rec['ticker']} (confidence: {rec['confidence']})\n"
                 + (f"Suggested size: {_money(rec['suggested_notional_usd'], ctx.settings.currency)}\n"
                    if rec['suggested_notional_usd'] else "")
@@ -385,6 +402,27 @@ def build_tools(ctx: AgentContext) -> list[Any]:
     return tools
 
 
+def _rec_investor(ctx: AgentContext, given: str, ticker: str) -> str:
+    """The followed investor(s) a recommendation came from: what Claude named (matched to the followed list),
+    else whoever made the new trades in that ticker, else the only followed name."""
+    followed = ctx.settings.investors
+    given = (given or "").strip()
+    if given:
+        for n in followed:
+            if n.upper() == given.upper() or matches_investor(given, n) or matches_investor(n, given):
+                return n
+        return given
+    found: list[str] = []
+    for t in ctx.result.new_trades:
+        if t.ticker == ticker.upper():
+            for n in followed_names(t.investor, followed):
+                if n not in found:
+                    found.append(n)
+    if found:
+        return ", ".join(found)
+    return followed[0] if len(followed) == 1 else ""
+
+
 def _money(amount: float, currency: str) -> str:
     sym = "₹" if currency == "INR" else "$"
     return f"{sym}{amount:,.0f}"
@@ -395,6 +433,7 @@ def enrich_trade(ctx: AgentContext, trade: DisclosedTrade) -> dict[str, Any]:
     d = trade.to_dict()
     d.pop("raw", None)
     ctype = classify_client(trade.investor, trade.source)
+    d["followed_investor"] = ", ".join(followed_names(trade.investor, ctx.settings.investors))
     d["client_type"] = ctype
     d["client_type_note"] = describe(ctype)
     if ctx.momentum is not None:
@@ -405,6 +444,7 @@ def enrich_trade(ctx: AgentContext, trade: DisclosedTrade) -> dict[str, Any]:
 
 def build_user_message(ctx: AgentContext) -> str:
     trades = [enrich_trade(ctx, t) for t in ctx.result.new_trades]
+    names = ctx.settings.investors
     if not ctx.settings.auto_trade:
         mode = "recommendation-only (no order tool)"
     elif ctx.live_money:
@@ -420,7 +460,10 @@ def build_user_message(ctx: AgentContext) -> str:
             context_line = f"GLOBAL CONTEXT: unavailable ({e})\n"
     return (
         MARKET_NOTES.get(ctx.settings.market, "") + "\n" + context_line
-        + f"Watched investor: {ctx.settings.watch_investor} (source: {ctx.settings.watch_source}).\n"
+        + (f"Watched investor: {names[0]} (source: {ctx.settings.watch_source}).\n" if len(names) == 1 else
+           f"Followed investors ({len(names)}): {', '.join(names)} (source: {ctx.settings.watch_source}). "
+           "Each trade names its followed_investor; name that investor in every recommendation.\n")
+        +
         f"Order mode: {mode}.\n\n"
         f"NEW disclosed trades since the last check ({len(trades)}):\n"
         f"{json.dumps(trades, indent=2)}\n\n"

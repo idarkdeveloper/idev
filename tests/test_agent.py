@@ -63,7 +63,7 @@ def test_recommendation_only_flow(settings, sample_rows):
     assert result.recommendations[0]["ticker"] == "NVDA"
     assert result.orders == []  # auto_trade off -> no order tool
     assert holder["r"].tool_log[-1] == ("place_paper_order", {"error": "tool not available"})
-    assert notifier.sent[0]["subject"].startswith("[BUY NVDA]")
+    assert notifier.sent[0]["subject"].startswith("[DEAL] Nancy Pelosi: BUY NVDA")
     # request shape
     kw = holder["r"].kwargs
     assert kw["model"] == "claude-opus-5-5" and kw["fallbacks"] == "default"

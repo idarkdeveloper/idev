@@ -15,7 +15,7 @@ from .momentum import MomentumScreen
 from .notify import Notifier
 from .prices import YahooPrices
 from .regime import GlobalContext
-from .quiver import DisclosedTrade
+from .quiver import DisclosedTrade, fetch_followed
 from .state import State
 
 log = logging.getLogger(__name__)
@@ -184,11 +184,12 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     live_run = trades is None  # trades fetched here, not supplied by a demo or test
     if live_run:
         data = data or make_data_source(settings)
-        trades = data.trades_for_investor(settings.watch_investor, settings.watch_source)
+        trades = fetch_followed(data, settings.investors, settings.watch_source)
 
-    new = state.new_trades(trades)
-    result = RunResult(investor=settings.watch_investor, new_trades=new)
-    log.info("%d disclosed trades for %s, %d new", len(trades), settings.watch_investor, len(new))
+    new = state.new_trades(trades)  # a deal is seen once for everyone who matches it
+    names = settings.investors
+    result = RunResult(investor=", ".join(names), new_trades=new, investors=list(names))
+    log.info("%d disclosed trades for %s, %d new", len(trades), ", ".join(names), len(new))
 
     if baseline:
         state.mark_seen(new)

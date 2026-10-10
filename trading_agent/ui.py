@@ -28,9 +28,9 @@ from urllib.parse import urlparse
 
 from . import taxes
 from .broker import AlreadyCopied, Broker, LocalPaperBroker
-from .config import Settings, load_settings
+from .config import Settings, load_settings, parse_investors
 from .investors import classify_client
-from .quiver import DisclosedTrade
+from .quiver import DisclosedTrade, fetch_followed, followed_names
 from .momentum import MomentumScreen, momentum_summary
 from .runner import check, free_prices, make_broker, equity_key, make_data_source, make_notifier, make_practice_broker
 from .state import STATE_LOCK, State
@@ -46,7 +46,8 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 "/static/common.js": ("common.js", "text/javascript; charset=utf-8"),
                 "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8")}
 EDITABLE_ENV_KEYS = {
-    "watch_investor": "WATCH_INVESTOR",
+    "watch_investor": "WATCH_INVESTOR",  # one name (older form); watch_investors below is the list
+    "watch_investors": "INVESTORS",
     "watch_source": "WATCH_SOURCE",
     "auto_trade": "AUTO_TRADE",
     "notify_email_to": "NOTIFY_EMAIL_TO",
@@ -288,8 +289,7 @@ class App:
         if self.demo_trades is not None or (fresh and not refresh):
             return self._deals or []
         try:
-            self._deals = self.data.trades_for_investor(self.settings.watch_investor,
-                                                        self.settings.watch_source)
+            self._deals = fetch_followed(self.data, self.settings.investors, self.settings.watch_source)
             self._deals_at = time.time()
             self._deals_error = None
         except Exception as e:  # noqa: BLE001
@@ -310,6 +310,7 @@ class App:
             d.pop("raw", None)
             d["status"] = "new" if t.key not in st.data["seen"] else "analysed"
             d["client_type"] = classify_client(t.investor, t.source)
+            d["who"] = followed_names(t.investor, s.investors)  # which followed investor(s) this deal belongs to
             deals.append(d)
         try:
             acct = self.broker.account().to_dict()
@@ -378,6 +379,7 @@ class App:
             "costs": _cost_table(self.settings.market),
             "settings": {
                 "market": s.market, "currency": s.currency, "watch_investor": s.watch_investor,
+                "investors": s.investors,
                 "watch_source": s.watch_source, "data_source": s.data_source,
                 "broker": getattr(self.broker, "name", s.broker), "mode": mode,
                 "auto_trade": s.auto_trade, "claude_model": s.claude_model,
@@ -537,9 +539,18 @@ class App:
                                "stop_type": st_["type"], "stop_label": st_["label"]}
         return out
 
-    def start_backtest(self, investor: str, days: int, horizons: tuple[int, ...], cost_bps: float) -> Job:
-        from .backtest import run_backtest
+    def backtest_names(self, investor: Any) -> list[str]:
+        """Who a backtest covers: empty / "All followed" is every followed investor; otherwise the given name(s),
+        which may be a followed name or free text (and several, comma separated or as a list)."""
+        if isinstance(investor, str) and investor.strip().lower() in ("", "all", "all followed", "__all__"):
+            return self.settings.investors
+        return parse_investors(investor)
 
+    def start_backtest(self, investor: Any, days: int, horizons: tuple[int, ...], cost_bps: float) -> Job:
+        from .backtest import run_backtest, run_backtest_followed
+
+        names = self.backtest_names(investor)
+        label = names[0] if len(names) == 1 else ", ".join(names)
         job = Job(id=len(self.jobs) + 1, kind="backtest")
         with self._slot_lock:  # the check and the claim of the slot are one step
             if self.busy:
@@ -559,14 +570,18 @@ class App:
                     prices: Any = _DemoHistory(getattr(self.broker, "price_fn", None) or (lambda s: 100.0))
                 else:
                     data = self.data
-                    deals = data.trades_for_investor(investor, self.settings.watch_source, days=days) \
-                        if self.settings.data_source == "nse" else data.trades_for_investor(investor, self.settings.watch_source)
+                    deals = fetch_followed(data, names, self.settings.watch_source,
+                                           days=days if self.settings.data_source == "nse" else None)
                     prices = self.prices
-                result = run_backtest(investor, deals, prices, horizons=horizons, cost_bps=cost_bps)
+                if len(names) == 1:
+                    result = run_backtest(names[0], deals, prices, horizons=horizons, cost_bps=cost_bps)
+                else:  # pooled result plus one row per investor
+                    result = run_backtest_followed(names, deals, prices, label="All followed",
+                                                   horizons=horizons, cost_bps=cost_bps)
                 self.last_backtest = {"at": _now(), "days": days, **result.to_dict()}
                 job.result = self.last_backtest["summary"]
                 job.ok = True
-                job.message = f"{len(deals)} deals replayed for {investor}"
+                job.message = f"{len(deals)} deals replayed for {label}"
             except Exception as e:  # noqa: BLE001
                 log.exception("backtest failed")
                 job.ok, job.message = False, f"{type(e).__name__}: {e}"
@@ -1020,11 +1035,19 @@ class App:
                     raise ValueError("starting cash must be positive")
                 self.settings.paper_starting_cash = cash
                 value = f"{cash:g}"
+            elif key == "watch_investors":
+                names = parse_investors(value)  # a list, or text with one name per line or commas
+                self.settings.investors = names
+                value = ",".join(names)
             else:
                 value = str(value).strip()
                 setattr(self.settings, key, (value or None) if key.startswith("notify") else value)
+                if key == "watch_investor" and self.settings.watch_investors:
+                    # INVESTORS is set, so the one-name form replaces the list, or the list would win
+                    self.settings.investors = [value]
+                    applied["INVESTORS"] = value
             applied[env_key] = value
-        if "watch_investor" in changes or "watch_source" in changes:
+        if "watch_investor" in changes or "watch_investors" in changes or "watch_source" in changes:
             self._deals, self._deals_at = None, 0.0
         if applied:
             self._settings_version += 1
@@ -1537,7 +1560,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"ok": True, "removed": app.reset()})
                 elif path == "/api/backtest":
                     horizons = tuple(int(h) for h in str(body.get("horizons", "5,20,60")).split(",") if h.strip())
-                    job = app.start_backtest(str(body.get("investor") or app.settings.watch_investor),
+                    job = app.start_backtest(body.get("investor") or "",
                                              int(body.get("days", 365)), horizons or (5, 20, 60),
                                              float(body.get("cost_bps", 50)))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)

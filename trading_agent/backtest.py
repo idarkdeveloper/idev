@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from .investors import classify_client
-from .quiver import DisclosedTrade
+from .quiver import DisclosedTrade, followed_names
 
 from .costs import IndianDeliveryCosts
 
@@ -51,6 +51,8 @@ class BacktestResult:
     cost_bps: float
     outcomes: list[DealOutcome]
     benchmark: str = BENCHMARK
+    # "All followed" runs: the same priced deals split by followed investor (a deal matching two is in both rows).
+    per_investor: dict[str, "BacktestResult"] = field(default_factory=dict)
 
     def _group(self, side: str, horizon: int, client_type: str | None = None) -> list[float]:
         vals = []
@@ -92,6 +94,8 @@ class BacktestResult:
             if vals:
                 out["by_client_type"][t] = {"n": len(vals),
                                             "mean_excess": statistics.fmean(v - cost for v in vals)}
+        if self.per_investor:
+            out["investors"] = {name: sub.summary() for name, sub in self.per_investor.items()}
         return out
 
     def to_dict(self) -> dict[str, Any]:
@@ -144,6 +148,21 @@ def run_backtest(investor: str, deals: list[DisclosedTrade], prices: Any,
                           outcomes=outcomes, benchmark=benchmark)
 
 
+def run_backtest_followed(investors: Iterable[str], deals: list[DisclosedTrade], prices: Any,
+                          label: str = "All followed", **kw: Any) -> BacktestResult:
+    """Pooled backtest of several followed investors' deals, plus one result per investor.
+
+    Each deal is priced once. A deal matching two followed names is counted once in the pooled result and
+    once in each of their rows."""
+    names = list(investors)
+    pooled = run_backtest(label, deals, prices, **kw)
+    for n in names:
+        mine = [o for o in pooled.outcomes if followed_names(o.deal.investor, [n])]
+        pooled.per_investor[n] = BacktestResult(investor=n, horizons=pooled.horizons, cost_bps=pooled.cost_bps,
+                                                outcomes=mine, benchmark=pooled.benchmark)
+    return pooled
+
+
 def format_summary(summary: dict[str, Any]) -> str:
     lines = [f"Backtest: {summary['investor']} vs {summary['benchmark']} "
              f"({summary['priced']}/{summary['deals']} deals priced, cost {summary['cost_bps']:.0f} bps round trip)"]
@@ -159,4 +178,11 @@ def format_summary(summary: dict[str, Any]) -> str:
         lines.append("  buys by who traded (longest horizon, after cost):")
         for t, r in summary["by_client_type"].items():
             lines.append(f"    {t:<17} n={r['n']:<4} mean {r['mean_excess']*100:+6.2f}%")
+    for name, sub in (summary.get("investors") or {}).items():
+        lines.append(f"  {name}: {sub['priced']}/{sub['deals']} deals priced")
+        for side, per_h in sub["by_side"].items():
+            for h, r in per_h.items():
+                tag = "buys" if side == "Purchase" else "sells"
+                lines.append(f"    {tag} {h:>3}d  n={r['n']:<4} mean {r['mean_excess']*100:+6.2f}%  "
+                             f"hit {r['hit_rate']*100:4.0f}%")
     return "\n".join(lines)

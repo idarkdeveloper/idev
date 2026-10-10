@@ -8,7 +8,8 @@ const mode = process.argv[2] || "live";
 const sample = process.argv[3] === "sample";
 const mpFail = process.argv[3] === "mpfail";
 const noMarker = process.argv[3] === "nomarker";
-const intervals = [], stored = {};
+const multi = process.argv[3] === "multi" || process.argv[3] === "multi-saved";   // several followed investors
+const intervals = [], stored = process.argv[3] === "multi-saved" ? {dealFilter: JSON.stringify(["VIJAY KEDIA"])} : {};
 const ui = path.join(__dirname, "..", "trading_agent", "ui");
 const html = fs.readFileSync(path.join(ui, "index.html"), "utf8");
 const common = fs.readFileSync(path.join(ui, "common.js"), "utf8");
@@ -33,7 +34,8 @@ function el(id) {
   return p;
 }
 
-const baseSettings = {market: "in", currency: "INR", watch_investor: "Ashish Kacholia", watch_source: "deals", data_source: "nse",
+const baseSettings = {market: "in", currency: "INR", watch_investor: "Ashish Kacholia",
+  investors: multi ? ["ASHISH KACHOLIA", "VIJAY KEDIA", "DOLLY KHANNA"] : ["Ashish Kacholia"], watch_source: "deals", data_source: "nse",
   broker: "local-paper", mode: "paper", auto_trade: false, claude_model: "claude-opus-5-5", notify_email_to: "",
   notify_webhook_url: "", paper_starting_cash: 100000, groww_gtt_stops: false, max_slippage_pct: 1, demo: sample};
 const state = {
@@ -47,7 +49,11 @@ const state = {
     {symbol: "NOSTOP", qty: 5, avg_entry_price: 50, current_price: 40, market_value: 200, unrealized_pl: -50, high_water: 50, stop: null,
      stop_type: "none", stop_label: "none", stop_value: null, gtt: null}],
   stop_fills: [{at: "2026-10-10T09:30:00+05:30", symbol: "OLD", qty: 3, price: 92, stop: 95, type: "fixed", label: "fixed"}],
-  performance: {pnl: 0, pnl_pct: 0, fees_paid: 0, starting_cash: 100000, orders: 1}, broker_error: null, deals: [], deals_error: null,
+  performance: {pnl: 0, pnl_pct: 0, fees_paid: 0, starting_cash: 100000, orders: 1}, broker_error: null, deals_error: null,
+  deals: multi ? [
+    {key: "k1", ticker: "SENCO", transaction: "Purchase", transaction_date: "2026-10-09", size: "1,000 @ 100", source: "bulk", investor: "KACHOLIA ASHISH", client_type: "individual", status: "new", who: ["ASHISH KACHOLIA"]},
+    {key: "k2", ticker: "TCS", transaction: "Sale", transaction_date: "2026-10-08", size: "500 @ 50", source: "block", investor: "VIJAY KEDIA", client_type: "individual", status: "analysed", who: ["VIJAY KEDIA"]},
+    {key: "k3", ticker: "BOTH", transaction: "Purchase", transaction_date: "2026-10-07", size: "9 @ 9", source: "bulk", investor: "KEDIA VIJAY AND DOLLY KHANNA", client_type: "individual", status: "new", who: ["VIJAY KEDIA", "DOLLY KHANNA"]}] : [],
   recommendations: [{index: 0, ticker: "SENCO", action: "buy", headline: "h", rationale: "r", confidence: "high",
     suggested_notional_usd: 5000, at: "2026-10-01T00:00:00+00:00", dismissed: false}],
   runs: [], seen_count: 0, busy: false, running: null, jobs: [],
@@ -72,7 +78,7 @@ const document = {
   getElementById: el, querySelectorAll: () => [], addEventListener(t, fn) { (listeners[t] = listeners[t] || []).push(fn); }, createElement: () => el("_new"),
 };
 const ctx = {document, console, setTimeout, clearTimeout, setInterval: (fn, ms) => { intervals.push([fn, ms]); return 0; },
-  localStorage: {getItem: () => noMarker ? null : "2026-10-09T00:00:00+05:30", setItem: (k, v) => { stored[k] = v; }}, Intl, Date, Math, JSON, Number, String, Object, Array,
+  localStorage: {getItem: (k) => k === "dealFilter" ? (k in stored ? stored[k] : null) : noMarker ? null : "2026-10-09T00:00:00+05:30", setItem: (k, v) => { stored[k] = v; }}, Intl, Date, Math, JSON, Number, String, Object, Array,
   Set, Map, Promise, URLSearchParams, encodeURIComponent, isNaN, isFinite, parseFloat, parseInt,
   fetch: async (url, opts) => (requests.push([String(url), opts && opts.body]), String(url).includes("/api/my-portfolio") && mpFail
     ? ({ok: false, status: 500, statusText: "err", json: async () => ({error: "Groww didn't answer"})})
@@ -136,6 +142,14 @@ setTimeout(async () => {
   await new Promise(r => setTimeout(r, 20));
   const practicePanelAfterRefresh = el("positions").innerHTML;
   await click({sellClose: ""});
+  const dealRows = () => (el("deals").innerHTML.match(/data-lookup="([A-Z]+)"/g) || []).map(x => x.slice(13, -1));
+  const dealsAll = dealRows(), filterAll = el("deal-filter").innerHTML, filterHidden = el("deal-filter").hidden;
+  if(multi) await click({dealFilter: "VIJAY KEDIA"});
+  const dealsKedia = dealRows(), filterKedia = el("deal-filter").innerHTML, storedAfterKedia = stored.dealFilter;
+  if(multi) await click({dealFilter: "ASHISH KACHOLIA"});
+  const dealsTwo = dealRows();
+  if(multi) await click({dealFilter: ""});
+  const dealsBack = dealRows(), storedAfterAll = stored.dealFilter;
   const banner = els["demo-banner"] && !els["demo-banner"].hidden
     ? els["demo-title"].textContent + " | " + els["btn-demo-reset"].textContent : "";
   console.log(JSON.stringify({
@@ -152,6 +166,11 @@ setTimeout(async () => {
     preview_text: previewText, reopen_bodies: reopenBodies, confirm_text: confirmText,
     preview_requests: requests.filter(r => r[0].includes("sell-preview")).map(r => r[1]),
     order_stop_select: html.includes('id="tk-stop"'), stop_banner: el("stop-banner").textContent,
+    heading: el("investor").textContent, investor_list: el("investor-list").textContent, investor_list_hidden: el("investor-list").hidden,
+    summary: el("summary").textContent, newcount: el("newcount").textContent,
+    deals_all: dealsAll, filter_all: filterAll, filter_hidden: filterHidden, deals_kedia: dealsKedia, filter_kedia: filterKedia,
+    stored_after_kedia: storedAfterKedia, deals_two: dealsTwo, deals_back: dealsBack, stored_after_all: storedAfterAll,
+    deals_html: el("deals").innerHTML, bt_options: el("bt-investor").innerHTML,
     check_hidden: el("check-split").hidden, settings_hidden: el("btn-settings").hidden, watch_hidden: el("btn-watch").hidden,
   }));
   process.exit(0);

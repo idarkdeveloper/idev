@@ -148,7 +148,8 @@
   button.primary:active { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
   button.small { min-height: 32px; padding: 0 10px; font-size: 13px; }
   button.danger { color: var(--color-accent-300); border-color: var(--color-accent-300); }
-  button.on { color: var(--color-accent); border-color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+  button.on, button.chip[aria-pressed="true"] { color: var(--color-accent); border-color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+  textarea { resize: vertical; line-height: 1.4; }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   button svg, .btn svg { display: block; flex: none; }
   .split { display: flex; }
@@ -233,11 +234,11 @@
   /* forms */
   .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
   label { font-size: 12px; color: var(--color-label); }
-  input, select { width: 100%; min-height: 36px; padding: 6px 10px; font: inherit; font-size: 14px; color: var(--color-text);
+  input, select, textarea { width: 100%; min-height: 36px; padding: 6px 10px; font: inherit; font-size: 14px; color: var(--color-text);
                   caret-color: var(--color-accent); background: var(--color-surface); border: 1px solid var(--color-input-border);
                   border-radius: var(--radius-md); }
-  input:hover, select:hover { border-color: var(--color-input-border-hover); }
-  input:focus-visible, select:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
+  input:hover, select:hover, textarea:hover { border-color: var(--color-input-border-hover); }
+  input:focus-visible, select:focus-visible, textarea:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
   input[type=checkbox], input[type=radio] { width: 18px; height: 18px; min-height: 18px; padding: 0; margin: 2px 0 0; flex: none; accent-color: var(--color-accent); }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
   .side .grid2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

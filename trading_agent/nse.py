@@ -38,7 +38,7 @@ from typing import Any, Iterable
 
 import requests
 
-from .quiver import DisclosedTrade, filter_by_investor
+from .quiver import DisclosedTrade, filter_by_investor, filter_by_investors
 
 log = logging.getLogger(__name__)
 
@@ -447,6 +447,14 @@ class NSEClient:
 
         ``source``: ``deals`` (bulk + block, default), ``bulk``, ``block`` or ``insider``.
         """
+        return _dedupe(filter_by_investor(self._rows(source, days), investor))
+
+    def trades_for_investors(self, investors: Iterable[str], source: str = "deals",
+                             days: int = 30) -> list[DisclosedTrade]:
+        """Trades matching any of several followed names, from one fetch; a trade matching two appears once."""
+        return _dedupe(filter_by_investors(self._rows(source, days), investors))
+
+    def _rows(self, source: str, days: int) -> list[DisclosedTrade]:
         rows: list[DisclosedTrade] = []
         if source in {"deals", "bulk"}:
             rows += self.historical_deals(days, "bulk")
@@ -454,7 +462,7 @@ class NSEClient:
             rows += self.historical_deals(days, "block")
         if source == "insider":
             rows += self.insider_trades(days)
-        return _dedupe(filter_by_investor(rows, investor))
+        return rows
 
     def history_for_ticker(self, investor: str, ticker: str, days: int = 365) -> list[DisclosedTrade]:
         rows = self.historical_deals(days, "bulk") + self.historical_deals(days, "block")

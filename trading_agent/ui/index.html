@@ -54,6 +54,7 @@
 
   <section style="display:flex;flex-direction:column;gap:6px">
     <h1>Following <span style="color:var(--teal)" id="investor"></span></h1>
+    <div class="sub" id="investor-list" style="font-size:14px" hidden></div>
     <div class="sub" id="summary" style="font-size:14px"></div>
   </section>
 
@@ -111,7 +112,8 @@
       </div>
       <div class="card">
         <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
-        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Who</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
+        <div class="row" id="deal-filter" role="group" aria-label="Show deals by investor" style="gap:6px;padding:8px 16px" hidden></div>
+        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Who</th><th>Client type</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Order history</h2><span class="sub" id="fees-note"></span></div>
@@ -164,7 +166,8 @@
         <div class="cardhead"><h2>Backtest</h2><span class="sub">replay disclosed deals: entry next close, excess return vs NIFTY 50 after cost</span></div>
         <form class="cardbody" id="bt-form">
           <div class="grid4">
-            <div class="field"><label for="bt-investor">Investor</label><input id="bt-investor" name="investor"></div>
+            <div class="field"><label for="bt-investor">Investor</label><select id="bt-investor" name="investor"></select>
+              <input id="bt-other" name="investor_other" aria-label="Or another investor's name" placeholder="or another name" autocomplete="off"></div>
             <div class="field"><label for="bt-days">Days back</label><input id="bt-days" name="days" type="number" value="365" min="30" max="1500"></div>
             <div class="field"><label for="bt-h">Horizons (days)</label><input id="bt-h" name="horizons" value="5,20,60"></div>
             <div class="field"><label for="bt-cost">Round-trip cost (bps)</label><input id="bt-cost" name="cost_bps" type="number" value="50" min="0" max="500" step="any"></div>
@@ -221,7 +224,7 @@
   <form method="dialog" class="form" id="settings-form">
     <div class="row"><div class="dialog-title">Settings</div><button type="button" class="small" style="margin-left:auto" id="btn-close">Close</button></div>
     <div class="grid2">
-      <div class="field"><label for="f-investor">Investor to follow</label><input id="f-investor" name="watch_investor"><div class="sub">Word order doesn't matter: NSE prints "KACHOLIA ASHISH"</div></div>
+      <div class="field"><label for="f-investors">Investors to follow</label><textarea id="f-investors" name="watch_investors" rows="4" spellcheck="false" aria-describedby="f-investors-hint"></textarea><div class="sub" id="f-investors-hint">One name per line, up to 10. Word order doesn't matter: NSE prints "KACHOLIA ASHISH"</div></div>
       <div class="field"><label for="f-source">Disclosures</label><select id="f-source" name="watch_source"></select></div>
       <div class="field"><label for="f-email">Email recommendations to</label><input id="f-email" name="notify_email_to" type="email" placeholder="you@example.com"><div class="sub">Needs RESEND_API_KEY in .env</div></div>
       <div class="field"><label for="f-webhook">Webhook (Slack, Discord, n8n)</label><input id="f-webhook" name="notify_webhook_url" type="url" placeholder="https://hooks.slack.com/…"></div>
@@ -298,6 +301,32 @@
       } catch(e){ toast(e.message); }
     });
   }
+  // Followed investors and the deals filter. dealSel holds the toggled investors; none toggled means "All".
+  // The choice is remembered in localStorage, which can throw or hold something else, so it is always guarded.
+  const investorsOf = (s) => (s.investors && s.investors.length) ? s.investors : [s.watch_investor];
+  let dealSel = [], btKey = "";
+  try { const v = JSON.parse(localStorage.getItem("dealFilter")); if(Array.isArray(v)) dealSel = v.filter(x => typeof x === "string"); } catch(e){}
+  const saveDealSel = () => { try { localStorage.setItem("dealFilter", JSON.stringify(dealSel)); } catch(e){} };
+  const activeSel = (inv) => inv.length > 1 ? dealSel.filter(n => inv.includes(n)) : [];
+  const dealsShown = (inv) => { const sel = activeSel(inv); return sel.length ? S.deals.filter(d => (d.who || []).some(w => sel.includes(w))) : S.deals; };
+  function renderDealFilter(inv){
+    const bar = $("deal-filter"); bar.hidden = inv.length < 2;
+    if(inv.length < 2) return;
+    const sel = activeSel(inv);
+    let focused;
+    try { const a = document.activeElement; if(a && a.dataset && a.dataset.dealFilter !== undefined && bar.contains && bar.contains(a)) focused = a.dataset.dealFilter; } catch(e){}
+    bar.innerHTML = `<button type="button" class="small chip" data-deal-filter="" aria-pressed="${sel.length === 0}">All</button>`
+      + inv.map(n => `<button type="button" class="small chip" data-deal-filter="${esc(n)}" aria-pressed="${sel.includes(n)}">${esc(n)}</button>`).join("");
+    if(focused !== undefined) bar.querySelectorAll("button").forEach(b => { if(b.dataset.dealFilter === focused) b.focus(); });   // a rebuilt bar keeps the keyboard where it was
+  }
+  function renderBtInvestors(inv){   // the backtest's investor select: All followed + each name
+    const sel = $("bt-investor"), key = inv.join("|");
+    if(btKey === key) return;
+    btKey = key;
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">All followed</option>` + inv.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    sel.value = inv.includes(cur) ? cur : "";
+  }
   let MP = null;  // the last My Groww portfolio answer: it fills the Live tiles
   if(MODE !== "demo") $("tiles").innerHTML = ["Holdings value", "Profit / loss", "Holdings"].map(l => tile(l, "\u2026", "Loading your holdings\u2026")).join("");
   const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"]],
@@ -324,7 +353,9 @@
   function render(keepPositions){   // keepPositions: leave the positions table alone (a stop editor is open in it)
     const s = S.settings, a = S.account, c = S.connections, w = S.watch || {};
     $("subtitle").textContent = s.market === "in" ? "Groww · NSE bulk & block deals" : "Alpaca · QuiverQuant disclosures";
-    $("investor").textContent = s.watch_investor;
+    const inv = investorsOf(s);
+    $("investor").textContent = inv.length === 1 ? inv[0] : `${inv.length} investors`;
+    $("investor-list").hidden = inv.length < 2; $("investor-list").textContent = inv.join(" · ");
     const modePill = s.mode === "live" ? '<span class="pill bad"><span class="dot"></span>LIVE orders</span>'
                    : s.mode === "paper" ? '<span class="pill ok"><span class="dot"></span>Paper trading</span>'
                    : '<span class="pill ok"><span class="dot"></span>Recommendations only</span>';
@@ -346,14 +377,17 @@
 
     $("newcount").textContent = `${newDeals} new`; $("newcount").className = "pill ok"; $("newcount").style.fontWeight = "600";
     $("dealsrc").textContent = S.deals_error ? "fetch failed: " + S.deals_error : (s.data_source === "nse" ? "NSE, last 30 days" : "QuiverQuant");
-    $("deals").innerHTML = S.deals.length ? S.deals.map(d => `<tr>
+    renderDealFilter(inv);
+    const shown = dealsShown(inv);
+    $("deals").innerHTML = shown.length ? shown.map(d => `<tr>
         <td class="mono" style="white-space:nowrap">${esc(d.transaction_date)}</td>
         <td><span class="side-chip ${d.transaction==="Sale"?"sell":"buy"}">${d.transaction==="Sale"?"SELL":d.transaction==="Purchase"?"BUY":esc(d.transaction)}</span></td>
         <td><div style="font-weight:600"><a href="#" data-lookup="${esc(d.ticker)}" style="text-decoration:none">${esc(d.ticker)}</a></div><div class="sub">${esc(d.investor)}</div></td>
         <td class="num">${esc(d.size)}</td><td>${esc(d.source)}</td>
+        <td>${esc((d.who||[]).join(", "))}</td>
         <td><span class="pill">${esc(WHO[d.client_type]||d.client_type||"")}</span></td>
         <td><span class="pill ${d.status==="new"?"ok":""}">${d.status==="new"?"New":"Analysed"}</span></td></tr>`).join("")
-      : `<tr><td colspan="7" class="empty">No disclosed deals by ${esc(s.watch_investor)} in the window.</td></tr>`;
+      : `<tr><td colspan="8" class="empty">${S.deals.length ? "No deals by the selected investors in the window." : `No disclosed deals by ${esc(inv.join(", "))} in the window.`}</td></tr>`;
 
     if(MODE === "demo"){
     $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
@@ -372,7 +406,7 @@
 
     $("recs").innerHTML = S.recommendations.length ? S.recommendations.map(r => `<article class="card rec ${esc(r.action)} ${r.dismissed?"dismissed":""}">
         <div class="row" style="gap:8px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>
-          <span class="pill">${esc(cap(r.confidence))} confidence</span><span class="sub" style="margin-left:auto;font-size:12px">${when(r.at)}</span></div>
+          <span class="pill">${esc(cap(r.confidence))} confidence</span>${r.investor ? `<span class="pill" title="The followed investor whose deal prompted this">${esc(r.investor)}</span>` : ""}<span class="sub" style="margin-left:auto;font-size:12px">${when(r.at)}</span></div>
         <div class="headline">${esc(r.headline)}</div><p class="rationale">${esc(r.rationale)}</p>
         <div class="row" style="gap:8px">
           ${(r.action==="buy"||r.action==="sell") && r.suggested_notional_usd>0 && !r.dismissed && MODE === "demo" && s.broker.startsWith("local-paper") ? `<button type="button" class="small primary" data-order="${r.index}">Paper ${esc(r.action)} ${money(r.suggested_notional_usd)}</button>` : ""}
@@ -387,7 +421,7 @@
         <span style="color:var(--ink2)">${r.baseline ? "baseline: recorded as seen after lost state, Claude not called" : r.skipped ? "skipped, Claude not called" : r.dry_run ? "dry run" : `${r.recommendations??0} recommendations · ${r.orders??0} orders · ${esc(r.model||"")}${r.refusal?" · refused":""}${r.fallback_used?" · fallback model":""}${r.stop==="step_limit"?" · hit step limit":r.stop==="max_tokens"?" · reply cut short":""}${r.usage && r.usage.cost_usd!=null?` · $${r.usage.cost_usd.toFixed(3)} (${Math.round((r.usage.input_tokens+r.usage.cache_read_tokens+r.usage.cache_write_tokens+r.usage.output_tokens)/1000)}k tokens)`:""}`}</span></div>`).join("")
       : '<div class="empty">No runs recorded yet.</div>';
 
-    if(!$("bt-investor").value) $("bt-investor").value = s.watch_investor;
+    renderBtInvestors(inv);
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
     renderOrders();
     if(MODE === "demo") renderEquity();
@@ -717,8 +751,17 @@
       for(const [h, r] of Object.entries(perH)) rows.push(`<tr><td>${side==="Purchase"?"Buys (after cost)":"Sells (stock vs index)"}</td><td class="num">${h}d</td><td class="num">${r.n}</td><td class="num ${r.mean_excess>=0?"up":"down"}">${pct(r.mean_excess,2)}</td><td class="num">${pct(r.median_excess,2)}</td><td class="num">${Math.round(r.hit_rate*100)}%</td></tr>`);
     }
     const types = Object.entries(sm.by_client_type||{}).map(([t,r]) => `<span class="pill">${esc(WHO[t]||t)} n=${r.n} ${pct(r.mean_excess,2)}</span>`).join(" ");
+    const per = Object.entries(sm.investors || {}).map(([name, q]) => {
+      const hs = Object.keys(Object.assign({}, (sm.by_side || {}).Purchase, (sm.by_side || {}).Sale)), lastH = hs[hs.length - 1];
+      const buy = lastH && q.by_side.Purchase ? q.by_side.Purchase[lastH] : null, sell = lastH && q.by_side.Sale ? q.by_side.Sale[lastH] : null;
+      return `<tr><td>${esc(name)}</td><td class="num">${q.priced}/${q.deals}</td>
+        <td class="num">${buy ? buy.n : "–"}</td><td class="num ${buy && buy.mean_excess>=0?"up":"down"}">${buy ? pct(buy.mean_excess,2) : "–"}</td><td class="num">${buy ? Math.round(buy.hit_rate*100)+"%" : "–"}</td>
+        <td class="num">${sell ? sell.n : "–"}</td><td class="num">${sell ? Math.round(sell.hit_rate*100)+"%" : "–"}</td></tr>`; });
+    const perTable = per.length ? `<h3 style="margin-top:6px">Per investor (buys after cost, sells vs index; longest horizon)</h3>
+      <div class="scroll"><table><thead><tr><th>Investor</th><th class="num">Priced</th><th class="num">Buys</th><th class="num">Mean excess</th><th class="num">Hit rate</th><th class="num">Sells</th><th class="num">Hit rate</th></tr></thead><tbody>${per.join("")}</tbody></table></div>` : "";
     $("bt-result").innerHTML = rows.length ? `<div class="sub">${esc(sm.investor)} vs ${esc(sm.benchmark)} · ${sm.priced}/${sm.deals} deals priced · ${b.days} days · cost ${sm.cost_bps} bps · ${when(b.at)}</div>
       <div class="scroll"><table><thead><tr><th>Side</th><th class="num">Hold</th><th class="num">N</th><th class="num">Mean excess</th><th class="num">Median</th><th class="num">Hit rate</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
+      ${perTable}
       ${types ? `<div class="row" style="gap:6px"><span class="sub">Buys by who traded (longest horizon):</span>${types}</div>` : ""}
       <h3 style="margin-top:6px">Each deal's excess return, longest horizon</h3><div class="chart" id="bt-hist"></div>`
       : `<div class="sub">No priced deals for ${esc(sm.investor)} in that window. Famous names rarely cross the 0.5% bulk-deal threshold; try more days or another name.</div>`;
@@ -924,6 +967,8 @@
   $("bt-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target).entries());
+    if(String(f.investor_other || "").trim()) f.investor = String(f.investor_other).trim();   // a name that is not followed
+    delete f.investor_other;
     try { const j = await api("/api/backtest", f); if(j.ok===false){ toast(j.message); return; } waitingFor = j.id; $("bt-status").textContent = "Replaying deals and fetching price history…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
@@ -1092,8 +1137,8 @@
       const verdict = (row) => { const hs = s.horizons.map(String).reverse(); for(const h of hs){ const c = row.correct[h]; if(c === true) return `<span class="pill ok" style="padding:2px 8px">Right at ${h}d</span>`; if(c === false) return `<span class="pill bad" style="padding:2px 8px">Wrong at ${h}d</span>`; }
         return row.action==="watch"||row.action==="hold" ? `<span class="pill" style="padding:2px 8px">Not scored</span>` : `<span class="pill" style="padding:2px 8px">Pending</span>`; };
       $("scd-result").innerHTML = `${sumRows.length ? `<div class="scroll"><table><thead><tr><th>Call</th><th class="num">After</th><th class="num">N</th><th class="num">Mean vs index</th><th class="num">Right</th></tr></thead><tbody>${sumRows.join("")}</tbody></table></div>` : `<div class="sub">${s.pending} recommendation${s.pending===1?"":"s"} still too recent to score.</div>`}
-        <div class="scroll"><table><thead><tr><th>Made</th><th>Call</th><th>Stock</th>${s.horizons.map(h => `<th class="num">${h}d vs index</th>`).join("")}<th>Verdict</th></tr></thead><tbody>
-        ${rows.slice().reverse().map(x => `<tr><td class="mono sub" style="white-space:nowrap">${when(x.at)}</td><td><span class="act ${esc(x.action)}">${esc(x.action.toUpperCase())}</span></td><td style="font-weight:600">${esc(x.ticker)}</td>${s.horizons.map(h => { const v = x.excess[String(h)]; return `<td class="num ${v==null?"":v>=0?"up":"down"}">${v==null?"pending":pct(v,1)}</td>`; }).join("")}<td>${verdict(x)}</td></tr>`).join("")}
+        <div class="scroll"><table><thead><tr><th>Made</th><th>Call</th><th>Stock</th><th>Investor</th>${s.horizons.map(h => `<th class="num">${h}d vs index</th>`).join("")}<th>Verdict</th></tr></thead><tbody>
+        ${rows.slice().reverse().map(x => `<tr><td class="mono sub" style="white-space:nowrap">${when(x.at)}</td><td><span class="act ${esc(x.action)}">${esc(x.action.toUpperCase())}</span></td><td style="font-weight:600">${esc(x.ticker)}</td><td>${esc(x.investor || "")}</td>${s.horizons.map(h => { const v = x.excess[String(h)]; return `<td class="num ${v==null?"":v>=0?"up":"down"}">${v==null?"pending":pct(v,1)}</td>`; }).join("")}<td>${verdict(x)}</td></tr>`).join("")}
         </tbody></table></div><div class="sub">Benchmark ${esc(s.benchmark)}. Buys must beat it by more than their round-trip trading cost to count as right.</div>`;
     } catch(e){ $("scd-result").innerHTML = `<div class="sub">${esc(e.message)}</div>`; }
     $("scd-run").disabled = false;
@@ -1120,6 +1165,13 @@
   document.addEventListener("click", async (ev) => {
     const l = ev.target.closest("a[data-lookup]"); if(l){ ev.preventDefault(); lookup(l.dataset.lookup); $("lk-form").scrollIntoView({behavior:"smooth", block:"center"}); return; }
     const b = ev.target.closest("button"); if(!b) return;
+    if(b.dataset.dealFilter !== undefined){
+      const n = b.dataset.dealFilter, inv = investorsOf(S.settings);
+      if(n === "") dealSel = [];
+      else { dealSel = dealSel.includes(n) ? dealSel.filter(x => x !== n) : dealSel.concat([n]); if(inv.every(x => dealSel.includes(x))) dealSel = []; }
+      saveDealSel(); render(true);
+      return;
+    }
     if(b.dataset.stopEdit !== undefined){
       const p = (S.positions || []).find(x => x.symbol === b.dataset.stopEdit); if(!p) return;
       stopEdit = {symbol: p.symbol, type: p.stop_type || "trailing", value: p.stop_value}; render();
@@ -1160,7 +1212,7 @@
   const conn = (ok, name, sub) => `<div class="conn"><span class="dot ${ok?"":"off"}"></span><div><div style="font-weight:600">${name}</div><div class="sub">${esc(sub)}</div></div></div>`;
   $("btn-settings").addEventListener("click", () => {
     const s = S.settings, c = S.connections;
-    $("f-investor").value = s.watch_investor;
+    $("f-investors").value = investorsOf(s).join("\n");
     $("f-source").innerHTML = SOURCES[s.market].map(([v,l]) => `<option value="${v}" ${v===s.watch_source?"selected":""}>${l}</option>`).join("");
     $("f-email").value = s.notify_email_to; $("f-webhook").value = s.notify_webhook_url;
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
@@ -1186,7 +1238,7 @@
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);
       if(S.watch && S.watch.on && !marketChanged) await api("/api/watch", {on:true, every:Number($("f-every").value)||60, auto_exit:$("f-autoexit").checked});
-      $("dlg").close(); toast(marketChanged ? "Saved; market switched" : "Saved to .env"); $("bt-investor").value = body.watch_investor || ""; await refresh(); } catch(e){ toast(e.message); }
+      $("dlg").close(); toast(marketChanged ? "Saved; market switched" : "Saved to .env"); btKey = ""; await refresh(); } catch(e){ toast(e.message); }
   });
   $("btn-reset").addEventListener("click", async () => {
     if(!confirm("Forget seen deals? This clears the seen deals, the recommendations history and the Live account curve. The practice account and its curve are not touched.")) return;

@@ -32,6 +32,7 @@ def score_recommendations(recs: Iterable[dict[str, Any]], prices: Any, *, horizo
         day = str(r.get("at") or "")[:10]
         row: dict[str, Any] = {"index": i, "at": r.get("at"), "ticker": ticker, "action": action,
                                "confidence": r.get("confidence"), "headline": r.get("headline"),
+                               "investor": r.get("investor") or "",
                                "dismissed": bool(r.get("dismissed")), "returns": {}, "excess": {},
                                "correct": {}, "error": None}
         try:

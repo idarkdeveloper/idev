@@ -118,6 +118,11 @@ class QuiverClient:
         rows = self.congress_trades() if source == "congress" else self.insider_trades()
         return filter_by_investor(rows, investor)
 
+    def trades_for_investors(self, investors: Iterable[str], source: str = "congress") -> list[DisclosedTrade]:
+        """The same, for several followed names from one fetch; a trade matching two appears once."""
+        rows = self.congress_trades() if source == "congress" else self.insider_trades()
+        return filter_by_investors(rows, investors)
+
     def history_for_ticker(self, investor: str, ticker: str,
                            source: str = "congress") -> list[DisclosedTrade]:
         rows = self.congress_trades(ticker) if source == "congress" else self.insider_trades(ticker)
@@ -142,5 +147,39 @@ def matches_investor(name: str, investor: str) -> bool:
 
 def filter_by_investor(rows: Iterable[DisclosedTrade], investor: str) -> list[DisclosedTrade]:
     out = [t for t in rows if matches_investor(t.investor, investor)]
+    out.sort(key=lambda t: (t.report_date, t.transaction_date), reverse=True)
+    return out
+
+
+def followed_names(trade_investor: str, investors: Iterable[str]) -> list[str]:
+    """Which followed names a trade's client name matches (the one-name rule, applied per name). A trade
+    matching two names is attributed to both."""
+    return [n for n in investors if matches_investor(trade_investor, n)]
+
+
+def filter_by_investors(rows: Iterable[DisclosedTrade], investors: Iterable[str]) -> list[DisclosedTrade]:
+    """Trades matching any followed name, each once, newest first."""
+    names = list(investors)
+    out = [t for t in rows if followed_names(t.investor, names)]
+    out.sort(key=lambda t: (t.report_date, t.transaction_date), reverse=True)
+    return out
+
+
+def fetch_followed(data: Any, investors: Iterable[str], source: str, days: int | None = None) -> list[DisclosedTrade]:
+    """Disclosed trades of every followed name from a data client, each trade once.
+
+    Uses the client's ``trades_for_investors`` (one fetch) when it has one; otherwise asks once per name and
+    merges by trade key, so older clients and test fakes with only ``trades_for_investor`` keep working.
+    """
+    names = list(investors)
+    kw: dict[str, Any] = {} if days is None else {"days": days}
+    many = getattr(data, "trades_for_investors", None)
+    if many is not None:
+        return list(many(names, source, **kw))
+    merged: dict[str, DisclosedTrade] = {}
+    for n in names:
+        for t in data.trades_for_investor(n, source, **kw):
+            merged.setdefault(t.key, t)
+    out = list(merged.values())
     out.sort(key=lambda t: (t.report_date, t.transaction_date), reverse=True)
     return out

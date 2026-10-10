@@ -1,6 +1,6 @@
 # idev25 — Claude trading agent (Groww + NSE)
 
-An AI trading agent that **watches one investor's publicly disclosed trades on the NSE,
+An AI trading agent that **watches one or several investors' publicly disclosed trades on the NSE,
 compares new activity against your Groww portfolio, and sends you a recommendation when
 something changes** — the setup from the "Claude can now build an AI trading agent" reel,
 as code you own, adapted for the Indian market. (A US mode with QuiverQuant + Alpaca is
@@ -39,6 +39,8 @@ python -m trading_agent check --demo
 
 # 3. Real NSE data: who did ASHISH KACHOLIA trade this month? (no key needed for NSE data)
 python -m trading_agent check --investor "ASHISH KACHOLIA"
+# ...or several at once (comma list, or repeat the flag); default: everyone in INVESTORS
+python -m trading_agent check --investor "ASHISH KACHOLIA,VIJAY KEDIA"
 
 # 4. Keep checking every 30 minutes
 python -m trading_agent loop --every 30
@@ -59,7 +61,7 @@ A local web page served by the package itself (no extra dependencies) that shows
 watched investor's disclosed deals with new ones flagged, your real Groww holdings with live
 P&L, Claude's recommendations with a one-click paper order, and the run log. The
 **Run check now** button runs the same check as the CLI in the background. **Settings**
-edits the investor, disclosure source, order mode and notification targets and writes
+edits the followed investors (one name per line, up to 10), disclosure source, order mode and notification targets and writes
 them to `.env`; API keys stay in `.env` by hand, and live Groww orders can never be
 switched on from the page.
 
@@ -190,7 +192,8 @@ prints this machine's public IP and whether it matches `GROWW_ALLOWED_IP`.
 
 ## Which investors can I follow?
 
-`WATCH_INVESTOR` is matched against the **client name** in NSE bulk and block deals, or the
+`INVESTORS` (comma separated, up to 10, for example `INVESTORS=ASHISH KACHOLIA,VIJAY KEDIA`) lists
+everyone to follow; if it is unset the single `WATCH_INVESTOR` is used. Each name is matched against the **client name** in NSE bulk and block deals, or the
 acquirer name in insider filings. Matching is case-insensitive and ignores word order,
 because the exchange prints names surname-first and inconsistently (`KACHOLIA ASHISH`,
 `MUKUL MAHAVIR AGRAWAL`, `ESTATE OF LATE MR. RAKESH JHUNJHUNWALA`). Bulk deals only show
@@ -200,6 +203,7 @@ before trusting anyone:
 
 ```bash
 python -m trading_agent backtest --investor "MUKUL AGRAWAL" --days 365
+python -m trading_agent backtest --days 365   # all followed: one row per investor plus the pooled result
 python -m trading_agent backtest --demo
 ```
 
@@ -467,7 +471,7 @@ on Indian markets supports:
 | `ANTHROPIC_API_KEY` | Claude. Model defaults to `claude-opus-5-5` (`CLAUDE_MODEL`). |
 | `ANTHROPIC_WORKSPACE_ID` | Only for a key that isn't scoped to one workspace: the API then rejects every request until this is set. |
 | `MARKET` | `in` (default: NSE + Groww) or `us` (QuiverQuant + Alpaca). |
-| `WATCH_INVESTOR`, `WATCH_SOURCE` | Who to follow and which disclosures to read. |
+| `INVESTORS`, `WATCH_SOURCE` | Who to follow (comma separated, max 10; falls back to `WATCH_INVESTOR` when unset) and which disclosures to read. |
 | `GROWW_ACCESS_TOKEN` / `GROWW_API_KEY` + `GROWW_API_SECRET` or `GROWW_TOTP_SECRET` | Groww access. Unset = local simulator only. |
 | `GROWW_LIVE_ORDERS` | `false` (default) = paper fills with real holdings/prices. `true` = real orders. |
 | `MAX_SLIPPAGE_PCT` | Live limit price distance from the LTP, in percent (default `0.5`, max 5). |
@@ -494,7 +498,7 @@ Setup, in the repository's **Settings → Secrets and variables → Actions**:
 | Secret | `ANTHROPIC_API_KEY` | **yes** | Without it the routine only lists new deals. |
 | Secret | `GROWW_API_KEY` + `GROWW_TOTP_SECRET` | no | Shows your real Groww holdings and gives live prices. TOTP flow needs no daily approval; `GROWW_API_SECRET` works too but needs a daily tap in the app. |
 | Secret | `RESEND_API_KEY`, `NOTIFY_WEBHOOK_URL` | no | Email / chat delivery. |
-| Variable | `WATCH_INVESTOR` | no | Defaults to `ASHISH KACHOLIA`. |
+| Variable | `INVESTORS` (or `WATCH_INVESTOR`) | no | Comma-separated names; defaults to `ASHISH KACHOLIA`. |
 | Variable | `NOTIFY_EMAIL_TO`, `NOTIFY_EMAIL_FROM` | no | With `RESEND_API_KEY`. |
 | Variable | `AUTO_TRADE`, `GROWW_LIVE_ORDERS`, `GROWW_GTT_STOPS` | no | All default to `false`. |
 | Variable | `MAX_SLIPPAGE_PCT` | no | Default `0.5`. |
@@ -511,7 +515,7 @@ always analyses everything.
 ## How a check works
 
 1. Fetch the last 30 days of bulk and block deals (and insider filings if selected),
-   keep the watched investor's rows, drop the ones already in `state/state.json`.
+   keep the followed investors' rows (a deal that matches two names is one deal), drop the ones already in `state/state.json`.
 2. Nothing new → exit without calling Claude.
 3. Something new → Claude gets the new deals and tools to inspect your holdings, live
    prices and the investor's history in that stock. It calls `send_recommendation`

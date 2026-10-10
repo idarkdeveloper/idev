@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +26,36 @@ def _bool(value: str | None, default: bool = False) -> bool:
     if value is None or value == "":
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+MAX_INVESTORS = 10
+
+
+def parse_investors(raw: "str | list[str] | tuple[str, ...] | None") -> list[str]:
+    """Followed-investor names from INVESTORS (comma separated) or a list (one name per line also works).
+
+    Trimmed, de-duplicated ignoring case (the first spelling and the order are kept). Raises ValueError with a
+    plain message when nothing is left or there are more than ``MAX_INVESTORS``.
+    """
+    if raw is None:
+        items: list[str] = []
+    elif isinstance(raw, str):
+        items = [raw]
+    else:
+        items = [str(i) for i in raw]
+    parts = [p for item in items for p in re.split(r"[,\r\n]+", item)]
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        name = " ".join(part.split())
+        if name and name.upper() not in seen:
+            seen.add(name.upper())
+            out.append(name)
+    if not out:
+        raise ValueError("name at least one investor to follow (INVESTORS is empty)")
+    if len(out) > MAX_INVESTORS:
+        raise ValueError(f"you can follow at most {MAX_INVESTORS} investors, got {len(out)}")
+    return out
 
 
 @dataclass
@@ -73,6 +104,21 @@ class Settings:
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:3b"
     news_claude_model: str = "claude-haiku-4-5"
+    # Everyone followed, from INVESTORS. Empty means "just watch_investor" (the single-name setting).
+    watch_investors: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.watch_investors = list(self.watch_investors)  # never shared between copies of the settings
+
+    @property
+    def investors(self) -> list[str]:
+        """The followed names, in order. ``watch_investor`` is the first of them."""
+        return list(self.watch_investors) or [self.watch_investor]
+
+    @investors.setter
+    def investors(self, names: "list[str]") -> None:
+        names = parse_investors(names)
+        self.watch_investors, self.watch_investor = names, names[0]
 
     @property
     def use_alpaca(self) -> bool:
@@ -126,6 +172,11 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         raise SystemExit(f"NEWS_TAGGER must be auto, ollama, claude or none, got {news_tagger!r}")
     data_source = (env("DATA_SOURCE") or ("nse" if market == "in" else "quiver")).lower()
     default_investor = "ASHISH KACHOLIA" if market == "in" else "Nancy Pelosi"
+    raw_investors = (env("INVESTORS") or "").strip()
+    try:
+        investors = parse_investors(raw_investors) if raw_investors else []
+    except ValueError as e:
+        raise SystemExit(f"INVESTORS: {e}") from None
     default_source = "deals" if data_source == "nse" else "congress"
     return Settings(
         anthropic_api_key=env("ANTHROPIC_API_KEY") or None,
@@ -143,7 +194,8 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         alpaca_key_id=alpaca_key,
         alpaca_secret=alpaca_secret,
         alpaca_base_url=env("ALPACA_BASE_URL") or "https://paper-api.alpaca.markets",
-        watch_investor=env("WATCH_INVESTOR") or default_investor,
+        watch_investor=investors[0] if investors else (env("WATCH_INVESTOR") or default_investor),
+        watch_investors=investors,
         watch_source=(env("WATCH_SOURCE") or default_source).lower(),
         paper_starting_cash=float(env("PAPER_STARTING_CASH") or (500_000 if market == "in" else 80_000)),
         auto_trade=_bool(env("AUTO_TRADE"), False),
