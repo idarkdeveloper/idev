@@ -455,6 +455,7 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
             notes.append("Stopped early: the build ran out of time, so some holdings were not checked")
             break
         reasons: list[str] = []
+        stop_level = ma200 = None
         sym, price = h["symbol"], h["price"]
         _remember(ctx, sym, h.get("name"))
         bars: list[dict[str, Any]] = []
@@ -465,6 +466,7 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
         try:
             st = position_stop(h["pos"], bars)
             level = st["level"]
+            stop_level = level
             if level is not None and price is not None:
                 a = atr(bars) if bars else None
                 near = min(a, NEAR_STOP * level) if a else NEAR_STOP * level   # 1 ATR, but never more than 3%
@@ -485,6 +487,7 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
             notes.append(f"{sym}: stop level unavailable ({type(e).__name__})")
         if bars:
             ms = momentum_stats(bars)
+            ma200 = ms.get("ma200")
             if ms.get("above_200dma") is False:
                 reasons.append(f"below its 200-day average ({num(ms['ma200'], 2)})")
             drop = last_session_move(bars, today)
@@ -510,7 +513,9 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
                     notes.append(f"Results dates: unavailable ({ann_err[0]})")
         if reasons:
             items.append({"symbol": sym, "name": clean_text(h.get("name") or "", 80), "source": h["source"],
-                          "price": round(price, 2), "reasons": reasons, "loss_pct": round((price / h["avg"] - 1) * 100, 2)})
+                          "price": round(price, 2), "reasons": reasons, "loss_pct": round((price / h["avg"] - 1) * 100, 2),
+                          "stop": None if stop_level is None else round(stop_level, 2),
+                          "ma200": None if ma200 is None else round(ma200, 2)})
     # one line per stock and place; a practice position with the same reasons as its Groww twin is shown once
     groww_price = {h["symbol"]: h["price"] for h in holdings if h["source"] == "Groww"}
     groww = {i["symbol"]: i for i in items if i["source"] == "Groww"}

@@ -146,7 +146,7 @@ def test_risk_off_says_no_new_buys_and_lists_ideas_under_would_pass(s):
     assert data["buy_ideas"]["wait"] is True and [i["symbol"] for i in data["buy_ideas"]["ideas"]][0] == "AAA"
     assert "DOWN" not in [i["symbol"] for i in data["buy_ideas"]["ideas"]]   # below its 200-day average
     mail = digest_render.render(data)
-    assert "No new buys today" in mail["text"] and "WOULD PASS, BUT THE MARKET FILTER SAYS WAIT" in mail["text"]
+    assert "No new buys today" in mail["text"] and "HELD BACK BY THE MARKET FILTER" in mail["text"]
     assert mail["subject"].startswith("Today: risk-off · 0 buy ideas · ")
     # Nifty below its 200-day average has the same effect even when the regime is risk-on
     data2 = morning_brief(ctx_for(s, prices=screen_prices(), context=Regime("risk_on", above=False), universe=lambda n: UNIVERSE))
@@ -1347,8 +1347,8 @@ def test_one_line_per_stock_and_place_ordered_capped_and_deduplicated(s):
     assert len(tcs[0]["reasons"]) >= 2 and w["items"][2]["loss_pct"] == 0.0
     mail = digest_render.render({**digest._header(ctx, "morning"), "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"),
                                  "watch": w, "deals": digest.unavailable("x")})
-    assert "Groww (also in practice)" in mail["text"] and f"and {w['more']} more not shown." in mail["text"]
-    assert any("; " in line and line.strip().startswith("TCS") for line in mail["text"].splitlines())
+    assert "(also in practice)" in mail["text"] and f"and {w['more']} more not shown." in mail["text"]
+    assert any("below" in line and "TCS" in line for line in mail["text"].splitlines())
     assert mail["subject"].endswith(f"· {w['total']} to watch")
 
 
@@ -1397,10 +1397,10 @@ def test_phone_layout_puts_the_name_under_the_symbol_and_keeps_numbers_on_one_li
     assert cell, html
     assert re.search(r"<td align=\"right\" style=\"[^\"]*white-space:nowrap;\">₹1,234.50</td>", html)
     assert "width=\"640\"" not in html and "max-width:640px;width:100%" in html
-    assert ">Where</th>" not in html and ">Why</th>" not in html               # cards, not a three-column table
-    assert html.count("<ul") == 1 and "TCS ₹2,156.00" in html and "Groww · also in practice" in html
-    assert "<li" in html and "below its 200-day average (₹2,456)" in html
-    assert "below its 200-day average (₹2,456); negative news: x" in text
+    assert ">Flags<" not in html and "<ul" not in html            # one table, flags under the stock
+    assert "TCS" in html and "2,156.00" in html and "also in practice" in html
+    assert "below avg" in html
+    assert "below avg" in text and "news" in text
 
 
 # ===================== world markets and risk gauges =====================
@@ -1800,9 +1800,9 @@ def test_the_watch_list_is_cards_on_a_phone_and_the_mood_has_no_duplicated_indic
             "deals": digest.unavailable("x")}
     mail = digest_render.render(data)
     html, text = mail["html"], mail["text"]
-    assert html.count("<ul") == 2 and ">Why</th>" not in html and "VEDL ₹264.00" in html and "Groww · also in practice" in html
-    assert "x" * 100 not in html and "..." in html                                         # headlines are clipped to ~90 characters
-    assert "VEDL" in text and "; " in text.split("HOLDINGS TO WATCH")[1]                    # the text part keeps its one-line rows
+    assert "<ul" not in html and "VEDL" in html and "264.00" in html and "also in practice" in html
+    assert "x" * 100 not in html
+    assert "VEDL" in text and "below" in text.split("HOLDINGS TO WATCH")[1]
     mood_text = text.split("MARKET MOOD")[1].split("HOLDINGS TO WATCH")[0]
     assert "Regime: neutral, score 0, trend down" in mood_text
     assert "Nifty: 22,520, +1.3% today, −3.9% in 20 days, below its 200-day average" in mood_text
@@ -1897,7 +1897,7 @@ def test_one_card_per_stock_when_it_is_in_both_groww_and_practice(s):
     assert any("well past any stop" in r for r in lt[0]["reasons"])
     mail = digest_render.render({**digest._header(ctx, "morning"), "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"),
                                  "watch": w, "deals": digest.unavailable("x")})
-    assert mail["html"].count("LT ₹100.00") == 1 and "Groww · also in practice" in mail["html"]
+    assert mail["html"].count(">LT") == 1 and "also in practice" in mail["html"]
 
 
 def test_a_copy_matches_with_average_prices_within_a_tenth_of_a_percent(s):
