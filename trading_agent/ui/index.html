@@ -62,7 +62,6 @@
         <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
           <button type="button" class="small" id="mp-refresh" style="margin-left:auto">Refresh</button></div>
         <div class="cardbody" id="mp-body" style="padding-top:0;border-top:none"><div class="stats" id="mp-stats"></div></div>
-        <div class="cardbody sub" id="stop-banner" style="border-bottom:1px solid var(--line)">Practice stops are checked every minute in market hours while the dashboard is running; prices may be delayed.</div>
         <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
       </div>
       <div class="card">
@@ -76,7 +75,8 @@
           <div class="row" style="justify-content:space-between"><h3>Account value</h3><span class="sub" id="eq-note"></span></div>
           <div class="chart" id="eq-chart"></div>
         </div>
-        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th>Stop-loss</th><th>GTT stop</th><th><span class="sr-only">Close position</span></th></tr></thead><tbody id="positions"></tbody><tfoot id="pp-foot"></tfoot></table></div>
+        <div class="cardbody sub" id="stop-banner" style="border-bottom:1px solid var(--line)">Practice stops are checked every minute in market hours while the dashboard is running; prices may be delayed.</div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th>Stop-loss</th><th><span class="sr-only">Close position</span></th></tr></thead><tbody id="positions"></tbody><tfoot id="pp-foot"></tfoot></table></div>
         <form class="cardbody" id="tk-form" style="border-top:1px solid var(--line)">
           <h3>Paper order</h3>
           <div class="row">
@@ -296,7 +296,7 @@
         <span class="c ${(m[k].ret_1d||0)>=0?"up":"down"}">${pct(m[k].ret_1d)}</span></div>`).join("");
   }
 
-  function render(){
+  function render(keepPositions){   // keepPositions: leave the positions table alone (a stop editor is open in it)
     const s = S.settings, a = S.account, c = S.connections, w = S.watch || {};
     $("subtitle").textContent = s.market === "in" ? "Groww · NSE bulk & block deals" : "Alpaca · QuiverQuant disclosures";
     $("investor").textContent = s.watch_investor;
@@ -335,14 +335,13 @@
     renderPaperStats(a, perf);
     noticeStopFills();
     const plTone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
-    $("positions").innerHTML = S.positions.length ? S.positions.map(p => { const inv = p.qty * p.avg_entry_price, pc = inv ? p.unrealized_pl / inv : null; return `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
+    if(!keepPositions) $("positions").innerHTML = S.positions.length ? S.positions.map(p => { const inv = p.qty * p.avg_entry_price, pc = inv ? p.unrealized_pl / inv : null; return `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
         <td class="num">${money(inv)}</td><td class="num">${money(p.market_value)}</td>
         <td class="num ${plTone(p.unrealized_pl)}">${signed(p.unrealized_pl)}</td><td class="num ${plTone(pc)}">${pc == null ? "n/a" : spctP(pc)}</td>
         <td>${stopCell(p)}</td>
-        <td>${gttCell(p, c)}</td>
         <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>${stopEdit && stopEdit.symbol === p.symbol ? stopEditorRow(p) : ""}`; }).join("")
-      : `<tr><td colspan="11" class="empty">No practice trades yet. ${s.auto_trade ? "The agent buys here when a check finds a good deal." : "Place a paper order below, or use a recommendation's paper-buy button."}</td></tr>`;
+      : `<tr><td colspan="10" class="empty">No practice trades yet. ${s.auto_trade ? "The agent buys here when a check finds a good deal." : "Place a paper order below, or use a recommendation's paper-buy button."}</td></tr>`;
     }
 
     $("recs").innerHTML = S.recommendations.length ? S.recommendations.map(r => `<article class="card rec ${esc(r.action)} ${r.dismissed?"dismissed":""}">
@@ -426,7 +425,7 @@
   function stopCell(p){
     const type = p.stop_type || "trailing", label = p.stop_label || type;
     if(p.stop == null) return `<div>No stop</div><div class="sub">${esc(label)} \u00b7 nothing sells it automatically</div>${stopBtn(p)}`;
-    const dist = p.current_price != null ? p.current_price / p.stop - 1 : null, hit = dist != null && dist <= 0;
+    const dist = p.current_price != null ? 1 - p.stop / p.current_price : null, hit = p.current_price != null && p.current_price <= p.stop;
     return `<div class="${hit ? "down" : ""}" style="font-weight:600">${money(p.stop, 2)}</div>
       <div class="sub">${esc(label)}${dist != null ? ` \u00b7 ${hit ? "at or below the stop" : (dist * 100).toFixed(1) + "% below the price"}` : ""}</div>${stopBtn(p)}`;
   }
@@ -434,7 +433,7 @@
   const stopOptions = (cur) => STOP_CHOICES.map(([v, t]) => `<option value="${v}"${v === cur ? " selected" : ""}>${t}</option>`).join("");
   function stopEditorRow(p){
     const e = stopEdit, needs = e.type === "fixed" || e.type === "percent";
-    return `<tr class="stop-editor"><td colspan="11"><div class="row" role="group" aria-label="Edit stop-loss for ${esc(p.symbol)}">
+    return `<tr class="stop-editor"><td colspan="10"><div class="row" role="group" aria-label="Edit stop-loss for ${esc(p.symbol)}">
       <label for="se-type" class="sub">Stop-loss for ${esc(p.symbol)}</label>
       <select id="se-type">${stopOptions(e.type)}</select>
       ${needs ? `<label for="se-value" class="sub">${e.type === "fixed" ? "Stop price" : "% below buy price"}</label>
@@ -446,7 +445,16 @@
   }
   function noticeStopFills(){
     const fills = S.stop_fills || [];
-    if(fillsSeen === null){ try { fillsSeen = localStorage.getItem("stopFillsSeen") || ""; } catch(e){ fillsSeen = ""; } }
+    if(fillsSeen === null){
+      let marker = null;
+      try { marker = localStorage.getItem("stopFillsSeen"); } catch(e){}
+      if(marker === null){   // first visit in this browser: older fills are history, not news. Remember the newest.
+        fillsSeen = fills.length ? String(fills[fills.length - 1].at || "") : "";
+        if(fillsSeen){ try { localStorage.setItem("stopFillsSeen", fillsSeen); } catch(e){} }
+        return;
+      }
+      fillsSeen = marker;
+    }
     const fresh = fills.filter(f => String(f.at || "") > fillsSeen);
     if(!fresh.length) return;
     fillsSeen = String(fresh[fresh.length - 1].at || "");
@@ -670,7 +678,7 @@
                .concat(r.index_fund ? [{name: `Index fund (${r.index_fund_symbol})`, label: "Fund", color: C.s3, width: 1.5, values: idx(r.index_fund)}] : [])});
   }
 
-  async function refresh(){ try { S = await api("/api/state"); render(); } catch(e){ toast("Could not load: "+e.message); } }
+  async function refresh(){ try { S = await api("/api/state"); render(stopEdit !== null); } catch(e){ toast("Could not load: "+e.message); } }
   const VERDICT = {"predictive": ["ok", "Predictive"], "could be luck": ["warn", "Could be luck"], "too small to trade": ["warn", "Too small to trade"],
                    "reversed": ["bad", "Reversed"], "no edge": ["", "No edge"], "not enough data": ["", "Not enough data"]};
   function tBars(el, rows, cfg){

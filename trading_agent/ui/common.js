@@ -134,7 +134,7 @@ window.TA = (function(){
     if(bad) out.push(`Negative news on ${istDay(bad.published)} (${esc(bad.source)}): "${esc(clip(bad.title, 110))}". Read it before buying.`);
     const pos = r.position;
     if(pos && r.price){
-      const pl = r.price / pos.avg_entry_price - 1, room = pos.stop ? r.price / pos.stop - 1 : null;
+      const pl = r.price / pos.avg_entry_price - 1, room = pos.stop ? 1 - pos.stop / r.price : null;
       const kind = pos.stop_label || "trailing", stopTxt = pos.stop_type === "none" ? "; it has no stop-loss, so nothing sells it automatically"
         : room != null ? `; its ${kind} stop at ${money(pos.stop, 2)} is ${(room * 100).toFixed(1)}% below the price` : "";
       out.push(`You hold ${pos.qty} at ${money(pos.avg_entry_price, 2)} (${pl >= 0 ? "+" : ""}${(pl * 100).toFixed(1)}%)${stopTxt}.`);

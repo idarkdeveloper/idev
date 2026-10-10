@@ -10,6 +10,7 @@ import pytest
 
 from trading_agent.broker import LocalPaperBroker
 from trading_agent.quiver import _norm_congress, filter_by_investor
+from trading_agent.stops import PracticeStopChecker
 from trading_agent.ui import App, make_server
 
 
@@ -979,8 +980,8 @@ def test_the_apps_checker_sells_on_practice_only_and_marks_the_order(two_pages, 
     pb = app.practice_broker
     prices = {"v": 100.0}
     pb.price_fn = lambda s: prices["v"]
-    checker = app.ensure_stop_checker()
-    checker.stop()   # the thread is not needed: drive one pass by hand at a market-hours time
+    monkeypatch.setattr(PracticeStopChecker, "start", lambda self: None)   # no thread that could tick at wall-clock time
+    checker = app.ensure_stop_checker()   # drive one pass by hand at a market-hours time
     from datetime import datetime
     from trading_agent.timezones import IST
     when = datetime(2026, 10, 9, 11, 0, tzinfo=IST)
@@ -1023,7 +1024,7 @@ def test_demo_page_shows_the_stop_column_editor_and_fill_notice():
     assert r.returncode == 0, r.stderr + r.stdout
     out = json.loads(r.stdout)
     rows = out["positions_html"]
-    assert "−8% from buy" in rows and "11.1% below the price" in rows and "₹90.00" in rows    # level, type, distance
+    assert "−8% from buy" in rows and "10.0% below the price" in rows and "₹90.00" in rows    # level, type, distance
     assert "No stop" in rows and rows.count('data-stop-edit=') == 2 and "Edit stop" in rows              # real buttons
     opened = out["editor_open_html"]
     assert 'for="se-type"' in opened and '<select id="se-type">' in opened and '<option value="percent" selected>' in opened
@@ -1034,7 +1035,19 @@ def test_demo_page_shows_the_stop_column_editor_and_fill_notice():
         assert label in html
     r = subprocess.run([node, str(root / "ui_mode_harness.js"), "live"], capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr
-    assert json.loads(r.stdout)["positions_html"] == ""   # Live has no practice stop column
+    live = json.loads(r.stdout)
+    assert live["positions_html"] == "" and live["pp_card_hidden"] is True   # Live has no practice card, so no banner
+    card = html.split('id="pp-card"')[1].split('id="tk-form"')[0]              # the banner sits in the practice card...
+    assert "Practice stops are checked every minute" in card and card.index('id="pricesrc"') < card.index('id="stop-banner"') < card.index('id="positions"')
+    assert "Practice stops are checked" not in html.split('id="mp-card"')[1].split('id="pp-card"')[0]   # ...not in the Groww one
+    assert "<th>GTT stop</th>" not in html and "${gttCell(p, c)}" not in html
+    assert out["positions_html"].count("<td") == 20 and 'colspan="10"' in opened   # two rows of ten cells (nine columns plus close)
+    assert out["editor_after_refresh_html"] == opened                            # the 60 s refresh leaves an open editor alone
+    assert out["stored"] == {"stopFillsSeen": "2026-10-10T09:30:00+05:30"}   # an older marker: the newer fill toasts and moves it
+    r = subprocess.run([node, str(root / "ui_mode_harness.js"), "demo", "nomarker"], capture_output=True, text=True, encoding="utf-8")
+    assert r.returncode == 0, r.stderr
+    first = json.loads(r.stdout)    # no marker yet: seed it with the newest fill and show no toast
+    assert first["toast"] == "" and first["stored"] == {"stopFillsSeen": "2026-10-10T09:30:00+05:30"}
 
 
 def test_lookup_note_names_the_stop_type_in_the_page_script():
@@ -1060,3 +1073,21 @@ console.log(JSON.stringify({trailing:mk({stop:90,stop_type:'trailing',stop_label
     assert "its trailing stop at" in o["trailing"] and "its trailing stop at" in o["old"]
     assert "its fixed stop at" in o["fixed"] and "no stop-loss, so nothing sells it automatically" in o["none"]
     assert "its trailing stop" not in o["none"]
+    # the distance is 1 - stop / price, not price / stop - 1: a stop 8% under the price reads 8.0%
+    eight = subprocess.run([node, "-e", js.replace("price:100,", "price:3318.2,").replace("stop:90,stop_type:'trailing'", "stop:3052.74,stop_type:'trailing'"),
+                            str(common)], capture_output=True, text=True, encoding="utf-8")
+    assert eight.returncode == 0, eight.stderr
+    assert "is 8.0% below the price" in json.loads(eight.stdout)["trailing"]
+
+
+def test_a_topup_buy_that_would_put_a_percent_stop_above_the_price_is_refused(two_pages):
+    base, app, fake, settings = two_pages
+    assert _post(base + "/demo/api/stop", {"symbol": "LAURUSLABS", "type": "percent", "value": 8})[0] == 200
+    pb = app.practice_broker
+    pb.price_fn = lambda s: 80.0          # the price fell; a buy now drags the average (and the 8% level) above it
+    status, j = _post(base + "/demo/api/order", {"symbol": "LAURUSLABS", "side": "buy", "qty": 1})
+    assert status == 400 and "sell at once" in j["error"] and "average price" in j["error"]
+    assert pb.positions()[0].qty == 10
+    pb.price_fn = lambda s: 100.0         # a top-up at the buy price keeps the level below the price: allowed
+    assert _post(base + "/demo/api/order", {"symbol": "LAURUSLABS", "side": "buy", "qty": 1})[0] == 200
+    assert fake.writes == []

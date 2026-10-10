@@ -162,19 +162,30 @@ def test_checker_only_in_market_hours_on_trading_days(tmp_path):
 def test_checker_and_watch_never_sell_the_same_position_twice(tmp_path, settings):
     b = broker_with(tmp_path, stop={"type": "fixed", "value": 90.0})
     b.prices["X"] = 80.0
-    start, results = threading.Barrier(4), []
+    start, results = threading.Barrier(5), []
 
     def go(fn):
         start.wait()
         results.append(fn())
     w = Watcher(settings, every=60, broker=b, notifier=Notifier(), prices=None, auto_exit=True)
+    state_file = settings.state_dir / "state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+
+    def unrelated_write():   # another writer (e.g. a new seen deal) saving state.json during the race
+        from trading_agent.state import STATE_LOCK, State
+        with STATE_LOCK:
+            st = State(state_file)
+            st.data["unrelated_key"] = {"kept": True}
+            st.save()
     ts = [threading.Thread(target=go, args=(f,)) for f in (
-        lambda: checker(tmp_path, b).check_once(FRI_OPEN), lambda: checker(tmp_path, b).check_once(FRI_OPEN),
-        lambda: checker(tmp_path, b).check_once(FRI_OPEN), w.check_trailing_stops)]
+        lambda: checker(settings.state_dir, b).check_once(FRI_OPEN), lambda: checker(settings.state_dir, b).check_once(FRI_OPEN),
+        lambda: checker(settings.state_dir, b).check_once(FRI_OPEN), w.check_trailing_stops, unrelated_write)]
     [t.start() for t in ts]
     [t.join() for t in ts]
     sells = [o for o in b.orders() if o["side"] == "sell"]
     assert len(sells) == 1 and b.positions() == []
+    saved = json.loads(state_file.read_text())
+    assert len(saved["practice_stop_fills"]) == 1 and saved["unrelated_key"] == {"kept": True}
     # a stale caller (it saw 10 shares) is refused inside the lock
     b2 = broker_with(tmp_path, stop={"type": "fixed", "value": 90.0}, name="b2.json")
     b2.prices["X"] = 80.0
@@ -184,6 +195,49 @@ def test_checker_and_watch_never_sell_the_same_position_twice(tmp_path, settings
     b2.prices["X"] = 95.0
     assert b2.sell_if_stopped("X", qty=6, level=90.0, stop={"type": "fixed", "value": 90.0}) is None   # price came back
     assert b2.positions()[0].qty == 6
+
+
+def test_two_brokers_on_one_file_sell_a_stopped_position_once(tmp_path):
+    """A separate ``watch`` process opens its own LocalPaperBroker on the same file: only one of them sells."""
+    prices = {"X": 100.0}
+    mk = lambda: LocalPaperBroker(tmp_path / "shared.json", starting_cash=100_000, price_fn=lambda s: prices[s],
+                                  currency="INR", whole_shares=True)
+    a = mk()
+    a.submit_order("X", "buy", qty=10, stop={"type": "fixed", "value": 90.0})
+    b = mk()                                   # loaded now: it still sees the 10 shares after `a` sells them
+    prices["X"] = 80.0
+    stop = {"type": "fixed", "value": 90.0}
+    start, got = threading.Barrier(2), []
+
+    def go(br):
+        start.wait()
+        got.append(br.sell_if_stopped("X", qty=10, level=90.0, stop=stop))
+    ts = [threading.Thread(target=go, args=(br,)) for br in (a, b)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert sum(o is not None for o in got) == 1
+    on_disk = json.loads((tmp_path / "shared.json").read_text())
+    assert on_disk["positions"] == {} and [o["side"] for o in on_disk["orders"]] == ["buy", "sell"]
+    assert on_disk["cash"] == pytest.approx(100_000 - 10 * 100.0 + 10 * 80.0)
+    # sequentially, with a stale object: the second broker re-reads the file and sells nothing
+    c, d = mk(), mk()
+    assert c.positions() == []
+    prices["X"] = 100.0
+    c.submit_order("X", "buy", qty=5, stop=stop)
+    prices["X"] = 80.0
+    assert d.sell_if_stopped("X", qty=5, level=90.0, stop=stop) is not None   # d sees c's buy, sells it
+    assert c.sell_if_stopped("X", qty=5, level=90.0, stop=stop) is None       # c sees d's sale
+    assert not (tmp_path / "shared.json.lock").exists()
+
+
+def test_checker_does_nothing_when_the_market_is_not_india(tmp_path):
+    b = broker_with(tmp_path, stop={"type": "fixed", "value": 90.0})
+    b.prices["X"] = 50.0
+    market = {"v": "us"}
+    c = checker(tmp_path, b, enabled_fn=lambda: market["v"] == "in")
+    assert c.check_once(FRI_OPEN) == [] and b.positions()
+    market["v"] = "in"
+    assert len(c.check_once(FRI_OPEN)) == 1
 
 
 def test_checker_has_no_notifier_and_no_groww(tmp_path, monkeypatch):

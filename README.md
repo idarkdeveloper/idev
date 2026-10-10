@@ -169,7 +169,9 @@ GTT smart orders) refuses with `LiveOrdersDisabled` before touching the network 
   latest price, with the usual charges, once the price is at or below the stop; the fill is
   kept in `state.json` (`practice_stop_fills`), shown as a notice on the Demo page and marked
   "stop hit" in the order history. Watch mode's auto-exit uses the same rule, and the two
-  can never sell the same position twice. Unlike the GTT above this is not an order at any
+  do not sell the same position twice: each re-checks the position under a lock on the
+  practice account file (`paper_broker.json.lock`) after re-reading it, so this also holds
+  against a separate `watch` process using the same file. Unlike the GTT above this is not an order at any
   broker: it only acts while the dashboard process runs, uses delayed Yahoo prices unless
   Groww is linked, and never touches Groww or sends a notification.
 

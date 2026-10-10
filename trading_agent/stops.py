@@ -5,7 +5,9 @@ checker only ever uses the practice ``LocalPaperBroker`` it is given: it has no 
 notifier. Every minute in NSE market hours (09:15 to 15:30 IST on a trading day) it sells, at the latest price,
 any practice position whose price is at or below its stop (``risk.position_stop``), and records the fill in
 ``state.json`` under ``practice_stop_fills``. The broker's ``sell_if_stopped`` re-checks inside its lock, so the
-checker, a second checker and watch-mode auto-exit can never sell the same position twice.
+checker, a second checker and watch-mode auto-exit do not sell the same position twice: the re-check runs under the
+broker's in-process lock and a lock file on the account file, and reads the file afresh, so it also holds against a
+separate ``watch`` process using the same practice account file.
 """
 
 from __future__ import annotations
@@ -41,7 +43,8 @@ def record_stop_fill(state_path: Path, order: dict[str, Any], stop: dict[str, An
 class PracticeStopChecker:
     def __init__(self, broker_fn: Callable[[], Any], state_path: Path, *, bars_fn: Callable[[str], Any] | None = None,
                  holidays: Any | None = None, every: int = 60, tz: tzinfo = IST,
-                 now_fn: Callable[[], datetime] | None = None, after_fill: Callable[[], Any] | None = None):
+                 now_fn: Callable[[], datetime] | None = None, after_fill: Callable[[], Any] | None = None,
+                 enabled_fn: Callable[[], bool] | None = None):
         self._broker_fn = broker_fn  # called each tick, so the practice account is opened lazily
         self.state_path = Path(state_path)
         self._bars_fn = bars_fn
@@ -50,6 +53,7 @@ class PracticeStopChecker:
         self.tz = tz
         self._now_fn = now_fn
         self._after_fill = after_fill
+        self._enabled_fn = enabled_fn  # read every tick: e.g. the dashboard's market is still India
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last_error: str | None = None
@@ -60,12 +64,16 @@ class PracticeStopChecker:
             now = now.astimezone(self.tz)
         if now.weekday() >= 5:
             return False
+        # The holiday list fails open: if a holiday is unknown to it, that weekday counts as a trading day. That is
+        # harmless here, since prices do not move on a holiday and so nothing reaches a stop.
         if self.holidays is not None and not self.holidays.is_trading_day(now.date()):
             return False
         return OPEN <= now.time() <= CLOSE
 
     def check_once(self, now: datetime | None = None) -> list[dict[str, Any]]:
         """One pass. Returns the fills made (empty outside market hours)."""
+        if self._enabled_fn is not None and not self._enabled_fn():
+            return []
         if not self.market_open(now):
             return []
         broker = self._broker_fn()

@@ -12,6 +12,7 @@ that is not the paper endpoint.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import math
@@ -183,14 +184,38 @@ class LocalPaperBroker:
         self.whole_shares = whole_shares  # Indian equities trade in whole shares
         self.cost_model = cost_model  # object with .charges(side, notional); None = free
         self.now_fn = now_fn or _utc_now  # Replay stamps fills with the replay date
+        self._depth = 0  # >0 while this object holds the cross-process file lock
         self._state = self._load(starting_cash)
+        self._normalise()
+        if self._state.get("mirrors"):
+            self.name = f"local-paper (mirrors {self._state['mirrors']})"
+
+    def _normalise(self) -> None:
         self._state.setdefault("fees_paid", 0.0)
         if not self._state.get("created_at"):
             # Older files: the account is at least as old as its first order.
             times = [o.get("filled_at") for o in self._state.get("orders", []) if o.get("filled_at")]
             self._state["created_at"] = min(times) if times else _utc_now()
-        if self._state.get("mirrors"):
-            self.name = f"local-paper (mirrors {self._state['mirrors']})"
+
+    @contextlib.contextmanager
+    def _txn(self):
+        """Every read-modify-write of the account runs in here: the in-process lock, then a lock file shared with any
+        other process using the same account file (a separate ``watch`` process), and the file is re-read from disk
+        on the way in, so what is decided and written is based on what the other process last saved."""
+        with self._lock:
+            if self._depth:  # nested call from inside a transaction
+                yield
+                return
+            from .news import _file_lock
+            with _file_lock(self.path.with_name(self.path.name + ".lock"), what="paper account"):
+                self._depth = 1
+                try:
+                    if self.path.exists():
+                        self._state = json.loads(self.path.read_text())
+                        self._normalise()
+                    yield
+                finally:
+                    self._depth = 0
 
     def _load(self, starting_cash: float) -> dict[str, Any]:
         if self.path.exists():
@@ -216,7 +241,7 @@ class LocalPaperBroker:
     def reset(self, starting_cash: float) -> bool:
         """Start the account over in place (same object, so every holder of it sees the fresh account).
         Removes the file; it is written again by the next order. True if a file was removed."""
-        with self._lock:
+        with self._txn():
             existed = self.path.exists()
             if existed:
                 self.path.unlink()
@@ -233,6 +258,10 @@ class LocalPaperBroker:
     def seed(self, positions: list[Position], cash: float | None = None,
              label: str | None = None) -> None:
         """Mirror a real account into the simulator (positions + optional cash)."""
+        with self._txn():
+            self._seed(positions, cash, label)
+
+    def _seed(self, positions: list[Position], cash: float | None, label: str | None) -> None:
         for p in positions:
             self._state["positions"][p.symbol.upper()] = {"qty": p.qty,
                                                           "avg_entry_price": p.avg_entry_price}
@@ -250,8 +279,9 @@ class LocalPaperBroker:
 
     def set_price(self, symbol: str, price: float) -> None:
         """Manual price override (used by tests and demo mode)."""
-        self._state["prices"][symbol.upper()] = float(price)
-        self._save()
+        with self._txn():
+            self._state["prices"][symbol.upper()] = float(price)
+            self._save()
 
     def latest_price(self, symbol: str) -> float:
         symbol = symbol.upper()
@@ -267,7 +297,7 @@ class LocalPaperBroker:
         raise LookupError(f"No price known for {symbol}; set one with set_price() or a price_fn")
 
     def positions(self) -> list[Position]:
-        with self._lock:  # the watch thread's auto-exit orders change the same dict
+        with self._txn():  # the watch thread's auto-exit orders change the same dict
             out = []
             dirty = False
             for sym, p in self._state["positions"].items():
@@ -294,7 +324,7 @@ class LocalPaperBroker:
                        currency=self.currency)
 
     def submit_order(self, *args: Any, **kw: Any) -> dict[str, Any]:
-        with self._lock:
+        with self._txn():
             return self._submit_order(*args, **kw)
 
     def _submit_order(self, symbol: str, side: str, notional: float | None = None,
@@ -352,7 +382,7 @@ class LocalPaperBroker:
 
     def set_stop(self, symbol: str, stop: dict[str, Any]) -> None:
         """Change the practice stop-loss of an open position ({"type", "value"} from ``risk.normalize_stop``)."""
-        with self._lock:
+        with self._txn():
             pos = self._state["positions"].get(symbol.upper())
             if pos is None:
                 raise LookupError(f"no open position in {symbol.upper()}")
@@ -363,8 +393,10 @@ class LocalPaperBroker:
                         extra: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Sell the whole position at the latest price, but only if, now and inside the lock, it is still the same
         position (same quantity, same stop setting) and the price is still at or below ``level``. The dashboard's
-        checker and the watch thread both come through here, so a position is sold once. None = nothing sold."""
-        with self._lock:
+        checker and the watch thread both come through here, so a position is sold once. None = nothing sold.
+        The check runs on the account file re-read under the cross-process lock, so a sale made by another process
+        (a separate ``watch``) on the same file is seen too."""
+        with self._txn():
             sym = symbol.upper()
             pos = self._state["positions"].get(sym)
             if pos is None or abs(pos["qty"] - qty) > 1e-9:
@@ -381,9 +413,10 @@ class LocalPaperBroker:
 
     def credit(self, amount: float, note: str, at: str) -> None:
         """Add cash that isn't a trade (a dividend paid out in Replay)."""
-        self._state["cash"] += float(amount)
-        self._state.setdefault("credits", []).append({"at": at, "amount": round(float(amount), 2), "note": note})
-        self._save()
+        with self._txn():
+            self._state["cash"] += float(amount)
+            self._state.setdefault("credits", []).append({"at": at, "amount": round(float(amount), 2), "note": note})
+            self._save()
 
     def credits(self) -> list[dict[str, Any]]:
         return list(self._state.get("credits", []))

@@ -426,7 +426,7 @@ _LOG_LOCK = threading.Lock()  # one writer at a time inside this process
 
 
 @contextlib.contextmanager
-def _file_lock(path: Path, wait: float = 5.0, stale: float = 30.0):
+def _file_lock(path: Path, wait: float = 5.0, stale: float = 30.0, what: str = "news log"):
     """Exclusive-create lock file so the dashboard and watch (two processes) cannot interleave writes."""
     path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.time() + wait
@@ -442,7 +442,7 @@ def _file_lock(path: Path, wait: float = 5.0, stale: float = 30.0):
                     os.replace(path, grave)  # only one process wins this rename
                     grave.unlink(missing_ok=True)
             if time.time() > deadline:
-                raise TimeoutError(f"news log is locked ({path})")
+                raise TimeoutError(f"{what} is locked ({path})")
             time.sleep(0.05)
     try:
         yield

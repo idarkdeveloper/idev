@@ -16,7 +16,7 @@ from typing import Any, Callable
 
 from .config import Settings
 from .risk import check_stops
-from .state import State
+from .state import STATE_LOCK, State
 from .timezones import IST
 
 log = logging.getLogger(__name__)
@@ -173,8 +173,8 @@ class Watcher:
         hits = check_stops(positions, bars_fn)
         if not hits:
             return []
-        st = State(self.settings.state_dir / "state.json")
-        alerted = st.data.setdefault("stop_alerts", {})
+        state_path = self.settings.state_dir / "state.json"
+        alerted = dict(State(state_path).data.get("stop_alerts", {}))  # a read only: no State is held across the sells
         fresh = []
         for h in hits:
             key = f"{h['symbol']}:{round(h['stop'], 2)}"
@@ -193,14 +193,19 @@ class Watcher:
                     h["order"] = order
                 elif "order_error" not in h:
                     continue  # already sold by the other seller, or the price came back above the stop
-            alerted[key] = h["price"]
             fresh.append(h)
-        st.save()
-        from .stops import record_stop_fill  # after the save above, which would otherwise overwrite the record
-        for h in fresh:
-            if h.get("order"):
-                record_stop_fill(self.settings.state_dir / "state.json", h["order"],
-                                 {"level": h["level"], "type": h["type"], "label": h["label"]})
+        if fresh:
+            from .stops import record_stop_fill
+            with STATE_LOCK:  # reload now and change only our own keys, so a write made while we sold is kept
+                st = State(state_path)
+                marks = st.data.setdefault("stop_alerts", {})
+                for h in fresh:
+                    marks[f"{h['symbol']}:{round(h['stop'], 2)}"] = h["price"]
+                st.save()
+                for h in fresh:
+                    if h.get("order"):
+                        record_stop_fill(state_path, h["order"],
+                                         {"level": h["level"], "type": h["type"], "label": h["label"]})
         if fresh and self._notifier is not None:
             body ="\n".join(f"{h['symbol']}: {h['price']:.2f} at/below {h['label']} stop {h['stop']:.2f} "
                              f"({h['drawdown_from_high']*100:+.1f}% from high)"

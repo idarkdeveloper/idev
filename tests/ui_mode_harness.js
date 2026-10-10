@@ -7,6 +7,8 @@ const vm = require("vm");
 const mode = process.argv[2] || "live";
 const sample = process.argv[3] === "sample";
 const mpFail = process.argv[3] === "mpfail";
+const noMarker = process.argv[3] === "nomarker";
+const intervals = [], stored = {};
 const ui = path.join(__dirname, "..", "trading_agent", "ui");
 const html = fs.readFileSync(path.join(ui, "index.html"), "utf8");
 const common = fs.readFileSync(path.join(ui, "common.js"), "utf8");
@@ -62,7 +64,8 @@ const document = {
   body: {dataset: Object.assign({mode}, sample ? {sample: "1"} : {})},
   getElementById: el, querySelectorAll: () => [], addEventListener(t, fn) { (listeners[t] = listeners[t] || []).push(fn); }, createElement: () => el("_new"),
 };
-const ctx = {document, console, setTimeout, clearTimeout, setInterval: () => 0, Intl, Date, Math, JSON, Number, String, Object, Array,
+const ctx = {document, console, setTimeout, clearTimeout, setInterval: (fn, ms) => { intervals.push([fn, ms]); return 0; },
+  localStorage: {getItem: () => noMarker ? null : "2026-10-09T00:00:00+05:30", setItem: (k, v) => { stored[k] = v; }}, Intl, Date, Math, JSON, Number, String, Object, Array,
   Set, Map, Promise, URLSearchParams, encodeURIComponent, isNaN, isFinite, parseFloat, parseInt,
   fetch: async (url) => String(url).includes("/api/my-portfolio") && mpFail
     ? ({ok: false, status: 500, statusText: "err", json: async () => ({error: "Groww didn't answer"})})
@@ -85,6 +88,11 @@ setTimeout(async () => {
   const toastText = el("toast").textContent;
   await click({stopEdit: "LAURUSLABS"});
   const editorOpen = el("positions").innerHTML;
+  state.positions[0].current_price = 95;   // the 60 s refresh must not rebuild the table under an open editor
+  const tick = intervals.find(([, ms]) => ms === 60000);
+  await tick[0]();
+  await new Promise(r => setTimeout(r, 20));
+  const editorAfterRefresh = el("positions").innerHTML;
   await click({stopCancel: ""});
   const editorClosed = el("positions").innerHTML;
   const banner = els["demo-banner"] && !els["demo-banner"].hidden
@@ -95,6 +103,7 @@ setTimeout(async () => {
     dismiss_button: el("recs").innerHTML.includes("data-dismiss"),
     pp_card_hidden: el("pp-card").hidden,
     banner,
+    editor_after_refresh_html: editorAfterRefresh, stored,
     positions_html: positionsBefore, editor_open_html: editorOpen, editor_closed_html: editorClosed, toast: toastText,
     order_stop_select: html.includes('id="tk-stop"'), stop_banner: el("stop-banner").textContent,
     check_hidden: el("check-split").hidden, settings_hidden: el("btn-settings").hidden, watch_hidden: el("btn-watch").hidden,

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import logging
 import sys
 import threading
@@ -610,6 +611,8 @@ class App:
         if side == "buy" and stop_type not in (None, ""):  # none given: a held position keeps its stop, a new one trails
             from .risk import normalize_stop
             stop = normalize_stop(stop_type, stop_value, self.broker.latest_price(symbol))
+        if side == "buy":
+            self._check_topup_percent_stop(symbol, stop, qty, notional)
         if qty not in (None, "", 0, "0"):
             order = self.broker.submit_order(symbol, side, qty=float(qty), stop=stop)
         elif notional in (None, "", 0, "0"):
@@ -618,6 +621,31 @@ class App:
             order = self.broker.submit_order(symbol, side, notional=float(notional), stop=stop)
         self._record_equity()
         return order
+
+    def _check_topup_percent_stop(self, symbol: str, stop: dict[str, Any] | None, qty: Any, notional: Any) -> None:
+        """A buy that adds to a position with a percent stop moves its average buy price, and so the stop level. Refuse
+        it when the new level would be at or above today's price, since the position would be sold at once."""
+        from .risk import AT_ONCE
+        pos = next((p for p in self.broker.positions() if p.symbol == symbol), None)
+        if pos is None:
+            return
+        eff_type, eff_value = (stop["type"], stop.get("value")) if stop is not None else (pos.stop_type, pos.stop_value)
+        if eff_type != "percent" or not eff_value:
+            return
+        price = self.broker.latest_price(symbol)
+        try:
+            add = float(qty) if qty not in (None, "", 0, "0") else float(notional) / price
+        except (TypeError, ValueError):
+            return  # the order itself reports a bad amount
+        if getattr(self.broker, "whole_shares", False):
+            add = float(math.floor(add))
+        if add <= 0:
+            return
+        avg = (pos.qty * pos.avg_entry_price + add * price) / (pos.qty + add)
+        if avg * (1 - float(eff_value) / 100) >= price:
+            raise ValueError(f"after this buy your average price would be {avg:,.2f}, which puts the "
+                             f"{float(eff_value):g}% stop at or above today's price, so it would sell at once. "
+                             "Choose a smaller stop percentage or another stop type")
 
     def set_stop(self, symbol: str, stop_type: str, stop_value: Any = None) -> dict[str, Any]:
         """Change the practice stop-loss of an open practice position (Demo page only)."""
@@ -648,7 +676,8 @@ class App:
                 root._stops = PracticeStopChecker(
                     lambda: root.practice_broker, root.settings.state_dir / "state.json",
                     bars_fn=lambda sym: root.prices.history(sym, "1y") if not root.demo_trades else [],
-                    holidays=root.holidays, after_fill=lambda: root.demo._record_equity())
+                    holidays=root.holidays, after_fill=lambda: root.demo._record_equity(),
+                    enabled_fn=lambda: root.settings.market == "in")
             if root._stops is not None:
                 root._stops.start()
             return root._stops
