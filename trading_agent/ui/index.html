@@ -252,6 +252,7 @@
           <label for="f-dg-pm-t">Send after (IST)</label><input id="f-dg-pm-t" name="digest_evening" type="time" value="15:45"></div>
       </div>
       <div class="field"><label for="f-dg-writer">Summary on top</label><select id="f-dg-writer" name="digest_writer"><option value="claude">Claude Haiku (default; the rules when it fails)</option><option value="auto">Ollama, then Claude (falls back to the rules)</option><option value="ollama">Ollama only (falls back to the rules)</option><option value="rules">Written by the rules (no AI)</option><option value="none">No summary</option></select></div>
+      <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-bul" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-bul" style="color:var(--ink)">Market bulletin in the evening email</label></div><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-chart" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-chart" style="color:var(--ink)">With chart pictures</label></div><div class="sub">Nifty levels, ADX and RSI, global markets, commodities and a concept of the day. Readings of past prices, never a forecast.</div></div>
       <div class="row"><button type="button" class="small" id="btn-dg-morning">Preview morning</button><button type="button" class="small" id="btn-dg-evening">Preview evening</button>
         <input type="checkbox" id="dg-summary" style="width:20px;height:20px;min-height:20px;margin:0"><label for="dg-summary" class="sub">with the AI summary (uses your Claude credit)</label></div>
     </div>
@@ -1151,7 +1152,7 @@
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
     $("f-gtt").checked = !!s.groww_gtt_stops; $("f-bse").checked = s.bse_deals !== false;
     $("f-dg-writer").value = s.digest_writer || "claude";
-    $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on;
+    $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on; $("f-dg-bul").checked = s.digest_bulletin !== false; $("f-dg-chart").checked = s.digest_charts !== false;
     $("f-dg-am-t").value = s.digest_morning || "09:00"; $("f-dg-pm-t").value = s.digest_evening || "15:45";
     $("f-dg-note").textContent = s.digest_channel ? "Sent by the watch service on NSE trading days to your email or webhook. They never place an order." : "Add RESEND_API_KEY with an email address (or a webhook) above, or nothing is sent. Preview still works.";
     $("f-gtt-note").textContent = c.groww_live_orders ? "A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Uses REAL orders on Groww." : "Saved, but inactive: GROWW_LIVE_ORDERS is not true in .env, so no GTT orders are placed.";
@@ -1180,7 +1181,7 @@
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.bse_deals = $("f-bse").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked;
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.bse_deals = $("f-bse").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked;
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);

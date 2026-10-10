@@ -64,6 +64,8 @@ EDITABLE_ENV_KEYS = {
     "digest_morning": "DIGEST_MORNING",
     "digest_evening": "DIGEST_EVENING",
     "digest_writer": "DIGEST_WRITER",
+    "digest_bulletin": "DIGEST_BULLETIN",
+    "digest_charts": "DIGEST_CHARTS",
     # Only has an effect when GROWW_LIVE_ORDERS=true, which the dashboard can never set.
     "groww_gtt_stops": "GROWW_GTT_STOPS",
 }
@@ -408,6 +410,7 @@ class App:
                 "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
                 "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
                 "digest_enabled": s.digest_enabled, "digest_writer": s.digest_writer,
+                "digest_bulletin": s.digest_bulletin, "digest_charts": s.digest_charts,
                 "digest_channel": bool(s.resend_api_key and s.notify_email_to) or bool(s.notify_webhook_url),
                 "max_slippage_pct": s.max_slippage_pct,
                 "demo": self.demo_trades is not None,
@@ -1073,8 +1076,8 @@ class App:
             elif key in ("digest_morning", "digest_evening"):
                 value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
-            elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on"):
-                value = "true" if value in (True, "true", "1", 1, "on") else "false"
+            elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
+                value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
                 value = str(value).strip().lower()
@@ -1315,7 +1318,10 @@ class App:
             email = build_digest(kind, ctx, writer=writer)
         finally:
             root._preview_lock.release()
-        return {k: email[k] for k in ("subject", "text", "html", "writer")}
+        from .digest_render import inline_data_urls
+        out = {k: email[k] for k in ("subject", "text", "html", "writer")}
+        out["html"] = inline_data_urls(out["html"], email.get("images"))   # the preview iframe shows the charts as data: URLs
+        return out
 
     def groww_test(self) -> dict[str, Any]:
         """Check Groww credentials end to end without ever returning the token."""
@@ -1392,15 +1398,32 @@ def _cost_table(market: str) -> dict[str, Any]:
 WATCH_SOURCES = {"in": {"deals", "bulk", "block", "insider"}, "us": {"congress", "insider"}}
 
 
+_TRUE_WORDS, _FALSE_WORDS = {"true", "1", "yes", "on"}, {"false", "0", "no", "off"}
+
+
+def _bool_setting(key: str, value: Any) -> bool:
+    """A switch from JSON: true/false, 1/0, or the words true, false, 1, 0, yes, no, on, off. Anything else is a 400
+    (a typo must not silently switch something off)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    word = value.strip().lower() if isinstance(value, str) else None
+    if word in _TRUE_WORDS:
+        return True
+    if word in _FALSE_WORDS:
+        return False
+    raise ValueError(f"{key} must be true or false")
+
+
 def _check_type(key: str, value: Any) -> None:
     """Settings arrive as JSON: refuse a list, dict, number or bool where text is expected, with a plain message."""
     if key in ("watch_investors", "watch_investor"):
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on"):
-        if isinstance(value, (list, tuple, dict)):
-            raise ValueError(f"{key} must be true or false")
+    elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
+        _bool_setting(key, value)
     elif key in ("digest_morning", "digest_evening", "digest_writer"):
         if not isinstance(value, str):
             raise ValueError(f"{key} must be a time as text, HH:MM")

@@ -662,6 +662,27 @@ class NewsService:
                 self._probed_at = self._clock()
             return self._tagger
 
+    def market_headlines(self, hours: float = 24.0) -> list[dict[str, Any]]:
+        """Headlines of the general market feeds from the last ``hours`` hours, newest first, each with the tag the
+        news log already holds for it (sentiment / confidence are None when untagged). Never raises."""
+        try:
+            items = self.feed.general()
+            known = self.log.known()
+        except Exception as e:  # noqa: BLE001
+            log.warning("market headlines unavailable: %s", e)
+            return []
+        cutoff = datetime.now(IST) - timedelta(hours=hours)
+        out = []
+        for i in items:
+            try:
+                if not i.get("published") or datetime.fromisoformat(i["published"]) < cutoff:
+                    continue
+            except ValueError:
+                continue
+            t = known.get(i["id"]) or {}
+            out.append({**i, "sentiment": t.get("sentiment"), "event": t.get("event"), "confidence": t.get("confidence")})
+        return sorted(out, key=lambda i: i["published"], reverse=True)
+
     def for_symbol(self, symbol: str, name: str | None = None, background: bool = False) -> dict[str, Any]:
         if name is None and self.names is not None:
             try:
