@@ -1688,6 +1688,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:  # noqa: N802
             refused = self._post_refusal()
             if refused:
+                try:   # drain the unread body so the client gets the answer instead of a reset connection
+                    self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1_000_000))
+                except (ValueError, OSError):
+                    pass
                 self._json({"error": refused[1]}, refused[0])
                 return
             path = urlparse(self.path).path
