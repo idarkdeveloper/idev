@@ -241,3 +241,53 @@ def format_forward(s: dict[str, Any]) -> str:
     if s["days"] < 60:
         lines.append("Too early to judge: give it at least a few months before reading anything into the gap.")
     return "\n".join(lines)
+
+
+# -- rebuilding the account from its start date ---------------------------------------------------------
+class AsOfPrices:
+    """A price source as it stood at the close of ``asof`` (a date string): ``history`` stops at that day and
+    ``latest_price`` is that day's close (the last bar on or before it). The first routine run took its fills at the
+    latest price after the close, which is the same number."""
+
+    def __init__(self, prices: Any, asof: str):
+        self.prices, self.asof = prices, asof
+
+    def history(self, symbol: str, range_: str = "2y") -> list[dict[str, Any]]:
+        return [b for b in self.prices.history(symbol, range_) if b["date"] <= self.asof]
+
+    def latest_price(self, symbol: str) -> float:
+        bars = self.history(symbol, "2y")
+        if not bars:
+            raise LookupError(f"no price for {symbol} on or before {self.asof}")
+        return float(bars[-1]["close"])
+
+    __call__ = latest_price
+
+
+def forward_exists(state_dir: Path, universe: str) -> bool:
+    d = Path(state_dir) / "forward"
+    return any((d / f"{universe.lower()}{suffix}.json").exists() for suffix in ("", "_broker"))
+
+
+def rebuild_from(state_dir: Path, asof: str, *, universe: str = "NIFTYMIDCAP150", top: int = 20,
+                 capital: float = 500_000.0, prices: Any, cost_model: Any | None,
+                 screen_fn: Callable[[Any], dict[str, Any]], force: bool = False,
+                 hour: int = 16, minute: int = 0) -> dict[str, Any]:
+    """Recreate the paper forward account as the first routine run made it on ``asof``: the top ``top`` of the screen
+    as of that date, equal weights, the same charges, fills at that day's close, the index fund bought with the same
+    capital. ``screen_fn(prices)`` ranks with the as-of price source it is given. Refuses when a forward account
+    for the universe already exists unless ``force`` (which deletes it first). Returns the run summary."""
+    day = datetime.strptime(asof, "%Y-%m-%d")   # ValueError for anything but YYYY-MM-DD
+    if day.weekday() >= 5:
+        raise ValueError(f"{asof} is a weekend: there was no close to trade at")
+    if forward_exists(state_dir, universe):
+        if not force:
+            raise FileExistsError(f"a forward test for {universe.upper()} already exists in {state_dir}; "
+                                  "pass --force to delete it and rebuild")
+        for suffix in ("", "_broker"):
+            (Path(state_dir) / "forward" / f"{universe.lower()}{suffix}.json").unlink(missing_ok=True)
+    asof_prices = AsOfPrices(prices, asof)
+    clock = datetime(day.year, day.month, day.day, hour, minute, tzinfo=IST)
+    ft = ForwardTest(state_dir, universe=universe, top=top, capital=capital, price_fn=asof_prices.latest_price,
+                     cost_model=cost_model, now=lambda: clock)
+    return ft.run(lambda: screen_fn(asof_prices))

@@ -85,6 +85,42 @@ def parse_investors(raw: "str | list[str] | tuple[str, ...] | None") -> list[str
     return out
 
 
+TELEGRAM_TOKEN_RE = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
+TELEGRAM_CHAT_RE = re.compile(r"-?\d+|@[A-Za-z][A-Za-z0-9_]{3,}")
+
+
+def parse_heartbeat_url(value: object) -> str | None:
+    """HEARTBEAT_URL: an https URL (the path is a secret token, so it is never echoed in an error); empty means off."""
+    from urllib.parse import urlparse
+    text = str(value or "").strip()
+    if not text:
+        return None
+    u = urlparse(text)
+    if u.scheme != "https" or not u.hostname or any(c.isspace() for c in text):
+        raise ValueError("HEARTBEAT_URL must be an https URL (for example your healthchecks.io ping URL)")
+    return text
+
+
+def parse_telegram_token(value: object) -> str | None:
+    """TELEGRAM_BOT_TOKEN as given by @BotFather (digits, a colon, 30+ letters/digits/_/-); never echoed in an error."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not TELEGRAM_TOKEN_RE.fullmatch(text):
+        raise ValueError("TELEGRAM_BOT_TOKEN does not look like a bot token from @BotFather (digits:letters)")
+    return text
+
+
+def parse_telegram_chat(value: object) -> str | None:
+    """TELEGRAM_CHAT_ID: a whole number (a chat or a group, groups are negative) or a public @channel name."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not TELEGRAM_CHAT_RE.fullmatch(text):
+        raise ValueError("TELEGRAM_CHAT_ID must be a whole number or an @channel name")
+    return text
+
+
 @dataclass
 class Settings:
     # Claude
@@ -149,9 +185,20 @@ class Settings:
     digest_claude_model: str = "claude-haiku-4-5"
     digest_bulletin: bool = True  # the market bulletin (Nifty levels, global markets, commodities, concept) in the evening email
     digest_charts: bool = True  # its chart images (needs matplotlib); False sends the bulletin as text only
+    # Dead-man's switch: the watch loop pings this https URL every 5 minutes (healthchecks.io style); the path is a secret.
+    heartbeat_url: str | None = None
+    # Telegram alerts: with both the token and the chat id set, every alert also goes to Telegram (switch: telegram_alerts).
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    telegram_alerts: bool = True
+    forward_universe: str = "NIFTYMIDCAP150"  # the paper forward test the server runs once a day after the close
 
     def __post_init__(self) -> None:
         self.watch_investors = list(self.watch_investors)  # never shared between copies of the settings
+
+    @property
+    def telegram_on(self) -> bool:
+        return bool(self.telegram_alerts and self.telegram_bot_token and self.telegram_chat_id)
 
     @property
     def investors(self) -> list[str]:
@@ -227,6 +274,12 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         raise SystemExit(f"DIGEST_TOP must be a whole number; DIGEST_MORNING / DIGEST_EVENING a time (HH:MM): {e}") from None
     if not 1 <= digest_top <= 50:
         raise SystemExit(f"DIGEST_TOP must be between 1 and 50, got {digest_top}")
+    try:
+        heartbeat_url = parse_heartbeat_url(env("HEARTBEAT_URL"))
+        telegram_token = parse_telegram_token(env("TELEGRAM_BOT_TOKEN"))
+        telegram_chat = parse_telegram_chat(env("TELEGRAM_CHAT_ID"))
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
     data_source = (env("DATA_SOURCE") or ("nse" if market == "in" else "quiver")).lower()
     default_investor = "ASHISH KACHOLIA" if market == "in" else "Nancy Pelosi"
     raw_investors = (env("INVESTORS") or "").strip()
@@ -283,4 +336,9 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         digest_claude_model=env("DIGEST_CLAUDE_MODEL") or "claude-haiku-4-5",
         digest_bulletin=_bool(env("DIGEST_BULLETIN"), True),
         digest_charts=_bool(env("DIGEST_CHARTS"), True),
+        heartbeat_url=heartbeat_url,
+        telegram_bot_token=telegram_token,
+        telegram_chat_id=telegram_chat,
+        telegram_alerts=_bool(env("TELEGRAM_ALERTS"), True),
+        forward_universe=(env("FORWARD_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),
     )

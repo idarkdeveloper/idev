@@ -53,7 +53,7 @@ class Watcher:
                  weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False,
                  holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
                  news: Any | None = None, broker_factory: Callable[[], Any] | None = None,
-                 digest: Any | None = None):
+                 digest: Any | None = None, forward: Any | None = None, heartbeat: Any | None = None):
         self.settings = settings
         self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
         self._blocked_until: datetime | None = None
@@ -72,6 +72,8 @@ class Watcher:
         self._warned_no_tagger = False
         self._news = news  # NewsService: negative headlines for held stocks
         self._digest = digest  # DigestScheduler: the morning and evening emails (own worker thread)
+        self._forward = forward  # ForwardScheduler: the paper forward test, once a trading day after the close
+        self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every 5 minutes, whatever the market window
         self._broker = broker
         self._notifier = notifier
         self._stop = threading.Event()
@@ -304,6 +306,11 @@ class Watcher:
                 info["digest"] = self._digest.tick(now)
             except Exception:  # noqa: BLE001 - the emails never stop the watch
                 log.exception("daily email check failed")
+        if self._forward is not None:  # once a trading day after the close; returns at once (its own worker thread)
+            try:
+                info["forward"] = self._forward.tick(now)
+            except Exception:  # noqa: BLE001 - the paper forward test never stops the watch
+                log.exception("forward test check failed")
         if self._awake is not None and info["in_window"] != self._awake_on:
             self._awake(info["in_window"])
             self._awake_on = info["in_window"]
@@ -336,10 +343,18 @@ class Watcher:
     def run_forever(self) -> None:
         self.started_at = datetime.now(self.tz).isoformat(timespec="seconds")
         while not self._stop.is_set():
+            error: str | None = None
             try:
                 self.tick()
-            except Exception:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001
                 log.exception("watch tick failed")
+                from .notify import redact
+                error = redact(f"{type(e).__name__}: {e}", getattr(self.settings, "telegram_bot_token", None))
+            if self._heartbeat is not None:  # every 5 minutes, any time of day; a failed tick is reported at once
+                try:
+                    self._heartbeat.tick(error)
+                except Exception:  # noqa: BLE001 - the dead-man ping never stops the watch
+                    pass
             self._stop.wait(self.every)
 
     def start(self) -> None:

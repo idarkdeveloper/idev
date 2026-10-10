@@ -1,22 +1,16 @@
-# The "routine" from the reel: check for new disclosed trades automatically.
-# Every 30 minutes, Mon-Fri, from NSE open (09:15 IST = 03:45 UTC) through the evening
-# bulk/block-deal publication (~18:00 IST) and on through US market close (20:00 UTC).
-# A run with nothing new exits before calling Claude, so frequent checks are cheap.
-name: trading-agent routine
+# MANUAL DRY RUN ONLY. The Oracle server (the trading-agent-watch service) is the only engine: it checks deals, stops,
+# announcements and news every minute in market hours, sends the daily emails and runs the paper forward test after
+# the close. This workflow used to run every 30 minutes as a second engine; that is switched off because two engines
+# fight over one Groww login (150 token requests a day, one allowed IP) and a Groww-less runner loses its state when
+# the Actions cache is evicted.
+#
+# What is left: press "Run workflow" to fetch the current deals and print what a check would do, with NO broker login,
+# NO Claude call, NO email and NO order (no Groww, Anthropic, Resend or order settings are given to this job). It keeps
+# nothing afterwards: the state cache is only read, never saved.
+name: trading-agent manual dry run
 
 on:
-  schedule:
-    - cron: "0,30 4-20 * * 1-5"
   workflow_dispatch:
-    inputs:
-      force:
-        description: "Run Claude even if nothing new was disclosed"
-        type: boolean
-        default: false
-      dry_run:
-        description: "Fetch and diff only; do not call Claude"
-        type: boolean
-        default: false
 
 concurrency:
   group: trading-agent
@@ -33,73 +27,11 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
 
-      # Remembered trades + local paper account live in ./state between runs.
-      - uses: actions/cache/restore@v4
-        with:
-          path: state
-          key: trading-agent-state-${{ github.run_id }}
-          restore-keys: trading-agent-state-
-
-      - name: Check for new disclosed trades
-        # Without ANTHROPIC_API_KEY the run degrades to a dry run instead of failing, so
-        # the schedule is harmless until the secrets are added.
+      - name: Dry run of the check (fetch and diff only)
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           MARKET: ${{ vars.MARKET || 'in' }}
-          GROWW_API_KEY: ${{ secrets.GROWW_API_KEY }}
-          GROWW_API_SECRET: ${{ secrets.GROWW_API_SECRET }}
-          GROWW_TOTP_SECRET: ${{ secrets.GROWW_TOTP_SECRET }}
-          GROWW_LIVE_ORDERS: ${{ vars.GROWW_LIVE_ORDERS || 'false' }}
-          GROWW_GTT_STOPS: ${{ vars.GROWW_GTT_STOPS || 'false' }}
-          # Live orders from Actions need a fixed-IP proxy registered with Groww (docs/hosting.md).
-          GROWW_ALLOWED_IP: ${{ secrets.GROWW_ALLOWED_IP }}
-          GROWW_PROXY_URL: ${{ secrets.GROWW_PROXY_URL }}
-          MAX_SLIPPAGE_PCT: ${{ vars.MAX_SLIPPAGE_PCT || '0.5' }}
-          QUIVER_API_KEY: ${{ secrets.QUIVER_API_KEY }}
-          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
-          ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          NOTIFY_EMAIL_TO: ${{ vars.NOTIFY_EMAIL_TO }}
-          NOTIFY_EMAIL_FROM: ${{ vars.NOTIFY_EMAIL_FROM }}
-          NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
           INVESTORS: ${{ vars.INVESTORS }}
           WATCH_INVESTOR: ${{ vars.WATCH_INVESTOR || 'ASHISH KACHOLIA' }}
           WATCH_SOURCE: ${{ vars.WATCH_SOURCE || 'deals' }}
-          AUTO_TRADE: ${{ vars.AUTO_TRADE || 'false' }}
           PAPER_STARTING_CASH: ${{ vars.PAPER_STARTING_CASH || '500000' }}
-        run: |
-          FLAGS="${{ inputs.force && '--force' || '' }} ${{ inputs.dry_run && '--dry-run' || '' }}"
-          if [ -z "$ANTHROPIC_API_KEY" ]; then
-            echo "::warning::ANTHROPIC_API_KEY secret is not set - running a dry run only. Add it under Settings > Secrets and variables > Actions."
-            FLAGS="$FLAGS --dry-run"
-          fi
-          # Lost state (cache evicted or first run): record today's deals as seen instead of
-          # re-sending a month of old deals as new. Manual runs still analyse everything.
-          if [ "${{ github.event_name }}" = "schedule" ] && [ ! -f state/state.json ]; then
-            echo "::warning::No saved state was restored; recording current deals as seen without calling Claude."
-            FLAGS="--baseline"
-          fi
-          # Scheduled runs skip NSE trading holidays; manual runs always go ahead.
-          if [ "${{ github.event_name }}" = "schedule" ]; then FLAGS="$FLAGS --skip-holidays"; fi
-          python -m trading_agent check $FLAGS
-
-      # Forward test of the factor screen (paper only): once a weekday after the 15:30 close,
-      # rebalancing on the first such run of each month. Never fails the routine.
-      - name: Forward test of the factor screen
-        continue-on-error: true
-        env:
-          MARKET: ${{ vars.MARKET || 'in' }}
-          PAPER_STARTING_CASH: ${{ vars.PAPER_STARTING_CASH || '500000' }}
-        run: python -m trading_agent forward --if-due --universe "${{ vars.FORWARD_UNIVERSE || 'NIFTYMIDCAP150' }}"
-
-      # Never put the cached Groww access token into the Actions cache: it can trade.
-      # Each run generates its own (well under Groww's 150 a day at this schedule).
-      - name: Drop cached Groww token
-        if: always()
-        run: rm -f state/groww_token.json state/groww_token.json.tmp
-
-      - uses: actions/cache/save@v4
-        if: always()
-        with:
-          path: state
-          key: trading-agent-state-${{ github.run_id }}
+        run: python -m trading_agent check --dry-run

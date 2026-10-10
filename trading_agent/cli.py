@@ -306,6 +306,8 @@ def cmd_forward(args: argparse.Namespace) -> int:
 
     settings = _settings(args)
     prices = free_prices(settings)
+    if args.rebuild_from:
+        return _forward_rebuild(args, settings, prices)
     from .holidays import NSEHolidays
     ft = ForwardTest(settings.state_dir, universe=args.universe, top=args.top,
                      capital=args.capital or settings.paper_starting_cash, price_fn=prices.latest_price,
@@ -323,6 +325,28 @@ def cmd_forward(args: argparse.Namespace) -> int:
         return run_screen(members, prices, top=ft.data["top"])
 
     print(format_forward(ft.run(screen, force_rebalance=args.rebalance)))
+    return 0
+
+
+def _forward_rebuild(args: argparse.Namespace, settings: Any, prices: Any) -> int:
+    """forward --rebuild-from DATE: recreate the paper forward account as the first routine run made it on DATE."""
+    from .costs import cost_model_for
+    from .forward import format_forward, rebuild_from
+    from .screen import load_universe, run_screen
+
+    def screen(asof_prices: Any) -> dict:
+        members = load_universe(args.universe)
+        print(f"Ranking {len(members)} {args.universe.upper()} members as of {args.rebuild_from}…")
+        return run_screen(members, asof_prices, top=args.top)
+
+    try:
+        summary = rebuild_from(settings.state_dir, args.rebuild_from, universe=args.universe, top=args.top,
+                               capital=args.capital or settings.paper_starting_cash, prices=prices,
+                               cost_model=cost_model_for("in"), screen_fn=screen, force=args.force)
+    except (FileExistsError, ValueError) as e:
+        print(f"Not rebuilt: {e}", file=sys.stderr)
+        return 1
+    print(format_forward(summary))
     return 0
 
 
@@ -772,7 +796,13 @@ def cmd_watch(args: argparse.Namespace) -> int:
     holidays = _market_holidays(settings)
     digest = make_scheduler(settings, notifier, data=data, prices=free_prices(settings), news=news, holidays=holidays,
                             practice=broker if isinstance(broker, LocalPaperBroker) else None)
-    w = Watcher(settings, every=args.every, news=news, digest=digest, window=(args.window_start, args.window_end),
+    from .forward_schedule import ForwardScheduler, run_forward_due
+    from .heartbeat import Heartbeat
+    forward_prices = free_prices(settings)
+    forward = ForwardScheduler(settings.state_dir, lambda: print(run_forward_due(settings, forward_prices, holidays)),
+                               holidays=holidays)
+    w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
+                heartbeat=Heartbeat(settings.heartbeat_url), window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
                 auto_exit=settings.auto_trade,
                 holidays=holidays, broker_factory=lambda: make_broker(settings),
@@ -869,6 +899,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--rebalance", action="store_true", help="rebalance now even if this month is done")
     sp.add_argument("--status", action="store_true", help="show the current standing without trading")
     sp.add_argument("--if-due", action="store_true", help="for schedules: skip unless a weekday after the close")
+    sp.add_argument("--rebuild-from", metavar="YYYY-MM-DD",
+                    help="recreate the forward account as the first run made it on that date (refuses if one exists)")
+    sp.add_argument("--force", action="store_true", help="with --rebuild-from: delete an existing forward account first")
     sp.set_defaults(func=cmd_forward)
     sp = sub.add_parser("groww-check", help="verify live-trading assumptions on your Groww account")
     sp.add_argument("--live-test", metavar="SYMBOL",
