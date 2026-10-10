@@ -67,7 +67,7 @@
     const body = await r.json().catch(() => ({}));
     if(r.status === 404){ toast(body.error || "No such replay"); location.hash = ""; return; }
     if(!r.ok){ toast(body.error || "Could not load this replay"); if(!T) $("step-status").textContent = body.error || ""; return; }
-    T = body; render(); loadTools();
+    T = body; render(); loadTools(); loadDeals();
   }
   function render(){
     const t = T.trial, ended = !!t.ended;
@@ -140,6 +140,7 @@
   }
   function renderScore(){
     $("summary").innerHTML = summaryHtml();
+    loadDealsSummary();
     const s = T.scorecard, n = T.next;
     const days = (new Date(T.trial.ended) - new Date(T.trial.start)) / 86400000;
     if(!s){ $("scorecard").innerHTML = ""; return; }
@@ -155,6 +156,86 @@
     if(n.error) return;
     lineChart($("next-chart"), {x: n.dates, height: 200, left: 64, legend: true, endLabels: false, yFmt: rupeesShort, label: "After the replay",
       series: [{name: "You", color: C.s1, values: n.you}, {name: "Agent", color: C.s2, values: n.agent}, {name: T.trial.benchmark, color: C.s3, values: n.nifty}]});
+  }
+
+  // ---- Disclosed deals: what was public on the replay date, and nothing after it ----
+  let DL = null, dealSel = [];
+  try { dealSel = JSON.parse(localStorage.getItem("replay.dealSel") || "[]").filter(x => typeof x === "string"); } catch(e){ dealSel = []; }
+  const saveDealSel = () => { try { localStorage.setItem("replay.dealSel", JSON.stringify(dealSel)); } catch(e){} };
+  const inNum = v => v == null ? "n/a" : Math.round(v).toLocaleString("en-IN");
+  const dealSide = d => d.side === "buy" ? "BUY" : d.side === "sell" ? "SELL" : "TRADE";
+  const dealSize = d => (d.qty != null ? inNum(d.qty) + " sh" : "n/a") + (d.price != null ? " @ " + inr(d.price, 2) : "") + (d.value != null ? " (" + inr(d.value) + ")" : "");
+  const DEALS_NOTE = "Only deals that were public on the replay date are listed: nothing reported later. Click a stock to look it up and fill the order form (you still press Place).";
+  async function loadDeals(){
+    const key = slug + "|" + T.trial.clock;
+    if(DL && DL.key === key){ renderDeals(); return; }
+    DL = null; $("dl-rows").innerHTML = `<tr><td colspan="9" class="empty">Loading disclosed deals…</td></tr>`;
+    try {
+      const r = await api(`/replay/api/trial/${slug}/deals?days=30`);
+      if(key !== slug + "|" + T.trial.clock) return;   // a newer step or replay was opened meanwhile
+      DL = Object.assign(r, {key}); renderDeals();
+    } catch(e){ $("dl-rows").innerHTML = `<tr><td colspan="9" class="empty">${esc(e.message)}</td></tr>`; }
+  }
+  function renderDeals(){
+    if(!DL) return;
+    const inv = DL.investors || [];
+    dealSel = dealSel.filter(n => inv.includes(n));
+    const bar = $("dl-filter"); bar.hidden = inv.length < 2;
+    bar.innerHTML = `<button type="button" class="small chip" data-deal-filter="" aria-pressed="${dealSel.length === 0}">All</button>`
+      + inv.map(n => `<button type="button" class="small chip" data-deal-filter="${esc(n)}" aria-pressed="${dealSel.includes(n)}">${esc(n)}</button>`).join("");
+    const rows = DL.deals.filter(d => !dealSel.length || d.followed.some(n => dealSel.includes(n)));
+    $("dl-sub").textContent = `last 30 days up to ${shortDate(DL.today)} · ${rows.length} deal${rows.length === 1 ? "" : "s"}`;
+    $("dl-rows").innerHTML = rows.length ? rows.map(d => `<tr>
+        <td style="white-space:nowrap">${esc(shortDate(d.reported))}</td>
+        <td><span class="side-chip ${d.side === "sell" ? "sell" : "buy"}">${dealSide(d)}</span></td>
+        <td><a href="#" data-deal-stock="${esc(d.ticker)}" data-deal-side="${esc(d.side)}" style="font-weight:600;text-decoration:none">${esc(d.ticker)}</a>${d.name ? `<div class="sub" style="font-size:12px">${esc(d.name)}</div>` : ""}</td>
+        <td class="num">${inNum(d.qty)}</td><td class="num">${d.price == null ? "n/a" : inr(d.price, 2)}</td><td class="num">${d.value == null ? "n/a" : inr(d.value)}</td>
+        <td>${esc(d.exchange)}</td><td>${esc(d.who)}</td><td>${esc(d.client_type)}</td></tr>`).join("")
+      : `<tr><td colspan="9" class="empty">${esc(DL.note || (DL.deals.length ? "No deals by the selected investors in the window." : "No deals by " + inv.join(", ") + " were public in the 30 days before this date."))}</td></tr>`;
+    $("dl-note").textContent = DL.errors && DL.errors.length ? DL.errors.join(" · ") : DEALS_NOTE;
+  }
+  // Markers on the Look up price chart: reported deals for the stock, public on the replay date only. The chart helper
+  // has no marker option, so they are drawn on its SVG with the same scale (the axis ticks come from TA.niceTicks).
+  function dealMarks(el, h, deals, refs){
+    const svg = el.querySelector("svg"); if(!svg || h.length < 2) return 0;
+    const vb = svg.viewBox.baseVal, W = vb.width, H = vb.height, ml = 52, mr = 14, mt = 10, mb = 24, pw = W - ml - mr, ph = H - mt - mb;
+    const vals = []; h.forEach(p => { if(p.c != null) vals.push(p.c); if(p.ma200 != null) vals.push(p.ma200); }); (refs || []).forEach(r => { if(r && r.y != null && isFinite(r.y)) vals.push(r.y); });
+    const ticks = TA.niceTicks(Math.min(...vals), Math.max(...vals), 4), y0 = ticks[0], y1 = ticks[ticks.length - 1];
+    const X = i => ml + i / (h.length - 1) * pw, Y = v => mt + ph - (v - y0) / ((y1 - y0) || 1) * ph;
+    const g = document.createElementNS(TA.NS, "g"); g.setAttribute("class", "deal-marks"); let shown = 0; const stack = {};
+    deals.forEach(d => {
+      const i = h.findIndex(p => p.d >= d.reported); if(i < 0 || d.reported < h[0].d) return;
+      const k = i + d.side, n = stack[k] = (stack[k] || 0) + 1, up = d.side === "sell", cx = X(i), cy = Y(h[i].c) + (up ? -(7 + 9 * (n - 1)) : 7 + 9 * (n - 1));
+      const pts = up ? `${cx - 5},${cy - 4} ${cx + 5},${cy - 4} ${cx},${cy + 5}` : `${cx - 5},${cy + 4} ${cx + 5},${cy + 4} ${cx},${cy - 5}`;
+      const m = document.createElementNS(TA.NS, "polygon"); m.setAttribute("points", pts);
+      m.setAttribute("fill", up ? C.neg : C.pos); m.setAttribute("stroke", C.ring); m.setAttribute("stroke-width", d.followed.length ? 2 : 1);
+      const t = document.createElementNS(TA.NS, "title"); t.textContent = `${shortDate(d.reported)} · ${dealSide(d)} · ${d.who} · ${dealSize(d)} · ${d.exchange}`;
+      m.appendChild(t); g.appendChild(m); shown++;
+    });
+    svg.appendChild(g); return shown;
+  }
+  async function loadDealMarks(want, h, refs){
+    if(!$("rl-deals")) return;
+    try {
+      const r = await api(`/replay/api/trial/${slug}/deals?ticker=${encodeURIComponent(want)}&days=90`);
+      if($("rl-ticker").value.trim().toUpperCase() !== want || !$("rl-deals")) return;   // a newer look-up won
+      const n = r.deals.length ? dealMarks($("rl-chart"), h, r.deals, refs) : 0;
+      $("rl-deals").innerHTML = r.deals.length
+        ? `<div class="sub"><span class="pl-profit">▲</span> buy · <span class="pl-loss">▼</span> sell, on the day reported (${n} shown, last 90 days; thick edge = a followed investor). Public by ${esc(shortDate(r.today))} only.</div>`
+          + r.deals.slice(0, 6).map(d => `<div class="sub" style="font-size:12px">${esc(shortDate(d.reported))} · ${dealSide(d)} · ${esc(d.who)} · ${esc(dealSize(d))}</div>`).join("")
+        : `<div class="sub">${esc(r.note || "No disclosed deals in this stock in the last 90 days up to the replay date.")}</div>`;
+    } catch(e){ if($("rl-deals")) $("rl-deals").innerHTML = `<div class="sub">${esc(e.message)}</div>`; }
+  }
+  // End of the replay: what following the followed investors' buys would have returned (looking forward is allowed now).
+  async function loadDealsSummary(){
+    const box = $("deals-summary"), key = slug;
+    if(!T.trial.ended){ box.innerHTML = ""; return; }
+    box.innerHTML = `<div class="card"><div class="cardbody"><div class="sub">Working out which disclosed deals you could have followed…</div></div></div>`;
+    try {
+      const r = await api(`/replay/api/trial/${slug}/deals-summary`);
+      if(key !== slug) return;
+      box.innerHTML = `<div class="card"><div class="cardbody"><div class="callout"><b style="color:var(--color-accent)">Deals you could have followed.</b> ${esc(r.text.replace(/^Deals you could have followed:\s*/, ""))}</div>${r.errors && r.errors.length ? `<div class="sub">${esc(r.errors.join(" · "))}</div>` : ""}</div></div>`;
+    } catch(e){ box.innerHTML = `<div class="card"><div class="cardbody"><div class="sub">${esc(e.message)}</div></div></div>`; }
   }
 
   // ---- actions ----
@@ -202,12 +283,15 @@
         <div class="sub">${esc(r.momentum_summary || "")}</div>
         <div id="rl-note">${note ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${note}</div>` : ""}</div>
         <div class="chart" id="rl-chart" style="margin-top:6px"></div>
+        <div id="rl-deals" aria-live="polite"><div class="sub">Loading disclosed deals for the chart…</div></div>
         <h3 style="margin-top:6px">NSE announcements, last 60 days</h3><div id="rl-news" aria-live="polite">${r.announcements_pending ? `<div class="sub">Loading NSE announcements… the first look-up of a company takes up to half a minute.</div>` : newsHtml(r)}</div>`;
       const h = r.history || [];
+      const chartRefs = r.position ? [{y: r.position.avg_entry_price, label: "Your cost"}].concat(r.position.stop != null ? [{y: r.position.stop, label: "Stop", color: C.neg}] : []) : [];
       lineChart($("rl-chart"), {x: h.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, label: `${r.ticker} price, year before the replay date`,
         yFmt: v => "₹" + Math.round(v).toLocaleString("en-IN"), empty: "No price history before this date.",
-        refs: r.position ? [{y: r.position.avg_entry_price, label: "Your cost"}].concat(r.position.stop != null ? [{y: r.position.stop, label: "Stop", color: C.neg}] : []) : [],
+        refs: chartRefs,
         series: [{name: "Price", color: C.s1, values: h.map(p => p.c)}, {name: "200-day average", color: C.ctx, width: 1.5, values: h.map(p => p.ma200)}]});
+      loadDealMarks(r.ticker, h, chartRefs);
       if(r.announcements_pending){
         const want = r.ticker;
         try {
@@ -288,6 +372,19 @@
   document.addEventListener("click", async (ev) => {
     const o = ev.target.closest("[data-open]"); if(o){ ev.preventDefault(); location.hash = o.dataset.open; return; }
     const l = ev.target.closest("a[data-lookup]"); if(l){ ev.preventDefault(); lookup(l.dataset.lookup); $("rl-form").scrollIntoView({behavior: "smooth", block: "center"}); return; }
+    const df = ev.target.closest("[data-deal-filter]");
+    if(df){
+      const n = df.dataset.dealFilter;
+      dealSel = n === "" ? [] : dealSel.includes(n) ? dealSel.filter(x => x !== n) : dealSel.concat([n]);
+      saveDealSel(); renderDeals(); return;
+    }
+    const ds = ev.target.closest("a[data-deal-stock]");
+    if(ds){   // look the stock up and fill the practice order form; the person still presses Place
+      ev.preventDefault(); const sym = ds.dataset.dealStock;
+      lookup(sym);
+      if(!T.trial.ended){ $("ro-symbol").value = sym; $("ro-amount").value = $("ro-qty").value = ""; if(ds.dataset.dealSide === "buy") document.querySelector('#ro-form [data-side="buy"]').click(); }
+      $("rl-form").scrollIntoView({behavior: "smooth", block: "center"}); return;
+    }
     const c = ev.target.closest("[data-copy]"); if(c){ $("ro-symbol").value = c.dataset.copy; document.querySelector('#ro-form [data-side="buy"]').click(); $("ro-amount").focus(); return; }
     const s = ev.target.closest("[data-sell]");
     if(s){

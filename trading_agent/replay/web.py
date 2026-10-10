@@ -18,9 +18,13 @@ from .news import ClockedNews
 from .scorecard import end_trial, what_happened_next
 from .summary import build_summary
 from ..nse import check_ticker
+from ..quiver import followed_names
+from .deals import KINDS_BY_SOURCE, DealsService, NSEFetcher, claude_deals, deal_row, followed_summary
 from .trial import BENCHMARKS, PORTFOLIOS, ReplayUniverse, Trial, list_trials
 
 log = logging.getLogger(__name__)
+_Rows = list[dict[str, Any]]
+_Notes = list[str]
 _SLUG = re.compile(r"^[a-z0-9-]{1,40}$")
 
 
@@ -45,7 +49,8 @@ class NotFound(Exception):
 class ReplayApp:
     def __init__(self, app: Any, *, source: Any | None = None, universe_factory: Callable[[str], Any] | None = None,
                  news_client: Any | None = None, client_factory: Callable[[], Any] | None = None,
-                 today_fn: Callable[[], str] | None = None, screen_fn: Callable[..., Any] | None = None):
+                 today_fn: Callable[[], str] | None = None, screen_fn: Callable[..., Any] | None = None,
+                 deals_fetcher: Any | None = None):
         self.app, self.settings = app, app.settings
         self.dir = self.settings.state_dir / "replay"
         if source is None:
@@ -61,8 +66,13 @@ class ReplayApp:
             news_client = NSEClient(cache_dir=self.settings.state_dir / "cache")
         self.news_client = news_client
         self.client_factory = client_factory
+        # Disclosed deals: the dashboard's own NSE/BSE client (built on first use), or a test's fake fetcher.
+        if deals_fetcher is None and self.settings.data_source == "nse":
+            deals_fetcher = _LazyFetcher(self.app)
         self.today_fn = today_fn or (lambda: date.today().isoformat())
         self.screen_fn = screen_fn
+        self.deal_feed = DealsService(deals_fetcher, self.settings.state_dir / "cache" / "replay_deals", self.today_fn,
+                                      lambda: KINDS_BY_SOURCE.get(self.settings.watch_source, ("bulk", "block")))
         self._trials: dict[str, Trial] = {}
         self._tool_results: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
@@ -220,6 +230,39 @@ class ReplayApp:
             return {"ticker": sym, "today": t.clock.today, "announcements": n["items"][:8],
                     "announcements_error": n["error"]}
 
+    def _deal_rows(self, day: str, days: int, ticker: str | None) -> tuple[_Rows, _Notes]:
+        """Shaped deals public on ``day`` (the followed investors', or every investor's in one stock)."""
+        deals, errors = self.deal_feed.known_on(day, days, ticker=ticker)
+        followed = self.settings.investors
+        if not ticker:
+            deals = [d for d in deals if followed_names(d.investor, followed)]
+        return [deal_row(d, day, followed) for d in deals[:400]], errors
+
+    def deals(self, slug: str, query: dict[str, str]) -> dict[str, Any]:
+        """Disclosed deals as they stood on the replay day. Deliberately not under the replay's lock: a slow NSE
+        download must not block orders or look-ups, and the day is read once, so nothing newer can come back."""
+        t = self.trial(slug)
+        day = t.clock.today
+        days = int(_num(query.get("days"), "days", 30.0))
+        ticker = check_ticker(query["ticker"]) if (query.get("ticker") or "").strip() else None
+        rows, errors = self._deal_rows(day, days, ticker)
+        return {"today": day, "days": max(1, min(days, 120)), "ticker": ticker, "investors": self.settings.investors,
+                "available": self.deal_feed.available, "deals": rows, "errors": errors,
+                "note": None if self.deal_feed.available else "Disclosed deals in Replay cover the Indian market (bulk, block and insider filings)."}
+
+    def deals_summary(self, slug: str) -> dict[str, Any]:
+        """The end-of-replay line: what following the followed investors' buys would have returned. Only for an ended
+        replay, because it looks from each deal forward to the end date."""
+        t = self.trial(slug)
+        end, start = t.data["ended"], t.data["start"]
+        if not end:
+            raise ValueError("deals you could have followed are worked out when the replay ends")
+        span = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+        deals, errors = self.deal_feed.known_on(end, span, cap=3660)
+        out = followed_summary(deals, self.settings.investors, t.prices, start, end)
+        out["errors"] = errors
+        return out
+
     def _lookup(self, slug: str, ticker: str, news: bool = True) -> dict[str, Any]:
         t = self.trial(slug)
         sym = check_ticker(ticker)
@@ -267,7 +310,19 @@ class ReplayApp:
         else:
             from ..agent import make_client
             client = make_client(self.settings)
-        return ask(t, client, self.settings.claude_model, self._news(t), lookup=lookup)
+        return ask(t, client, self.settings.claude_model, self._news(t), lookup=lookup, deals=self._claude_deals(t, lookup))
+
+    def _claude_deals(self, t: Trial, lookup: str | None) -> str | None:
+        """The deals public on the replay day, as untrusted text for Claude. Missing deals never stop an ask."""
+        try:
+            rows = self._deal_rows(t.clock.today, 30, None)[0][:25]
+            if lookup:
+                seen = {r["key"] for r in rows}
+                rows += [r for r in self._deal_rows(t.clock.today, 90, lookup)[0] if r["key"] not in seen][:15]
+            return claude_deals(rows, limit=40) if rows else None
+        except Exception:  # noqa: BLE001
+            log.exception("replay deals for Claude failed")
+            return None
 
     def tool(self, slug: str, body: dict[str, Any]) -> Any:
         t = self.trial(slug)
@@ -448,6 +503,10 @@ class ReplayApp:
                 if not t:
                     raise ValueError("ticker required")
                 return 200, self.news(slug, t)
+            if method == "GET" and action == "deals":
+                return 200, self.deals(slug, query)
+            if method == "GET" and action == "deals-summary":
+                return 200, self.deals_summary(slug)
             if method == "GET" and action == "size":
                 return 200, self.size(slug, query)
             if method == "GET" and action == "cost":
@@ -486,6 +545,19 @@ def _blind_verdict(state_dir: Any) -> Any:
         return latest_verdict(state_dir)
     except Exception:  # noqa: BLE001 - an unreadable research file never breaks the page
         return None
+
+
+class _LazyFetcher:
+    """The dashboard's NSE/BSE client is built on first use, so opening Replay never touches the network."""
+
+    def __init__(self, app: Any):
+        self.app = app
+        self._f: NSEFetcher | None = None
+
+    def fetch(self, kind: str, start: date, end: date) -> Any:
+        if self._f is None:
+            self._f = NSEFetcher(self.app.data)
+        return self._f.fetch(kind, start, end)
 
 
 class _LazyUniverse:

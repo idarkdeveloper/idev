@@ -52,7 +52,7 @@ def _stock(trial: Any, news: Any, sym: str) -> dict[str, Any]:
     return out
 
 
-def build_context(trial: Any, news: Any, lookup: str | None = None) -> dict[str, Any]:
+def build_context(trial: Any, news: Any, lookup: str | None = None, deals: str | None = None) -> dict[str, Any]:
     nifty = momentum_stats(trial.prices.history("^NSEI", "2y"))
     ctx: dict[str, Any] = {
         "date": trial.clock.today,
@@ -67,6 +67,11 @@ def build_context(trial: Any, news: Any, lookup: str | None = None) -> dict[str,
     }
     if lookup:
         ctx["lookup"] = _stock(trial, news, lookup.upper())
+    if deals:   # already wrapped as untrusted text and already limited to what was public on the clock's day
+        ctx["disclosed_deals_note"] = ("Bulk, block and insider deals that were already public on this date, newest first "
+                                       "(followed investors, plus any in the stock being looked up). A deal is a fact about "
+                                       "what someone did, not a prediction.")
+        ctx["disclosed_deals"] = deals
     return ctx
 
 
@@ -81,8 +86,9 @@ def request_view(client: Any, model: str, date_label: str, ctx: dict[str, Any]) 
     return resp, block.input
 
 
-def ask(trial: Any, client: Any, model: str, news: Any, lookup: str | None = None) -> dict[str, Any]:
-    ctx = build_context(trial, news, lookup)
+def ask(trial: Any, client: Any, model: str, news: Any, lookup: str | None = None,
+        deals: str | None = None) -> dict[str, Any]:
+    ctx = build_context(trial, news, lookup, deals)
     resp, view = request_view(client, model, trial.clock.today, ctx)
     entry = {"date": trial.clock.today, "summary": view.get("summary", ""),
              "recommendations": view.get("recommendations", []),
