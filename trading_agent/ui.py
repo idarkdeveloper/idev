@@ -32,7 +32,7 @@ from .config import Settings, load_settings, parse_investors
 from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
-from .groww import GrowwTokenUnavailable
+from .groww import GrowwTokenUnavailable, warn_token_block_once
 from .runner import check, free_prices, make_broker, equity_key, make_data_source, make_notifier, make_practice_broker
 from .state import STATE_LOCK, State
 from .stops import FILLS_KEY, PracticeStopChecker
@@ -314,19 +314,22 @@ class App:
             d["who"] = followed_names(t.investor, s.investors)  # which followed investor(s) this deal belongs to
             deals.append(d)
         try:
-            acct = self.broker.account().to_dict()
-            positions = [p.to_dict() for p in self.broker.positions()]
+            broker = self.broker  # resolved once: in live mode this can fail (e.g. Groww refusing a token)
+            acct = broker.account().to_dict()
+            positions = [p.to_dict() for p in broker.positions()]
             broker_error = None
         except Exception as e:  # noqa: BLE001
+            broker = self._broker  # whatever exists already, else None
             acct, positions, broker_error = None, [], str(e)
-        perf = self.broker.performance() if isinstance(self.broker, LocalPaperBroker) else None
-        since = self.broker.created_at if isinstance(self.broker, LocalPaperBroker) else None
-        ekey = equity_key(self.broker)  # the practice account and a real account keep separate curves
+        perf = broker.performance() if isinstance(broker, LocalPaperBroker) else None
+        since = broker.created_at if isinstance(broker, LocalPaperBroker) else None
+        # the practice account and a real account keep separate curves; no broker at all: the real one's
+        ekey = equity_key(broker) if broker is not None else "equity_history"
         practice_tax = copy_info = None
-        if self.page == "demo" and isinstance(self.broker, LocalPaperBroker):
+        if self.page == "demo" and isinstance(broker, LocalPaperBroker):
             if s.market == "in":
-                practice_tax = taxes.fy_summary(self.broker.orders(), self._now_dt())
-            cs = self.broker.copy_status()
+                practice_tax = taxes.fy_summary(broker.orders(), self._now_dt())
+            cs = broker.copy_status()
             copy_info = {"held": len(cs["held"]), "copied_on": self._ist_day(cs["last_copy_at"]) if cs["held"] else None}
         gtt = st.data.get("gtt_stops", {})
         for pos in positions:  # trailing-stop level and GTT status for the table
@@ -382,7 +385,7 @@ class App:
                 "market": s.market, "currency": s.currency, "watch_investor": s.watch_investor,
                 "investors": s.investors,
                 "watch_source": s.watch_source, "data_source": s.data_source,
-                "broker": getattr(self.broker, "name", s.broker), "mode": mode,
+                "broker": getattr(broker, "name", s.broker), "mode": mode,
                 "auto_trade": s.auto_trade, "claude_model": s.claude_model,
                 "notify_email_to": s.notify_email_to or "",
                 "notify_webhook_url": s.notify_webhook_url or "",
@@ -634,8 +637,14 @@ class App:
                     or want_exit != self.watcher.auto_exit):
                 if self.watcher:
                     self.watcher.stop()
+                try:
+                    wbroker = self.broker
+                except GrowwTokenUnavailable as e:  # live mode, Groww refusing a token: watch alerts-only for now
+                    warn_token_block_once(e, log)
+                    wbroker = None
                 self.watcher = Watcher(
-                    self.settings, every=every or 60, data=self.data, broker=self.broker,
+                    self.settings, every=every or 60, data=self.data, broker=wbroker,
+                    broker_factory=lambda: self.broker,
                     notifier=make_notifier(self.settings), prices=self.prices,
                     auto_exit=want_exit, holidays=self.holidays,
                     # No Claude key: compare deals only, instead of failing every tick.
@@ -1327,7 +1336,10 @@ class App:
         """Live page: real Groww orders (state.json). Demo page: practice fills. Offline sample: both. Newest first."""
         out: list[dict[str, Any]] = []
         if self.page == "demo":
-            b = self.broker
+            try:
+                b = self.broker
+            except GrowwTokenUnavailable:  # e.g. Groww refusing a token: show the other orders
+                b = None
             if isinstance(b, LocalPaperBroker):
                 # newest first already, so the (stable) sort below keeps same-second fills in order
                 out += [{**o, "at": o.get("filled_at")} for o in reversed(b.orders())]

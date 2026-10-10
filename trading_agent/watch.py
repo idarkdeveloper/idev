@@ -52,8 +52,9 @@ class Watcher:
                  data: Any | None = None, broker: Any | None = None, notifier: Any | None = None,
                  weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False,
                  holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
-                 news: Any | None = None):
+                 news: Any | None = None, broker_factory: Callable[[], Any] | None = None):
         self.settings = settings
+        self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
         self._prices = prices  # object with .history(symbol, range) for ATR-based stops
         self.auto_exit = auto_exit  # sell paper positions that hit their trailing stop
         self.every = max(15, int(every))
@@ -234,6 +235,16 @@ class Watcher:
         st.save()
         return out
 
+    def ensure_broker(self) -> Any | None:
+        """The broker, built now if it could not be at start (Groww refusing a login token). While it cannot
+        be built the watch runs alerts-only: deals, announcements and news, with a single warning per block."""
+        if self._broker is None and self._broker_factory is not None:
+            try:
+                self._broker = self._broker_factory()
+            except GrowwTokenUnavailable as e:
+                warn_token_block_once(e, log)
+        return self._broker
+
     def tick(self, force: bool = False) -> dict[str, Any]:
         now = datetime.now(self.tz)
         info: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "in_window": self.market_window_open(now)}
@@ -244,8 +255,11 @@ class Watcher:
             info["skipped"] = True
             self.last_tick = info
             return info
+        alerts_only = self.ensure_broker() is None and self._broker_factory is not None
+        if alerts_only:
+            info["alerts_only"] = "Groww is unavailable: stop and order checks are paused"
         try:
-            if self._check_fn is not None:
+            if self._check_fn is not None and not alerts_only:
                 result = self._check_fn()
                 info["check"] = result.to_dict() if hasattr(result, "to_dict") else result
         except Exception as e:  # noqa: BLE001

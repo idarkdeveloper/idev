@@ -237,14 +237,19 @@ def test_block_file_holds_no_secrets(tmp_path):
     text = cache.block_path.read_text()
     for secret in ("APIKEY", "s3cret", "TOKENVALUE", "Bearer"):
         assert secret not in text
-    assert set(json.loads(text)) == {"until", "status", "reason", "at", "strikes", "key"}
+    assert set(json.loads(text)) == {"until", "status", "reason", "at", "strikes", "last_429", "key"}
     assert not list(tmp_path.glob("*.tmp"))
 
 
-def test_corrupt_block_file_is_ignored(tmp_path):
+def test_corrupt_block_file_fails_closed_for_two_minutes(tmp_path):
     cache = TokenCache(tmp_path / "t.json")
     cache.block_path.write_text("{not json")
-    assert get_token(cache, TokenSession(Resp(200, {"token": "T"}))) == "T"
+    sess = TokenSession(Resp(200, {"token": "T"}))
+    with pytest.raises(GrowwTokenUnavailable, match="could not be read"):
+        get_token(cache, sess, now=datetime.now(IST))
+    assert sess.calls == 0
+    assert get_token(cache, sess, now=datetime.now(IST) + timedelta(minutes=3)) == "T"  # window over
+    assert not cache.block_path.exists()
 
 
 # --------------------------------------------------------------------------- #

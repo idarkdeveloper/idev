@@ -753,7 +753,13 @@ def cmd_watch(args: argparse.Namespace) -> int:
     if args.auto_trade:
         settings.auto_trade = True
     data = make_data_source(settings)
-    broker = make_broker(settings)
+    try:
+        broker = make_broker(settings)
+    except GrowwTokenUnavailable as e:
+        # Live mode while Groww refuses a token: do not exit (a service manager would restart-loop and the deal
+        # alerts would stop). Watch alerts-only and build the broker again once the cool-down ends.
+        print(_token_error_text(e), file=sys.stderr)
+        broker = None
     notifier = make_notifier(settings)
     from .runner import free_prices
     news = None
@@ -764,8 +770,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
     w = Watcher(settings, every=args.every, news=news, window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
                 auto_exit=settings.auto_trade,
-                holidays=_market_holidays(settings),
-                check_fn=lambda: check(settings, broker=broker, data=data, notifier=notifier,
+                holidays=_market_holidays(settings), broker_factory=lambda: make_broker(settings),
+                check_fn=lambda: check(settings, broker=w._broker, data=data, notifier=notifier,
                                        dry_run=not settings.anthropic_api_key))
     print(f"Watching {', '.join(settings.investors)} every {w.every}s, {args.window_start}-{args.window_end} IST, "
           f"NSE trading days. Ctrl+C to stop.")

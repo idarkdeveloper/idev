@@ -3,7 +3,7 @@ import hashlib
 import pytest
 
 from trading_agent.broker import LocalPaperBroker
-from trading_agent.groww import GrowwBroker, get_access_token, totp_now
+from trading_agent.groww import GrowwBroker, request_access_token, totp_now
 from .conftest import FakeSession
 
 ROUTES = {
@@ -62,7 +62,7 @@ def test_api_failure_raises():
 
 def test_access_token_checksum_flow():
     sess = FakeSession({("POST", "/token/api/access"): {"token": "T123", "expiry": "x"}})
-    tok = get_access_token("APIKEY", secret="s3cret", session=sess)
+    tok = request_access_token("APIKEY", secret="s3cret", session=sess)["token"]
     assert tok == "T123"
     method, url, kw = sess.calls[0]
     body = kw["json"]

@@ -27,6 +27,18 @@ def token_cache(settings: Settings) -> Any:
     return TokenCache(settings.state_dir / "groww_token.json")
 
 
+def token_block(settings: Settings) -> Any | None:
+    """The GrowwTokenUnavailable that asking for a token would raise right now (no network), else None.
+    None when an env token is set, or a valid cached token exists, or no key is configured."""
+    key = settings.groww_api_key
+    if settings.groww_access_token or not key:
+        return None
+    cache = token_cache(settings)
+    if cache.get(key):
+        return None
+    return cache.block_error(key)
+
+
 def resolve_groww_token(settings: Settings, *, fresh: bool = False, session: Any | None = None,
                         force: bool = False) -> str:
     """GROWW_ACCESS_TOKEN wins; otherwise reuse the cached generated token until it
@@ -99,6 +111,10 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
 
         def groww_or_free(symbol: str) -> float:
             if holder["g"] is None:
+                blocked = token_block(settings)  # a file read: no client or Session is built while blocked
+                if blocked is not None:
+                    warn_token_block_once(blocked, log)
+                    return price_fn(symbol)
                 try:
                     holder["g"] = make_groww(read_only, price_fn)
                 except GrowwTokenUnavailable as e:

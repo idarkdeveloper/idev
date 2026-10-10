@@ -26,6 +26,7 @@ import math
 import os
 import re
 import struct
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone, time as dtime
@@ -217,12 +218,6 @@ def request_access_token(api_key: str, *, secret: str | None = None, totp: str |
     return {"token": token, "expiry": data.get("expiry") or payload.get("expiry")}
 
 
-def get_access_token(api_key: str, *, secret: str | None = None, totp: str | None = None,
-                     session: requests.Session | None = None, base_url: str = BASE_URL) -> str:
-    return request_access_token(api_key, secret=secret, totp=totp, session=session,
-                                base_url=base_url)["token"]
-
-
 def _parse_expiry(value: Any) -> datetime | None:
     if not value:
         return None
@@ -234,6 +229,34 @@ def _parse_expiry(value: Any) -> datetime | None:
         return dt if dt.tzinfo else dt.replace(tzinfo=IST)
     except (ValueError, OSError, OverflowError):
         return None
+
+
+_mem_blocks: dict[str, dict[str, Any]] = {}  # in-process copy of the cool-down, used if the file cannot be written
+_TOKEN_LOCK = threading.Lock()  # one token request at a time in this process
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=IST)
+
+
+def _atomic_write_private(path: Path, body: str) -> None:
+    """Write via a uniquely named temp file (so concurrent writers never share one), owner-only, then rename."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 class TokenCache:
@@ -267,15 +290,7 @@ class TokenCache:
         body = json.dumps({"token": token, "key": self.fingerprint(api_key),
                            "expires_at": expires_at.isoformat(timespec="seconds"),
                            "created_at": datetime.now(IST).isoformat(timespec="seconds")})
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(body)
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, self.path)
+        _atomic_write_private(self.path, body)
 
     def clear(self) -> None:
         try:
@@ -289,38 +304,55 @@ class TokenCache:
         return self.path.with_suffix(".block")
 
     def read_block(self) -> dict[str, Any] | None:
-        """The last failure record ({until, status, reason, at, strikes, key}), or None."""
+        """The last failure record ({until, status, reason, at, strikes, last_429, key}), or None.
+
+        A block file that exists but cannot be read or understood fails closed: blocked until its
+        modification time + 2 minutes. When there is no usable file the in-process copy is used."""
         try:
-            data = json.loads(self.block_path.read_text())
-            datetime.fromisoformat(data["until"])
-            return data if isinstance(data, dict) else None
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
+            raw = self.block_path.read_text()
+        except FileNotFoundError:
+            return _mem_blocks.get(str(self.block_path))
+        except OSError:
+            raw = None
+        try:
+            data = json.loads(raw) if raw is not None else None
+            if isinstance(data, dict):
+                data["until"] = _aware(datetime.fromisoformat(data["until"])).isoformat()
+                return data
+        except (ValueError, KeyError, TypeError):
+            pass
+        try:
+            mtime = datetime.fromtimestamp(self.block_path.stat().st_mtime, IST)
+        except OSError:
+            return _mem_blocks.get(str(self.block_path))
+        return {"until": (mtime + timedelta(minutes=2)).isoformat(timespec="seconds"), "status": None,
+                "reason": "unreadable cool-down file", "at": mtime.isoformat(timespec="seconds")}
 
     def active_block(self, api_key: str, now: datetime | None = None) -> dict[str, Any] | None:
         """The cool-down still in force for this key, else None."""
         now = now or datetime.now(IST)
-        b = self.read_block()
-        if not b or now >= datetime.fromisoformat(b["until"]):
-            return None
-        if b.get("status") in (401, 403) and b.get("key") != self.fingerprint(api_key):
-            return None  # the key was changed since: the old rejection says nothing about the new one
-        return b
+        best = None
+        for b in (self.read_block(), _mem_blocks.get(str(self.block_path))):
+            if not b or now >= datetime.fromisoformat(b["until"]):
+                continue
+            if b.get("status") in (401, 403) and b.get("key") != self.fingerprint(api_key):
+                continue  # the key was changed since: the old rejection says nothing about the new one
+            if best is None or b["until"] > best["until"]:
+                best = b
+        return best
+
+    def block_error(self, api_key: str, now: datetime | None = None) -> "GrowwTokenUnavailable | None":
+        """The error to raise right now if a cool-down is in force (no network, no token needed), else None."""
+        now = now or datetime.now(IST)
+        b = self.active_block(api_key, now)
+        return _block_error(b, now) if b else None
 
     def write_block(self, record: dict[str, Any]) -> None:
         """Atomic, owner-only. Holds no token, key or secret: only the status, a fixed phrase and times."""
-        self.block_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.block_path.with_name(self.block_path.name + ".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(json.dumps(record))
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, self.block_path)
+        _atomic_write_private(self.block_path, json.dumps(record))
 
     def clear_block(self) -> None:
+        _mem_blocks.pop(str(self.block_path), None)
         try:
             self.block_path.unlink()
         except FileNotFoundError:
@@ -355,9 +387,18 @@ def _parse_retry_after(value: str | None, now: datetime) -> float | None:
         return None
 
 
-def _block_message(status: int | None, until: datetime, now: datetime) -> str:
+IN_PROGRESS = "request in progress"
+
+
+def _block_message(status: int | None, until: datetime, now: datetime, reason: str | None = None) -> str:
     u = until.astimezone(IST)
     when = u.strftime("%H:%M IST") + ("" if u.date() == now.astimezone(IST).date() else u.strftime(" on %d %b"))
+    if reason == IN_PROGRESS:
+        return ("Another Groww login token request is in progress. Try again in a minute "
+                f"(after {when}); the agent keeps working without Groww data until then.")
+    if reason and reason.startswith("unreadable"):
+        return ("Groww login token requests are paused because the cool-down file could not be read. "
+                f"Next try after {when}. The agent keeps working without Groww data until then.")
     if status == 429:
         return (f"Groww refused a new login token (429 Too Many Requests). Next try after {when}. "
                 "Nothing else to do; the agent keeps working without Groww data until then.")
@@ -369,25 +410,26 @@ def _block_message(status: int | None, until: datetime, now: datetime) -> str:
             f"Next try after {when}. Nothing else to do; the agent keeps working without Groww data until then.")
 
 
-def _record_token_failure(cache: TokenCache, api_key: str, exc: BaseException,
-                          now: datetime) -> GrowwTokenUnavailable:
+def _record_token_failure(cache: TokenCache, api_key: str, exc: BaseException, now: datetime,
+                          prev: dict[str, Any] | None = None) -> GrowwTokenUnavailable:
     status = exc.status if isinstance(exc, TokenRequestError) else None
-    prev = cache.read_block()
-    strikes = 1
+    prev = prev or {}
+    strikes = int(prev.get("strikes") or 0)
+    last_429 = prev.get("last_429")
     if status == 429:
-        wait = float(TOKEN_BLOCK_429_S)
+        base = float(TOKEN_BLOCK_429_S)
         ra = _parse_retry_after(getattr(exc, "retry_after", None), now)
         if ra is not None:
-            wait = max(wait, ra)
+            base = max(base, ra)  # what Groww asked for is never capped
         try:
-            recent = bool(prev and prev.get("status") == 429
-                          and now - datetime.fromisoformat(prev["at"]) < timedelta(hours=12))
-        except (KeyError, ValueError, TypeError):
+            recent = bool(last_429 and now - _aware(datetime.fromisoformat(last_429)) < timedelta(hours=12))
+        except (ValueError, TypeError):
             recent = False
-        if recent:
-            strikes = int(prev.get("strikes") or 1) + 1
-            wait = wait * 2 ** (strikes - 1)
-        wait = min(wait, TOKEN_BLOCK_429_CAP_S)
+        strikes = strikes + 1 if recent else 1
+        wait = base
+        if strikes > 1:
+            wait = max(base, min(base * 2 ** (strikes - 1), TOKEN_BLOCK_429_CAP_S))
+        last_429 = now.isoformat(timespec="seconds")
         until = now + timedelta(seconds=wait)
         text = (getattr(exc, "text", "") or "").lower()
         if "daily" in text and "limit" in text:
@@ -395,20 +437,22 @@ def _record_token_failure(cache: TokenCache, api_key: str, exc: BaseException,
     elif status in (401, 403):
         until = now + timedelta(seconds=TOKEN_BLOCK_AUTH_S)
     else:
-        until = now + timedelta(seconds=TOKEN_BLOCK_NETWORK_S)
+        until = now + timedelta(seconds=TOKEN_BLOCK_NETWORK_S)  # strikes / last_429 carried over unchanged
     reason = _REASONS.get(status, f"HTTP {status}" if status else "network error")
+    record = {"until": until.isoformat(timespec="seconds"), "status": status, "reason": reason,
+              "at": now.isoformat(timespec="seconds"), "strikes": strikes, "last_429": last_429,
+              "key": cache.fingerprint(api_key)}
+    _mem_blocks[str(cache.block_path)] = record  # kept even if the file cannot be written
     try:
-        cache.write_block({"until": until.isoformat(timespec="seconds"), "status": status, "reason": reason,
-                           "at": now.isoformat(timespec="seconds"), "strikes": strikes,
-                           "key": cache.fingerprint(api_key)})
+        cache.write_block(record)
     except OSError:
-        log.warning("Could not save the Groww token cool-down file")
-    return GrowwTokenUnavailable(_block_message(status, until, now), until, status)
+        log.warning("Could not save the Groww token cool-down file; remembering it in this process only")
+    return GrowwTokenUnavailable(_block_message(status, until, now, reason), until, status)
 
 
 def _block_error(b: dict[str, Any], now: datetime) -> GrowwTokenUnavailable:
     until = datetime.fromisoformat(b["until"])
-    return GrowwTokenUnavailable(_block_message(b.get("status"), until, now), until, b.get("status"))
+    return GrowwTokenUnavailable(_block_message(b.get("status"), until, now, b.get("reason")), until, b.get("status"))
 
 
 def warn_token_block_once(exc: GrowwTokenUnavailable, logger: logging.Logger | None = None) -> bool:
@@ -436,22 +480,40 @@ def cached_access_token(api_key: str, cache: TokenCache, *, secret: str | None =
         tok = cache.get(api_key, now)
         if tok:
             return tok
-    if not force:
-        blk = cache.active_block(api_key, now)
-        if blk:
-            raise _block_error(blk, now)
-    try:
-        info = request_access_token(api_key, secret=secret, totp=totp_fn() if totp_fn else None,
-                                    session=session)
-    except (requests.RequestException, OSError, RuntimeError) as e:  # HTTP error, network, or no token in reply
-        raise _record_token_failure(cache, api_key, e, now) from None
-    expires = next_token_expiry(now)
-    reported = _parse_expiry(info.get("expiry"))
-    if reported is not None and reported > now:
-        expires = min(expires, reported)
-    cache.put(api_key, info["token"], expires)
-    cache.clear_block()
-    return info["token"]
+    with _TOKEN_LOCK:
+        # Another thread may have fetched a token, or hit a refusal, while we waited for the lock.
+        if not fresh:
+            tok = cache.get(api_key, now)
+            if tok:
+                return tok
+        if not force:
+            blk = cache.active_block(api_key, now)
+            if blk:
+                raise _block_error(blk, now)
+        prev = cache.read_block()
+        # Tell other processes on this machine a request is under way, so they wait instead of piling on.
+        try:
+            cache.write_block({"until": (now + timedelta(seconds=60)).isoformat(timespec="seconds"),
+                               "status": None, "reason": IN_PROGRESS, "at": now.isoformat(timespec="seconds"),
+                               "strikes": int((prev or {}).get("strikes") or 0),
+                               "last_429": (prev or {}).get("last_429"), "key": cache.fingerprint(api_key)})
+        except OSError:
+            pass
+        try:
+            info = request_access_token(api_key, secret=secret, totp=totp_fn() if totp_fn else None,
+                                        session=session)
+        except (requests.RequestException, OSError, RuntimeError) as e:  # HTTP error, network, or no token in reply
+            raise _record_token_failure(cache, api_key, e, now, prev) from None
+        except BaseException:
+            cache.clear_block()
+            raise
+        expires = next_token_expiry(now)
+        reported = _parse_expiry(info.get("expiry"))
+        if reported is not None and reported > now:
+            expires = min(expires, reported)
+        cache.put(api_key, info["token"], expires)
+        cache.clear_block()
+        return info["token"]
 
 
 # --------------------------------------------------------------------------- #
