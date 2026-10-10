@@ -9,17 +9,29 @@ from contextlib import contextmanager
 from datetime import date
 from typing import Any, Callable
 
+from ..costs import cost_quote_for
 from ..momentum import momentum_summary, momentum_stats
-from ..risk import atr, trailing_stop
+from ..risk import atr, position_size, trailing_stop
 from .clock import EARLIEST_START
 from .engine import step, step_target
 from .news import ClockedNews
 from .scorecard import end_trial, what_happened_next
+from .summary import build_summary
 from ..nse import check_ticker
 from .trial import BENCHMARKS, PORTFOLIOS, ReplayUniverse, Trial, list_trials
 
 log = logging.getLogger(__name__)
 _SLUG = re.compile(r"^[a-z0-9-]{1,40}$")
+
+
+def _num(raw: Any, what: str, default: float) -> float:
+    try:
+        v = float(raw) if raw not in (None, "") else default
+    except (TypeError, ValueError):
+        raise ValueError(f"{what} must be a number") from None
+    if v != v or v in (float("inf"), float("-inf")):
+        raise ValueError(f"{what} must be a number")
+    return v
 
 
 class ReplayBusy(Exception):
@@ -289,6 +301,34 @@ class ReplayApp:
         t = self.trial(slug)
         return {k: v for k, v in self._tool_results.get(slug, {}).items() if v["date"] == t.clock.today}
 
+    def size(self, slug: str, query: dict[str, str]) -> dict[str, Any]:
+        """Position size for your replay account: your equity at the clock, and prices up to the clock only."""
+        with self._guard(slug, "a position-size check"):
+            t = self.trial(slug)
+            sym = check_ticker((query.get("ticker") or "").strip())
+            risk, cap = _num(query.get("risk_pct"), "risk %", 1.0), _num(query.get("max_pct"), "max position %", 10.0)
+            if not 0 < risk <= 100 or not 0 < cap <= 100:
+                raise ValueError("risk % and max position % must be between 0 and 100")
+            price = t.prices.latest_price(sym)
+            try:
+                a = atr(t.prices.history(sym, "1y"))
+            except LookupError:
+                a = None
+            equity = t.you.account().equity
+            r = position_size(equity, price, a, risk_pct=risk / 100, max_pct=cap / 100, whole_shares=True)
+            r.update(ticker=sym, equity=equity, today=t.clock.today)
+            if r["notional"]:
+                r["round_trip_cost"] = cost_quote_for("in", r["notional"])
+            return r
+
+    def cost(self, slug: str, query: dict[str, str]) -> dict[str, Any]:
+        """Charges for one amount under the same Indian delivery model the replay deducts."""
+        self.trial(slug)
+        amount = _num(query.get("amount"), "amount", 0.0)
+        if not 0 < amount <= 1e10:
+            raise ValueError("amount must be a positive number")
+        return cost_quote_for("in", amount)
+
     # -- the page's data ------------------------------------------------------------
     def snapshot(self, slug: str) -> dict[str, Any]:
         with self._guard(slug):
@@ -334,12 +374,21 @@ class ReplayApp:
             "you": {"cash": t.you.account().cash, "equity": t.you.account().equity, "positions": positions},
             "agent": {"holdings": holdings, "last_rebalance": d["rebalances"][-1] if d["rebalances"] else None,
                       "next_rebalance": f"{y + (m == 12):04d}-{m % 12 + 1:02d}"},
+            "summary": self._summary(t),
             "picks": picks, "stops": d["stops"][-20:], "claude": d["claude"],
             "claude_presses": d.get("claude_presses", 0), "claude_ready": bool(self.settings.anthropic_api_key),
             "scorecard": d.get("scorecard") if ended else None,
             "next": self._next(t) if ended else None,
             "universes": list(BENCHMARKS),
         }
+
+    @staticmethod
+    def _summary(t: Trial) -> dict[str, Any] | None:
+        try:
+            return build_summary(t)
+        except Exception:  # noqa: BLE001 - the summary is a nicety; never lose the page over it
+            log.exception("replay summary failed")
+            return None
 
     def _next(self, t: Trial) -> dict[str, Any]:
         try:
@@ -380,6 +429,10 @@ class ReplayApp:
                 if not t:
                     raise ValueError("ticker required")
                 return 200, self.news(slug, t)
+            if method == "GET" and action == "size":
+                return 200, self.size(slug, query)
+            if method == "GET" and action == "cost":
+                return 200, self.cost(slug, query)
             if method == "GET" and action == "tools":
                 return 200, self.tools(slug)
             if method == "POST" and action == "order":

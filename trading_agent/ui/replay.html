@@ -61,6 +61,7 @@
       <div class="cardhead"><h2>The race</h2><span class="sub" id="race-sub"></span></div>
       <div class="cardbody"><div class="chart" id="race-chart"></div></div>
     </div>
+    <div id="summary"></div>
     <div id="scorecard"></div>
     <section class="cols">
       <div class="main">
@@ -101,6 +102,24 @@
           <div class="cardhead"><h2>Look up a stock</h2></div>
           <form class="cardbody" id="rl-form"><div class="row"><input id="rl-ticker" aria-label="Stock to look up" autocomplete="off" placeholder="Ticker or company name" style="flex:1;text-transform:uppercase"><button type="submit" class="small">Check</button></div>
             <div id="rl-result" class="sub">Momentum, price and NSE announcements as they stood on the replay date.</div></form>
+        </div>
+        <div class="card">
+          <div class="cardhead"><h2>Position size</h2><span class="sub">your account on the replay date</span></div>
+          <form class="cardbody" id="rz-form">
+            <div class="row"><input id="rz-ticker" name="ticker" aria-label="Stock to size" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 140px;text-transform:uppercase" required><button type="submit" class="small">Size it</button></div>
+            <div class="grid2" style="gap:10px">
+              <div class="field"><label for="rz-risk">Risk per trade (% of equity)</label><input id="rz-risk" name="risk_pct" type="number" value="1" min="0.1" max="5" step="0.1"></div>
+              <div class="field"><label for="rz-max">Max position (% of equity)</label><input id="rz-max" name="max_pct" type="number" value="10" min="1" max="50" step="1"></div>
+            </div>
+            <div id="rz-result" class="sub">Shares so that a 2&times; ATR move costs your chosen risk, using your replay equity and prices up to the replay date.</div>
+          </form>
+        </div>
+        <div class="card">
+          <div class="cardhead"><h2>Trade cost</h2></div>
+          <form class="cardbody" id="rc-form">
+            <div class="row"><input id="rc-amount" name="amount" type="number" min="1" step="any" value="25000" style="flex:1 1 140px" aria-label="Trade amount"><button type="submit" class="small">Calculate</button></div>
+            <div id="rc-result" class="sub">Brokerage, STT, exchange, SEBI, stamp duty, GST and DP charge for a buy and later sell, as the replay deducts them.</div>
+          </form>
         </div>
         <div class="card">
           <div class="cardhead"><h2>Ask Claude about this day</h2></div>

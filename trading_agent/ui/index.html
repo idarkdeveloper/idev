@@ -277,7 +277,7 @@
 (function(){
   const {$, esc, money, signed, pct, when, cap, toast, api, tile, C, NS, niceTicks, shortDate, lineChart,
          histogram, rupeesShort, inr, sinr, spct, daysAgo, shortDay, clip, lookupTakeaway, attachSuggest,
-         currency, sym, factorTakeaway, signalTakeaway, signalRows} = TA;
+         currency, sym, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway} = TA;
   let S = null, pollTimer = null;
   TA.setCurrency(() => (S && S.settings && S.settings.currency) || "INR");
   const MODE = document.body.dataset.mode || "live";
@@ -998,27 +998,6 @@
   attachSuggest(["lk-ticker", "sz-ticker", "tk-symbol"], (input, s) => { if(input.id === "lk-ticker") lookup(s); else input.focus(); });
 
   // ---- "What this means" for a looked-up stock and for a position size ----
-  function sizeTakeaway(r, riskPct, maxPct){
-    if(!r || !r.price || !r.equity) return "";
-    const out = [], share = r.notional / r.equity;
-    if(!r.qty){
-      return `At ${money(r.price, 2)} a share, even one share would break the ${maxPct}% cap on your ${money(r.equity)} account, so the suggested size is zero.`;
-    }
-    out.push(`Buy ${r.qty} share${r.qty === 1 ? "" : "s"} for about ${money(r.notional)}: ${(share * 100).toFixed(1)}% of your ${money(r.equity)}.`);
-    if(r.atr){
-      const byRisk = Math.floor((r.equity * riskPct / 100) / (2 * r.atr));
-      if(byRisk > r.qty) out.push(`The ${maxPct}% cap set this: the ${riskPct}% risk rule alone would allow about ${byRisk} shares (${money(byRisk * r.price)}), so the cap is protecting you from putting too much in one stock.`);
-      else out.push(`The ${riskPct}% risk rule set this: a ${pct(2 * r.atr / r.price)} move (twice the usual daily range) would cost about ${riskPct}% of your equity.`);
-    } else out.push("There was no volatility data, so it is sized at half the cap.");
-    if(r.stop){
-      const loss = r.qty * (r.price - r.stop);
-      out.push(`If it falls to the stop at ${money(r.stop, 2)} (${pct(r.stop / r.price - 1)}), you would lose about ${money(loss)}, ${(loss / r.equity * 100).toFixed(2)}% of your equity.`);
-    }
-    const c = r.round_trip_cost;
-    if(c) out.push(`Buying and selling costs about ${money(c.total)} (${(c.total_bps / 100).toFixed(2)}%), so it must rise ${(c.total_bps / 100).toFixed(2)}% just to break even${c.total_bps > 70 ? "; at this size the flat ₹20 charges weigh heavily, and a bigger, rarer trade costs less in percent" : ""}.`);
-    return out.join(" ");
-  }
-
   const SENT = {positive: ["ok", "▲ Positive"], negative: ["bad", "▼ Negative"], neutral: ["", "● Neutral"]};
   const safeUrl = (u) => /^https?:\/\//i.test(String(u || "")) ? u : "";
   const istStamp = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) + " IST"; };

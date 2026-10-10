@@ -1147,17 +1147,8 @@ class App:
 
     # -- calculators and tools ------------------------------------------------
     def cost_quote(self, amount: float) -> dict[str, Any]:
-        from .costs import cost_model_for
-        if amount <= 0:
-            raise ValueError("amount must be positive")
-        m = cost_model_for(self.settings.market)
-        if not hasattr(m, "round_trip"):
-            bps = m.round_trip_bps(amount)
-            return {"amount": amount, "model": "flat", "total_bps": bps, "total": amount * bps / 10_000}
-        rt = m.round_trip(amount)
-        return {"amount": amount, "model": "india_delivery", "buy": rt["buy"], "sell": rt["sell"],
-                "charges": rt["charges"], "charges_bps": rt["charges_bps"], "total": rt["total"],
-                "total_bps": rt["total_bps"], "slippage_bps_one_way": m.slippage_bps}
+        from .costs import cost_quote_for
+        return cost_quote_for(self.settings.market, amount)
 
     def size_quote(self, ticker: str, equity: float | None = None, risk_pct: float = 1.0,
                    max_pct: float = 10.0) -> dict[str, Any]:
