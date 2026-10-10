@@ -2137,3 +2137,11 @@ def test_a_count_of_holdings_said_with_today_is_not_an_amount():
     assert _today_conflict("Today 13 of your holdings are flagged, with a portfolio loss overall.", data) is None
     assert _today_conflict("13 holdings flagged today in the portfolio.", data) is None
     assert _today_conflict("Your portfolio lost 21722 today.", data) is not None   # an amount still has to be today's move
+
+
+def test_only_amounts_are_held_to_todays_move():
+    from trading_agent.digest_writer import _today_conflict
+    data = {"portfolio": {"groww": {"day_pl": 0.0, "total_pl": -21722.0}}}
+    assert _today_conflict("Today the portfolio has 13 to watch and 9 screen passes.", data) is None
+    assert _today_conflict("The portfolio is down ₹21,722 today.", data) is not None
+    assert _today_conflict("Your holdings fell 21722 today.", data) is not None

@@ -302,6 +302,16 @@ _COUNT_AFTER = re.compile(r"\s*(?:of\s+(?:your|the|these|all)\s+)?(?:\w+\s+)?(ho
                           r"ideas?|candidates?|compan(?:y|ies)|positions?|investors?|days?|sessions?|flagged|pass)\b", re.I)
 
 
+_MOVE_BEFORE = re.compile(r"\b(lost|gained|down|up|fell|rose|moved|changed?|added|shed|dropped)\W+(?:\w+\W+){0,2}$", re.I)
+
+
+def _is_amount(sentence: str, m: "re.Match[str]") -> bool:
+    """A rupee amount (₹ or Rs before it), a percentage (% after it) or a number right after a move word."""
+    before, after = sentence[max(0, m.start() - 4):m.start()], sentence[m.end():m.end() + 2]
+    return ("₹" in before or "rs" in before.lower() or after.lstrip().startswith("%")
+            or bool(_MOVE_BEFORE.search(sentence[:m.start()])))
+
+
 def _today_conflict(text: str, data: dict[str, Any]) -> str | None:
     """An amount described as 'today' in a sentence about the portfolio must be today's move (or its absolute value),
     not the total: 'lost 21722 today' when today was ₹0 is rejected."""
@@ -323,6 +333,8 @@ def _today_conflict(text: str, data: dict[str, Any]) -> str | None:
                 continue
             if n == int(n) and _COUNT_AFTER.match(sentence, m.end()):
                 continue   # "13 holdings flagged today" is a count, not an amount that moved today
+            if not _is_amount(sentence, m):
+                continue   # only rupee amounts and percentages, or numbers right after a move word, are checked
             k = min(len(lit.split(".")[1]) if "." in lit else 0, 2)
             if not any(round(a, k) == n for a in allowed):
                 return f"gives {lit} as today's figure, which is not today's move"
@@ -518,6 +530,7 @@ def write_summary(kind: str, data: dict[str, Any], settings: Any, *, session: An
         if ok:
             return " ".join(text.split()), name
         log.warning("digest summary from %s rejected: %s", name, why)
+        log.info("rejected summary text: %s", " ".join(text.split())[:400])
     if mode == "none":
         return None, "none"
     from .digest_rules import rules_summary

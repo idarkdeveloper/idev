@@ -67,16 +67,17 @@ def test_table_rows_criteria_once_and_rollover():
     assert len(table) == 6 and all(len(r) <= 32 for r in table)   # header + 5
     assert table[1].startswith("S00") and table[1].endswith("stop+avg") and table[2].endswith(" avg")
     assert h.count("3×ATR") == 1 and h.count("200-day average") == 1
-    assert "<i>+ 8 more: Co05 (S05), Co06 (S06)" in h
+    assert "<i>+ 8 more: S05, S06, S07" in h   # codes only, so the line stays short
 
 
 def test_escaping_of_names_and_codes():
     w = watch(7)
     w["items"][0]["symbol"] = "<b>X"
-    w["items"][6]["name"] = "Evil <b>bold</b> & Co Limited"
+    w["items"][6]["symbol"] = "E<b>&"
     h = telegram_brief(morning(w=w))["html"]
-    assert "&lt;b&gt;X" in h and "Evil &lt;b&gt;bold&lt;/b&gt; &amp; Co (S06)" in h
-    assert "<b>X" not in h
+    assert "&lt;b&gt;X" in h and "E&lt;b&gt;&amp;" in h
+    assert "<b>X" not in h and "E<b>" not in h
+    assert "P&amp;L%" in h
 
 
 def test_evening_lines_and_deals():

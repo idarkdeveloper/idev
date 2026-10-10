@@ -122,6 +122,13 @@ def _compact(v: Any) -> str:
     return f"{v:.0f}" if abs(v) >= 1000 else f"{v:.1f}"
 
 
+def _price(v: Any) -> str:
+    """One decimal up to 9,999.9 (fits 6 characters), whole rupees above, so the column lines up."""
+    if not isinstance(v, (int, float)):
+        return "n/a"
+    return f"{v:.1f}" if abs(v) < 10000 else f"{v:.0f}"
+
+
 def _line(code: str, pl: str, price: str, flag: str) -> str:
     """CODE (9) P&L (6) PRICE (6) FLAG (8), single spaces: at most 32 characters."""
     return f"{code[:9]:<9} {pl[:6]:>6} {price[:6]:>6} {flag[:8]}".rstrip()
@@ -138,15 +145,15 @@ def _watch_block(watch: Any, rollover: bool = True) -> list[str]:
     top, rest = items[:TABLE_ROWS], items[TABLE_ROWS:]
     out = [f"⚠️ <b>Holdings to review ({total} flagged)</b>", f"<i>{_e(CRITERIA)}</i>"]
     if top:
-        rows = [_line("CODE", "P&L", "PRICE", "FLAG")]
-        rows += [_line(str(i.get("symbol") or "?"), _compact(i.get("loss_pct")), _compact(i.get("price")), _flag(i)) for i in top]
+        rows = [_line("CODE", "P&L%", "PRICE", "FLAG")]
+        rows += [_line(str(i.get("symbol") or "?"), _compact(i.get("loss_pct")), _price(i.get("price")), _flag(i)) for i in top]
         out.append("<pre>" + "\n".join(_e(r) for r in rows) + "</pre>")
     more = total - len(top)
     if more > 0:
         names: list[str] = []
         size = 0
         for i in rest if rollover else []:
-            nm = _e(label(i))
+            nm = _e(str(i.get("symbol") or "?"))   # codes only: the line stays short
             if size + len(nm) + 2 > ROLLOVER_CHARS:
                 break
             names.append(nm)
