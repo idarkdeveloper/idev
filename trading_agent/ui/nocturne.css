@@ -406,7 +406,10 @@ td.prot-cell > * + * { margin-top: 4px; }
 .ck-legend { font-size: 12px; line-height: 1.5; color: var(--color-muted); min-height: 36px; font-variant-numeric: tabular-nums; }
 .ck-legend b { color: var(--color-text); font-weight: 600; }
 .ck-up { color: var(--color-profit); font-weight: 600; } .ck-down { color: var(--color-loss); font-weight: 600; }
-.ck-box { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; touch-action: pan-y; }
+.ck-box { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; touch-action: pan-y;
+  border: 1px solid var(--color-input-border); border-radius: var(--radius-md, 8px); }   /* a clear frame around the chart */
+.ck-exch { display: inline-block; padding: 0 6px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  color: var(--color-text); background: var(--color-hover); border: 1px solid var(--color-input-border); }
 
 /* Ctrl+K command palette (palette.js). Tokens only; the dialog is centred high on the screen and fits a 360 px phone. */
 .pal-btn { gap: 8px; }

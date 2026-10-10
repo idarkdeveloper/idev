@@ -1142,7 +1142,7 @@
       const m = r.momentum || {}; const v = m.verdict || "n/a";
       const cls = v==="strong"?"ok":v==="weak"?"bad":"";
       $("lk-ticker").value = r.ticker;
-      $("lk-result").innerHTML = `<div class="lk-grid"><div class="lk-head">${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div><div id="lk-quote">${quoteHtml(null, r)}</div>${r.band_note ? `<div class="sub" style="font-size:12px">${esc(r.band_note)}</div>` : ""}
+      $("lk-result").innerHTML = `<div class="lk-grid"><div class="lk-head">${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="ck-exch" title="Price from this exchange (Yahoo, delayed)">${/\.BO$/i.test(r.ticker) ? "BSE" : "NSE"}</span><span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div><div id="lk-quote">${quoteHtml(null, r)}</div>${r.band_note ? `<div class="sub" style="font-size:12px">${esc(r.band_note)}</div>` : ""}
         <div class="sub">${esc(r.momentum_summary)}</div>
         <div id="lk-take">${takeawayHtml(r)}</div>
         </div><div class="chart lk-chart" id="lk-chart"></div>
@@ -1169,7 +1169,8 @@
       };
       try {
         stockCtl = TA.stockChart($("lk-chart"), {ticker: r.ticker, isCurrent: () => seq === lookupSeq, fallback: drawLine,
-          fetchCandles: (range) => api("/api/candles?ticker=" + encodeURIComponent(r.ticker) + "&range=" + encodeURIComponent(range))});
+          exchange: /\.BO$/i.test(r.ticker) ? "BSE" : "NSE",
+          fetchCandles: (range, exch) => api("/api/candles?ticker=" + encodeURIComponent(r.ticker) + "&range=" + encodeURIComponent(range) + "&exchange=" + encodeURIComponent(exch || "NSE"))});
       } catch(e){ drawLine(e.message); }
     } catch(e){ $("lk-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   }

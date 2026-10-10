@@ -109,7 +109,7 @@ def test_chart_colours_use_real_nocturne_tokens_and_both_theme_signals():
     css = (ui / "nocturne.css").read_text(encoding="utf-8")
     block = js[js.index("function stockColors"):js.index("const fmtVol")]
     tokens = set(re.findall(r'"(--color-[a-z0-9-]+)"', block))
-    assert tokens >= {"--color-surface", "--color-muted", "--color-rule", "--color-divider", "--color-profit", "--color-loss"}
+    assert tokens >= {"--color-surface", "--color-muted", "--color-rule", "--color-input-border-hover", "--color-profit", "--color-loss"}
     for t in tokens:
         assert re.search(re.escape(t) + r"\s*:", css), t + " is not defined in nocturne.css"
     assert "MutationObserver" in js and 'attributeFilter: ["data-theme"]' in js

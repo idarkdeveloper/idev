@@ -609,7 +609,7 @@ window.TA = (function(){
     const c = (t, f) => resolveColor(t, f);
     const x = {
       bg: c("--color-surface", "currentColor"), text: c("--color-muted", "currentColor"), grid: c("--color-rule", "currentColor"),
-      border: c("--color-divider", "currentColor"), ink: c("--color-text", "currentColor"),
+      border: c("--color-input-border-hover", "currentColor"), ink: c("--color-text", "currentColor"),
       up: c("--color-profit", "currentColor"), down: c("--color-loss", "currentColor"),
       accent: c("--color-accent", "currentColor"), amber: c("--color-replay", "currentColor"), teal: c("--color-demo", "currentColor"),
       accent2: c("--color-accent-2", "currentColor")
@@ -633,7 +633,9 @@ window.TA = (function(){
     const prefs = stockPrefs();
     let chart = null, data = null, dead = false, seq = 0, colors = null, ro = null, mo = null, mq = null;
     let series = {}, byDate = new Map(), legendFor = null, savedRange = null;
-    host.innerHTML = `<div class="ck-controls"><div class="ck-chips" role="group" aria-label="Chart range">${STOCK_RANGES.map(r =>
+    let exchange = cfg.exchange === "BSE" ? "BSE" : "NSE";
+    host.innerHTML = `<div class="ck-controls"><div class="ck-chips" role="group" aria-label="Exchange">${["NSE", "BSE"].map(x =>
+        `<button type="button" class="ck-chip" data-exch="${x}" aria-pressed="false">${x}</button>`).join("")}</div><div class="ck-chips" role="group" aria-label="Chart range">${STOCK_RANGES.map(r =>
         `<button type="button" class="ck-chip" data-range="${r}" aria-pressed="false">${r}</button>`).join("")}</div>
       <div class="ck-chips" role="group" aria-label="Indicators">${STOCK_TOGGLES.map(([k, l]) =>
         `<button type="button" class="ck-chip" data-tog="${k}" aria-pressed="false">${l}</button>`).join("")}</div></div>
@@ -643,6 +645,7 @@ window.TA = (function(){
     function paintChips(){
       host.querySelectorAll("[data-range]").forEach(b => b.setAttribute("aria-pressed", b.dataset.range === prefs.range ? "true" : "false"));
       host.querySelectorAll("[data-tog]").forEach(b => b.setAttribute("aria-pressed", prefs.on[b.dataset.tog] ? "true" : "false"));
+      host.querySelectorAll("[data-exch]").forEach(b => b.setAttribute("aria-pressed", b.dataset.exch === exchange ? "true" : "false"));
     }
     const heights = () => {
       const narrow = (box.clientWidth || host.clientWidth || 360) < 560;
@@ -709,7 +712,7 @@ window.TA = (function(){
         width: Math.max(box.clientWidth, 100), height: totalHeight(),
         layout: {fontFamily: getComputedStyle(document.body).fontFamily, fontSize: 11, attributionLogo: true},
         handleScroll: {mouseWheel: false, vertTouchDrag: false}, handleScale: {mouseWheel: true, pinch: true, axisPressedMouseMove: true},
-        timeScale: {timeVisible: false, rightOffset: 2},
+        timeScale: {timeVisible: false, rightOffset: 2, fixLeftEdge: true, fixRightEdge: true},   // no empty space beside the bars
         crosshair: {mode: 0}
       });
       const line = (opts, pane) => chart.addSeries(LW.LineSeries, Object.assign({lineWidth: 1, lastValueVisible: false,
@@ -777,7 +780,7 @@ window.TA = (function(){
       let i = key != null && byDate.has(key) ? byDate.get(key) : data.bars.length - 1;
       const b = data.bars[i], prev = i > 0 ? data.bars[i - 1].close : null, on = prefs.on;
       const chg = prev ? (b.close - prev) / prev : null, cls = chg == null ? "" : chg >= 0 ? "ck-up" : "ck-down";
-      const p = [`<b>${esc(b.time)}</b>`, `O ${esc(money(b.open, 2))}`, `H ${esc(money(b.high, 2))}`, `L ${esc(money(b.low, 2))}`,
+      const p = [`<span class="ck-exch">${esc(data.exchange || exchange)}</span> <b>${esc(b.time)}</b>`, `O ${esc(money(b.open, 2))}`, `H ${esc(money(b.high, 2))}`, `L ${esc(money(b.low, 2))}`,
         `C ${esc(money(b.close, 2))}`];
       if(chg != null) p.push(`<span class="${cls}">${chg >= 0 ? "+" : "−"}${Math.abs(chg * 100).toFixed(2)}%</span>`);
       if(on.vol) p.push(`Vol ${esc(fmtVol(b.volume))}`);
@@ -794,7 +797,7 @@ window.TA = (function(){
       const mine = ++seq;
       note.textContent = "Loading chart…";
       let payload;
-      try { payload = await cfg.fetchCandles(prefs.range); }
+      try { payload = await cfg.fetchCandles(prefs.range, exchange); }
       catch(e){ if(mine === seq && !dead && cfg.isCurrent()) cfg.fallback(e.message || "chart data unavailable"); return; }
       if(mine !== seq || dead || !cfg.isCurrent()) return;   // a newer range or another stock was asked for meanwhile
       if(!payload || payload.error || !payload.bars || !payload.bars.length){ cfg.fallback((payload && payload.error) || "no price history"); return; }
@@ -803,9 +806,10 @@ window.TA = (function(){
     }
 
     host.addEventListener("click", (ev) => {
-      const t = ev.target.closest && ev.target.closest("button[data-range], button[data-tog]");
+      const t = ev.target.closest && ev.target.closest("button[data-range], button[data-tog], button[data-exch]");
       if(!t || dead) return;
       ev.preventDefault();
+      if(t.dataset.exch){ if(t.dataset.exch === exchange) return; exchange = t.dataset.exch; paintChips(); load(); return; }
       if(t.dataset.range){ if(t.dataset.range === prefs.range) return; prefs.range = t.dataset.range; paintChips(); saveStockPrefs(prefs); load(); return; }
       prefs.on[t.dataset.tog] = !prefs.on[t.dataset.tog]; paintChips(); saveStockPrefs(prefs);
       try { build(true); } catch(e){ cfg.fallback(e.message || "chart failed"); }

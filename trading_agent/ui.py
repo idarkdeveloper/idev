@@ -692,14 +692,19 @@ class App:
                 "stop": round(st_["level"], 2) if st_["level"] is not None else None,
                 "stop_type": st_["type"], "stop_label": st_["label"]}
 
-    def candles(self, ticker: str, range_key: str) -> dict[str, Any]:
+    def candles(self, ticker: str, range_key: str, exchange: str = "NSE") -> dict[str, Any]:
         """Daily candles plus indicators for the lookup chart, from the same price source the lookup uses. Read-only;
-        the full 5-year series is cached per ticker for a few minutes and sliced to the range."""
+        the full 5-year series is cached per ticker for a few minutes and sliced to the range. ``exchange`` picks the
+        NSE (default) or BSE price series; a code that is already exchange-qualified (".BO") keeps its own."""
         from .candles import build_candles
         ticker = self.resolve(ticker)[0].upper()
+        base = ticker.split(".")[0]
+        if ticker.endswith(".BO"):
+            exchange = "BSE"
+        symbol = f"{base}.BO" if exchange == "BSE" else ticker
         now = time.time()
         with self.lock:
-            hit = self._candle_cache.get(ticker)
+            hit = self._candle_cache.get(symbol)
         error = None
         bars: list[dict[str, Any]] | None
         if hit is not None and now - hit[0] < CANDLES_TTL_SECONDS:
@@ -707,15 +712,16 @@ class App:
         else:
             bars = None
             try:
-                bars = self.prices.history_ohlc(ticker, "5y")
+                bars = self.prices.history_ohlc(symbol, "5y")
             except Exception as e:  # noqa: BLE001
                 error = str(e) or "price history unavailable"
             if bars:
                 with self.lock:
-                    self._candle_cache[ticker] = (now, bars)
+                    self._candle_cache[symbol] = (now, bars)
         held = self.holding(ticker)
         out = build_candles(ticker, range_key, bars or [],
                             {"cost": held["avg_entry_price"], "stop": held["stop"]} if held else None)
+        out["exchange"] = exchange
         if error and not out["bars"]:
             out["error"] = error
         return out
@@ -1794,8 +1800,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
                 elif range_key is None:
                     self._json({"error": "range must be one of 1M, 3M, 6M, 1Y, 2Y, 5Y"}, HTTPStatus.BAD_REQUEST)
+                elif (q.get("exchange") or ["NSE"])[0].upper() not in ("NSE", "BSE"):
+                    self._json({"error": "exchange must be NSE or BSE"}, HTTPStatus.BAD_REQUEST)
                 else:
-                    self._json(app.candles(ticker, range_key))
+                    self._json(app.candles(ticker, range_key, (q.get("exchange") or ["NSE"])[0].upper()))
             elif path == "/api/quote":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip().upper()

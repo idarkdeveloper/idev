@@ -1489,6 +1489,10 @@ def test_candles_endpoint_payload_and_errors(server):
     assert _get(base + "/api/candles?ticker=bad%20ticker!")[0] == 400
     status, err = _get(base + "/api/candles?ticker=senco&range=9Y")
     assert status == 400 and "error" in err
+    assert p["exchange"] == "NSE" and calls[0][0] == "SENCO"
+    status, pb = _get(base + "/api/candles?ticker=senco&exchange=bse")
+    assert status == 200 and pb["exchange"] == "BSE" and calls[-1][0] == "SENCO.BO"   # BSE prices, its own cache entry
+    assert _get(base + "/api/candles?ticker=senco&exchange=LSE")[0] == 400
 
 
 def test_candles_endpoint_reports_unavailable_history_and_a_held_position(server):
