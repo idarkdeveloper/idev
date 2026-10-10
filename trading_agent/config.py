@@ -34,7 +34,7 @@ def _bool(value: str | None, default: bool = False) -> bool:
 
 
 MAX_INVESTORS = 10
-DIGEST_WRITERS = ("auto", "ollama", "claude", "none")
+DIGEST_WRITERS = ("rules", "auto", "ollama", "claude", "none")
 
 
 DIGEST_TIME_RANGE = {"morning": ("06:00", "11:00"), "evening": ("15:30", "19:00")}
@@ -141,8 +141,8 @@ class Settings:
     digest_evening: str = "15:45"
     digest_universe: str = "NIFTYMIDCAP150"
     digest_top: int = 10
-    digest_writer: str = "auto"  # auto (Ollama, then Claude) | ollama | claude | none
-    digest_claude_model: str = "claude-sonnet-5-5"
+    digest_writer: str = "claude"  # claude (default; the rules summary when it is unavailable or rejected) | auto (Ollama, then Claude) | ollama | rules | none
+    digest_claude_model: str = "claude-haiku-4-5"
 
     def __post_init__(self) -> None:
         self.watch_investors = list(self.watch_investors)  # never shared between copies of the settings
@@ -207,9 +207,9 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
     news_tagger = (env("NEWS_TAGGER") or "auto").lower()
     if news_tagger not in {"auto", "ollama", "claude", "none"}:
         raise SystemExit(f"NEWS_TAGGER must be auto, ollama, claude or none, got {news_tagger!r}")
-    digest_writer = (env("DIGEST_WRITER") or "auto").lower()
+    digest_writer = (env("DIGEST_WRITER") or "claude").lower()
     if digest_writer not in DIGEST_WRITERS:
-        raise SystemExit(f"DIGEST_WRITER must be auto, ollama, claude or none, got {digest_writer!r}")
+        raise SystemExit(f"DIGEST_WRITER must be claude, auto, ollama, rules or none, got {digest_writer!r}")
     try:
         digest_top = int(env("DIGEST_TOP") or 10)
         digest_morning = parse_digest_time("morning", env("DIGEST_MORNING") or "09:00")
@@ -269,5 +269,5 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         digest_universe=(env("DIGEST_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),
         digest_top=digest_top,
         digest_writer=digest_writer,
-        digest_claude_model=env("DIGEST_CLAUDE_MODEL") or "claude-sonnet-5-5",
+        digest_claude_model=env("DIGEST_CLAUDE_MODEL") or "claude-haiku-4-5",
     )

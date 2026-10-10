@@ -11,7 +11,7 @@ import pytest
 
 import trading_agent.groww as groww_mod
 import trading_agent.runner as runner
-from trading_agent import digest, digest_render, digest_schedule, digest_writer
+from trading_agent import digest, digest_render, digest_rules, digest_schedule, digest_writer
 from trading_agent.broker import LocalPaperBroker, Position
 from trading_agent.digest import DigestContext, evening_report, morning_brief
 from trading_agent.digest_schedule import DigestScheduler, build_digest
@@ -113,6 +113,7 @@ def portfolio(rows):
 def s(settings):
     settings.market, settings.watch_source = "in", "deals"
     settings.digest_universe, settings.digest_top = "TESTIDX", 3
+    settings.digest_writer = "auto"   # the default is "rules"; most tests exercise the AI writers and their fallback
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     return settings
 
@@ -385,21 +386,21 @@ def test_ollama_down_uses_claude_and_logs_the_cost(s, caplog):
     claude = Claude()
     with caplog.at_level(logging.INFO, logger="trading_agent"):
         text, who = digest_writer.write_summary("morning", DATA, s, session=ollama(up=False), client=claude)
-    assert text == GOOD and who == "claude:claude-sonnet-5-5"
+    assert text == GOOD and who == "claude:claude-haiku-4-5"
     kw = claude.calls[0]
-    assert kw["model"] == "claude-sonnet-5-5" and kw["temperature"] == 0 and kw["timeout"] == 60
+    assert kw["model"] == "claude-haiku-4-5" and kw["temperature"] == 0 and kw["timeout"] == 60
     assert any("input / 100 output tokens" in r.getMessage() and "$" in r.getMessage() for r in caplog.records)
 
 
 def test_claude_without_a_key_gives_none_and_the_email_still_renders(s):
     s.anthropic_api_key = None
     claude = Claude()
-    assert digest_writer.write_summary("morning", DATA, s, session=ollama(up=False), client=claude) == (None, "none")
+    assert digest_writer.write_summary("morning", DATA, s, session=ollama(up=False), client=claude) == (digest_rules.rules_summary("morning", DATA), "rules")
     assert claude.calls == []
     mail = digest_render.render(DATA | {"date": "x", "generated_at": "2026-10-12T09:00:00+05:30", "delayed": True,
                                         "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"),
                                         "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}, None, "none")
-    assert "Summary written by" not in mail["text"] and "(prices may be delayed)" in mail["text"]
+    assert "(written by" not in mail["text"] and "(prices may be delayed)" in mail["text"]
 
 
 def test_validation_rejects_invented_tickers_and_numbers_and_falls_through(s):
@@ -409,7 +410,7 @@ def test_validation_rejects_invented_tickers_and_numbers_and_falls_through(s):
     assert who.startswith("claude") and text == GOOD
     bad_number = "The market is risk-on. ABC passes the screen at ₹999.00."
     text, who = digest_writer.write_summary("morning", DATA, s, session=ollama(bad_number), client=Claude(bad_number))
-    assert (text, who) == (None, "none")
+    assert (text, who) == (digest_rules.rules_summary("morning", DATA), "rules")
     ok, why = digest_writer.validate_summary("ABC is up 12.3% and costs ₹123.", DATA)   # rounded to the nearest rupee
     assert ok, why
     assert not digest_writer.validate_summary("Buy 7% more of ABC.", DATA)[0]            # a small integer, but a percentage
@@ -429,7 +430,7 @@ def test_writer_setting_chooses_the_order(s):
     assert who.startswith("claude") and not sess.calls
     s.digest_writer = "ollama"
     claude2 = Claude()
-    assert digest_writer.write_summary("morning", DATA, s, session=ollama(up=False), client=claude2) == (None, "none")
+    assert digest_writer.write_summary("morning", DATA, s, session=ollama(up=False), client=claude2) == (digest_rules.rules_summary("morning", DATA), "rules")
     assert claude2.calls == []
 
 
@@ -449,7 +450,7 @@ def test_summary_label_in_the_email():
             "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"), "watch": digest.unavailable("x"),
             "deals": digest.unavailable("x")}
     mail = digest_render.render(data, GOOD, "ollama:qwen2.5:3b")
-    assert "Summary written by ollama:qwen2.5:3b — check the numbers below." in mail["text"]
+    assert "IN SHORT (written by ollama:qwen2.5:3b — check the numbers below)" in mail["text"]
     assert digest_render.FOOTER in mail["text"] and "(prices may be delayed)" not in mail["text"]
 
 
@@ -685,7 +686,7 @@ def test_build_digest_makes_text_and_html_and_a_summary(s):
     first = digest.morning_brief(ctx)["buy_ideas"]["ideas"][0]["symbol"]
     text = f"The market is risk-on with a score of 3. {first} passes the screen."
     mail = build_digest("morning", ctx, session=ollama(text), client=Claude())
-    assert mail["writer"] == "ollama:qwen2.5:3b" and "Summary written by ollama:qwen2.5:3b — check the numbers below." in mail["text"]
+    assert mail["writer"] == "ollama:qwen2.5:3b" and "IN SHORT (written by ollama:qwen2.5:3b — check the numbers below)" in mail["text"]
     assert mail["html"].startswith("<table") and mail["subject"].startswith("Today: risk-on")
     assert build_digest("morning", ctx, writer="none")["writer"] == "none"
 
@@ -744,7 +745,7 @@ def test_load_settings_validates_digest_env(monkeypatch, tmp_path):
         monkeypatch.setenv(k, v)
     st = load_settings(None)
     assert st.digest_morning == "07:15" and st.digest_top == 5 and st.digest_writer == "claude"
-    assert st.digest_enabled and st.digest_universe == "NIFTYMIDCAP150" and st.digest_claude_model == "claude-sonnet-5-5"
+    assert st.digest_enabled and st.digest_universe == "NIFTYMIDCAP150" and st.digest_claude_model == "claude-haiku-4-5"
     monkeypatch.setenv("DIGEST_EVENING", "25:00")
     with pytest.raises(SystemExit):
         load_settings(None)
@@ -871,7 +872,7 @@ def test_claude_client_is_built_with_one_retry(s):
 
 def test_no_summary_model_is_called_once_cancelled(s):
     sess, claude = ollama(), Claude()
-    assert digest_writer.write_summary("morning", DATA, s, session=sess, client=claude, cancelled=lambda: True) == (None, "none")
+    assert digest_writer.write_summary("morning", DATA, s, session=sess, client=claude, cancelled=lambda: True) == (digest_rules.rules_summary("morning", DATA), "rules")
     assert sess.calls == [] and claude.calls == []
 
 
@@ -1874,7 +1875,7 @@ def test_a_validator_crash_is_a_rejection_never_a_lost_email(s, monkeypatch, cap
         raise RuntimeError("bug")
     monkeypatch.setattr(digest_writer, "validate_summary", boom)
     with caplog.at_level(logging.ERROR, logger="trading_agent"):
-        assert digest_writer.write_summary("morning", DATA, s, session=ollama(), client=Claude()) == (None, "none")
+        assert digest_writer.write_summary("morning", DATA, s, session=ollama(), client=Claude()) == (digest_rules.rules_summary("morning", DATA), "rules")
     assert any("validation failed" in r.getMessage() for r in caplog.records)
 
 
@@ -1908,3 +1909,184 @@ def test_a_copy_matches_with_average_prices_within_a_tenth_of_a_percent(s):
         e = evening_report(ctx_for(s, practice=pb, groww=lambda: portfolio(rows), prices=Prices({}), now=after))
         assert bool(e["practice"]["same_as_groww"]) is same, avg
         assert bool(e["practice"]["positions"]) is (not same)
+
+
+# ===================== fix round 6 =====================
+def _morning_data():
+    return {"kind": "morning", "date": "2026-10-12",
+            "mood": {"regime": "neutral", "no_new_buys": True, "why": ["Nifty is in a downtrend (50-day average below the 200-day, price below both)"]},
+            "world": {"region_lines": ["US: uptrend (2 of 3 up)", "Asia: mixed (Japan up; China down)"]},
+            "gauges": {"warning_texts": [], "gauges": [{"gauge": "USD/INR", "reading": "rupee near its weakest of the year", "warning": False}]},
+            "buy_ideas": {"ideas": [], "wait": True},
+            "watch": {"total": 14, "healthy": 2, "checked": 16, "items": [
+                {"symbol": "VEDL", "loss_pct": -29.0, "reasons": ["down 29% from your buy price (well past any stop)", "negative news: x (ET)"]},
+                {"symbol": "INFY", "loss_pct": -5.0, "reasons": ["below the stop level 1.00 (trailing)", "below its 200-day average (1.00)"]},
+                {"symbol": "TCS", "loss_pct": -6.0, "reasons": ["below the stop level 2.00 (trailing)", "below its 200-day average (2.00)"]}]},
+            "deals": {"deals": [], "total": 0}}
+
+
+def test_the_rules_summary_for_the_morning():
+    text = digest_rules.rules_summary("morning", _morning_data())
+    assert text == ("No new buys today: Nifty is in a downtrend. US up, Asia mixed; rupee near its weakest of the year. "
+                    "14 holdings flagged — biggest worries: VEDL (−29%, well past its stop, negative news); "
+                    "INFY and TCS (below stop and below 200-day average). No new deals.")
+    assert digest_rules.rules_summary("morning", {**_morning_data(), "mood": digest.unavailable("x"), "world": digest.unavailable("x"),
+                                                  "gauges": digest.unavailable("x"), "watch": digest.unavailable("x"),
+                                                  "deals": digest.unavailable("x")}) is None
+
+
+def _evening_data(**over):
+    d = {"kind": "evening", "date": "2026-10-10",
+         "stale_close": {"date": "2026-10-09", "reason": "no trading today", "label": "Fri 9 Oct"},
+         "groww": {"value": 168993.0, "invested": 190715.0, "pl": -21722.0, "pl_pct": -11.4, "day_pl": None, "day_pct": None, "holdings": []},
+         "practice": {"equity": 178993.0, "total_pl": -433.0, "total_pl_pct": -0.2, "day_change": None, "same_as_groww": None, "stop_fills_today": []},
+         "news": {"total": 7, "items": [{"symbol": "TCS", "sentiment": "negative"}, {"symbol": "INFY", "sentiment": "neutral"}]},
+         "deals": {"deals": [], "total": 0}}
+    d.update(over)
+    return d
+
+
+def test_the_rules_summary_for_a_non_trading_day_a_trading_day_and_missing_groww():
+    assert digest_rules.rules_summary("evening", _evening_data()) == (
+        "No trading today. Your Groww portfolio is ₹1,68,993, total −₹21,722 (−11.4%). "
+        "Practice account ₹1,78,993 (−₹433 since the start). 7 news items for your stocks, 1 negative (TCS). "
+        "No deals by followed investors today.")
+    trading = _evening_data(stale_close=None)
+    trading.pop("stale_close")
+    trading["groww"] = {**trading["groww"], "day_pl": 1200.0, "day_pct": 0.7,
+                        "holdings": [{"symbol": "X", "day_pct": 3.2}, {"symbol": "Y", "day_pct": 0.1}, {"symbol": "Z", "day_pct": -2.5}]}
+    t = digest_rules.rules_summary("evening", trading)
+    assert "Today +₹1,200 (+0.7%); best X +3.2%, worst Z −2.5%." in t and "No trading today" not in t
+    nog = digest_rules.rules_summary("evening", _evening_data(groww=digest.unavailable("Groww down")))
+    assert "Your Groww portfolio is unavailable." in nog and "Practice account ₹1,78,993" in nog
+    assert digest_rules.rules_summary("evening", {"kind": "evening", "groww": digest.unavailable("x"), "practice": digest.unavailable("x")}) is None
+    saved = digest_rules.rules_summary("evening", _evening_data(groww={**_evening_data()["groww"], "saved": "saved holdings from 9 Oct"}))
+    assert "(from saved holdings)" in saved
+    assert digest_rules.srupee(0) == "₹0" and digest_rules.srupee(50) == "+₹50" and digest_rules.srupee(-1234567) == "−₹12,34,567"
+
+
+def test_claude_haiku_is_the_default_writer_and_the_model_id_is_passed(monkeypatch):
+    from trading_agent.config import Settings, load_settings
+    for k in ("DIGEST_WRITER", "DIGEST_CLAUDE_MODEL"):
+        monkeypatch.delenv(k, raising=False)
+    st = load_settings(None)
+    assert st.digest_writer == "claude" and st.digest_claude_model == "claude-haiku-4-5"
+    claude = Claude()
+    base = dataclasses_replace(st)
+    base.anthropic_api_key = "test"
+    text, who = digest_writer.write_summary("morning", DATA, base, session=ollama(), client=claude)
+    assert who == "claude:claude-haiku-4-5" and text == GOOD and claude.calls[0]["model"] == "claude-haiku-4-5"
+    assert claude.calls[0]["temperature"] == 0
+
+
+def dataclasses_replace(st):
+    import dataclasses
+    return dataclasses.replace(st)
+
+
+def test_the_rules_summary_is_used_when_claude_has_no_key_fails_or_is_rejected(s, caplog):
+    s.digest_writer = "claude"
+    rules = digest_rules.rules_summary("morning", DATA)
+    s.anthropic_api_key = None
+    assert digest_writer.write_summary("morning", DATA, s, client=Claude()) == (rules, "rules")
+    s.anthropic_api_key = "k"
+
+    class Down(Claude):
+        def create(self, **kw):
+            raise TimeoutError("slow")
+    assert digest_writer.write_summary("morning", DATA, s, client=Down()) == (rules, "rules")
+    bad = Claude("Buy ZOMATO now and expect a ₹999 gain.")
+    assert digest_writer.write_summary("morning", DATA, s, client=bad) == (rules, "rules")
+    assert len(bad.calls) == 1
+    assert digest_writer.write_summary("morning", DATA, s, client=Claude()) == (GOOD, "claude:claude-haiku-4-5")
+    s.digest_writer = "rules"
+    assert digest_writer.write_summary("morning", DATA, s, client=bad) == (rules, "rules") and len(bad.calls) == 1   # no model call
+    s.digest_writer = "none"
+    assert digest_writer.write_summary("morning", DATA, s, client=bad) == (None, "none")
+
+
+def test_the_cost_of_the_claude_haiku_call_is_logged(s, caplog):
+    s.digest_writer = "claude"
+    with caplog.at_level(logging.INFO, logger="trading_agent"):
+        digest_writer.write_summary("morning", DATA, s, client=Claude())
+    msg = [r.getMessage() for r in caplog.records if "Claude" in r.getMessage()][0]
+    assert "claude-haiku-4-5" in msg and "1000 input / 100 output tokens" in msg and "$0.0015" in msg
+
+
+def test_the_email_labels_who_wrote_the_summary(s):
+    data = {"kind": "morning", "date": "x", "generated_at": "2026-10-12T09:00:00+05:30", "delayed": False, "mood": digest.unavailable("x"),
+            "buy_ideas": digest.unavailable("x"), "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}
+    rules = digest_render.render(data, "R.", "rules")
+    assert "IN SHORT (written by the rules)" in rules["text"] and "In short (written by the rules)" in rules["html"]
+    haiku = digest_render.render(data, "H.", "claude:claude-haiku-4-5")
+    assert "(written by Claude Haiku — check the numbers below)" in haiku["text"]
+
+
+def test_a_today_amount_must_be_todays_move_not_the_total():
+    d = {"kind": "evening", "date": "2026-10-10", "groww": {"value": 168993.0, "pl": -21722.0, "pl_pct": -11.4, "day_pl": 0.0, "day_pct": 0.0}}
+    for text in ("The portfolio lost 21722 today.", "Your portfolio lost ₹21,722 today.", "Your Groww portfolio is down 11.4% today."):
+        ok, why = digest_writer.validate_summary(text, d)
+        assert not ok and "today" in why, (text, why)
+    assert digest_writer.validate_summary("Your portfolio lost ₹21,722 in total. It was flat today.", d)[0]
+    e = {**d, "groww": {**d["groww"], "day_pl": 50.0, "day_pct": 0.5}}
+    assert digest_writer.validate_summary("Your portfolio gained ₹50 today.", e)[0]
+
+
+def test_json_escapes_in_model_output_are_decoded_before_checking_and_rendering(s):
+    s.digest_writer = "claude"
+    assert digest_writer.unescape('"The cost is \\u20b9123.45.\\nDone"') == "The cost is ₹123.45. Done"
+    claude = Claude("ABC passes the screen at \\u20b9123.45 after a 12.3% six-month gain.")
+    text, who = digest_writer.write_summary("morning", DATA, s, client=claude)
+    assert who.startswith("claude") and "₹123.45" in text and "\\u" not in text
+
+
+# ---------- news cards, counts, the saved note ----------
+def test_news_items_are_cards_with_a_muted_line_then_the_linked_headline(s):
+    n = {"items": [{"symbol": "TCS", "name": "", "sentiment": "negative", "source": "The Economic Times", "when": "9 Oct",
+                    "title": "TCS faces a long probe into <b>billing</b>", "link": "https://example.com/a?x=1&y=2", "confidence": "high", "event": "e"},
+                   {"symbol": "INFY", "name": "", "sentiment": "positive", "source": "Mint", "when": "9 Oct", "title": "plain", "link": "javascript:alert(1)",
+                    "confidence": "high", "event": "e"}], "total": 2, "symbols": 2}
+    data = {**digest._header(ctx_for(s), "evening"), "groww": digest.unavailable("x"), "practice": digest.unavailable("x"), "news": n,
+            "deals": digest.unavailable("x")}
+    mail = digest_render.render(data)
+    html = mail["html"]
+    assert ">Headline</th>" not in html and "TCS · negative · The Economic Times · 9 Oct" in html
+    assert '<a href="https://example.com/a?x=1&amp;y=2"' in html and "&lt;b&gt;billing&lt;/b&gt;" in html and "javascript:" not in html
+    assert "Headline" in mail["text"] and "The Economic Times" in mail["text"]                  # the text part keeps its table
+
+
+def test_news_items_carry_their_day_and_only_http_links(s):
+    item = headline("Some headline", published="2026-10-12T08:00:00+05:30")
+    item["link"] = "https://example.com/x"
+    ctx = ctx_for(s, news=News({"X": [item, {**headline("Odd link", "positive"), "link": "ftp://x"}]}), groww=lambda: portfolio([holding("X", 1, 1.0, 2.0)]),
+                  now=lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST))
+    n = digest._news_today(ctx, date(2026, 10, 12))
+    by = {i["title"]: i for i in n["items"]}
+    assert by["Some headline"]["when"] == "12 Oct" and by["Some headline"]["link"] == "https://example.com/x" and by["Odd link"]["link"] == ""
+
+
+def test_the_watch_count_is_unique_stocks_not_groww_plus_practice(s):
+    pb = LocalPaperBroker(s.state_dir / "dup.json", starting_cash=100_000, price_fn=lambda x: 110.0)
+    pb.seed([Position("AAA", 10, 100.0, 110.0), Position("BBB", 5, 100.0, 110.0)])
+    rows = [holding("AAA", 10, 100.0, 110.0), holding("BBB", 5, 100.0, 110.0), holding("CCC", 1, 100.0, 110.0)]
+    ctx = ctx_for(s, prices=Prices({k: bars(110, step=0.002) for k in ("AAA", "BBB", "CCC")}), groww=lambda: portfolio(rows), practice=pb)
+    w = digest._watch(ctx, MON.date())
+    assert w["checked"] == 3 and w["healthy"] + len({i["symbol"] for i in w["items"]}) == 3 and w["places"] == ["Groww", "Practice"]
+    text = digest_render.render({**digest._header(ctx, "morning"), "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"),
+                                 "watch": w, "deals": digest.unavailable("x")})["text"]
+    assert "3 stocks checked (Groww and practice);" in text and "with nothing to flag." in text
+
+
+def test_the_saved_holdings_note_appears_once_near_the_top(s):
+    rows = [holding("X", 10, 100.0, 110.0)]
+    saved = lambda: {**portfolio(rows), "source": "saved", "saved_at": "2026-10-09T15:40:00+05:30", "reason": "Groww down",
+                     "age_trading_days": 3, "source_note": "uploaded"}
+    px = Prices({"X": bars(110, n=30)})
+    e = evening_report(ctx_for(s, prices=px, groww=saved, now=lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST)))
+    text = digest_render.render(e, "S.", "rules")["text"]
+    assert text.count("saved holdings from") == 1 and text.index("saved holdings from") < text.index("YOUR GROWW PORTFOLIO")
+    assert text.index("IN SHORT") < text.index("saved holdings from")
+    m = {**digest._header(ctx_for(s), "morning"), "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"),
+         "watch": digest._watch(ctx_for(s, prices=Prices({"X": bars(110, step=0.002)}), groww=saved), MON.date()), "deals": digest.unavailable("x")}
+    mt = digest_render.render(m, "S.", "rules")["text"]
+    assert mt.count("saved holdings from") == 1 and mt.index("saved holdings from") < mt.index("HOLDINGS TO WATCH")

@@ -248,8 +248,9 @@
         <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-pm" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-pm" style="color:var(--ink)">Evening: your close report</label></div>
           <label for="f-dg-pm-t">Send after (IST)</label><input id="f-dg-pm-t" name="digest_evening" type="time" value="15:45"></div>
       </div>
+      <div class="field"><label for="f-dg-writer">Summary on top</label><select id="f-dg-writer" name="digest_writer"><option value="claude">Claude Haiku (default; the rules when it fails)</option><option value="auto">Ollama, then Claude (falls back to the rules)</option><option value="ollama">Ollama only (falls back to the rules)</option><option value="rules">Written by the rules (no AI)</option><option value="none">No summary</option></select></div>
       <div class="row"><button type="button" class="small" id="btn-dg-morning">Preview morning</button><button type="button" class="small" id="btn-dg-evening">Preview evening</button>
-        <input type="checkbox" id="dg-summary" style="width:20px;height:20px;min-height:20px;margin:0"><label for="dg-summary" class="sub">with the written summary (uses Ollama, then Claude)</label></div>
+        <input type="checkbox" id="dg-summary" style="width:20px;height:20px;min-height:20px;margin:0"><label for="dg-summary" class="sub">with the AI summary (uses your Claude credit)</label></div>
     </div>
     <div class="group"><span class="group-title">Order mode</span>
       <div class="radio"><input type="radio" name="auto_trade" value="false" id="m-reco"><div><label for="m-reco" style="font-size:15px;color:var(--ink)">Recommendations only</label><div class="sub">Claude explains what changed. Nothing is bought or sold.</div></div></div>
@@ -1241,6 +1242,7 @@
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
     $("f-gtt").checked = !!s.groww_gtt_stops;
+    $("f-dg-writer").value = s.digest_writer || "claude";
     $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on;
     $("f-dg-am-t").value = s.digest_morning || "09:00"; $("f-dg-pm-t").value = s.digest_evening || "15:45";
     $("f-dg-note").textContent = s.digest_channel ? "Sent by the watch service on NSE trading days to your email or webhook. They never place an order." : "Add RESEND_API_KEY with an email address (or a webhook) above, or nothing is sent. Preview still works.";

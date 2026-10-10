@@ -260,6 +260,44 @@ def _direction_conflict(text: str, data: dict[str, Any]) -> str | None:
     return None
 
 
+_TODAY = re.compile(r"\b(today|this session|so far today)\b", re.I)
+_MONEYISH = re.compile(r"\b(portfolio|holdings?|account|practice|groww|value|equity|worth|lost|gained|profit|loss)\b", re.I)
+
+
+def _today_conflict(text: str, data: dict[str, Any]) -> str | None:
+    """An amount described as 'today' in a sentence about the portfolio must be today's move (or its absolute value),
+    not the total: 'lost 21722 today' when today was ₹0 is rejected."""
+    allowed: list[float] = []
+    for sec, keys in (("groww", ("day_pl", "day_pct")), ("practice", ("day_change", "day_change_pct"))):
+        d = data.get(sec)
+        if isinstance(d, dict):
+            allowed += [abs(float(d[k])) for k in keys if isinstance(d.get(k), (int, float)) and not isinstance(d[k], bool)]
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        if not (_TODAY.search(sentence) and _MONEYISH.search(sentence)):
+            continue
+        for m in _NUM.finditer(sentence):
+            lit = m.group(0).rstrip(",")
+            try:
+                n = float(lit.replace(",", ""))
+            except ValueError:
+                continue
+            if n == int(n) and n <= 10:
+                continue
+            k = min(len(lit.split(".")[1]) if "." in lit else 0, 2)
+            if not any(round(a, k) == n for a in allowed):
+                return f"gives {lit} as today's figure, which is not today's move"
+    return None
+
+
+def unescape(text: str) -> str:
+    """Model output sometimes carries JSON escapes (\\u20b9 for the rupee sign, \\n, \\"): decode them."""
+    t = text.strip()
+    if len(t) >= 2 and t[0] == t[-1] == '"':
+        t = t[1:-1]
+    t = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), t)
+    return t.replace("\\n", " ").replace('\\"', '"').replace("\\/", "/")
+
+
 def validate_summary(text: str | None, data: dict[str, Any], known: Any = None, known_symbols: Any = None) -> tuple[bool, str]:
     """(ok, reason). A summary may use only the tickers listed in the data's symbol fields and numbers that appear in
     the data (rupee and percent figures must match after rounding; small integers up to 10 are free). ``known`` is
@@ -348,7 +386,7 @@ def validate_summary(text: str | None, data: dict[str, Any], known: Any = None, 
             if re.search(r"(?:\bno|\bnot|n't|\bwithout)(?:\s+(?:new|fresh))?$", before) or after.startswith(("idea", "ideas", "price", "is off", "are off", "is not", "is switched off")) or "would pass" in after[:30]:
                 continue
             return False, "talks about buying on a day when new buying is off"
-    why = _trend_conflict(text, data) or _direction_conflict(text, data)
+    why = _trend_conflict(text, data) or _direction_conflict(text, data) or _today_conflict(text, data)
     if why:
         return False, why
     return True, "ok"
@@ -392,7 +430,7 @@ def write_summary(kind: str, data: dict[str, Any], settings: Any, *, session: An
     """(summary text, writer name). Tries the writers DIGEST_WRITER allows, in order; an unavailable, failing or
     invalid writer falls through to the next, and ("None", "none") means the email goes out with rules only."""
     mode = (getattr(settings, "digest_writer", "auto") or "auto").lower()
-    order = {"auto": ("ollama", "claude"), "ollama": ("ollama",), "claude": ("claude",)}.get(mode, ())
+    order = {"auto": ("ollama", "claude"), "ollama": ("ollama",), "claude": ("claude",)}.get(mode, ())   # rules / none: no model
     facts = summary_facts(kind, data)
     prompt = build_prompt(kind, facts, trimmed=True)
     for which in order:
@@ -409,7 +447,7 @@ def write_summary(kind: str, data: dict[str, Any], settings: Any, *, session: An
             continue
         if text is None:
             continue
-        text = unicodedata.normalize("NFKC", text)
+        text = unicodedata.normalize("NFKC", unescape(text))
         try:
             ok, why = validate_summary(text, facts, known, known_symbols)
         except Exception as e:  # noqa: BLE001 - a validator bug must not cost the email: reject and carry on
@@ -418,4 +456,8 @@ def write_summary(kind: str, data: dict[str, Any], settings: Any, *, session: An
         if ok:
             return " ".join(text.split()), name
         log.warning("digest summary from %s rejected: %s", name, why)
-    return None, "none"
+    if mode == "none":
+        return None, "none"
+    from .digest_rules import rules_summary
+    text = rules_summary(kind, data)   # never no summary: the rules one is always correct
+    return (text, "rules") if text else (None, "none")

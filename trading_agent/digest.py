@@ -445,7 +445,7 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
     if ctx.data is None or not hasattr(ctx.data, "announcements"):
         notes.append("Results dates: unavailable (no NSE announcements source)")
     now = ctx.now()
-    items, healthy = [], 0
+    items = []
     for h in holdings:
         if ctx.expired():
             notes.append("Stopped early: the build ran out of time, so some holdings were not checked")
@@ -507,8 +507,6 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
         if reasons:
             items.append({"symbol": sym, "name": clean_text(h.get("name") or "", 80), "source": h["source"],
                           "price": round(price, 2), "reasons": reasons, "loss_pct": round((price / h["avg"] - 1) * 100, 2)})
-        else:
-            healthy += 1
     # one line per stock and place; a practice position with the same reasons as its Groww twin is shown once
     groww_price = {h["symbol"]: h["price"] for h in holdings if h["source"] == "Groww"}
     groww = {i["symbol"]: i for i in items if i["source"] == "Groww"}
@@ -525,8 +523,10 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
         twin["also_practice"] = True
         twin["reasons"] += [r for r in i["reasons"] if r not in twin["reasons"]]
     kept.sort(key=lambda i: (-len(i["reasons"]), i["loss_pct"]))   # most reasons first, then the biggest loss
-    return {"items": kept[:MAX_WATCH], "total": len(kept), "more": max(0, len(kept) - MAX_WATCH), "healthy": healthy,
-            "checked": len(holdings), "notes": [clean_text(n, 300) for n in notes]}
+    stocks = {h["symbol"] for h in holdings}   # a stock held in both places counts once
+    flagged = {i["symbol"] for i in items}
+    return {"items": kept[:MAX_WATCH], "total": len(kept), "more": max(0, len(kept) - MAX_WATCH),
+            "healthy": len(stocks - flagged), "checked": len(stocks), "places": sorted({h["source"] for h in holdings}), "notes": [clean_text(n, 300) for n in notes]}
 
 
 def _within_days(published: Any, now: datetime, days: float) -> bool:
@@ -967,7 +967,10 @@ def _news_today(ctx: DigestContext, today: date) -> dict[str, Any]:
             for it in ctx.news.for_symbol(sym, name, background=True).get("items", []):
                 if not it.get("sentiment") or not _is_on(it.get("published"), today):
                     continue
-                items.append({"symbol": sym, "name": clean_text(name or ctx.name_of.get(sym.upper()) or "", 80),
+                link = str(it.get("link") or "")
+                items.append({"symbol": sym, "when": _day_label(it.get("published")),
+                              "link": link if link.startswith(("http://", "https://")) else "",
+                              "name": clean_text(name or ctx.name_of.get(sym.upper()) or "", 80),
                               "title": clean_text(it.get("title"), 160),
                               "source": clean_text(it.get("source"), 40), "sentiment": it["sentiment"],
                               "confidence": it.get("confidence"), "event": it.get("event")})
@@ -978,6 +981,14 @@ def _news_today(ctx: DigestContext, today: date) -> dict[str, Any]:
     if errors:
         out["notes"] = errors[:5]
     return out
+
+
+def _day_label(published: Any) -> str:
+    try:
+        dt = datetime.fromisoformat(str(published))
+        return f"{dt.day} {dt:%b}"
+    except ValueError:
+        return ""
 
 
 def _is_on(published: Any, day: date) -> bool:

@@ -964,7 +964,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("digest", help="print (and with --send, email) the morning or evening digest")
     sp.add_argument("kind", choices=["morning", "evening"])
     sp.add_argument("--send", action="store_true", help="email it through the configured channels")
-    sp.add_argument("--writer", choices=["auto", "ollama", "claude", "none"],
+    sp.add_argument("--writer", choices=["rules", "auto", "ollama", "claude", "none"],
                     help="who writes the summary on top (default DIGEST_WRITER); none = rules only")
     sp.set_defaults(func=cmd_digest)
     sp = sub.add_parser("ui", help="open the local web dashboard")

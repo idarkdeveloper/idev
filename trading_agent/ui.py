@@ -28,7 +28,7 @@ from urllib.parse import urlparse
 
 from . import taxes
 from .broker import AlreadyCopied, Broker, LocalPaperBroker
-from .config import Settings, load_settings, parse_digest_time, parse_investors
+from .config import DIGEST_WRITERS, Settings, load_settings, parse_digest_time, parse_investors
 from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
@@ -62,6 +62,7 @@ EDITABLE_ENV_KEYS = {
     "digest_evening_on": "DIGEST_EVENING_ON",
     "digest_morning": "DIGEST_MORNING",
     "digest_evening": "DIGEST_EVENING",
+    "digest_writer": "DIGEST_WRITER",
     # Only has an effect when GROWW_LIVE_ORDERS=true, which the dashboard can never set.
     "groww_gtt_stops": "GROWW_GTT_STOPS",
 }
@@ -405,7 +406,7 @@ class App:
                 "groww_gtt_stops": s.groww_gtt_stops,
                 "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
                 "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
-                "digest_enabled": s.digest_enabled,
+                "digest_enabled": s.digest_enabled, "digest_writer": s.digest_writer,
                 "digest_channel": bool(s.resend_api_key and s.notify_email_to) or bool(s.notify_webhook_url),
                 "max_slippage_pct": s.max_slippage_pct,
                 "demo": self.demo_trades is not None,
@@ -1063,7 +1064,12 @@ class App:
             if key in ("watch_investors", "watch_investor"):   # the page sends one comma list; line breaks are never a separator here
                 for item in (value if isinstance(value, (list, tuple)) else [value]):
                     _check_env_value(env_key, item)
-            if key in ("digest_morning", "digest_evening"):
+            if key == "digest_writer":
+                value = str(value).strip().lower()
+                if value not in DIGEST_WRITERS:
+                    raise ValueError("the summary writer must be one of: " + ", ".join(DIGEST_WRITERS))
+                ops.append(lambda v=value: setattr(st, "digest_writer", v))
+            elif key in ("digest_morning", "digest_evening"):
                 value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
             elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
@@ -1307,7 +1313,10 @@ class App:
                 ctx = make_context(root.settings, data=root.data, prices=root.prices, news=root.news,
                                    holidays=root.holidays, context=root.context, groww=lambda: root.my_portfolio(),
                                    practice=practice)
-            email = build_digest(kind, ctx, writer=None if with_summary else "none")
+            configured = root.settings.digest_writer
+            # Preview shows the free rules summary; the AI writer (Ollama, then Claude) only when asked for
+            writer = ("claude" if configured in ("rules", "none") else configured) if with_summary else "rules"
+            email = build_digest(kind, ctx, writer=writer)
         finally:
             root._preview_lock.release()
         return {k: email[k] for k in ("subject", "text", "html", "writer")}
@@ -1396,7 +1405,7 @@ def _check_type(key: str, value: Any) -> None:
     elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
         if isinstance(value, (list, tuple, dict)):
             raise ValueError(f"{key} must be true or false")
-    elif key in ("digest_morning", "digest_evening"):
+    elif key in ("digest_morning", "digest_evening", "digest_writer"):
         if not isinstance(value, str):
             raise ValueError(f"{key} must be a time as text, HH:MM")
     elif key == "paper_starting_cash":

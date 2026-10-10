@@ -118,8 +118,10 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         rows = [[i["symbol"], i["source"] + (" (also in practice)" if i.get("also_practice") else ""), inr(i["price"], 2),
                  "; ".join(i["reasons"])] for i in watch["items"]]
-        lines = [f"{watch['checked']} holdings checked; {watch['healthy']} with nothing to flag."] if watch["checked"] else []
-        lines += [f"Note: {n}" for n in watch.get("notes", [])]
+        both = " (Groww and practice)" if len(watch.get("places") or []) > 1 else ""
+        lines = [f"{watch['checked']} stock{'s' if watch['checked'] != 1 else ''} checked{both}; "
+                 f"{watch['healthy']} with nothing to flag."] if watch["checked"] else []
+        lines += [f"Note: {n}" for n in watch.get("notes", []) if not n.startswith("Using ")]   # the saved-holdings note is at the top
         if watch.get("more"):
             lines.append(f"and {watch['more']} more not shown.")
         if not watch["items"] and watch["checked"]:
@@ -200,8 +202,6 @@ def _evening_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
                 lines.insert(0, f"Today {inr(g['day_pl'], 0, True)} ({pct_text(g['day_pct'])}) against the previous close.")
             else:
                 lines.insert(0, "Today's change is unavailable (no previous close).")
-        if g.get("saved"):
-            lines.insert(0, "Using " + g["saved"] + ".")
         if not stale:
             lines.append("Today's buys appear in your holdings from the next day (T+1 settlement).")
         if g["no_price"]:
@@ -255,7 +255,10 @@ def _evening_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
         lines = ["Headlines are tagged by a language model and can be wrong."]
         if n["total"] > len(rows):
             lines.append(f"{n['total']} headlines; the first {len(rows)} are shown.")
+        cards = [{"style": "news", "meta": " · ".join(x for x in (i["symbol"], i["sentiment"], i["source"], i.get("when")) if x),
+                  "title": i["title"], "link": i.get("link") or ""} for i in n["items"]]
         blocks.append(_block("News for your stocks today", lines, {"head": ["Stock", "Tone", "Headline", "Source"], "rows": rows, "num": []},
+                             cards=cards,
                              tone="warn" if any(i["sentiment"] == "negative" for i in n["items"]) else None))
     blocks.append(_deals_block(d["deals"], "Today's deals by followed investors"))
     return blocks
@@ -269,8 +272,18 @@ def document(data: dict[str, Any], summary: str | None = None, writer: str = "no
         day = data.get("date", "")
     head = (f"Today: what to buy and what to watch, {day}" if kind == "morning" else f"Close: your portfolio, {day}")
     blocks = []
-    if summary:
-        blocks.append(_block("Summary", [summary, f"Summary written by {writer} — check the numbers below."]))
+    if summary and writer == "rules":
+        blocks.append(_block("In short (written by the rules)", [summary]))
+    elif summary:   # a model wrote it: say which, and to check the numbers
+        who = "Claude Haiku" if "claude-haiku" in writer else writer
+        blocks.append(_block(f"In short (written by {who} — check the numbers below)", [summary]))
+    saved = None
+    if kind == "evening" and isinstance(data.get("groww"), dict):
+        saved = data["groww"].get("saved")
+    elif kind == "morning" and isinstance(data.get("watch"), dict):
+        saved = next((n[len("Using "):] for n in data["watch"].get("notes", []) if n.startswith("Using ")), None)
+    if saved:
+        blocks.append(_block(None, ["Using " + saved + "."], tone="warn"))
     blocks += _morning_blocks(data) if kind == "morning" else _evening_blocks(data)
     foot = [FOOTER] + ([DELAYED] if data.get("delayed") else [])
     return {"title": head, "blocks": blocks, "footer": foot}
@@ -297,7 +310,8 @@ def _text_table(t: dict[str, Any]) -> list[str]:
 def to_text(doc: dict[str, Any]) -> str:
     out = [doc["title"], "=" * len(doc["title"]), ""]
     for b in doc["blocks"]:
-        out.append(b["title"].upper() if b["title"] else "")
+        head, sep, tail = (b["title"] or "").partition(" (")   # "IN SHORT (written by ...)": only the name is upper-cased
+        out.append(head.upper() + sep + tail)
         out += [f"{k}: {v}" for k, v in b.get("kv") or []]
         out += b["lines"]
         if b["table"]:
@@ -334,6 +348,13 @@ def to_html(doc: dict[str, Any]) -> str:
             parts.append("</table>")
         t = None if b.get("cards") else b["table"]   # the watch list is cards on a phone, not a table
         for card in b.get("cards") or []:
+            if card.get("style") == "news":   # small muted line, then the headline at full width (linked when it has a link)
+                head = _e(card["title"])
+                if str(card.get("link") or "").startswith(("http://", "https://")):
+                    head = f'<a href="{_e(card["link"])}" style="color:#1d4ed8;text-decoration:none">{head}</a>'
+                parts.append(f'<div style="margin-top:9px"><div style="font-size:11px;color:#6b7280">{_e(card["meta"])}</div>'
+                             f'<div style="font-size:13px;color:#111827;line-height:1.4">{head}</div></div>')
+                continue
             parts.append(f'<div style="margin-top:10px"><span style="font-size:14px;font-weight:bold;color:#111827">{_e(card["title"])}</span> '
                          f'<span style="font-size:11px;color:#6b7280">{_e(card["meta"])}</span>'
                          '<ul style="margin:3px 0 0 18px;padding:0">'
