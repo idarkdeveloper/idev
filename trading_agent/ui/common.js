@@ -695,8 +695,16 @@ window.TA = (function(){
       });
       const line = (opts, pane) => chart.addSeries(LW.LineSeries, Object.assign({lineWidth: 1, lastValueVisible: false,
         priceLineVisible: false, crosshairMarkerVisible: false}, opts), pane);
+      // the price scale also covers your cost and stop, so those lines are never off-screen
+      const keep = [data.position && data.position.cost, data.position && data.position.stop].filter(v => v != null);
       series.candle = chart.addSeries(LW.CandlestickSeries, {borderVisible: false, priceLineVisible: false,
-        priceFormat: {type: "custom", formatter: fmt, minMove: 0.01}}, 0);
+        priceFormat: {type: "custom", formatter: fmt, minMove: 0.01},
+        autoscaleInfoProvider: (base) => {
+          const r = base();
+          if(!r || !r.priceRange || !keep.length) return r;
+          return Object.assign({}, r, {priceRange: {minValue: Math.min(r.priceRange.minValue, ...keep),
+                                                    maxValue: Math.max(r.priceRange.maxValue, ...keep)}});
+        }}, 0);
       series.candle.setData(data.bars.map(b => ({time: b.time, open: b.open, high: b.high, low: b.low, close: b.close})));
       if(on.vol){
         series.vol = chart.addSeries(LW.HistogramSeries, {priceFormat: {type: "volume"}, priceScaleId: "vol",
