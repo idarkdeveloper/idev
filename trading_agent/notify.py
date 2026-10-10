@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import re
-import uuid
 from typing import Any
 
 import requests
@@ -31,6 +31,11 @@ def clean_text(text: object, limit: int = 200) -> str:
     return t if len(t) <= limit else t[:limit - 3].rstrip() + "..."
 
 
+def _key(logical: str | None, variant: str) -> str | None:
+    """Idempotency key for one variant of a logical send: sha256 of "<logical>:<variant>"."""
+    return hashlib.sha256(f"{logical}:{variant}".encode()).hexdigest() if logical else None
+
+
 class Notifier:
     def __init__(self, resend_api_key: str | None = None, email_to: str | None = None,
                  email_from: str = "Trading Agent <onboarding@resend.dev>",
@@ -51,30 +56,32 @@ class Notifier:
             out.append("webhook")
         return out
 
-    def _post_email(self, subject: str, body: str, html: str | None, images: list[dict[str, Any]] | None) -> None:
+    def _post_email(self, subject: str, body: str, html: str | None, images: list[dict[str, Any]] | None,
+                    key: str | None = None) -> None:
         payload: dict[str, Any] = {"from": self.email_from, "to": [self.email_to], "subject": subject, "text": body,
                                    **({"html": html} if html else {})}
         if images:   # inline pictures: <img src="cid:NAME"> in the HTML, content_id NAME here
             payload["attachments"] = [
                 {"filename": i["filename"], "content": base64.b64encode(i["content"]).decode("ascii"),
                  "content_type": i.get("content_type", "image/png"), "content_id": i["cid"]} for i in images]
-        r = self.session.post("https://api.resend.com/emails",
-                              headers={"Authorization": f"Bearer {self.resend_api_key}",
-                                       "Idempotency-Key": uuid.uuid4().hex},   # a new key for each attempt
-                              json=payload, timeout=30)
+        headers = {"Authorization": f"Bearer {self.resend_api_key}"}
+        if key:   # the same logical send always has the same key, so a retry after a timeout cannot make a second email
+            headers["Idempotency-Key"] = key
+        r = self.session.post("https://api.resend.com/emails", headers=headers, json=payload, timeout=30)
         r.raise_for_status()
 
     def send(self, subject: str, body: str, html: str | None = None,
-             images: list[dict[str, Any]] | None = None) -> list[str]:
+             images: list[dict[str, Any]] | None = None, idempotency_key: str | None = None) -> list[str]:
         """``images``: [{"cid", "filename", "content" (bytes)}] shown inline in the HTML part through Resend's
         attachments. If Resend refuses them, the email goes again without the pictures (their <img> tags removed);
-        webhooks get the text only."""
+        webhooks get the text only. ``idempotency_key`` names the logical send (for example "evening:2026-10-12"); the
+        Resend key is sha256 of it plus "img" or "plain", so a retried send reuses it. Without one no key is sent."""
         delivered = ["console"]
         print(f"\n=== {subject} ===\n{body}\n")
         if "email" in self.channels:
             try:
                 try:
-                    self._post_email(subject, body, html, images)
+                    self._post_email(subject, body, html, images, _key(idempotency_key, "img" if images else "plain"))
                 except requests.RequestException as e:
                     status = getattr(getattr(e, "response", None), "status_code", None)
                     if not images or status not in (400, 422):
@@ -85,7 +92,7 @@ class Notifier:
                         log.warning("email with inline images was refused (HTTP %s); sending without the images", status)
                     plain = re.sub(r"<img\b[^>]*\bsrc=\"cid:[^\"]*\"[^>]*>", "", html) if html else html
                     plain_text = re.sub(r"(?m)^\[Chart: .*\]\n", "", body)   # no mention of pictures that are not there
-                    self._post_email(subject, plain_text, plain, None)
+                    self._post_email(subject, plain_text, plain, None, _key(idempotency_key, "plain"))
                 delivered.append("email")
             except requests.RequestException as e:
                 log.warning("email delivery failed: %s", e)

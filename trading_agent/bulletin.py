@@ -565,6 +565,7 @@ def completed_bars(daily: list[dict[str, Any]], now: datetime, stale: dict[str, 
     """The daily bars of finished sessions only. With ``stale`` (the email's stale_close: no trading today, or before the
     close) every bar after that last close is dropped; otherwise today's bar is dropped while it is before 15:30 IST,
     because it is still a partial session. The bulletin never calls an unfinished session closed."""
+    now = now.astimezone(IST) if now.tzinfo else now.replace(tzinfo=IST)   # compare times and dates in Indian time
     if stale and stale.get("date"):
         return [b for b in daily if str(b.get("date")) <= str(stale["date"])]
     if now.time() < SESSION_CLOSE:
@@ -586,16 +587,8 @@ def _nifty(ctx: DigestContext, stale: dict[str, Any] | None = None) -> dict[str,
     return analyse_nifty(daily, bars15, bars1h)
 
 
-def _holiday_dates(ctx: DigestContext) -> list[str]:
-    """NSE holidays from the calendar, or none when it cannot say."""
-    try:
-        return list(ctx.calendar.days()) if ctx.calendar is not None and hasattr(ctx.calendar, "days") else []
-    except Exception:  # noqa: BLE001 - no calendar: every weekday counts
-        return []
-
-
 def _concept(ctx: DigestContext) -> dict[str, Any]:
-    return concept_for(ctx.now().date(), _holiday_dates(ctx))
+    return concept_for(ctx.now().astimezone(IST).date())
 
 
 def build_bulletin(ctx: DigestContext, stale: dict[str, Any] | None = None) -> dict[str, Any]:

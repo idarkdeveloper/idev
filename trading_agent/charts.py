@@ -153,7 +153,7 @@ def nifty_4h_png(bars4h: list[dict[str, Any]] | None, adx_series: dict[str, list
             ax2.axhline(25, color=MUTED, linestyle=":", linewidth=1.4)
             top = max(v for k in ("adx", "plus_di", "minus_di") for v in (series.get(k) or []) if v is not None)
             ax2.set_ylim(0, max(50.0, top + 20))
-            ax2.legend(loc="upper left", fontsize=LABEL_PT - 1, frameon=False, labelcolor=MUTED, ncol=3)
+            ax2.legend(loc="upper left", fontsize=LABEL_PT, frameon=False, labelcolor=MUTED, ncol=3)
             for lab in ax.get_xticklabels():
                 lab.set_visible(False)
         target.set_xticks(ticks)

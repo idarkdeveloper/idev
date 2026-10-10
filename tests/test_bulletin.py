@@ -644,8 +644,13 @@ def test_inline_image_refusal_400_422_resends_once_without_pictures_with_a_new_i
     sess = FakeSession({("POST", "api.resend.com"): Seq(_http_error(status), {"id": "e"})})
     out = Notifier(resend_api_key="re_fake", email_to="me@example.com", session=sess).send("s", TEXT_WITH_CHART, html=HTML_WITH_IMG, images=_imgs())
     assert "email" in out and len(sess.calls) == 2
-    k1, k2 = (c[2]["headers"]["Idempotency-Key"] for c in sess.calls)
-    assert k1 and k2 and k1 != k2
+    import hashlib
+    assert "Idempotency-Key" not in sess.calls[0][2]["headers"]          # no logical id given: no key, as before
+    sess2 = FakeSession({("POST", "api.resend.com"): Seq(_http_error(status), {"id": "e"})})
+    Notifier(resend_api_key="re_fake", email_to="me@example.com", session=sess2).send(
+        "s", TEXT_WITH_CHART, html=HTML_WITH_IMG, images=_imgs(), idempotency_key="evening:2026-10-12")
+    k1, k2 = (c[2]["headers"]["Idempotency-Key"] for c in sess2.calls)
+    assert k1 == hashlib.sha256(b"evening:2026-10-12:img").hexdigest() and k2 == hashlib.sha256(b"evening:2026-10-12:plain").hexdigest() and k1 != k2
     second = sess.calls[1][2]["json"]
     assert "attachments" not in second and "cid:" not in second["html"] and "[Chart:" not in second["text"] and second["text"] == "head\ntail\n"
 
@@ -659,12 +664,35 @@ def test_other_failures_are_never_resent(exc):
     assert out == ["console"] and len(sess.calls) == 1                     # logged, not delivered, and no second attempt
 
 
-def test_each_plain_send_has_its_own_idempotency_key():
+def test_the_same_logical_send_has_the_same_key_and_img_and_plain_differ():
+    import hashlib
     sess = FakeSession({("POST", "api.resend.com"): {"id": "e"}})
     n = Notifier(resend_api_key="re_fake", email_to="me@example.com", session=sess)
-    n.send("s", "b")
-    n.send("s", "b")
-    assert sess.calls[0][2]["headers"]["Idempotency-Key"] != sess.calls[1][2]["headers"]["Idempotency-Key"]
+    n.send("s", "b", html=HTML_WITH_IMG, images=_imgs(), idempotency_key="evening:2026-10-12")
+    n.send("s", "b", html=HTML_WITH_IMG, images=_imgs(), idempotency_key="evening:2026-10-12")      # the scheduler's retry
+    n.send("s", "b", html="<p>x</p>", idempotency_key="evening:2026-10-12")
+    n.send("s", "b", html=HTML_WITH_IMG, images=_imgs(), idempotency_key="morning:2026-10-12")
+    n.send("s", "alert")                                                                         # an alert email: no key
+    keys = [c[2]["headers"].get("Idempotency-Key") for c in sess.calls]
+    assert keys[0] == keys[1] == hashlib.sha256(b"evening:2026-10-12:img").hexdigest()
+    assert keys[2] == hashlib.sha256(b"evening:2026-10-12:plain").hexdigest() != keys[0]
+    assert keys[3] != keys[0] and keys[4] is None
+
+
+def test_the_scheduler_names_the_send_by_kind_and_day_so_a_retry_reuses_the_key(s):
+    got = []
+
+    class Spy:
+        channels = ["console", "email"]
+
+        def send(self, subject, body, html=None, images=None, idempotency_key=None):
+            got.append(idempotency_key)
+            return ["console", "email"]
+    mail = {"subject": "s", "text": "t", "html": "<p>x</p>", "images": []}
+    send_digest(Spy(), mail, "evening", "2026-10-12")
+    send_digest(Spy(), mail, "evening", "2026-10-12")
+    send_digest(Spy(), mail)
+    assert got == ["evening:2026-10-12", "evening:2026-10-12", None]
 
 
 def test_send_digest_decides_by_signature_and_does_not_swallow_a_real_type_error():
@@ -762,47 +790,53 @@ def test_two_charts_can_be_drawn_at_the_same_time():
     assert not errs and len(out) == 4 and all(png_size(x) == (1280, 720) for x in out)
 
 
-def test_concept_rotation_skips_holidays_and_counts_only_monday_to_thursday():
+def test_concept_rotation_counts_monday_to_thursday_from_a_fixed_epoch_and_ignores_holidays():
+    epoch = date(2026, 1, 5)
+    assert concepts._EPOCH == epoch and epoch.weekday() == 0
+    assert concepts.trading_day_number(epoch) == 0 and concepts.trading_day_number(date(2026, 1, 8)) == 3
+    assert concepts.trading_day_number(date(2026, 1, 12)) == 4                                   # Fridays do not count
     mon, tue, wed = date(2026, 10, 12), date(2026, 10, 13), date(2026, 10, 14)
-    base = concepts.concept_for(wed)["title"]
-    assert concepts.concept_for(wed, [tue.isoformat()])["title"] != base                        # Tuesday off: Wednesday takes Tuesday's entry
-    assert concepts.concept_for(wed, [tue.isoformat()])["title"] == concepts.concept_for(tue)["title"]
-    friday_holiday = [date(2026, 10, 16).isoformat()]                                            # a Friday holiday changes no daily entry
-    assert concepts.concept_for(date(2026, 10, 19), friday_holiday)["title"] == concepts.concept_for(date(2026, 10, 19))["title"]
-    assert concepts.concept_for(date(2026, 10, 16))["kind"] == "week"
-    assert concepts.concept_for(mon, ["not a date", None])["title"] == concepts.concept_for(mon)["title"]   # junk is ignored
+    assert concepts.concept_for(wed) == concepts.concept_for(wed) and concepts.concept_for(wed)["title"] != concepts.concept_for(tue)["title"]
+    n = concepts.trading_day_number(wed)
+    assert concepts.CONCEPTS[n % len(concepts.CONCEPTS)][0] == concepts.concept_for(wed)["title"]
+    fri = date(2026, 10, 16)
+    wk = concepts.concept_for(fri)
+    assert wk["kind"] == "week" and concepts.WEEKLY[fri.isocalendar()[1] % len(concepts.WEEKLY)][0] == wk["title"]
+    assert concepts.concept_for(fri + timedelta(days=7))["title"] != wk["title"]
 
 
-@pytest.mark.parametrize("size", [28, 29, 30, 35, 40])
-def test_every_entry_is_reachable_for_any_library_size_even_with_holidays(size):
+@pytest.mark.parametrize("size", [28, 29, 30, 31, 35])
+def test_every_entry_is_reachable_for_any_library_size(size):
     lib = [(f"T{i}", "x" * 80, "u") for i in range(size)]
     weekly = [(f"W{i}", "y" * 80, "u") for i in range(8)]
-    start = date(2026, 1, 5)
-    holidays = [start + timedelta(days=k) for k in range(3, 400, 11)]
-    days = [start + timedelta(days=k) for k in range(0, 7 * size * 2)]
-    seen = {concepts.concept_for(d, holidays, lib, weekly)["title"] for d in days if d.weekday() < 4 and d not in holidays}
-    assert seen == {t for t, _x, _u in lib}
-    wk = {concepts.concept_for(d, holidays, lib, weekly)["title"] for d in days if d.weekday() == 4}
-    assert wk == {t for t, _x, _u in weekly}
+    days = [date(2026, 1, 5) + timedelta(days=k) for k in range(0, 7 * size * 2)]
+    assert {concepts.concept_for(d, lib, weekly)["title"] for d in days if d.weekday() < 4} == {t for t, _x, _u in lib}
+    assert {concepts.concept_for(d, lib, weekly)["title"] for d in days if d.weekday() == 4} == {t for t, _x, _u in weekly}
 
 
-def test_bulletin_concept_uses_the_calendar_and_survives_a_broken_one(s):
+def test_the_scheduler_sends_no_email_on_an_exchange_holiday(s):
+    from trading_agent.digest_schedule import DigestScheduler
+
     class Cal:
-        def __init__(self, days=None, boom=False):
-            self._d, self.boom = days or {}, boom
-
-        def days(self):
-            if self.boom:
-                raise RuntimeError("NSE down")
-            return self._d
-
         def is_trading_day(self, d):
-            return True
-    wed = datetime(2026, 10, 14, 15, 50, tzinfo=IST)
-    plain = bulletin._concept(ctx_for(s, now=lambda: wed))["title"]
-    held = bulletin._concept(ctx_for(s, now=lambda: wed, calendar=Cal({"2026-10-13": "x"})))["title"]
-    assert held != plain
-    assert bulletin._concept(ctx_for(s, now=lambda: wed, calendar=Cal(boom=True)))["title"] == plain
+            return d != date(2026, 10, 13)
+    sc = DigestScheduler(s, lambda: None, SimpleNamespace(channels=["console", "email"], send=lambda *a, **k: ["console", "email"]),
+                         holidays=Cal())
+    assert sc.due(datetime(2026, 10, 13, 16, 0, tzinfo=IST)) == [] and "evening" in sc.due(datetime(2026, 10, 14, 16, 0, tzinfo=IST))
+
+
+def test_bar_cut_off_uses_indian_time_even_for_a_utc_clock():
+    from datetime import timezone
+    bars = [{"date": "2026-10-09"}, {"date": "2026-10-12"}]
+    # 23:30 UTC on Sunday 11 Oct is 05:00 IST on Monday 12 Oct: before the close, so Monday's bar is partial
+    assert bulletin.completed_bars(bars, datetime(2026, 10, 11, 23, 30, tzinfo=timezone.utc), None) == bars[:1]
+    # 10:30 UTC on Monday is 16:00 IST: after the close, Monday's bar is complete
+    assert bulletin.completed_bars(bars, datetime(2026, 10, 12, 10, 30, tzinfo=timezone.utc), None) == bars
+
+
+def test_the_legend_text_is_11_point():
+    from pathlib import Path
+    assert "fontsize=LABEL_PT - 1" not in Path(charts.__file__).read_text(encoding="utf-8") and charts.LABEL_PT == 11
 
 
 def test_adx_band_uses_the_rounded_value_and_40_is_strong():

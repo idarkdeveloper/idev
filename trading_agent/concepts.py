@@ -202,35 +202,24 @@ WEEKLY: list[tuple[str, str, str]] = [
 ]
 
 
-_EPOCH = date(2000, 1, 3)   # a Monday
+_EPOCH = date(2026, 1, 5)   # a Monday: the fixed start of the rotation
 
 
-def _as_dates(holidays: Any) -> list[date]:
-    out = []
-    for h in holidays or ():
-        try:
-            out.append(h if isinstance(h, date) else date.fromisoformat(str(h)[:10]))
-        except ValueError:
-            continue
-    return out
-
-
-def trading_day_number(day: date, holidays: Any = ()) -> int:
-    """How many Monday-to-Thursday trading days came before ``day`` (counted from 2000-01-03), leaving out the given
-    exchange holidays. It goes up by one on each such day, so a library of any size is walked entry by entry (Fridays
-    are not counted: they have their own rotation)."""
+def trading_day_number(day: date) -> int:
+    """How many Monday-to-Thursday weekdays came before ``day`` (counted from 2026-01-05). It goes up by one on each such
+    day, so a library of any size is walked entry by entry. Exchange holidays are not looked up: no email goes out on
+    a holiday, so that day's entry is simply skipped. Fridays have their own rotation."""
     weeks, extra = divmod((day - _EPOCH).days, 7)
-    n = weeks * 4 + min(extra, 4)
-    return n - sum(1 for h in _as_dates(holidays) if _EPOCH <= h < day and h.weekday() < 4)
+    return weeks * 4 + min(extra, 4)
 
 
-def concept_for(day: date, holidays: Any = (), library: list | None = None, weekly: list | None = None) -> dict[str, Any]:
-    """The concept for ``day``. Friday: the longer concept of the week, rotating by calendar week; Monday to Thursday:
-    one of the short entries, advancing one per trading day (``holidays``: dates or ISO strings that do not count)."""
+def concept_for(day: date, library: list | None = None, weekly: list | None = None) -> dict[str, Any]:
+    """The concept for ``day``. Friday: the longer concept of the week, rotating by ISO week number; Monday to Thursday:
+    one of the short entries, by ``trading_day_number``. Deterministic: the same day always gives the same entry."""
     library = CONCEPTS if library is None else library
     weekly = WEEKLY if weekly is None else weekly
     if day.weekday() == 4:
-        title, text, uses = weekly[((day - _EPOCH).days // 7) % len(weekly)]
+        title, text, uses = weekly[day.isocalendar()[1] % len(weekly)]
         return {"kind": "week", "label": "Concept of the week", "title": title, "text": text, "uses": uses}
-    title, text, uses = library[trading_day_number(day, holidays) % len(library)]
+    title, text, uses = library[trading_day_number(day) % len(library)]
     return {"kind": "day", "label": "Concept of the day", "title": title, "text": text, "uses": uses}
