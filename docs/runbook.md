@@ -317,12 +317,17 @@ prints what a check would do, with no Groww login, no Claude call, no email and 
    cd /opt/trading-agent
    sudo -u agent .venv/bin/python -m trading_agent forward --rebuild-from 2026-10-09 --universe NIFTYMIDCAP150
    ```
-   It ranks the Midcap 150 as of the close of 9 Oct 2026, buys the top 20 in equal weights with the same charges and
-   puts the same capital into MID150BEES, the way the first routine run did. It refuses if a forward account already
-   exists; add `--force` to delete that account and rebuild. Check with `... forward --status`. Days between 9 Oct
-   and today have no daily point (the curves start again from the first server run), and prices are the closes
-   Yahoo gives now, so a name can differ by a rounding of a rupee from what the routine paid. Use the same `--top`
-   and `--capital` (default `PAPER_STARTING_CASH`) as before if you changed them.
+   It ranks the index members **on that date** (point-in-time membership from the NSE index notices; it stops with a
+   clear message if that history only starts after the date), buys the top 20 in equal weights with the same charges
+   at the close of 9 Oct 2026 and puts the same capital into MID150BEES, the way the first routine run did. Fills and
+   the account start are stamped 9 Oct, not today. Every pick and the benchmark need a price bar dated exactly 9 Oct:
+   a pick without one is left out and listed in the output (no older close is used); weekends and NSE holidays are
+   refused. It refuses if a forward account already exists; add `--force` to delete that account and rebuild. Check
+   with `... forward --status`. Days between 9 Oct and today have no daily point (the curves start again from the first
+   server run). Use the same `--top` and `--capital` (default `PAPER_STARTING_CASH`) as before if you changed them.
+   Also put `FORWARD_START=2026-10-09` in `/opt/trading-agent/.env` (it is in `.env.example`). The server never
+   starts a fresh forward account silently: with no account it rebuilds from `FORWARD_START`, or, without that
+   setting, does nothing and sends one `[FORWARD]` alert a day until you run the rebuild.
 3. In GitHub, **Settings, Secrets and variables, Actions**: delete these secrets: `GROWW_API_KEY`,
    `GROWW_API_SECRET`, `GROWW_TOTP_SECRET`, `GROWW_ALLOWED_IP`, `GROWW_PROXY_URL`, `ANTHROPIC_API_KEY`,
    `RESEND_API_KEY`, `NOTIFY_WEBHOOK_URL`, `QUIVER_API_KEY`, `ALPACA_API_KEY_ID`, `ALPACA_API_SECRET_KEY` (the dry run
@@ -338,9 +343,14 @@ If you ever see two engines (alerts arriving twice, Groww 429), check that nothi
 ## 12. Dead-man's switch (heartbeat)
 
 If the server or the watch service dies, nothing tells you. Set `HEARTBEAT_URL` and a monitoring site will email you
-when the pings stop. The watch loop calls the URL every 5 minutes while it runs (any hour, weekends too), with a 10
-second timeout. When a tick raises, it calls `<url>/fail` with the error text instead. It never logs the URL (the path
-is a secret token), only "heartbeat ok" / "heartbeat failed".
+when the pings stop. A separate heartbeat thread calls the URL every 5 minutes (any hour, weekends too), with a 10
+second timeout, but only while the watch loop is making progress: if the loop has not finished or started an
+iteration for max(3 x the check interval, 20 minutes) it sends `/fail` with "watch loop stalled N min" instead of an
+ok ping, and a tick that raised sends `/fail` with the error text at once. The next healthy moment pings ok at once.
+`/fail` is sent only to hc-ping.com addresses (or when `HEARTBEAT_FAIL=true`); other providers just stop getting
+pings, which their own grace period turns into an alert. The URL and the bot token are never logged (redacted even
+with `-v`), only "heartbeat ok" / "heartbeat failed". After changing `HEARTBEAT_URL` or the Telegram settings, restart
+`trading-agent-watch` (the dashboard Settings dialog saves them to `.env` but the running service keeps its old ones).
 
 **Free healthchecks.io check**
 
@@ -398,5 +408,10 @@ Yahoo expect them). It does so only when `NOTIFY_EMAIL_FROM` is not on `resend.d
    `v=DMARC1; p=none; rua=mailto:you@yourdomain.com`. After two to four weeks of clean reports (everything passes SPF
    and DKIM) change it to `p=quarantine`.
 4. In `.env`: `NOTIFY_EMAIL_FROM=Trading Agent <agent@mail.yourdomain.com>`, then restart the watch service.
+
+Note: the headers are `List-Unsubscribe: <mailto:...>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. A
+mailto-only `List-Unsubscribe` with the `-Post` header is not RFC 8058 one-click (that needs an https URL that accepts
+the POST); it still gives Gmail and Yahoo an unsubscribe address, but do not count on the one-click button. These are
+single-recipient alerts to yourself, so this is a deliverability nicety, not a mailing-list feature.
 
 Subjects stay plain and free of promotional words (no "free", "offer", "!!!"); a test lists the current ones.

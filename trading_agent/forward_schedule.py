@@ -14,7 +14,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, time as dtime
+from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,6 +26,7 @@ RUN_AFTER = dtime(16, 10)   # IST; the 15:30 close plus the daily-email slot and
 LATEST = dtime(23, 30)      # after this the day is skipped
 RETRY_AFTER_S = 600.0
 MAX_TRIES = 3
+STALE_AFTER_S = 30 * 60.0   # a claim older than this whose process is gone is a crashed run
 
 
 class ForwardScheduler:
@@ -49,12 +50,48 @@ class ForwardScheduler:
     def _claim(self, day: str) -> bool:
         path = self._claim_path(day)
         path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                if not self._take_over_stale(path):
+                    return False
+                continue
+            except OSError:
+                return False
+            with os.fdopen(fd, "w") as f:
+                f.write(f"{os.getpid()} {int(time.time())}")
+            return True
+        return False
+
+    @staticmethod
+    def _pid_gone(pid: int) -> bool:
+        if os.name == "nt":   # os.kill(pid, 0) would terminate the process on Windows: go by age alone there
+            return True
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except OSError:   # exists (already run today, by us before a restart or by another process) or unwritable
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            return False   # exists but is not ours
+        return False
+
+    def _take_over_stale(self, path: Path) -> bool:
+        """A claim from a crashed run: older than 30 minutes and its process gone. The file is renamed to a name of
+        our own first, so only one contender wins; a file that turns out fresh is put back."""
+        try:
+            text = path.read_text(encoding="utf-8").split()
+            pid, at = int(text[0]), float(text[1])
+        except (OSError, ValueError, IndexError):
+            return False   # unreadable or an old-format claim: leave it
+        if time.time() - at <= STALE_AFTER_S or not self._pid_gone(pid):
             return False
-        with os.fdopen(fd, "w") as f:
-            f.write(str(os.getpid()))
+        mine = path.with_name(f"{path.name}.stale.{os.getpid()}.{threading.get_ident()}")
+        try:
+            os.replace(path, mine)
+        except OSError:
+            return False
+        mine.unlink(missing_ok=True)
         return True
 
     def _release(self, day: str) -> None:
@@ -121,18 +158,86 @@ class ForwardScheduler:
             t.join(timeout)
 
 
-def run_forward_due(settings: Any, prices: Any, holidays: Any) -> str:
-    """One ``forward --if-due`` run, as the CLI does it. Returns the report text."""
+def rebuild_for_settings(settings: Any, prices: Any, holidays: Any, asof: str, *, universe: str | None = None,
+                         top: int = 20, capital: float | None = None, force: bool = False,
+                         progress: Callable[[str], Any] | None = None) -> dict[str, Any]:
+    """The real wiring of ``forward.rebuild_from`` (current universe CSV for names, point-in-time membership, the
+    factor screen on as-of prices). Used by ``forward --rebuild-from`` and by FORWARD_START on the server."""
     from .costs import cost_model_for
-    from .forward import ForwardTest, format_forward
+    from .forward import rebuild_from
+    from .index_history import point_in_time
     from .screen import load_universe, run_screen
 
+    universe = (universe or settings.forward_universe).upper()
+    cache: dict[str, list[dict[str, str]]] = {}
+
+    def members_loader() -> list[dict[str, str]]:
+        if "m" not in cache:
+            cache["m"] = load_universe(universe)
+        return cache["m"]
+
+    def screen(asof_prices: Any, members: list[dict[str, str]]) -> dict[str, Any]:
+        if progress:
+            progress(f"Ranking {len(members)} {universe} members as of {asof}...")
+        return run_screen(members, asof_prices, top=top)
+
+    membership = point_in_time(universe, [m["symbol"] for m in members_loader()], settings.state_dir, progress=progress)
+    return rebuild_from(settings.state_dir, asof, universe=universe, top=top,
+                        capital=capital or settings.paper_starting_cash, prices=prices, cost_model=cost_model_for("in"),
+                        screen_fn=screen, members_loader=members_loader, membership=membership, holidays=holidays,
+                        force=force)
+
+
+def _alert_once_a_day(settings: Any, notifier: Any, message: str, today: str) -> None:
+    marker = Path(settings.state_dir) / f"forward_alert_{today}.sent"
+    if marker.exists():
+        return
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("sent", encoding="utf-8")
+        for old in marker.parent.glob("forward_alert_*.sent"):
+            if old != marker:
+                old.unlink(missing_ok=True)
+    except OSError:
+        pass
+    if notifier is not None:
+        try:
+            notifier.send("[FORWARD] paper forward test is not running", message)
+        except Exception:  # noqa: BLE001
+            log.warning("could not send the forward-test alert")
+
+
+def run_forward_due(settings: Any, prices: Any, holidays: Any, notifier: Any = None, *,
+                    today: date | None = None) -> str:
+    """One ``forward --if-due`` run, as the CLI does it. With no forward account yet it never starts a fresh one
+    silently: with FORWARD_START (earlier than today) it rebuilds from that date first; otherwise it refuses, says so
+    in its report and alerts once a day. Returns the report text."""
+    from .costs import cost_model_for
+    from .forward import ForwardTest, format_forward, forward_exists, format_rebuild
+    from .screen import load_universe, run_screen
+
+    today = today or datetime.now(IST).date()
+    prefix = ""
+    if not forward_exists(settings.state_dir, settings.forward_universe):
+        start = getattr(settings, "forward_start", None)
+        if start and start < today.isoformat():
+            try:
+                prefix = format_rebuild(rebuild_for_settings(settings, prices, holidays, start)) + "\n"
+            except Exception as e:  # noqa: BLE001 - FileExistsError cannot happen here; the rest is reported
+                msg = f"the forward account could not be rebuilt from FORWARD_START={start}: {type(e).__name__}: {e}"
+                _alert_once_a_day(settings, notifier, msg, today.isoformat())
+                return msg
+        else:
+            msg = "no forward account; run forward --rebuild-from DATE or set FORWARD_START"
+            _alert_once_a_day(settings, notifier, msg + " (on the server: forward --rebuild-from 2026-10-09).",
+                              today.isoformat())
+            return msg
     ft = ForwardTest(settings.state_dir, universe=settings.forward_universe, capital=settings.paper_starting_cash,
                      price_fn=prices.latest_price, cost_model=cost_model_for("in"), holidays=holidays)
     if not ft.due():
-        return "Forward test: nothing due."
+        return prefix + "Forward test: nothing due."
 
     def screen() -> dict[str, Any]:
         return run_screen(load_universe(ft.universe), prices, top=ft.data["top"])
 
-    return format_forward(ft.run(screen))
+    return prefix + format_forward(ft.run(screen))

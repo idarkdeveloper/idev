@@ -330,23 +330,17 @@ def cmd_forward(args: argparse.Namespace) -> int:
 
 def _forward_rebuild(args: argparse.Namespace, settings: Any, prices: Any) -> int:
     """forward --rebuild-from DATE: recreate the paper forward account as the first routine run made it on DATE."""
-    from .costs import cost_model_for
-    from .forward import format_forward, rebuild_from
-    from .screen import load_universe, run_screen
-
-    def screen(asof_prices: Any) -> dict:
-        members = load_universe(args.universe)
-        print(f"Ranking {len(members)} {args.universe.upper()} members as of {args.rebuild_from}…")
-        return run_screen(members, asof_prices, top=args.top)
+    from .forward import format_rebuild
+    from .forward_schedule import rebuild_for_settings
 
     try:
-        summary = rebuild_from(settings.state_dir, args.rebuild_from, universe=args.universe, top=args.top,
-                               capital=args.capital or settings.paper_starting_cash, prices=prices,
-                               cost_model=cost_model_for("in"), screen_fn=screen, force=args.force)
-    except (FileExistsError, ValueError) as e:
+        summary = rebuild_for_settings(settings, prices, _market_holidays(settings), args.rebuild_from,
+                                       universe=args.universe, top=args.top, capital=args.capital, force=args.force,
+                                       progress=print)
+    except (FileExistsError, ValueError, LookupError) as e:
         print(f"Not rebuilt: {e}", file=sys.stderr)
         return 1
-    print(format_forward(summary))
+    print(format_rebuild(summary))
     return 0
 
 
@@ -808,11 +802,14 @@ def cmd_watch(args: argparse.Namespace) -> int:
                             practice=broker if isinstance(broker, LocalPaperBroker) else None)
     from .forward_schedule import ForwardScheduler, run_forward_due
     from .heartbeat import Heartbeat
+    from .notify import install_log_redaction
+    install_log_redaction()   # bot tokens and the heartbeat path never reach a log, even at -v
     forward_prices = free_prices(settings)
-    forward = ForwardScheduler(settings.state_dir, lambda: print(run_forward_due(settings, forward_prices, holidays)),
+    forward = ForwardScheduler(settings.state_dir, lambda: print(run_forward_due(settings, forward_prices, holidays, notifier)),
                                holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
-                heartbeat=Heartbeat(settings.heartbeat_url), window=(args.window_start, args.window_end),
+                heartbeat=Heartbeat(settings.heartbeat_url, fail_enabled=True if settings.heartbeat_fail else None),
+                window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
                 auto_exit=settings.auto_trade,
                 holidays=holidays, broker_factory=lambda: make_broker(settings),
@@ -849,7 +846,7 @@ def cmd_digest(args: argparse.Namespace) -> int:
             return 1
         delivered = send_digest(notifier, email)
         print(f"Sent via: {', '.join(d for d in delivered if d != 'console') or 'nothing (delivery failed)'}")
-        return 0 if set(delivered) - {"console"} else 1
+        return 0 if set(delivered) - {"console", "telegram"} else 1
     return 0
 
 

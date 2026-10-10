@@ -5,8 +5,8 @@
 # the Actions cache is evicted.
 #
 # What is left: press "Run workflow" to fetch the current deals and print what a check would do, with NO broker login,
-# NO Claude call, NO email and NO order (no Groww, Anthropic, Resend or order settings are given to this job). It keeps
-# nothing afterwards: the state cache is only read, never saved.
+# NO Claude call, NO email and NO order (no Groww, Anthropic, Resend or order settings are given to this job). It
+# restores and saves no state: every run starts from nothing and leaves nothing behind (there is no cache step).
 name: trading-agent manual dry run
 
 on:

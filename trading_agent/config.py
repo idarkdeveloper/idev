@@ -101,6 +101,18 @@ def parse_heartbeat_url(value: object) -> str | None:
     return text
 
 
+def parse_forward_start(value: object) -> str | None:
+    """FORWARD_START: the YYYY-MM-DD the paper forward test started on (empty means unset)."""
+    from datetime import datetime
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        raise ValueError("FORWARD_START must be a date as YYYY-MM-DD, for example 2026-10-09") from None
+
+
 def parse_telegram_token(value: object) -> str | None:
     """TELEGRAM_BOT_TOKEN as given by @BotFather (digits, a colon, 30+ letters/digits/_/-); never echoed in an error."""
     text = str(value or "").strip()
@@ -191,6 +203,8 @@ class Settings:
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     telegram_alerts: bool = True
+    heartbeat_fail: bool = False  # also send /fail to a heartbeat provider other than hc-ping.com
+    forward_start: str | None = None  # YYYY-MM-DD the forward test started; the server rebuilds from it when the account is missing
     forward_universe: str = "NIFTYMIDCAP150"  # the paper forward test the server runs once a day after the close
 
     def __post_init__(self) -> None:
@@ -278,6 +292,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         heartbeat_url = parse_heartbeat_url(env("HEARTBEAT_URL"))
         telegram_token = parse_telegram_token(env("TELEGRAM_BOT_TOKEN"))
         telegram_chat = parse_telegram_chat(env("TELEGRAM_CHAT_ID"))
+        forward_start = parse_forward_start(env("FORWARD_START"))
     except ValueError as e:
         raise SystemExit(str(e)) from None
     data_source = (env("DATA_SOURCE") or ("nse" if market == "in" else "quiver")).lower()
@@ -340,5 +355,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         telegram_bot_token=telegram_token,
         telegram_chat_id=telegram_chat,
         telegram_alerts=_bool(env("TELEGRAM_ALERTS"), True),
+        heartbeat_fail=_bool(env("HEARTBEAT_FAIL"), False),
+        forward_start=forward_start,
         forward_universe=(env("FORWARD_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),
     )

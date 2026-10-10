@@ -2,19 +2,25 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 import logging
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+import requests
 
 from trading_agent import digest_render, notify
 from trading_agent.config import (load_settings, parse_heartbeat_url, parse_telegram_chat, parse_telegram_token)
 from trading_agent.costs import cost_model_for
 from trading_agent.forward import AsOfPrices, ForwardTest, IST, rebuild_from
-from trading_agent.forward_schedule import MAX_TRIES, ForwardScheduler
-from trading_agent.heartbeat import Heartbeat
+import threading
+import time
+import json
+from types import SimpleNamespace
+from trading_agent.forward_schedule import MAX_TRIES, ForwardScheduler, run_forward_due
+from trading_agent.heartbeat import Heartbeat, fail_url, stall_after
 from trading_agent.notify import Notifier, custom_domain, redact, telegram_chunks
 from trading_agent.watch import Watcher
 
@@ -36,7 +42,9 @@ class Session:
         self.calls.append((method, url, kw))
         if self.exc is not None:
             raise self.exc
-        return FakeResponse({"ok": True}, 500 if any(f in url for f in self.fail) else 200)
+        if any(f in url for f in self.fail):
+            raise requests.ConnectionError("boom")
+        return FakeResponse({"ok": True})
 
     def get(self, url, **kw):
         return self._do("GET", url, **kw)
@@ -105,77 +113,6 @@ def test_dashboard_settings_write_env_validate_and_never_echo_secrets(settings):
     assert TOKEN not in repr(snap) and "secret-path" not in repr(snap)
     app.update_settings({"telegram_bot_token": "", "heartbeat_url": ""})
     assert settings.telegram_bot_token is None and settings.heartbeat_url is None and not settings.telegram_on
-
-
-# ---------------------------------------------------------------- heartbeat
-def test_heartbeat_pings_every_five_minutes_and_not_without_a_url():
-    now = [1000.0]
-    s = Session()
-    hb = Heartbeat(HB_URL, session=s, clock=lambda: now[0])
-    hb.tick()
-    assert [c[:2] for c in s.calls] == [("GET", HB_URL)] and s.calls[0][2]["timeout"] == 10
-    now[0] += 299
-    hb.tick()
-    assert len(s.calls) == 1
-    now[0] += 2
-    hb.tick()
-    assert len(s.calls) == 2
-    off = Session()
-    Heartbeat(None, session=off).tick()
-    Heartbeat("", session=off).tick("boom")
-    assert off.calls == []
-
-
-def test_heartbeat_failure_goes_to_fail_with_the_error_text_at_once():
-    now = [0.0]
-    s = Session()
-    hb = Heartbeat(HB_URL + "/", session=s, clock=lambda: now[0])
-    hb.tick()
-    now[0] += 1   # not due, but a failed tick is reported on the spot
-    hb.tick("ValueError: tick exploded")
-    method, url, kw = s.calls[-1]
-    assert method == "POST" and url == HB_URL + "/fail" and kw["data"] == b"ValueError: tick exploded" and kw["timeout"] == 10
-
-
-def test_heartbeat_never_raises_and_never_logs_the_url(caplog):
-    caplog.set_level(logging.DEBUG)
-    s = Session(exc=ConnectionError(f"HTTPSConnectionPool: Max retries exceeded with url: {HB_URL}"))
-    hb = Heartbeat(HB_URL, session=s, clock=lambda: 0.0)
-    assert hb.ping() is False and hb.ping("err") is False
-    ok = Heartbeat(HB_URL, session=Session(), clock=lambda: 0.0)
-    assert ok.ping() is True
-    text = caplog.text
-    assert "heartbeat failed" in text and "heartbeat ok" in text
-    assert "secret-path" not in text and "hc-ping" not in text
-    bad_status = Heartbeat(HB_URL, session=Session(fail=("hc-ping",)))
-    assert bad_status.ping() is False and "secret-path" not in caplog.text
-
-
-def test_watch_loop_pings_after_each_tick_and_reports_a_raised_tick(settings):
-    seen: list = []
-
-    class HB:
-        def __init__(self, w):
-            self.w = w
-
-        def tick(self, error=None):
-            seen.append(error)
-            if len(seen) == 2:
-                self.w._stop.set()
-
-    w = Watcher(settings, every=15, awake=None)
-    calls = {"n": 0}
-
-    def tick(force=False):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise RuntimeError("tick blew up")
-        return {}
-
-    w.tick = tick
-    w._heartbeat = HB(w)
-    w.run_forever()
-    assert seen[0] is None and seen[1].startswith("RuntimeError: tick blew up")
 
 
 # ---------------------------------------------------------------- telegram
@@ -349,63 +286,13 @@ class FakePrices:
         return float(self.data[sym.upper()][-1]["close"])
 
 
-def screen_by_last_close_momentum(prices):
+def screen_by_last_close_momentum(prices, members=None):
     rows = []
-    for sym in ("A", "B", "C", "D", "E"):
+    for sym in [m["symbol"] for m in members] if members else ("A", "B", "C", "D", "E"):
         bars = prices.history(sym)
         rows.append({"symbol": sym, "score": bars[-1]["close"] / bars[0]["close"]})
     rows.sort(key=lambda r: -r["score"])
     return {"top": rows[:4], "eligible": len(rows)}
-
-
-def test_asof_prices_stop_at_the_date():
-    p = AsOfPrices(FakePrices(FUTURE), ASOF)
-    assert p.history("A")[-1]["date"] == ASOF and p.latest_price("A") == next(
-        b["close"] for b in FUTURE["A"] if b["date"] == ASOF)
-    assert p.latest_price("E") < 1000   # not the exploding last bar
-    with pytest.raises(LookupError):
-        AsOfPrices(FakePrices({"Z": [{"date": "2026-12-01", "close": 1.0}]}), ASOF).latest_price("Z")
-
-
-def test_rebuild_equals_a_fresh_run_on_that_date(tmp_path):
-    cm = cost_model_for("in")
-    rebuilt = rebuild_from(tmp_path / "r", ASOF, top=4, capital=100_000, prices=FakePrices(FUTURE), cost_model=cm,
-                           screen_fn=screen_by_last_close_momentum)
-    # the fresh run: the routine ran that evening, when the data simply ended at that day
-    past = {s: [b for b in bars if b["date"] <= ASOF] for s, bars in FUTURE.items()}
-    fresh_prices = FakePrices(past)
-    clock = datetime(2026, 10, 9, 16, 0, tzinfo=IST)
-    fresh = ForwardTest(tmp_path / "f", universe="NIFTYMIDCAP150", top=4, capital=100_000, price_fn=fresh_prices.latest_price,
-                        cost_model=cm, now=lambda: clock)
-    fresh_summary = fresh.run(lambda: screen_by_last_close_momentum(fresh_prices))
-    assert "E" not in rebuilt["last_picks"] and rebuilt["last_picks"] == fresh_summary["last_picks"]
-    assert rebuilt["holdings"] == fresh_summary["holdings"] and rebuilt["history"] == fresh_summary["history"]
-    loaded = ForwardTest(tmp_path / "r", universe="NIFTYMIDCAP150", price_fn=lambda s: 1.0, cost_model=cm)
-    assert loaded.data == fresh.data
-    assert [(p.symbol, p.qty) for p in loaded.broker.positions()] == [(p.symbol, p.qty) for p in fresh.broker.positions()]
-    assert loaded.data["started"].startswith(ASOF) and loaded.data["last_rebalance"] == "2026-10"
-    assert rebuilt["rebalanced"]["charges"] > 0 and loaded.data["bench_cost"] > 0
-
-
-def test_rebuild_refuses_an_existing_account_unless_forced(tmp_path):
-    kw = dict(top=4, capital=100_000, prices=FakePrices(FUTURE), cost_model=cost_model_for("in"),
-              screen_fn=screen_by_last_close_momentum)
-    rebuild_from(tmp_path, ASOF, **kw)
-    path = tmp_path / "forward" / "niftymidcap150.json"
-    before = path.read_text(encoding="utf-8")
-    with pytest.raises(FileExistsError) as e:
-        rebuild_from(tmp_path, ASOF, **kw)
-    assert "--force" in str(e.value) and path.read_text(encoding="utf-8") == before
-    # a half-existing account (only the broker file) also counts
-    path.unlink()
-    with pytest.raises(FileExistsError):
-        rebuild_from(tmp_path, ASOF, **kw)
-    summary = rebuild_from(tmp_path, ASOF, force=True, **kw)
-    assert summary["days"] == 1 and len(summary["holdings"]) == 4
-    with pytest.raises(ValueError):
-        rebuild_from(tmp_path / "w", "2026-10-10", **kw)   # a Saturday
-    with pytest.raises(ValueError):
-        rebuild_from(tmp_path / "x", "yesterday", **kw)
 
 
 def test_forward_cli_has_the_rebuild_options():
@@ -485,3 +372,342 @@ def test_scheduler_runs_in_a_background_thread_and_the_watch_tick_never_raises(t
 
     w = Watcher(settings, every=15, awake=None, forward=Broken())
     assert w.tick(force=True)["at"]
+
+
+# ---------------------------------------------------------------- fix round 1
+# -- Telegram never counts as the digest being delivered
+def test_telegram_success_does_not_hide_a_failed_email_and_telegram_is_not_repeated(settings, tmp_path):
+    from trading_agent.digest_schedule import DigestScheduler
+    from trading_agent.digest import read_digest_state
+    s = dataclasses.replace(settings, market="in", state_dir=tmp_path / "st")
+    sess = Session(fail=("api.resend.com",))
+    n = Notifier(resend_api_key="rk", email_to="me@example.com", session=sess, telegram_token=TOKEN,
+                 telegram_chat_id="42", telegram_state_dir=s.state_dir / "telegram_sent")
+    mail = lambda kind, cancel=None: {"subject": f"{kind} subject", "text": "t", "html": "<p>t</p>", "writer": "none"}  # noqa: E731
+    sc = DigestScheduler(s, lambda: None, n, holidays=Holidays(), retry_after=0, build_fn=mail)
+    when = at(2026, 10, 12, 9, 30)
+    sc.tick(when)
+    sc.wait()
+    assert (read_digest_state(s.state_dir).get("sent") or {}).get("morning") != "2026-10-12"
+    assert sc.last["outcome"] == "failed"
+    tg1 = [c for c in sess.calls if "telegram" in c[1]]
+    assert len(tg1) == 1
+    assert (s.state_dir / "telegram_sent" / "morning_2026-10-12").exists()
+    sc.tick(when)   # the retry
+    sc.wait()
+    assert len([c for c in sess.calls if "resend" in c[1]]) >= 2   # the email was tried again
+    assert len([c for c in sess.calls if "telegram" in c[1]]) == 1  # Telegram was not sent twice
+
+
+# -- rebuild: point in time, strict bars, holidays, stamps
+class Mem:
+    def __init__(self, members, known_since="2021-01-01"):
+        self.members, self.known_since = set(members), known_since
+
+    def members_on(self, day):
+        return set(self.members)
+
+
+def rebuild(tmp_path, data=None, mem=None, holidays=None, **kw):
+    seen = {}
+
+    def screen(prices, members):
+        seen["members"] = [m["symbol"] for m in members]
+        return screen_by_last_close_momentum(prices, members)
+    out = rebuild_from(tmp_path, ASOF, top=4, capital=100_000, prices=FakePrices(data or FUTURE),
+                       cost_model=cost_model_for("in"), screen_fn=screen,
+                       members_loader=lambda: [{"symbol": x, "name": x, "industry": ""} for x in "ABCD"],
+                       membership=mem or Mem("ABCDE"), holidays=holidays, **kw)
+    return out, seen
+
+
+def test_asof_prices_need_a_bar_dated_exactly_that_day():
+    p = AsOfPrices(FakePrices(FUTURE), ASOF)
+    assert p.latest_price("A") == next(b["close"] for b in FUTURE["A"] if b["date"] == ASOF)
+    assert p.latest_price("E") < 1000
+    gap = {"Z": [b for b in FUTURE["A"] if b["date"] < ASOF]}
+    with pytest.raises(LookupError):
+        AsOfPrices(FakePrices(gap), ASOF).latest_price("Z")
+    assert not AsOfPrices(FakePrices(gap), ASOF).has_bar("Z")
+
+
+def test_rebuild_equals_a_fresh_run_and_uses_point_in_time_members(tmp_path):
+    cm = cost_model_for("in")
+    rebuilt, seen = rebuild(tmp_path / "r")
+    assert seen["members"] == list("ABCDE") and rebuilt["members_on_asof"] == 5
+    past = {k: [b for b in bars if b["date"] <= ASOF] for k, bars in FUTURE.items()}
+    fp = FakePrices(past)
+    clock = datetime(2026, 10, 9, 16, 0, tzinfo=IST)
+    fresh = ForwardTest(tmp_path / "f", universe="NIFTYMIDCAP150", top=4, capital=100_000, price_fn=fp.latest_price,
+                        cost_model=cm, now=lambda: clock)
+    fs = fresh.run(lambda: screen_by_last_close_momentum(fp))
+    loaded = ForwardTest(tmp_path / "r", universe="NIFTYMIDCAP150", price_fn=lambda s: 1.0, cost_model=cm)
+    assert loaded.data == fresh.data and rebuilt["holdings"] == fs["holdings"] and rebuilt["skipped_no_bar"] == []
+    assert "E" not in rebuilt["last_picks"]
+
+
+def test_rebuild_stamps_the_asof_date_not_the_wall_clock(tmp_path):
+    rebuild(tmp_path)
+    bro = json.loads((tmp_path / "forward" / "niftymidcap150_broker.json").read_text())
+    assert bro["created_at"].startswith("2026-10-09")
+    assert bro["orders"] and all(o["filled_at"].startswith("2026-10-09") for o in bro["orders"])
+    assert json.loads((tmp_path / "forward" / "niftymidcap150.json").read_text())["started"].startswith("2026-10-09")
+
+
+def test_rebuild_refuses_unknown_late_or_holiday_cases_with_clear_messages(tmp_path):
+    with pytest.raises(ValueError, match="only known from 2026-11-01"):
+        rebuild(tmp_path / "a", mem=Mem("ABCDE", known_since="2026-11-01"))
+    with pytest.raises(ValueError, match="no point-in-time membership"):
+        rebuild_from(tmp_path / "b", ASOF, prices=FakePrices(FUTURE), cost_model=None, screen_fn=None,
+                     members_loader=lambda: [], membership=None)
+    with pytest.raises(ValueError, match="holiday"):
+        rebuild(tmp_path / "c", holidays=Holidays({date(2026, 10, 9)}))
+    with pytest.raises(ValueError, match="weekend"):
+        rebuild_from(tmp_path / "d", "2026-10-10", prices=FakePrices(FUTURE), cost_model=None, screen_fn=None,
+                     members_loader=lambda: [], membership=Mem("A"))
+    no_bench = {k: v for k, v in FUTURE.items() if k != "MID150BEES"}
+    no_bench["MID150BEES"] = [b for b in FUTURE["MID150BEES"] if b["date"] < ASOF]
+    with pytest.raises(ValueError, match="benchmark"):
+        rebuild(tmp_path / "e", data=no_bench)
+    assert not (tmp_path / "e" / "forward").exists()
+
+
+def test_rebuild_leaves_out_a_pick_without_a_bar_and_says_so(tmp_path):
+    data = dict(FUTURE)
+    data["A"] = [b for b in FUTURE["A"] if b["date"] != ASOF]   # A has no bar on the day (older closes exist)
+    out, _ = rebuild(tmp_path, data=data)
+    assert out["skipped_no_bar"] == ["A"] and "A" not in out["last_picks"]
+    from trading_agent.forward import format_rebuild
+    assert "Left out" in format_rebuild(out) and "A" in format_rebuild(out)
+
+
+def test_rebuild_refuses_an_existing_account_unless_forced(tmp_path):
+    rebuild(tmp_path)
+    path = tmp_path / "forward" / "niftymidcap150.json"
+    before = path.read_text(encoding="utf-8")
+    with pytest.raises(FileExistsError, match="--force"):
+        rebuild(tmp_path)
+    assert path.read_text(encoding="utf-8") == before
+    path.unlink()
+    with pytest.raises(FileExistsError):
+        rebuild(tmp_path)
+    out, _ = rebuild(tmp_path, force=True)
+    assert out["days"] == 1 and len(out["holdings"]) == 4
+
+
+# -- no silent fresh account on the server
+def server_settings(settings, tmp_path, start=None):
+    return dataclasses.replace(settings, market="in", state_dir=tmp_path / "st", forward_start=start)
+
+
+def test_server_refuses_to_start_a_fresh_account_and_alerts_once_a_day(settings, tmp_path):
+    s = server_settings(settings, tmp_path)
+    sess = Session()
+    n = Notifier(session=sess, webhook_url="https://hooks.example/x")
+    msg = run_forward_due(s, FakePrices(FUTURE), Holidays(), n, today=date(2026, 10, 12))
+    assert msg == "no forward account; run forward --rebuild-from DATE or set FORWARD_START"
+    run_forward_due(s, FakePrices(FUTURE), Holidays(), n, today=date(2026, 10, 12))
+    assert len(n.sent) == 1 and n.sent[0]["subject"].startswith("[FORWARD]")
+    run_forward_due(s, FakePrices(FUTURE), Holidays(), n, today=date(2026, 10, 13))
+    assert len(n.sent) == 2   # once per day
+    assert not (s.state_dir / "forward").exists()
+
+
+def test_server_rebuilds_from_forward_start_then_runs_the_normal_flow(settings, tmp_path, monkeypatch):
+    from trading_agent import forward_schedule
+    s = server_settings(settings, tmp_path, start=ASOF)
+    called = {}
+
+    def fake_rebuild(settings_, prices, holidays, asof, **kw):
+        called["asof"] = asof
+        out, _ = rebuild(tmp_path / "st")
+        return out
+    monkeypatch.setattr(forward_schedule, "rebuild_for_settings", fake_rebuild)
+    monkeypatch.setattr(forward_schedule, "datetime", SimpleNamespace(now=lambda tz=None: datetime(2026, 10, 12, 16, 30, tzinfo=IST)))
+    monkeypatch.setattr("trading_agent.screen.load_universe", lambda u: [{"symbol": x, "name": x, "industry": ""} for x in "ABCD"])
+    monkeypatch.setattr("trading_agent.screen.run_screen", lambda members, prices, top=20: screen_by_last_close_momentum(prices))
+    text = run_forward_due(s, FakePrices(FUTURE), Holidays(), None, today=date(2026, 10, 12))
+    assert called["asof"] == ASOF and "Forward test" in text
+    # a start date that is today or later is not "earlier than today": refuse
+    s2 = server_settings(settings, tmp_path / "other", start="2026-10-12")
+    assert "no forward account" in run_forward_due(s2, FakePrices(FUTURE), Holidays(), None, today=date(2026, 10, 12))
+
+
+def test_forward_start_setting_is_validated():
+    from trading_agent.config import parse_forward_start
+    assert parse_forward_start("2026-10-09") == "2026-10-09" and parse_forward_start("") is None
+    for bad in ("09/10/2026", "2026-13-40", "x"):
+        with pytest.raises(ValueError):
+            parse_forward_start(bad)
+
+
+def test_forward_claim_stale_takeover(tmp_path):
+    sch = ForwardScheduler(tmp_path, lambda: None, holidays=Holidays(), threaded=False)
+    day = "2026-10-12"
+    claim = sch._claim_path(day)
+    assert sch._claim(day) and not sch._claim(day)
+    pid, _ = claim.read_text().split()
+    assert pid == str(os.getpid())
+    # an old claim from a process that is gone is taken over; a fresh one, or one of a live process, is not
+    claim.write_text(f"999999 {int(time.time()) - 3600}")
+    sch._pid_gone = staticmethod(lambda p: True)
+    assert sch._claim(day)
+    claim.write_text(f"999999 {int(time.time()) - 60}")
+    assert not sch._claim(day)
+    claim.write_text(f"999999 {int(time.time()) - 3600}")
+    sch._pid_gone = staticmethod(lambda p: False)
+    assert not sch._claim(day)
+
+
+# -- heartbeat on its own thread, tied to the loop's progress
+def test_fail_url_keeps_the_query_and_goes_on_the_path():
+    assert fail_url("https://hc-ping.com/abc") == "https://hc-ping.com/abc/fail"
+    assert fail_url("https://hc-ping.com/abc/?create=1&x=2") == "https://hc-ping.com/abc/fail?create=1&x=2"
+
+
+def hb(session, clock, progress, **kw):
+    h = Heartbeat(HB_URL, session=session, clock=lambda: clock[0], **kw)
+    h._progress, h._stall = progress, stall_after(60)
+    return h
+
+
+def test_beat_ok_stalled_fail_and_immediate_recovery():
+    now = [10_000.0]
+    stamp = [now[0]]
+    s = Session()
+    h = hb(s, now, lambda: stamp[0])
+    assert h.beat() == "ok" and s.calls[-1][0] == "GET" and s.calls[-1][2]["timeout"] == 10
+    now[0] += 1300   # no progress for 21 minutes (limit max(3*60, 1200))
+    assert h.beat() == "fail"
+    method, url, kw = s.calls[-1]
+    assert method == "POST" and url == HB_URL + "/fail" and kw["data"] == b"watch loop stalled 21 min"
+    now[0] += 30
+    assert h.beat() == "skip" and len(s.calls) == 2   # still stalled: no fail spam inside the interval
+    stamp[0] = now[0]   # the loop is back
+    assert h.beat() == "ok" and s.calls[-1][0] == "GET"   # healthy again: ok at once
+
+
+def test_reported_error_pings_fail_with_the_text_and_url_off_means_nothing():
+    now = [0.0]
+    s = Session()
+    h = hb(s, now, lambda: now[0])
+    h.report_error("ValueError: tick exploded")
+    assert h.beat() == "fail" and s.calls[-1][2]["data"] == b"ValueError: tick exploded"
+    off = Session()
+    assert Heartbeat(None, session=off).beat() == "skip" and off.calls == []
+
+
+def test_fail_goes_only_to_hc_ping_unless_enabled():
+    now = [0.0]
+    other = "https://uptime.example.com/api/push/TOKEN"
+    s = Session()
+    h = Heartbeat(other, session=s, clock=lambda: now[0])
+    h._progress, h._stall = (lambda: now[0]), 1200
+    h.report_error("boom")
+    h.beat()
+    assert s.calls == []   # no /fail to another provider: it only sees the pings stop
+    h.beat()
+    assert s.calls[-1][0] == "GET"
+    s2 = Session()
+    h2 = Heartbeat(other, session=s2, clock=lambda: now[0], fail_enabled=True)
+    h2._progress, h2._stall = (lambda: now[0]), 1200
+    h2.report_error("boom")
+    h2.beat()
+    assert s2.calls[-1][1] == other + "/fail"
+
+
+def wait_for(cond, secs=3.0):
+    end = time.time() + secs
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return cond()
+
+
+def test_heartbeat_thread_pings_on_its_own_and_fails_at_once_on_a_reported_error():
+    s = Session()
+    h = Heartbeat(HB_URL, session=s, every=0.05)
+    stop = threading.Event()
+    h.start(lambda: time.monotonic(), stall_s=1200, stop=stop)
+    try:
+        assert wait_for(lambda: len([c for c in s.calls if c[0] == "GET"]) >= 3)
+        h.report_error("RuntimeError: x")
+        assert wait_for(lambda: any(c[0] == "POST" for c in s.calls))
+        n = len(s.calls)
+        assert wait_for(lambda: len([c for c in s.calls[n:] if c[0] == "GET"]) >= 1)   # recovered
+    finally:
+        stop.set()
+        h.stop()
+
+
+def test_watch_loop_stamps_progress_reports_tick_errors_and_never_depends_on_the_ping(settings):
+    log: list = []
+
+    class HB:
+        def start(self, progress, *, stall_s, stop):
+            log.append(("start", stall_s, progress() > 0))
+
+        def report_error(self, text):
+            log.append(("error", text))
+            w._stop.set()
+
+        def stop(self):
+            pass
+
+    w = Watcher(settings, every=15, awake=None, heartbeat=HB())
+    calls = {"n": 0}
+
+    def tick(force=False):
+        calls["n"] += 1
+        raise RuntimeError("tick blew up")
+    w.tick = tick
+    before = w._progress
+    w.run_forever()
+    assert log[0] == ("start", 1200, True) and log[1][0] == "error" and log[1][1].startswith("RuntimeError: tick blew up")
+    assert w._progress >= before
+
+
+# -- logging never carries secrets
+def test_log_redaction_covers_bot_tokens_and_the_heartbeat_path_even_at_debug(caplog):
+    from trading_agent.notify import install_log_redaction
+    install_log_redaction()
+    Heartbeat(HB_URL, session=Session())   # registers its secrets
+    caplog.set_level(logging.DEBUG)
+    logging.getLogger("some.library").debug("GET https://api.telegram.org/bot%s/getMe", TOKEN)
+    logging.getLogger("other").warning("ping %s failed", HB_URL)
+    logging.getLogger("other").info("path /0123abcd-secret-path-token seen")
+    text = caplog.text
+    assert TOKEN not in text and "AAH_fake" not in text and "secret-path" not in text and "hc-ping.com/0123" not in text
+    assert "bot***" in text
+    assert logging.getLogger("urllib3").level == logging.WARNING
+
+
+# -- state/watch_alive.json
+def test_watch_alive_file_is_written_atomically_throttled_and_never_breaks_the_loop(settings, monkeypatch):
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    w = Watcher(settings, every=15, awake=None)
+    w._tick_started = "2026-10-12T10:00:00+05:30"
+    w._write_alive("boom")
+    path = settings.state_dir / "watch_alive.json"
+    d = json.loads(path.read_text())
+    assert set(d) == {"at", "tick_started", "tick_finished", "last_error", "every", "market_window"}
+    assert d["last_error"] == "boom" and d["every"] == 15 and d["tick_finished"] is None
+    assert d["at"].endswith("+05:30") and isinstance(d["market_window"], bool)
+    path.unlink()
+    w._write_alive(None)   # inside 30 s: skipped
+    assert not path.exists()
+    w._write_alive(None, force=True)
+    assert json.loads(path.read_text())["last_error"] is None
+    # a write failure is swallowed
+    import trading_agent.state as st
+    monkeypatch.setattr(st, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    w._write_alive("x", force=True)
+    # and the loop writes it around each tick
+    path.unlink()
+    monkeypatch.undo()
+    w2 = Watcher(settings, every=15, awake=None)
+    w2.tick = lambda force=False: (w2._stop.set(), {})[1]
+    w2.run_forever()
+    d = json.loads(path.read_text())
+    assert d["tick_started"] and d["last_error"] is None

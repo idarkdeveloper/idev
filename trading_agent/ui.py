@@ -29,7 +29,7 @@ from urllib.parse import urlparse
 from . import taxes
 from .broker import AlreadyCopied, Broker, LocalPaperBroker
 from .config import (DIGEST_WRITERS, Settings, load_settings, parse_digest_time, parse_heartbeat_url, parse_investors,
-                     parse_telegram_chat, parse_telegram_token)
+                     parse_forward_start, parse_telegram_chat, parse_telegram_token)
 from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
@@ -61,6 +61,7 @@ EDITABLE_ENV_KEYS = {
     "telegram_chat_id": "TELEGRAM_CHAT_ID",
     "telegram_alerts": "TELEGRAM_ALERTS",
     "heartbeat_url": "HEARTBEAT_URL",
+    "forward_start": "FORWARD_START",
     "market": "MARKET",
     "paper_starting_cash": "PAPER_STARTING_CASH",
     # The daily emails (digest.py), sent by the watch service
@@ -1085,6 +1086,9 @@ class App:
             elif key in ("digest_morning", "digest_evening"):
                 value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
+            elif key == "forward_start":
+                value = parse_forward_start(value) or ""
+                ops.append(lambda v=value: setattr(st, "forward_start", v or None))
             elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url"):
                 # validated here; the error never repeats the value (a token or ping URL is a secret)
                 parse = {"telegram_bot_token": parse_telegram_token, "telegram_chat_id": parse_telegram_chat,
@@ -1446,7 +1450,7 @@ def _check_type(key: str, value: Any) -> None:
     elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
                  "telegram_alerts"):
         _bool_setting(key, value)
-    elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url"):
+    elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url", "forward_start"):
         if value is not None and not isinstance(value, str):
             raise ValueError(f"{key} must be text (or empty to clear it)")
     elif key in ("digest_morning", "digest_evening", "digest_writer"):

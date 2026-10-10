@@ -340,7 +340,8 @@ def make_notifier(settings: Settings) -> Notifier:
     return Notifier(resend_api_key=settings.resend_api_key, email_to=settings.notify_email_to,
                     email_from=settings.notify_email_from, webhook_url=settings.notify_webhook_url,
                     telegram_token=settings.telegram_bot_token if settings.telegram_on else None,
-                    telegram_chat_id=settings.telegram_chat_id if settings.telegram_on else None)
+                    telegram_chat_id=settings.telegram_chat_id if settings.telegram_on else None,
+                    telegram_state_dir=settings.state_dir / "telegram_sent")
 
 
 def cached_notifier(settings: Settings) -> Any:

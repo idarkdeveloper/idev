@@ -107,8 +107,14 @@ def send_digest(notifier: Any, email: dict[str, Any], kind: str | None = None, d
     return notifier.send(email["subject"], text)   # a notifier that takes no HTML part
 
 
-def _external(delivered: Any) -> bool:
-    return bool(set(delivered or []) - {"console"})
+def _external(delivered: Any, notifier: Any = None) -> bool:
+    """The digest counts as sent when email (if email is configured) or the webhook got it. Telegram alone never
+    counts: a Telegram success must not hide a failed email, or the retry would never happen."""
+    got = set(delivered or [])
+    channels = set(getattr(notifier, "channels", None) or [])
+    if "email" in channels:
+        return "email" in got
+    return bool(got - {"console", "telegram"})
 
 
 _FILE_LOCK = threading.Lock()  # digest_state.json read-modify-write inside this process
@@ -327,7 +333,7 @@ class DigestScheduler:
         else:
             try:
                 delivered = send_digest(self._notifier(), result["email"], kind, day)
-                if _external(delivered):
+                if _external(delivered, self._notifier()):
                     outcome = "sent"
                 else:
                     detail = "no email or webhook delivery succeeded"

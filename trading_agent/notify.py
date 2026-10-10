@@ -38,6 +38,46 @@ TELEGRAM_LIMIT = 4000   # Telegram allows 4096 characters per message; stay unde
 _BOT_URL = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
 
 
+_SECRETS: set[str] = set()   # extra strings that must never reach a log line (the heartbeat URL and its path)
+_FACTORY_INSTALLED = False
+
+
+def add_log_secret(*values: str | None) -> None:
+    for v in values:
+        if v and len(v) >= 8:
+            _SECRETS.add(v)
+
+
+def _scrub(text: str) -> str:
+    out = _BOT_URL.sub("bot***", text)
+    for s in _SECRETS:
+        out = out.replace(s, "***")
+    return out
+
+
+def install_log_redaction() -> None:
+    """Every log record (any logger, any level, -v/DEBUG included) has ``bot<token>`` and registered secrets replaced
+    before any handler sees it, and urllib3's request logging (which prints URLs) is held at WARNING."""
+    global _FACTORY_INSTALLED
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    if _FACTORY_INSTALLED:
+        return
+    _FACTORY_INSTALLED = True
+    old = logging.getLogRecordFactory()
+
+    def factory(*a: Any, **kw: Any) -> logging.LogRecord:
+        rec = old(*a, **kw)
+        try:
+            msg = rec.getMessage()
+            clean = _scrub(msg)
+            if clean != msg:
+                rec.msg, rec.args = clean, ()
+        except Exception:  # noqa: BLE001 - logging must never fail because of the scrub
+            pass
+        return rec
+    logging.setLogRecordFactory(factory)
+
+
 def redact(text: object, secret: str | None = None) -> str:
     """``bot<token>`` becomes ``bot***`` (the Telegram bot token is part of every request URL, so a logged URL or
     requests exception would leak it); a known secret is removed wherever else it appears."""
@@ -88,7 +128,8 @@ class Notifier:
     def __init__(self, resend_api_key: str | None = None, email_to: str | None = None,
                  email_from: str = "Trading Agent <onboarding@resend.dev>",
                  webhook_url: str | None = None, session: requests.Session | None = None,
-                 telegram_token: str | None = None, telegram_chat_id: str | None = None):
+                 telegram_token: str | None = None, telegram_chat_id: str | None = None,
+                 telegram_state_dir: Any | None = None):
         self.resend_api_key = resend_api_key
         self.email_to = email_to
         self.email_from = email_from
@@ -96,6 +137,8 @@ class Notifier:
         self.session = session or requests.Session()
         self.telegram_token = telegram_token
         self.telegram_chat_id = telegram_chat_id
+        self.telegram_state_dir = telegram_state_dir   # state/telegram_sent: one marker per idempotency key
+        add_log_secret(telegram_token)
         self.sent: list[dict[str, Any]] = []
 
     @property
@@ -162,12 +205,34 @@ class Notifier:
                 delivered.append("webhook")
             except requests.RequestException as e:
                 log.warning("webhook delivery failed: %s", e)
-        if "telegram" in self.channels and self._telegram(subject, body if telegram_text is None else telegram_text, images):
-            delivered.append("telegram")
+        if "telegram" in self.channels and not self._tg_done(idempotency_key):
+            if self._telegram(subject, body if telegram_text is None else telegram_text, images):
+                delivered.append("telegram")
+                self._tg_mark(idempotency_key)
         self.sent.append({"subject": subject, "body": body, "delivered": delivered})
         return delivered
 
     # -- Telegram ---------------------------------------------------------------
+    def _tg_path(self, key: str | None) -> Any:
+        from pathlib import Path
+        if not key or self.telegram_state_dir is None:
+            return None
+        return Path(self.telegram_state_dir) / re.sub(r"[^A-Za-z0-9._-]", "_", key)
+
+    def _tg_done(self, key: str | None) -> bool:
+        """True when Telegram already got this logical send (a retry of the email must not repeat it)."""
+        p = self._tg_path(key)
+        return bool(p and p.exists())
+
+    def _tg_mark(self, key: str | None) -> None:
+        p = self._tg_path(key)
+        if p is not None:
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text("sent", encoding="utf-8")
+            except OSError:
+                pass
+
     def _tg(self, method: str, **kw: Any) -> None:
         r = self.session.post(f"https://api.telegram.org/bot{self.telegram_token}/{method}", timeout=30, **kw)
         r.raise_for_status()
