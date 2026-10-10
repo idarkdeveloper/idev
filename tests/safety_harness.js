@@ -31,7 +31,7 @@ const paintedChip = {text: els["fresh-text"].textContent, cls: els.freshness.cla
 console.log(JSON.stringify({
   strip: {
     live_off: S.modeStrip("live", {liveOrders: false}), live_on: S.modeStrip("live", {liveOrders: true}),
-    live_unknown: S.modeStrip("live", {}), demo: S.modeStrip("demo", {liveOrders: true}),
+    live_unknown: S.modeStrip("live", {}), live_state_unknown: S.modeStrip("live", {liveOrders: "unknown"}), demo: S.modeStrip("demo", {liveOrders: true}),
     replay: S.modeStrip("replay", {date: "2021-03-09"}), replay_home: S.modeStrip("replay", {}),
   },
   painted,

@@ -28,7 +28,7 @@ from urllib.parse import urlparse
 
 from . import taxes
 from .broker import AlreadyCopied, Broker, LocalPaperBroker
-from .config import (DIGEST_WRITERS, Settings, load_settings, parse_digest_time, parse_heartbeat_url, parse_investors,
+from .config import (DIGEST_WRITERS, Settings, load_settings, parse_digest_time, parse_allowed_hosts, parse_heartbeat_url, parse_investors,
                      parse_forward_start, parse_telegram_chat, parse_telegram_token)
 from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
@@ -62,6 +62,7 @@ EDITABLE_ENV_KEYS = {
     "telegram_chat_id": "TELEGRAM_CHAT_ID",
     "telegram_alerts": "TELEGRAM_ALERTS",
     "heartbeat_url": "HEARTBEAT_URL",
+    "allowed_hosts": "TA_ALLOWED_HOSTS",   # not on the Settings form; validated like the rest
     "forward_start": "FORWARD_START",
     "market": "MARKET",
     "paper_starting_cash": "PAPER_STARTING_CASH",
@@ -445,6 +446,7 @@ class App:
                          "started_at": self.running.started_at} if self.busy and self.running else None),
             "jobs": [j.to_dict() for j in self.jobs[-5:]],
             "protection": self.protection(positions, gtt),
+            "live_orders": self._live_orders_on(),   # the one effective flag: the strip and the protection column both use it
         }
 
     # -- safety and freshness ---------------------------------------------------
@@ -1128,6 +1130,9 @@ class App:
             elif key == "forward_start":
                 value = parse_forward_start(value) or ""
                 ops.append(lambda v=value: setattr(st, "forward_start", v or None))
+            elif key == "allowed_hosts":
+                value = ",".join(parse_allowed_hosts(value))
+                ops.append(lambda v=value: setattr(st, "allowed_hosts", parse_allowed_hosts(v)))
             elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url"):
                 # validated here; the error never repeats the value (a token or ping URL is a secret)
                 parse = {"telegram_bot_token": parse_telegram_token, "telegram_chat_id": parse_telegram_chat,
@@ -1489,7 +1494,7 @@ def _check_type(key: str, value: Any) -> None:
     elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
                  "telegram_alerts"):
         _bool_setting(key, value)
-    elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url", "forward_start"):
+    elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url", "forward_start", "allowed_hosts"):
         if value is not None and not isinstance(value, str):
             raise ValueError(f"{key} must be text (or empty to clear it)")
     elif key in ("digest_morning", "digest_evening", "digest_writer"):
@@ -1587,6 +1592,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             return json.loads(raw.decode() or "{}")
 
         def do_GET(self) -> None:  # noqa: N802
+            refused = self._request_refusal("GET")
+            if refused:
+                self._refuse(refused)
+                return
             path = urlparse(self.path).path
             if path in STATIC_FILES:
                 name, ctype = STATIC_FILES[path]
@@ -1689,34 +1698,71 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             else:
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
-        def _post_refusal(self) -> tuple[int, str] | None:
-            """Cross-site request protection for every POST: JSON only, and same-origin only. A browser sends a
-            text/plain cross-site POST without a preflight, so the content type and the Origin are both checked."""
+        _LOCAL_NAMES = ("127.0.0.1", "localhost", "[::1]")
+
+        @staticmethod
+        def _split_host(host: str) -> tuple[str, str | None]:
+            host = host.strip().lower()
+            if host.startswith("["):   # [::1]:8787
+                end = host.find("]")
+                rest = host[end + 1:]
+                return host[:end + 1], rest[1:] if rest.startswith(":") else None
+            name, _, port = host.partition(":")
+            return name, port or None
+
+        def _host_allowed(self, host: str, *, forwarded: bool = False) -> bool:
+            """localhost / 127.0.0.1 / [::1] (with the server's port or none) and the TA_ALLOWED_HOSTS names."""
+            name, port = self._split_host(host)
+            if not name:
+                return False
+            if name in self._LOCAL_NAMES and not forwarded:
+                return port is None or port == str(self.server.server_address[1])
+            for a in app.settings.allowed_hosts:
+                an, ap = self._split_host(a)
+                if name == an and (ap is None or ap == port):
+                    return True
+            return False
+
+        def _request_refusal(self, method: str) -> tuple[int, str] | None:
+            """Checked on every request before any handler: the Host must be ours (421 otherwise, which stops DNS
+            rebinding); /api GETs are refused cross-site; a POST must be JSON and same-origin (a browser sends a
+            text/plain cross-site POST without a preflight, so the content type and the Origin are both checked)."""
+            host = self.headers.get("Host") or ""
+            if not self._host_allowed(host):
+                return 421, "unknown Host; add it to TA_ALLOWED_HOSTS to reach the dashboard under that name"
+            site = self.headers.get("Sec-Fetch-Site")
+            if method == "GET":
+                if urlparse(self.path).path.startswith(("/api/", "/demo/api/", "/replay/api/")) and site in ("cross-site", "same-site"):
+                    return 403, "cross-site request refused"
+                return None
             ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
             if ctype != "application/json":
                 return 415, "POST bodies must be Content-Type: application/json"
             origin = self.headers.get("Origin")
             if origin is not None:
-                hosts = {("http", self.headers.get("Host") or "")}
+                own = {f"http://{host.strip().lower()}"}
                 if self.client_address[0] in ("127.0.0.1", "::1"):   # tailscale serve proxies from localhost
                     fh = (self.headers.get("X-Forwarded-Host") or "").split(",")[0].strip()
-                    fp = (self.headers.get("X-Forwarded-Proto") or "https").split(",")[0].strip()
-                    if fh:
-                        hosts.add((fp, fh))
-                if origin not in {f"{sch}://{h}" for sch, h in hosts if h}:
+                    fp = (self.headers.get("X-Forwarded-Proto") or "https").split(",")[0].strip().lower()
+                    if fh and fp in ("http", "https") and self._host_allowed(fh, forwarded=True):
+                        own.add(f"{fp}://{fh.lower()}")
+                if origin.strip().lower() not in own:
                     return 403, "cross-origin request refused"
-            elif self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+            elif site not in (None, "same-origin", "none"):
                 return 403, "cross-site request refused"
             return None
 
+        def _refuse(self, refused: tuple[int, str]) -> None:
+            try:   # drain the unread body so the client gets the answer instead of a reset connection
+                self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1_000_000))
+            except (ValueError, OSError):
+                pass
+            self._json({"error": refused[1]}, refused[0])
+
         def do_POST(self) -> None:  # noqa: N802
-            refused = self._post_refusal()
+            refused = self._request_refusal("POST")
             if refused:
-                try:   # drain the unread body so the client gets the answer instead of a reset connection
-                    self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 1_000_000))
-                except (ValueError, OSError):
-                    pass
-                self._json({"error": refused[1]}, refused[0])
+                self._refuse(refused)
                 return
             path = urlparse(self.path).path
             if path.startswith("/replay/api/"):

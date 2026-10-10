@@ -89,6 +89,28 @@ TELEGRAM_TOKEN_RE = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
 TELEGRAM_CHAT_RE = re.compile(r"-?\d+|@[A-Za-z][A-Za-z0-9_]{3,}")
 
 
+_HOST = re.compile(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d{1,5})?")
+
+
+def parse_allowed_hosts(value: object) -> list[str]:
+    """TA_ALLOWED_HOSTS: extra Host names the dashboard answers to (for example your tailnet name,
+    box.tail1234.ts.net), as a comma list. Exact names only, with an optional :port; no wildcards."""
+    if isinstance(value, (list, tuple)):
+        value = ",".join(str(v) for v in value)
+    out: list[str] = []
+    for item in str(value or "").split(","):
+        h = item.strip().lower()
+        if not h:
+            continue
+        if not _HOST.fullmatch(h):
+            raise ValueError("TA_ALLOWED_HOSTS must be a comma list of host names such as box.tail1234.ts.net (no wildcards, no scheme)")
+        if h not in out:
+            out.append(h)
+    if len(out) > 10:
+        raise ValueError("TA_ALLOWED_HOSTS: at most 10 host names")
+    return out
+
+
 def parse_heartbeat_url(value: object) -> str | None:
     """HEARTBEAT_URL: an https URL (the path is a secret token, so it is never echoed in an error); empty means off."""
     from urllib.parse import urlparse
@@ -199,6 +221,8 @@ class Settings:
     digest_charts: bool = True  # its chart images (needs matplotlib); False sends the bulletin as text only
     # Dead-man's switch: the watch loop pings this https URL every 5 minutes (healthchecks.io style); the path is a secret.
     heartbeat_url: str | None = None
+    # Extra Host names the dashboard answers to besides localhost (a tailnet name); anything else gets 421.
+    allowed_hosts: list[str] = field(default_factory=list)
     # Telegram alerts: with both the token and the chat id set, every alert also goes to Telegram (switch: telegram_alerts).
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
@@ -290,6 +314,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         raise SystemExit(f"DIGEST_TOP must be between 1 and 50, got {digest_top}")
     try:
         heartbeat_url = parse_heartbeat_url(env("HEARTBEAT_URL"))
+        allowed_hosts = parse_allowed_hosts(env("TA_ALLOWED_HOSTS"))
         telegram_token = parse_telegram_token(env("TELEGRAM_BOT_TOKEN"))
         telegram_chat = parse_telegram_chat(env("TELEGRAM_CHAT_ID"))
         forward_start = parse_forward_start(env("FORWARD_START"))
@@ -352,6 +377,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         digest_bulletin=_bool(env("DIGEST_BULLETIN"), True),
         digest_charts=_bool(env("DIGEST_CHARTS"), True),
         heartbeat_url=heartbeat_url,
+        allowed_hosts=allowed_hosts,
         telegram_bot_token=telegram_token,
         telegram_chat_id=telegram_chat,
         telegram_alerts=_bool(env("TELEGRAM_ALERTS"), True),

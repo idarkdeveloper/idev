@@ -17,9 +17,22 @@ from .timezones import IST
 
 WATCH_FILE = "watch_alive.json"
 OPEN, CLOSE = dtime(9, 15), dtime(15, 30)   # NSE cash market, IST
-WARN_AFTER_S, BAD_AFTER_S = 5 * 60, 15 * 60   # watch age in market hours: amber, then red
+WARN_AFTER_S, BAD_AFTER_S = 5 * 60, 15 * 60   # watch age in market hours: amber, then red (at least; see thresholds())
 
-# GTT states that no longer protect anything.
+
+def thresholds(every: Any) -> tuple[int, int]:
+    """(amber, red) heartbeat ages in seconds, scaled with the watch interval so a slow tick is not a false alarm."""
+    try:
+        e = float(every)
+    except (TypeError, ValueError):
+        e = 60.0
+    if not e > 0:
+        e = 60.0
+    return int(max(WARN_AFTER_S, 2 * e + 60)), int(max(BAD_AFTER_S, 4 * e + 120))
+
+
+# GTT states that really protect, states that no longer do; any other word is unknown and shown as a warning.
+_LIVE_GTT = {"ACTIVE", "OPEN", "PENDING", "TRIGGER_PENDING"}
 _DEAD_GTT = {"CANCELLED", "CANCELED", "TRIGGERED", "EXPIRED", "FAILED", "REJECTED", "DISABLED", "COMPLETED"}
 
 
@@ -85,11 +98,12 @@ def watch_info(state_dir: Path, now: datetime, is_open: bool) -> dict[str, Any]:
         return {"seen": False, "at": None, "age_s": None, "every": None, "last_error": None, "tick_finished": None,
                 "level": "unseen"}
     age = max(0, int((now - at).total_seconds()))
+    warn_s, bad_s = thresholds(raw.get("every"))
     if not is_open:
         level = "idle"
-    elif age > BAD_AFTER_S:
+    elif age > bad_s:
         level = "bad"
-    elif age > WARN_AFTER_S:
+    elif age > warn_s:
         level = "warn"
     else:
         level = "ok"
@@ -120,36 +134,56 @@ def _age_text(age_s: int) -> str:
     return f"{age_s // 3600} h" if age_s >= 7200 else f"{max(1, round(age_s / 60))} min" if age_s >= 90 else f"{age_s} s"
 
 
+def _stamp(iso: Any) -> str:
+    t = parse_time(iso)
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if t else ""
+
+
+def _shares(n: Any) -> str:
+    return f"{float(n):g}"
+
+
 def protection(gtt: dict[str, Any] | None, stop_level: float | None, *, live_orders: bool,
-               watch: dict[str, Any] | None = None) -> dict[str, Any]:
+               watch: dict[str, Any] | None = None, qty: float | None = None) -> dict[str, Any]:
     """Which stop actually protects one real holding.
 
     ``gtt`` is the holding's ``gtt_stops`` record (or None), ``stop_level`` its trailing-stop price (or None),
-    ``watch`` the ``watch_info`` dict. Returns {"kind": "gtt" | "server" | "none", "tone": "solid" | "neutral" |
-    "warn" | "bad", "text": str, "warning": str | None}. The tone is shown with words and an icon, never as colour
-    alone."""
+    ``watch`` the ``watch_info`` dict, ``qty`` the shares held. Returns {"kind": "gtt" | "server" | "none", "tone":
+    "solid" | "neutral" | "warn" | "bad", "text": str, "warning": str | None}. The tone is shown with words and an
+    icon, never as colour alone. A server stop on a real holding only ALERTS (the watch service sells nothing at
+    Groww), so it is never shown as protection."""
     watch = watch or {"level": "unseen", "age_s": None}
     warning = None
     if gtt and gtt.get("last_error"):
         warning = f"GTT problem: {gtt['last_error']}"
     status = str((gtt or {}).get("status") or "ACTIVE").upper()
     if gtt and gtt.get("smart_order_id") and gtt.get("trigger") is not None and status not in _DEAD_GTT:
-        return {"kind": "gtt", "tone": "solid", "warning": warning,
-                "text": f"GTT at Groww {_inr(gtt['trigger'])} (#{gtt['smart_order_id']})"}
+        text, tone = f"GTT at Groww {_inr(gtt['trigger'])} (#{gtt['smart_order_id']})", "solid"
+        if status not in _LIVE_GTT:
+            text, tone = text + f" · status {status} is unconfirmed", "warn"
+        held, covered = qty, gtt.get("qty")
+        try:
+            if held is not None and covered is not None and float(covered) < float(held):
+                text, tone = text + f" · covers {_shares(covered)} of {_shares(held)} shares", "warn"
+        except (TypeError, ValueError):
+            pass
+        if gtt.get("updated_at") and _stamp(gtt["updated_at"]):
+            text += f" · updated {_stamp(gtt['updated_at'])}"
+        return {"kind": "gtt", "tone": tone, "text": text, "warning": warning}
     if not live_orders:
         return {"kind": "none", "tone": "neutral", "warning": warning,
                 "text": "Not protected (live orders off — stop is advisory)"}
     if stop_level is None:
         return {"kind": "none", "tone": "bad", "warning": warning,
-                "text": "No stop set — nothing sells this holding"}
-    text = f"Server stop {_inr(stop_level)} — sells only while the watch service runs"
+                "text": "No stop set: nothing sells this holding"}
+    text = f"Server stop {_inr(stop_level)}: alert only, nothing sells automatically (needs the watch service running)"
     level, age = watch.get("level"), watch.get("age_s")
-    tone = "neutral"
+    tone = "warn"
     if level in ("warn", "bad"):
         tone = level
         text += f" · server not seen for {_age_text(age or 0)}"
     elif level == "unseen":
-        tone = "warn"
+        tone = "bad"
         text += " · watch service not seen"
     return {"kind": "server", "tone": tone, "text": text, "warning": warning}
 
@@ -160,6 +194,7 @@ def protection_map(positions: list[dict[str, Any]], gtt_stops: dict[str, Any], *
     with no entry of its own falls back to ``default``."""
     by_symbol: dict[str, Any] = {}
     stops = {str(p.get("symbol", "")).upper(): p.get("stop") for p in positions}
+    qtys = {str(p.get("symbol", "")).upper(): p.get("qty") for p in positions}
     syms = set(stops) | {str(s).upper() for s in (gtt_stops or {})}
     for sym in sorted(syms):
         if not sym:
@@ -168,7 +203,7 @@ def protection_map(positions: list[dict[str, Any]], gtt_stops: dict[str, Any], *
         if not live_orders and not (gtt_stops or {}).get(sym):
             continue   # live orders off and no GTT recorded: the default already says it
         by_symbol[sym] = protection((gtt_stops or {}).get(sym), stops.get(sym) if has_position else None,
-                                    live_orders=live_orders, watch=watch)
+                                    live_orders=live_orders, watch=watch, qty=qtys.get(sym))
     default = protection(None, None, live_orders=live_orders, watch=watch)
     if live_orders:
         default = {"kind": "none", "tone": "neutral", "warning": None,

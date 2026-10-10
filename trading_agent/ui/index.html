@@ -431,7 +431,7 @@
 
   function render(keepPositions){   // keepPositions: leave the positions table alone (a stop editor is open in it)
     const s = S.settings, a = S.account, c = S.connections, w = S.watch || {};
-    SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: c.groww_live_orders === true}));
+    SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: S.live_orders === true}));
     $("subtitle").textContent = s.market === "in" ? "Groww · NSE bulk & block deals" : "Alpaca · QuiverQuant disclosures";
     const inv = investorsOf(s);
     $("investor").textContent = inv.length === 1 ? inv[0] : `${inv.length} investors`;
@@ -899,7 +899,7 @@
                .concat(r.index_fund ? [{name: `Index fund (${r.index_fund_symbol})`, label: "Fund", color: C.s3, width: 1.5, values: idx(r.index_fund)}] : [])});
   }
 
-  async function refresh(){ try { S = await api("/api/state"); const first = !urlApplied; applyUrlOnce(); if(first) restoreAnchor(); render(stopEdit !== null || (sellEdit !== null && sellEdit.source === "practice")); } catch(e){ toast("Could not load: "+e.message); } }
+  async function refresh(){ try { S = await api("/api/state"); const first = !urlApplied; applyUrlOnce(); if(first) restoreAnchor(); render(stopEdit !== null || (sellEdit !== null && sellEdit.source === "practice")); } catch(e){ toast("Could not load: "+e.message); SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: "unknown"})); } }
   const VERDICT = {"predictive": ["ok", "Predictive"], "could be luck": ["warn", "Could be luck"], "too small to trade": ["warn", "Too small to trade"],
                    "reversed": ["bad", "Reversed"], "no edge": ["", "No edge"], "not enough data": ["", "Not enough data"]};
   function tBars(el, rows, cfg){
@@ -1255,10 +1255,11 @@
 
   refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); });
   loadMyPortfolio(false);
-  setInterval(() => loadMyPortfolio(false), 120000);
-  setInterval(refresh, 60000);
+  setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 120000);
+  setInterval(() => { if(!document.hidden) refresh(); }, 60000);   // a hidden tab does not poll
   loadFreshness();
-  setInterval(loadFreshness, 60000);
+  setInterval(() => { if(!document.hidden) loadFreshness(); }, 60000);
+  document.addEventListener("visibilitychange", () => { if(!document.hidden){ loadFreshness(); refresh(); } });
 })();
 </script>
 </body>

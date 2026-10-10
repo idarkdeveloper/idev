@@ -50,10 +50,11 @@ const state = {
     stop_value: 8, gtt: null},
     {symbol: "NOSTOP", qty: 5, avg_entry_price: 50, current_price: 40, market_value: 200, unrealized_pl: -50, high_water: 50, stop: null,
      stop_type: "none", stop_label: "none", stop_value: null, gtt: null}],
+  live_orders: mode === "demo" ? false : liveOrders,
   protection: mode === "demo" ? null : liveOrders
     ? {live_orders: true, default: {kind: "none", tone: "neutral", text: "No stop recorded (not tradable here, or no price)", warning: null}, by_symbol: {
         TCS: {kind: "gtt", tone: "solid", text: "GTT at Groww ₹99.00 (#gtt_1)", warning: "GTT problem: modify refused"},
-        LAURUSLABS: {kind: "server", tone: "warn", text: "Server stop ₹90.00 — sells only while the watch service runs · server not seen for 7 min", warning: null}}}
+        LAURUSLABS: {kind: "server", tone: "warn", text: "Server stop ₹90.00: alert only, nothing sells automatically (needs the watch service running) · server not seen for 7 min", warning: null}}}
     : {live_orders: false, default: {kind: "none", tone: "neutral", text: "Not protected (live orders off — stop is advisory)", warning: null}, by_symbol: {}},
   stop_fills: [{at: "2026-10-10T09:30:00+05:30", symbol: "OLD", qty: 3, price: 92, stop: 95, type: "fixed", label: "fixed"}],
   performance: {pnl: 0, pnl_pct: 0, fees_paid: 0, starting_cash: 100000, orders: 1}, broker_error: null, deals_error: null,

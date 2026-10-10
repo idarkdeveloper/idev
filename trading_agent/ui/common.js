@@ -452,6 +452,7 @@ window.TA = (function(){
       if(mode === "replay") return {kind: "replay", icon: "rewind",
         text: o.date ? `REPLAY · past data up to ${day(o.date, true)} · practice money` : "REPLAY · past data only · practice money"};
       if(mode === "demo") return {kind: "practice", icon: "flask", text: "PRACTICE · practice money only · no real orders possible"};
+      if(o.liveOrders === "unknown") return {kind: "unknown", icon: "alert", text: "LIVE · your real Groww account · live-orders setting unknown (could not read the server state)"};
       if(o.liveOrders === true) return {kind: "liveon", icon: "alert", text: "LIVE · real Groww account · live orders ON (agent/watch can trade)"};
       if(o.liveOrders === false) return {kind: "live", icon: "lock", text: "LIVE · your real Groww account · read-only on this page · live orders OFF"};
       return {kind: "live", icon: "lock", text: "LIVE · your real Groww account · read-only on this page · checking the live-orders setting"};

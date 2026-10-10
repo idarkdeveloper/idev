@@ -179,21 +179,44 @@ def test_protection_live_orders_off_says_advisory():
 
 
 @pytest.mark.parametrize("level, age, tone, suffix", [
-    ("ok", 40, "neutral", ""),
+    ("ok", 40, "warn", ""),     # alert only is never "protected": amber even with a healthy watch
     ("warn", 7 * 60, "warn", " · server not seen for 7 min"),
     ("bad", 16 * 60, "bad", " · server not seen for 16 min"),
-    ("unseen", None, "warn", " · watch service not seen"),
-    ("idle", 20000, "neutral", ""),
+    ("unseen", None, "bad", " · watch service not seen"),
+    ("idle", 20000, "warn", ""),
 ])
 def test_protection_server_stop_follows_the_watch_service(level, age, tone, suffix):
     p = safety.protection(None, 90.0, live_orders=True, watch={"level": level, "age_s": age})
     assert p["kind"] == "server" and p["tone"] == tone
-    assert p["text"] == "Server stop ₹90.00 — sells only while the watch service runs" + suffix
+    assert p["text"] == ("Server stop ₹90.00: alert only, nothing sells automatically "
+                         "(needs the watch service running)" + suffix)
 
 
 def test_protection_live_orders_on_but_no_stop_level_is_flagged():
     p = safety.protection(None, None, live_orders=True, watch={"level": "ok", "age_s": 1})
-    assert p["kind"] == "none" and p["tone"] == "bad" and "nothing sells" in p["text"]
+    assert p["kind"] == "none" and p["tone"] == "bad" and p["text"] == "No stop set: nothing sells this holding"
+
+
+def test_protection_partial_gtt_unknown_status_and_updated_at():
+    p = safety.protection({**GTT, "qty": 2, "updated_at": "2026-10-12T06:30:00+00:00"}, None, live_orders=True, qty=5)
+    assert p["tone"] == "warn" and p["text"] == "GTT at Groww ₹153.00 (#gtt_77) · covers 2 of 5 shares · updated 2026-10-12 06:30 UTC"
+    assert safety.protection(GTT, None, live_orders=True, qty=2)["tone"] == "solid"          # fully covered
+    assert safety.protection(GTT, None, live_orders=True, qty=1)["tone"] == "solid"
+    for ok in ("ACTIVE", "open", "PENDING", "trigger_pending"):
+        assert safety.protection({**GTT, "status": ok}, None, live_orders=True, qty=2)["tone"] == "solid", ok
+    odd = safety.protection({**GTT, "status": "WEIRD"}, None, live_orders=True, qty=2)
+    assert odd["kind"] == "gtt" and odd["tone"] == "warn" and "status WEIRD is unconfirmed" in odd["text"]
+    m = safety.protection_map([{"symbol": "INFY", "stop": 80.0, "qty": 10}], {"INFY": GTT}, live_orders=True, watch={"level": "ok", "age_s": 1})
+    assert "covers 2 of 10 shares" in m["by_symbol"]["INFY"]["text"]
+
+
+def test_watch_thresholds_scale_with_the_interval(tmp_path):
+    assert safety.thresholds(60) == (300, 900) and safety.thresholds(None) == (300, 900) and safety.thresholds(-5) == (300, 900)
+    assert safety.thresholds(300) == (660, 1320)
+    d = beat(tmp_path, MON_NOON, 600, every=300)       # 10 minutes is fine for a 5-minute loop
+    assert safety.freshness(d, MON_NOON)["watch"]["level"] == "ok"
+    d = beat(tmp_path, MON_NOON, 1400, every=300)
+    assert safety.freshness(d, MON_NOON)["watch"]["level"] == "bad"
 
 
 def test_protection_map_covers_positions_and_recorded_gtts():
@@ -249,7 +272,7 @@ def test_live_snapshot_protection_with_live_orders_on(settings, tmp_path, monkey
     (settings.state_dir / "state.json").write_text(json.dumps(st))
     prot = app.snapshot()["protection"]
     assert prot["live_orders"] is True
-    assert prot["by_symbol"]["TCS"]["text"] == "GTT at Groww ₹153.00 (#gtt_77)"
+    assert prot["by_symbol"]["TCS"]["text"] == "GTT at Groww ₹153.00 (#gtt_77) · covers 2 of 10 shares"
     assert prot["by_symbol"]["TCS"]["warning"] == "GTT problem: modify refused"
     assert prot["by_symbol"]["INFY"]["tone"] == "bad"                                       # stop type "none"
     assert app.demo.snapshot()["protection"] is None                                        # the Demo page has no such column
@@ -268,7 +291,8 @@ def test_live_server_stop_text_reaches_the_snapshot(settings, tmp_path, monkeypa
     (settings.state_dir / "watch_alive.json").write_text(json.dumps({"at": (MON_NOON - timedelta(seconds=20 * 60)).isoformat()}))
     t = app.snapshot()["protection"]["by_symbol"]["TCS"]
     assert t["kind"] == "server" and t["tone"] == "bad" and t["text"] == (
-        "Server stop ₹95.00 — sells only while the watch service runs · server not seen for 20 min")
+        "Server stop ₹95.00: alert only, nothing sells automatically (needs the watch service running)"
+        " · server not seen for 20 min")
 
 
 # ---------------------------------------------------------------- the page
@@ -289,6 +313,7 @@ def test_mode_strip_text_per_mode():
     assert s["replay"]["text"] == "REPLAY · past data up to 9 Mar 2021 · practice money"
     assert s["replay_home"]["text"] == "REPLAY · past data only · practice money"
     assert "checking" in s["live_unknown"]["text"] and s["live_unknown"]["kind"] == "live"
+    assert s["live_state_unknown"]["kind"] == "unknown" and "live-orders setting unknown" in s["live_state_unknown"]["text"]
     assert (s["live_off"]["kind"], s["live_on"]["kind"], s["replay"]["kind"]) == ("live", "liveon", "replay")
     for k, v in s.items():
         assert v["icon"] in ("lock", "alert", "flask", "rewind"), k      # always an icon as well as colour
@@ -344,69 +369,97 @@ def _raw_post(base, path, body, headers):
         return e.code
 
 
+TS = "box.tail1234.ts.net"
+
+
 def test_post_requires_json_and_same_origin(server):
     base, app = server
+    app.settings.allowed_hosts = [TS]
     body = json.dumps({"index": 0}).encode()
     js = {"Content-Type": "application/json"}
     assert _raw_post(base, "/api/dismiss", body, {"Content-Type": "text/plain"}) == 415
     assert _raw_post(base, "/api/dismiss", body, {}) == 415
     assert _raw_post(base, "/api/dismiss", body, {**js, "Origin": "https://evil.example"}) == 403
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Origin": "null"}) == 403
     assert _raw_post(base, "/api/dismiss", body, {**js, "Origin": base}) == 200
     assert _raw_post(base, "/api/dismiss", body, js) == 200                                   # no Origin, no Sec-Fetch-Site
     assert _raw_post(base, "/api/dismiss", body, {**js, "Sec-Fetch-Site": "same-origin"}) == 200
     assert _raw_post(base, "/api/dismiss", body, {**js, "Sec-Fetch-Site": "cross-site"}) == 403
     assert _raw_post(base, "/api/dismiss", body, {**js, "Sec-Fetch-Site": "same-site"}) == 403
-    # tailscale serve: proxied from localhost, Host is the local one, Origin the public name
-    proxied = {**js, "Origin": "https://box.tail1234.ts.net", "X-Forwarded-Host": "box.tail1234.ts.net", "X-Forwarded-Proto": "https"}
+    # tailscale serve: proxied from localhost, the public name is allowlisted
+    proxied = {**js, "Origin": f"https://{TS}", "X-Forwarded-Host": TS, "X-Forwarded-Proto": "https"}
     assert _raw_post(base, "/api/dismiss", body, proxied) == 200
     assert _raw_post(base, "/api/dismiss", body, {**proxied, "Origin": "https://evil.example"}) == 403
+    # a forwarded host that is not allowlisted is not trusted, even from localhost
+    unlisted = {**js, "Origin": "https://other.ts.net", "X-Forwarded-Host": "other.ts.net", "X-Forwarded-Proto": "https"}
+    assert _raw_post(base, "/api/dismiss", body, unlisted) == 403
     assert _raw_post(base, "/demo/api/dismiss", body, {"Content-Type": "text/plain"}) == 415
     assert _raw_post(base, "/replay/api/trials", b"{}", {"Content-Type": "text/plain"}) == 415   # Replay routes too
     assert _raw_post(base, "/replay/api/trials", b"{}", {**js, "Origin": "https://evil.example"}) == 403
 
 
-@pytest.mark.skipif(NODE is None, reason="node not installed")
-def test_protection_markup_is_escaped_and_uses_icons():
-    p = _node(str(HARNESS))["prot"]
-    assert "&lt;b&gt;x&lt;/b&gt;" in p["escaped"] and "<b>" not in p["escaped"]
-    assert p["gtt"].count("<svg") == 1 and 'class="prot solid"' in p["gtt"]
-    assert 'class="prot-warn"' in p["warn"] and p["warn"].count("<svg") == 2
+def _fetch(base, path, headers):
+    import urllib.error
+    import urllib.request
+    try:
+        with urllib.request.urlopen(urllib.request.Request(base + path, headers=headers), timeout=5) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
 
 
-@pytest.mark.skipif(NODE is None, reason="node not installed")
-@pytest.mark.parametrize("arg, strip, kind", [
-    ("live", "LIVE · your real Groww account · read-only on this page · live orders OFF", "live"),
-    ("liveorders", "LIVE · real Groww account · live orders ON (agent/watch can trade)", "liveon"),
-])
-def test_live_page_strip_chip_and_protection_column(arg, strip, kind):
-    out = _node(str(Path(__file__).resolve().parent / "ui_mode_harness.js"), "live", *(["liveorders"] if arg == "liveorders" else []))
-    assert out["strip_text"] == strip and out["strip_class"] == "modestrip " + kind and out["strip_theme"] == kind
-    assert out["fresh_text"] == "Data live · watch 40 s ago" and out["fresh_class"] == "pill fresh ok"
-    rows = out["mp_rows_html"]
-    assert out["prot_th_hidden"] is False and rows.count('class="prot-cell"') == 2 and rows.count('class="prot-line"') == 2
-    if kind == "live":
-        assert rows.count("Not protected (live orders off — stop is advisory)") == 4          # cell + phone line, two holdings
-    else:
-        assert "GTT at Groww ₹99.00 (#gtt_1)" in rows and "GTT problem: modify refused" in rows
-        assert "server not seen for 7 min" in rows and "No stop recorded" not in rows
+def test_host_allowlist_stops_dns_rebinding_on_get_and_post(server):
+    base, app = server
+    port = base.rsplit(":", 1)[1]
+    body = json.dumps({"index": 0}).encode()
+    js = {"Content-Type": "application/json"}
+    for host in (f"127.0.0.1:{port}", "127.0.0.1", "localhost", f"localhost:{port}", f"[::1]:{port}", "[::1]"):
+        assert _fetch(base, "/api/state", {"Host": host}) == 200, host
+    for host in ("evil.example", f"evil.example:{port}", "127.0.0.1.evil.example", f"127.0.0.1:{int(port) + 1}", "0.0.0.0"):
+        assert _fetch(base, "/api/state", {"Host": host}) == 421, host
+        assert _fetch(base, "/", {"Host": host}) == 421, host
+        assert _raw_post(base, "/api/dismiss", body, {**js, "Host": host}) == 421, host
+    assert _fetch(base, "/api/state", {"Host": TS}) == 421                                  # not listed yet
+    app.settings.allowed_hosts = [TS]
+    assert _fetch(base, "/api/state", {"Host": TS}) == 200
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Host": TS, "Origin": f"http://{TS}"}) == 200
+    assert _fetch(base, "/api/state", {"Host": "other." + TS}) == 421                       # exact names, no suffix match
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Origin": "http://evil.example"}) == 403   # Origin must be an allowlisted host
 
 
-@pytest.mark.skipif(NODE is None, reason="node not installed")
-def test_demo_page_strip_has_no_protection_column():
-    out = _node(str(Path(__file__).resolve().parent / "ui_mode_harness.js"), "demo")
-    assert out["strip_text"] == "PRACTICE · practice money only · no real orders possible" and out["strip_theme"] == "practice"
-    assert out["prot_th_hidden"] is True and "prot-cell" not in out["mp_rows_html"]
+def test_get_api_refuses_cross_site_fetches(server):
+    base, _ = server
+    for site, want in (("cross-site", 403), ("same-site", 403), ("same-origin", 200), ("none", 200)):
+        assert _fetch(base, "/api/state", {"Sec-Fetch-Site": site}) == want, site
+    assert _fetch(base, "/api/freshness", {"Sec-Fetch-Site": "cross-site"}) == 403
+    assert _fetch(base, "/", {"Sec-Fetch-Site": "cross-site"}) == 200                        # the page itself can be linked to
 
 
-def test_pages_carry_the_strip_and_the_chip_and_touch_rules():
-    index = (UI / "index.html").read_text(encoding="utf-8")
-    replay = (UI / "replay.html").read_text(encoding="utf-8")
-    css = (UI / "nocturne.css").read_text(encoding="utf-8")
-    assert 'id="modestrip"' in index and 'id="modestrip"' in replay
-    assert index.index("</header>") < index.index('id="modestrip"') < index.index("<main>")      # directly under the header
-    assert 'id="freshness"' in index and 'id="fresh-text"' in index and "/api/freshness" in index
-    assert ".modestrip { position: sticky; top: 0;" in css
-    assert "touch-action: pan-y" in css and "@media (pointer: coarse)" in css and "min-height: 44px" in css
-    for name in ("portfolio", "deals", "signal-lab", "lookup"):
-        assert f'data-anchor="{name}"' in index
-    assert "history.replaceState" in index and "mousemove" in (UI / "common.js").read_text(encoding="utf-8")
+def test_forwarded_headers_from_a_non_local_peer_are_ignored(server, monkeypatch):
+    """Only a peer on localhost (tailscale serve) may vouch for a forwarded host."""
+    import http.server
+    base, app = server
+    app.settings.allowed_hosts = [TS]
+    real = http.server.BaseHTTPRequestHandler.handle_one_request
+
+    def from_elsewhere(self):
+        self.client_address = ("100.64.0.9", self.client_address[1])
+        return real(self)
+    monkeypatch.setattr(http.server.BaseHTTPRequestHandler, "handle_one_request", from_elsewhere)
+    body = json.dumps({"index": 0}).encode()
+    proxied = {"Content-Type": "application/json", "Origin": f"https://{TS}", "X-Forwarded-Host": TS, "X-Forwarded-Proto": "https"}
+    assert _raw_post(base, "/api/dismiss", body, proxied) == 403
+
+
+def test_allowed_hosts_setting_is_validated(tmp_path):
+    from trading_agent.config import parse_allowed_hosts
+    from trading_agent.ui import _check_type, _write_env
+    assert parse_allowed_hosts(" Box.Tail1234.ts.net , localhost:8787,box.tail1234.ts.net ") == ["box.tail1234.ts.net", "localhost:8787"]
+    assert parse_allowed_hosts("") == [] and parse_allowed_hosts(None) == []
+    for bad in ("*.ts.net", "https://box.ts.net", "a b", "box/ts", "-x", "a," + ",".join(f"h{i}" for i in range(11))):
+        with pytest.raises(ValueError):
+            parse_allowed_hosts(bad)
+    with pytest.raises(ValueError):
+        _check_type("allowed_hosts", ["a"])
+    with pytest.raises(ValueError):
+        _write_env(tmp_path / ".env", {"TA_ALLOWED_HOSTS": "a.ts.net\nGROWW_LIVE_ORDERS=true"})

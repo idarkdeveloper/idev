@@ -94,6 +94,7 @@ sudo systemctl restart trading-agent-watch trading-agent-dashboard   # apply
 | `NOTIFY_WEBHOOK_URL` | Optional Slack / Discord / n8n webhook |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Optional Telegram alerts (section 13); `TELEGRAM_ALERTS=false` switches them off |
 | `HEARTBEAT_URL` | Optional dead-man's switch ping URL, healthchecks.io style (section 12) |
+| `TA_ALLOWED_HOSTS` | Optional, extra dashboard Host names for phone access (section 15) |
 
 ### Safety switches (keep as shown until the live test)
 
@@ -415,3 +416,17 @@ the POST); it still gives Gmail and Yahoo an unsubscribe address, but do not cou
 single-recipient alerts to yourself, so this is a deliverability nicety, not a mailing-list feature.
 
 Subjects stay plain and free of promotional words (no "free", "offer", "!!!"); a test lists the current ones.
+
+## 15. Phone access (Tailscale)
+
+The dashboard only answers to `127.0.0.1`, `localhost` and `[::1]` (with or without its port). A request with any other
+`Host` header gets HTTP 421: that is what stops a malicious website from reaching the dashboard through DNS rebinding.
+To use it from a phone, run `tailscale serve` on the machine (it proxies `https://<host>.<tailnet>.ts.net` to
+`127.0.0.1:8787`) and add that exact name to `.env`:
+
+    TA_ALLOWED_HOSTS=box.tail1234.ts.net
+
+Several names are comma separated; wildcards are refused. Restart the dashboard after editing. Every POST must also be
+JSON and same-origin: a browser's `Origin` must match an allowed host, and `X-Forwarded-Host` / `X-Forwarded-Proto` are
+trusted only from a proxy on localhost and only for an allowed host. Page loads and API reads from another site are
+refused too (`Sec-Fetch-Site`).
