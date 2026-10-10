@@ -675,7 +675,7 @@ run the rest, and after that only new filings, which takes seconds.
 
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest -q
+python -m pytest -q -n 8            # parallel (pip install -r requirements-dev.txt); about 4 min instead of 7
 python -m ruff check .          # pyflakes, bugbear, blind-except (config in pyproject.toml; no formatter is run)
 python -m mypy                  # trading_agent/ only, pragmatic mode
 ```
