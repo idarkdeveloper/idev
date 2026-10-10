@@ -10,13 +10,14 @@ Percentages inside the data are plain percent numbers (3.12 means +3.12%), keys 
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -65,6 +66,7 @@ class DigestContext:
     names: Any = None  # CompanyNames: the full NSE equity list (cached), for the summary's known-name check
     calendar: Any = None  # NSEHolidays-like (is_trading_day): finds the previous trading day
     name_of: dict = field(default_factory=dict)  # symbol -> company name (from the NSE list), for the summary check
+    known_symbols: set = field(default_factory=set)
     known: set = field(default_factory=set)  # every symbol / company word seen, so a summary cannot name others
     cancel: threading.Event | None = None  # set when the build has timed out
     deadline: float | None = None  # time.monotonic() after which the build stops asking for more
@@ -208,6 +210,11 @@ def num(v: float, d: int = 0) -> str:
     return ip + ("." + fp if fp else "")
 
 
+def num_intl(v: float, d: int = 0) -> str:
+    """Foreign index levels and dollar prices use international grouping (123,456); rupee amounts stay Indian."""
+    return f"{abs(v):,.{d}f}"
+
+
 def inr(v: float | None, d: int = 0, sign: bool = False) -> str:
     if v is None:
         return "n/a"
@@ -247,7 +254,9 @@ def _mood(ctx: DigestContext) -> dict[str, Any]:
     if down:
         why.append("Nifty is in a downtrend (50-day average below the 200-day, price below both)")
     risk_off = risk_off or down
-    out = {"regime": r.get("regime"), "score": r.get("score"), "summary": clean_text(r.get("summary") or "", 500),
+    out = {"trend": r.get("trend"), "nifty": {"last": nifty.get("last"), "ret_1d_pct": _pct(nifty.get("ret_1d")),
+                                              "ret_20d_pct": _pct(nifty.get("ret_20d")), "above_200dma": nifty.get("above_200dma")},
+           "regime": r.get("regime"), "score": r.get("score"), "summary": clean_text(r.get("summary") or "", 500),
            "guidance": r.get("guidance"), "nifty_above_200dma": nifty.get("above_200dma"),
            "no_new_buys": bool(risk_off or below), "why": why,
            "rules": "no new buys when the regime is risk-off, Nifty is below its 200-day average, or Nifty is in a downtrend"}
@@ -314,13 +323,26 @@ COMMON_WORDS = {
 _COMMON = COMMON_WORDS
 
 
+@functools.lru_cache(maxsize=1)
+def english_words() -> frozenset:
+    """Everyday English (a few thousand words, shipped as common_words.txt): these are never company names here."""
+    try:
+        from importlib import resources
+        text = (resources.files("trading_agent") / "common_words.txt").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        text = ""
+    return frozenset(w.strip().lower() for w in text.splitlines() if w.strip()) | {w.lower() for w in COMMON_WORDS}
+
+
 def _remember(ctx: DigestContext, symbol: Any, name: Any) -> None:
-    """Note a symbol and the distinctive words of a company name; the summary writer rejects any of them that the
-    data does not carry."""
+    """Note a symbol (always) and the distinctive, non-English words of a company name; the summary writer rejects
+    any of them that the data does not carry."""
     if symbol:
-        ctx.known.add(str(symbol).upper())   # always: an upper-case OIL is still checked
+        ctx.known.add(str(symbol).upper())
+        ctx.known_symbols.add(str(symbol).upper())   # always: an upper-case OIL is still checked
+    eng = english_words()
     for w in re.findall(r"[A-Za-z&]{4,}", str(name or "")):
-        if w.upper() not in COMMON_WORDS:
+        if w.upper() not in COMMON_WORDS and w.lower() not in eng:
             ctx.known.add(w.upper())
 
 
@@ -442,11 +464,11 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
                 a = atr(bars) if bars else None
                 near = min(a, NEAR_STOP * level) if a else NEAR_STOP * level   # 1 ATR, but never more than 3%
                 avg = h["avg"]
+                what = "the stop level"
                 if h["estimated"]:
-                    what = "its estimated stop"
-                    rule = "15% under your buy price" if abs(level - avg * 0.85) < 0.005 * avg else "3 ATR under your buy price"
+                    rule = "buy price minus 15%" if abs(level - avg * 0.85) < 0.005 * avg else "buy price minus 3×ATR"
                 else:
-                    what, rule = "its stop", st["label"]
+                    rule = st["label"]
                 if price <= level:
                     if h["estimated"] and price < level * 0.75 and price < avg:
                         reasons.append(f"down {(1 - price / avg) * 100:.0f}% from your buy price (well past any stop)")
@@ -564,11 +586,11 @@ def _section(fn: Callable[..., Any], label: str, *a: Any) -> dict[str, Any]:
 WORLD_INDICES = [
     ("^GSPC", "S&P 500", "us", "US"), ("^IXIC", "Nasdaq", "us", "US"), ("^DJI", "Dow", "us", "US"),
     ("^N225", "Nikkei", "asia", "Japan"), ("^HSI", "Hang Seng", "asia", "Hong Kong"), ("000001.SS", "Shanghai", "asia", "China"),
-    ("^KS11", "KOSPI", "asia", "South Korea"), ("^TWII", "Taiwan", "asia", "Taiwan"), ("^STI", "Straits Times", "asia", "Singapore"),
+    ("^KS11", "KOSPI", "asia", "Korea"), ("^TWII", "Taiwan", "asia", "Taiwan"), ("^STI", "Straits Times", "asia", "Singapore"),
     ("^AXJO", "ASX 200", "asia", "Australia")]
 WORLD_FUTURES = [("ES=F", "S&P 500 fut"), ("NQ=F", "Nasdaq 100 fut")]
 WORLD_VIX = ("^VIX", "VIX")
-INDIA_CONTEXT = [("nifty50", "Nifty"), ("india_vix", "India VIX"), ("usdinr", "USD/INR"), ("brent", "Brent")]
+_REGIME_TREND = {"up": "UP", "down": "DOWN", "mixed": "mixed"}
 
 
 def _chg(closes: list[float], n: int) -> float | None:
@@ -594,9 +616,18 @@ def trend_label(closes: list[float]) -> str:
     return "mixed"
 
 
-def _world_row(src: Any, symbol: str, name: str) -> dict[str, Any] | None:
+ASIA_CLOSE_IST = {"^N225": dtime(11, 30), "^HSI": dtime(13, 30), "000001.SS": dtime(12, 30), "^KS11": dtime(12, 0),
+                  "^TWII": dtime(11, 0), "^STI": dtime(14, 30), "^AXJO": dtime(11, 30)}
+
+
+def _world_row(src: Any, symbol: str, name: str, drop_today: date | None = None) -> dict[str, Any] | None:
+    """``drop_today``: that day's bar is left out (an Asian market still trading at 09:00 IST has only a partial bar;
+    the row then describes the last completed session)."""
     try:
-        closes = [float(b["close"]) for b in src.history(symbol, "1y") if b.get("close") is not None]
+        bars = [b for b in src.history(symbol, "1y") if b.get("close") is not None]
+        if drop_today is not None and bars and str(bars[-1].get("date")) == drop_today.isoformat():
+            bars = bars[:-1]
+        closes = [float(b["close"]) for b in bars]
     except Exception:  # noqa: BLE001 - an index that cannot be read is skipped (and counted)
         return None
     if len(closes) < 2:
@@ -609,16 +640,17 @@ def _world_row(src: Any, symbol: str, name: str) -> dict[str, Any] | None:
 def _region_line(region: str, rows: list[dict[str, Any]], countries: dict[str, str]) -> str | None:
     if not rows:
         return None
-    ups = sum(r["trend"] == "UP" for r in rows)
-    downs = sum(r["trend"] == "DOWN" for r in rows)
-    label = "uptrend" if ups * 2 > len(rows) else "downtrend" if downs * 2 > len(rows) else "mixed"
-    moved_up = [r for r in rows if (r["d1_pct"] or 0) >= 0]
+    # by the TREND label of each index (the same one the table shows), never by the day's move; indices only
+    up = [r for r in rows if r["trend"] == "UP"]
+    down = [r for r in rows if r["trend"] == "DOWN"]
+    mixed = [r for r in rows if r["trend"] not in ("UP", "DOWN")]
+    label = "uptrend" if len(up) * 2 > len(rows) else "downtrend" if len(down) * 2 > len(rows) else "mixed"
+    who = (lambda rs: [r["index"] for r in rs]) if region == "US" else (lambda rs: [countries[r["index"]] for r in rs])
     if region == "US":
-        return f"US: {label} ({len(moved_up)} of {len(rows)} up)"
-    up = [countries[r["index"]] for r in rows if (r["d1_pct"] or 0) >= 0]
-    down = [countries[r["index"]] for r in rows if (r["d1_pct"] or 0) < 0]
-    detail = "; ".join(x for x in (", ".join(up) + " up" if up else "", ", ".join(down) + " down" if down else "") if x)
-    return f"Asia: {label} ({detail})"
+        parts = [f"{len(up)} of {len(rows)} up"] + [", ".join(who(rs)) + f" {w}" for rs, w in ((down, "down"), (mixed, "mixed")) if rs]
+        return f"US: {label} ({', '.join(parts)})"
+    parts = [", ".join(who(rs)) + f" {w}" for rs, w in ((up, "up"), (down, "down"), (mixed, "mixed")) if rs]
+    return f"Asia: {label} ({'; '.join(parts)})"
 
 
 def _world(ctx: DigestContext) -> dict[str, Any]:
@@ -632,42 +664,51 @@ def _world(ctx: DigestContext) -> dict[str, Any]:
         if ctx.expired():
             skipped += 1
             continue
-        row = _world_row(src, sym, name)
+        now = ctx.now()
+        still_open = region == "asia" and now.time() < ASIA_CLOSE_IST.get(sym, dtime(0, 0))
+        row = _world_row(src, sym, name, now.date() if still_open else None)
         if row is None:
             skipped += 1
         else:
             rows[region].append(row)
     futures = []
     for sym, name in WORLD_FUTURES:
+        if ctx.expired():
+            skipped += 1
+            continue
         row = _world_row(src, sym, name)
         if row is None:
             skipped += 1
         else:
             futures.append(row)
-    vix = _world_row(src, *WORLD_VIX)
+    vix = None if ctx.expired() else _world_row(src, *WORLD_VIX)
     if vix is None:
         skipped += 1
     else:
         vix["direction"] = "rising" if vix["vs_50d"] == "above" else "falling" if vix["vs_50d"] == "below" else None
-    india = []
-    try:
-        mk = ctx.context.fetch().get("markets", {}) if ctx.context is not None else {}
-        for key, name in INDIA_CONTEXT:
-            m = mk.get(key) or {}
+    india = []   # Nifty only: India VIX, USD/INR and Brent are in the risk gauges
+    nifty = _world_row(src, "^NSEI", "Nifty")
+    if nifty is not None:
+        india.append(nifty)
+    else:
+        try:
+            m = (ctx.context.fetch().get("markets", {}) if ctx.context is not None else {}).get("nifty50") or {}
             if m.get("last") is not None:
-                india.append({"index": name, "close": round(m["last"], 2), "d1_pct": _pct(m.get("ret_1d")),
-                              "d5_pct": _pct(m.get("ret_5d")), "d20_pct": _pct(m.get("ret_20d")), "trend": None})
-    except Exception:  # noqa: BLE001
-        pass
+                india.append({"index": "Nifty", "close": round(m["last"], 2), "d1_pct": _pct(m.get("ret_1d")),
+                              "d5_pct": _pct(m.get("ret_5d")), "d20_pct": _pct(m.get("ret_20d")),
+                              "trend": _REGIME_TREND.get(str(m.get("trend")), "mixed")})
+        except Exception:  # noqa: BLE001
+            pass
     if not (rows["us"] or rows["asia"] or futures or vix or india):
         return unavailable("none of the world indices could be read")
     lines = [x for x in (_region_line("US", rows["us"], countries), _region_line("Asia", rows["asia"], countries)) if x]
     out: dict[str, Any] = {
         "us": rows["us"], "asia": rows["asia"], "futures": futures, "vix": vix, "india": india, "skipped": skipped,
         "region_lines": lines,
+        "trends": {r["index"]: r["trend"] for r in rows["us"] + rows["asia"] + india},
         "futures_line": ("Overnight futures: " + ", ".join(f"{r['index'].replace(' fut', '')} {pct_text(r['d1_pct'])}" for r in futures)
                          if futures else None),
-        "vix_line": (f"VIX {num(vix['close'], 2)}, {vix['direction']} against its 50-day average" if vix and vix.get("direction") else None),
+        "vix_line": (f"VIX {num_intl(vix['close'], 2)}, {vix['direction']} against its 50-day average" if vix and vix.get("direction") else None),
         "note": "Current trends from daily closes (UP: close above the 50-day average above the 200-day; DOWN: the reverse), not a forecast."}
     return out
 
@@ -784,7 +825,7 @@ def morning_brief(ctx: DigestContext) -> dict[str, Any]:
 # =============================================================================
 # Evening
 # =============================================================================
-def _groww_close(ctx: DigestContext, today: date) -> dict[str, Any]:
+def _groww_close(ctx: DigestContext, today: date, closed: bool = True) -> dict[str, Any]:
     rows, info = _groww_rows(ctx)
     if info.get("unavailable"):
         return unavailable(info["unavailable"])
@@ -797,7 +838,8 @@ def _groww_close(ctx: DigestContext, today: date) -> dict[str, Any]:
             continue
         prev = None
         try:
-            prev = prev_close(_bars(ctx, h["symbol"], "1mo", bse=h.get("exchange") == "BSE"), today)
+            if closed:
+                prev = prev_close(_bars(ctx, h["symbol"], "1mo", bse=h.get("exchange") == "BSE"), today)
         except Exception:  # noqa: BLE001
             prev = None
         row = {"symbol": h["symbol"], "name": clean_text(h.get("name") or "", 80), "qty": h["qty"], "price": round(price, 2),
@@ -808,14 +850,14 @@ def _groww_close(ctx: DigestContext, today: date) -> dict[str, Any]:
                        day_pl=round(h["qty"] * (price - prev), 2))
             day_pl += h["qty"] * (price - prev)
             day_base += h["qty"] * prev
-        else:
+        elif closed:
             no_prev.append(h["symbol"])
         out_rows.append(row)
     out_rows.sort(key=lambda r: (r["day_pct"] is None, -(r["day_pct"] or 0)))
     g = info["portfolio"]
     priced = [r for r in out_rows]
     out = {"value": g.get("value"), "invested": g.get("invested"), "pl": g.get("pl"), "pl_pct": _pct(g.get("pl_pct")),
-           "day_pl": round(day_pl, 2) if priced and len(no_prev) < len(priced) else None,
+           "day_pl": round(day_pl, 2) if closed and priced and len(no_prev) < len(priced) else None,
            "day_pct": round(day_pl / day_base * 100, 2) if day_base else None,
            "holdings": out_rows, "no_price": no_price, "no_prev_close": no_prev}
     label = _saved_label(info)
@@ -833,7 +875,8 @@ def _previous_trading_day(ctx: DigestContext, today: date) -> date:
     return d
 
 
-def _practice_close(ctx: DigestContext, today: date) -> dict[str, Any]:
+def _practice_close(ctx: DigestContext, today: date, closed: bool = True,
+                    groww: dict[str, Any] | None = None) -> dict[str, Any]:
     if ctx.practice is None:
         return unavailable("no practice account yet")
     acct = ctx.practice.account()
@@ -845,10 +888,16 @@ def _practice_close(ctx: DigestContext, today: date) -> dict[str, Any]:
                           "pl": round(p.unrealized_pl, 2) if p.unrealized_pl is not None else None,
                           "pl_pct": round((p.current_price / p.avg_entry_price - 1) * 100, 2)
                           if p.current_price is not None and p.avg_entry_price else None})
+    same = None
+    if groww and positions and "holdings" in groww:
+        held = {(h["symbol"], float(h["qty"])) for h in groww["holdings"]}
+        if held and held == {(x["symbol"], float(x["qty"])) for x in positions} and \
+                len(groww["holdings"]) + len(groww.get("no_price") or []) >= len(positions):
+            same = len(positions)
     st = _state(ctx)
     change = change_pct = since = since_change = since_pct = None
     fills: list[dict[str, Any]] = []
-    if st is not None:
+    if st is not None and closed:
         before, before_day = None, None
         for pt in st.data.get("practice_equity", []):
             try:
@@ -876,7 +925,8 @@ def _practice_close(ctx: DigestContext, today: date) -> dict[str, Any]:
                               "label": f.get("label")})
     return {"equity": round(acct.equity, 2), "cash": round(acct.cash, 2), "day_change": change, "day_change_pct": change_pct,
             "since": since, "since_change": since_change, "since_change_pct": since_pct,
-            "total_pl": perf.get("pnl"), "total_pl_pct": perf.get("pnl_pct"), "positions": positions,
+            "same_as_groww": same,
+            "total_pl": perf.get("pnl"), "total_pl_pct": perf.get("pnl_pct"), "positions": [] if same else positions,
             "stop_fills_today": fills}
 
 
@@ -926,12 +976,24 @@ def _is_on(published: Any, day: date) -> bool:
     return (dt if dt.tzinfo else dt.replace(tzinfo=IST)).astimezone(IST).date() == day
 
 
+def _trading_day(ctx: DigestContext, d: date) -> bool:
+    return d.weekday() < 5 and (ctx.calendar is None or bool(ctx.calendar.is_trading_day(d)))
+
+
 def evening_report(ctx: DigestContext) -> dict[str, Any]:
     load_known(ctx)
-    today = ctx.now().date()
+    now = ctx.now()
+    today = now.date()
     data = _header(ctx, "evening")
-    data["groww"] = _section(_groww_close, "Groww portfolio", ctx, today)
-    data["practice"] = _section(_practice_close, "practice account", ctx, today)
+    trading = _trading_day(ctx, today)
+    closed = trading and now.time() >= dtime(15, 30)
+    if not closed:   # a weekend, a holiday, or before the close: the figures are those of the last close
+        last = _previous_trading_day(ctx, today)
+        data["stale_close"] = {"date": last.isoformat(), "reason": "before the close" if trading else "no trading today",
+                               "label": f"{last:%a} {last.day} {last:%b}"}
+    data["groww"] = _section(_groww_close, "Groww portfolio", ctx, today, closed)
+    data["practice"] = _section(_practice_close, "practice account", ctx, today, closed,
+                                (data["groww"] if "unavailable" not in data["groww"] else None))
     data["news"] = _section(_news_today, "news", ctx, today)
     data["deals"] = _section(_deals, "deals", ctx, "evening", today)
     return data
@@ -947,7 +1009,7 @@ def build_data(kind: str, ctx: DigestContext) -> dict[str, Any]:
 # Real context
 # =============================================================================
 def make_context(settings: Any, *, data: Any = None, prices: Any = None, news: Any = None, holidays: Any = None,
-                 practice: Any = None, groww: Callable[[], dict[str, Any]] | None = None,
+                 prices_bse: Any = None, practice: Any = None, groww: Callable[[], dict[str, Any]] | None = None,
                  context: Any = None) -> DigestContext:
     """The digest's inputs for a real run. Anything that cannot be built is left None (its section then says
     "unavailable"); nothing here places an order or writes to Groww."""
@@ -973,7 +1035,9 @@ def make_context(settings: Any, *, data: Any = None, prices: Any = None, news: A
         sim = Path(settings.state_dir) / "paper_broker.json"
         if sim.exists():
             try:
-                practice = LocalPaperBroker(sim, starting_cash=settings.paper_starting_cash, price_fn=prices,
+                from .instruments import nse_then_bse
+                bse = prices_bse or YahooPrices(suffix=".BO", cache_dir=cache)
+                practice = LocalPaperBroker(sim, starting_cash=settings.paper_starting_cash, price_fn=nse_then_bse(prices, bse),
                                             currency="INR", whole_shares=True, cost_model=cost_model_for("in"),
                                             shared=True)
             except Exception as e:  # noqa: BLE001
@@ -985,7 +1049,7 @@ def make_context(settings: Any, *, data: Any = None, prices: Any = None, news: A
     except Exception:  # noqa: BLE001
         pass
     return DigestContext(
-        names=names, world_prices=YahooPrices(suffix="", cache_dir=cache, cache_ttl=6 * 3600), settings=settings, prices=prices, prices_bse=YahooPrices(suffix=".BO", cache_dir=cache), context=context,
+        names=names, world_prices=YahooPrices(suffix="", cache_dir=cache, cache_ttl=6 * 3600), settings=settings, prices=prices, prices_bse=prices_bse or YahooPrices(suffix=".BO", cache_dir=cache), context=context,
         data=data, news=news, practice=practice, calendar=holidays,
         groww=groww or (lambda: read_groww_portfolio(settings, prices, datetime.now(IST).isoformat(timespec="seconds"))),
         universe=load_universe, state_path=Path(settings.state_dir) / "state.json")

@@ -50,7 +50,7 @@ def build_digest(kind: str, ctx: DigestContext, *, writer: str | None = None, se
         settings = dataclasses.replace(settings, digest_writer=writer)
     data = build_data(kind, ctx)
     summary, name = write_summary(kind, data, settings, session=session, client=client, known=ctx.known,
-                                  cancelled=ctx.expired)
+                                  cancelled=ctx.expired, known_symbols=ctx.known_symbols)
     return {**render(data, summary, name), "writer": name, "summary": summary, "data": data}
 
 

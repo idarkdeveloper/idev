@@ -196,8 +196,8 @@ def test_each_watch_reason_triggers_its_line_and_healthy_holdings_are_counted(s)
                   groww=lambda: portfolio(rows))
     w = digest._watch(ctx, MON.date())
     by = {i["symbol"]: i for i in w["items"]}
-    assert any(r.startswith("below its estimated stop") and "under your buy price" in r for r in by["STOPPED"]["reasons"])
-    assert any("within" in r and "of its estimated stop" in r for r in by["NEAR"]["reasons"])
+    assert any(r.startswith("below the stop level") and "buy price minus" in r for r in by["STOPPED"]["reasons"])
+    assert any("within" in r and "of the stop level" in r for r in by["NEAR"]["reasons"])
     assert any("below its 200-day average" in r for r in by["BELOW"]["reasons"])
     assert any(r.startswith("negative news: NEWS Ltd faces probe") and "(ET)" in r for r in by["NEWS"]["reasons"])
     assert sum(r.startswith("negative news") for r in by["NEWS"]["reasons"]) == 1   # old, low-confidence, positive: no
@@ -217,7 +217,7 @@ def test_missing_sources_become_unavailable_lines_and_never_raise(s):
     m = morning_brief(ctx)
     for k in ("mood", "buy_ideas", "watch", "deals"):
         assert "unavailable" in m[k], k
-    e = evening_report(ctx)
+    e = evening_report(ctx_for(s, now=lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST)))
     for k in ("groww", "practice", "news", "deals"):
         assert "unavailable" in e[k], k
     for d in (m, e):
@@ -701,7 +701,7 @@ def test_cli_digest_prints_and_sends_through_a_fake_notifier(s, monkeypatch, cap
     monkeypatch.setattr("trading_agent.runner.make_notifier", lambda st: n)
     assert cli.main(["digest", "evening", "--writer", "none"]) == 0
     out = capsys.readouterr().out
-    assert "Subject: Close: portfolio unavailable" in out and digest_render.FOOTER in out and n.sent == []
+    assert "Subject: Close (Fri 9 Oct): portfolio unavailable" in out and digest_render.FOOTER in out and n.sent == []
     assert cli.main(["digest", "morning", "--writer", "none", "--send"]) == 0
     assert n.sent and n.sent[0][0].startswith("Today: ") and n.sent[0][2].startswith("<table")
     quiet = Fake()
@@ -776,7 +776,7 @@ def test_preview_works_on_demo_and_settings_are_403_there(s):
         status, j = post("/api/digest/preview", {"kind": "morning"})
         assert status == 200 and j["subject"].startswith("Today: ") and j["html"].startswith("<table") and j["writer"] == "none"
         status, j = post("/api/digest/preview", {"kind": "evening"})
-        assert status == 200 and j["subject"].startswith("Close: ")
+        assert status == 200 and j["subject"].startswith("Close")
         assert post("/api/digest/preview", {"kind": "noon"})[0] == 400
     finally:
         srv.shutdown()
@@ -899,7 +899,7 @@ def test_near_stop_is_within_one_atr_not_a_fixed_three_percent(s):
         ctx = ctx_for(s, prices=Prices({"ONE": bars(price, step=0.002)}), groww=lambda r=rows: portfolio(r))
         w = digest._watch(ctx, MON.date())
         # the level moves with the bars' own ATR, so recompute from the same bars the digest saw
-        got = any("of its estimated stop" in r for i in w["items"] for r in i["reasons"])
+        got = any("of the stop level" in r for i in w["items"] for r in i["reasons"])
         assert got is flagged, (price, level, a)
 
 
@@ -1303,7 +1303,7 @@ def test_an_old_mirror_does_not_get_a_stop_from_a_stale_high(s):
     w = digest._watch(ctx, MON.date())
     why = " ".join(r for i in w["items"] for r in i["reasons"])
     assert "4,141" not in why and "4210" not in why
-    assert "estimated stop 2,163.25 (15% under your buy price)" in why
+    assert "below the stop level 2,163.25 (buy price minus 15%)" in why
     # far below the buy price: say so instead of quoting a stop
     pb2 = seeded_mirror(s, 50.0, 400.0, 152.04, "VOGL")
     w2 = digest._watch(ctx_for(s, prices=Prices({"VOGL": bars(50, step=0.0)}), practice=pb2), MON.date())
@@ -1324,7 +1324,7 @@ def test_copies_with_stop_none_are_not_flagged_and_real_trailing_stops_use_the_r
     pb2.positions()                                                    # high-water 120
     price["v"] = 90.0
     w2 = digest._watch(ctx_for(s, prices=Prices({}), practice=pb2), MON.date())
-    assert any(r.startswith("below its stop 102.00 (trailing)") for i in w2["items"] for r in i["reasons"])
+    assert any(r.startswith("below the stop level 102.00 (trailing)") for i in w2["items"] for r in i["reasons"])
     pb2.set_stop("REAL", {"type": "none", "value": None})
     w3 = digest._watch(ctx_for(s, prices=Prices({}), practice=pb2), MON.date())
     assert not any("stop" in r for i in w3["items"] for r in i["reasons"])
@@ -1396,9 +1396,10 @@ def test_phone_layout_puts_the_name_under_the_symbol_and_keeps_numbers_on_one_li
     assert cell, html
     assert re.search(r"<td align=\"right\" style=\"[^\"]*white-space:nowrap;\">₹1,234.50</td>", html)
     assert "width=\"640\"" not in html and "max-width:640px;width:100%" in html
-    assert re.search(r"nowrap;\">TCS · Groww \(also in practice\)</td>", html)
-    assert ">Where</th>" not in html and ">Why</th>" in html
-    assert "below its 200-day average (₹2,456); negative news: x" in html
+    assert ">Where</th>" not in html and ">Why</th>" not in html               # cards, not a three-column table
+    assert html.count("<ul") == 1 and "TCS ₹2,156.00" in html and "Groww · also in practice" in html
+    assert "<li" in html and "below its 200-day average (₹2,456)" in html
+    assert "below its 200-day average (₹2,456); negative news: x" in text
 
 
 # ===================== world markets and risk gauges =====================
@@ -1433,18 +1434,18 @@ def test_world_markets_region_lines_futures_vix_and_missing_indices(s):
     ctx = ctx_for(s, world_prices=src, context=SimpleNamespace(fetch=lambda force=False: {"markets": {
         "nifty50": {"last": 25000.0, "ret_1d": 0.004, "ret_5d": 0.01, "ret_20d": -0.02}, "brent": {"last": 80.0}}}))
     w = digest._world(ctx)
-    assert w["region_lines"][0] == "US: uptrend (2 of 3 up)"
+    assert w["region_lines"][0] == "US: uptrend (2 of 3 up, Dow down)"
     assert w["region_lines"][1] == "Asia: mixed (Japan, Taiwan up; Hong Kong, China down)"
     assert w["futures_line"] == "Overnight futures: S&P 500 +0.3%, Nasdaq 100 +0.5%"
     assert w["vix_line"].startswith("VIX 20.00, rising against its 50-day average")
     assert w["skipped"] == 3 and "not a forecast" in w["note"]            # KOSPI, Straits, ASX left out, counted
     by = {r["index"]: r for r in w["us"] + w["asia"]}
     assert by["S&P 500"]["trend"] == "UP" and by["Dow"]["trend"] == "DOWN" and by["S&P 500"]["d1_pct"] > 0 > by["Dow"]["d1_pct"]
-    assert {r["index"] for r in w["india"]} == {"Nifty", "Brent"}
+    assert {r["index"] for r in w["india"]} == {"Nifty"}
     data = {**digest._header(ctx, "morning"), "mood": digest.unavailable("x"), "world": w, "buy_ideas": digest.unavailable("x"),
             "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}
     mail = digest_render.render(data)
-    assert "WORLD MARKETS" in mail["text"] and "US: uptrend (2 of 3 up)" in mail["text"] and "3 index(es) could not be read" in mail["text"]
+    assert "WORLD MARKETS" in mail["text"] and "US: uptrend (2 of 3 up, Dow down)" in mail["text"] and "3 index(es) could not be read" in mail["text"]
     assert mail["text"].index("WORLD MARKETS") > 0 and ">Close</th>" not in mail["html"] and ">Index</th>" in mail["html"]
     assert 'max-width:640px;width:100%' in mail["html"] and "white-space:nowrap" in mail["html"]
     # the summary may speak about it, and only in terms of the data
@@ -1513,3 +1514,296 @@ def test_morning_brief_builds_world_and_gauges_after_the_mood(s):
     text = digest_render.render(m)["text"]
     assert text.index("MARKET MOOD") < text.index("WORLD MARKETS") < text.index("RISK GAUGES") < text.index("HOLDINGS TO WATCH")
     assert list(m).index("world") < list(m).index("gauges") < list(m).index("buy_ideas")
+
+
+# ===================== fix round 4 =====================
+def test_region_lines_follow_the_trend_labels_not_the_days_move(s):
+    dip = line(100, 200, 240) + line(120, 90, 20)                      # a "mixed" trend whose last day is DOWN
+    rising_day = line(100, 200, 240) + line(120, 90, 19) + [95.0]      # mixed, and it rose on the last day
+    src = Src({"^GSPC": line(100, 200), "^IXIC": line(100, 220), "^DJI": dip,
+               "^N225": line(100, 200), "^TWII": line(100, 150), "^HSI": line(200, 100), "000001.SS": line(200, 120),
+               "^KS11": dip, "^STI": rising_day, "^AXJO": dip})
+    w = digest._world(ctx_for(s, world_prices=src))
+    assert w["region_lines"] == ["US: uptrend (2 of 3 up, Dow mixed)",
+                                 "Asia: mixed (Japan, Taiwan up; Hong Kong, China down; Korea, Singapore, Australia mixed)"]
+    assert {r["index"]: r["trend"] for r in w["asia"]}["Taiwan"] == "UP"
+    assert w["skipped"] == 3                                                           # the two futures and the VIX are not in this fixture
+
+
+def test_the_india_row_is_nifty_with_a_trend_and_the_others_are_left_to_the_gauges(s):
+    w = digest._world(ctx_for(s, world_prices=Src({"^GSPC": line(100, 200), "^NSEI": line(100, 200)})))
+    assert [r["index"] for r in w["india"]] == ["Nifty"] and w["india"][0]["trend"] == "UP"
+    fallback = digest._world(ctx_for(s, world_prices=Src({"^GSPC": line(100, 200)}), context=SimpleNamespace(fetch=lambda force=False: {
+        "markets": {"nifty50": {"last": 25000.0, "ret_1d": 0.01, "ret_5d": 0.0, "ret_20d": 0.0, "trend": "down"},
+                    "brent": {"last": 80.0}, "india_vix": {"last": 14.0}}})))
+    assert [(r["index"], r["trend"]) for r in fallback["india"]] == [("Nifty", "DOWN")]
+    data = {**digest._header(ctx_for(s), "morning"), "mood": digest.unavailable("x"), "world": w, "buy_ideas": digest.unavailable("x"),
+            "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}
+    text = digest_render.render(data)["text"]
+    assert "Nifty" in text and "India VIX" not in text and "Brent" not in text
+
+
+def test_the_writer_gets_only_the_headline_facts_and_a_short_answer_is_asked_for(s):
+    items = [{"symbol": f"S{i:02d}", "name": "N" * 40, "source": "Groww", "price": 100.0 + i, "loss_pct": -1.0,
+              "reasons": ["below the stop level 99.00 (buy price minus 15%)", "below its 200-day average (120.00)", "negative news: " + "x" * 120]}
+             for i in range(30)]
+    ideas = [{"symbol": f"I{i:02d}", "name": "Idea " * 6, "price": 100.0, "qty": 3, "notional": 300.0, "stop": 90.0,
+              "ret_6m_pct": 12.0, "ret_12_1_pct": 30.0, "rank": i} for i in range(10)]
+    world = {"us": [{"index": f"US{i}", "close": 1.0, "d1_pct": 1.0, "d5_pct": 1.0, "d20_pct": 1.0, "trend": "UP"} for i in range(40)],
+             "asia": [], "futures": [], "vix": None, "india": [], "skipped": 0, "region_lines": ["US: uptrend (3 of 3 up)", "Asia: mixed (Japan up)"],
+             "futures_line": "Overnight futures: S&P 500 +0.3%", "vix_line": "VIX 14.00, falling against its 50-day average", "note": "n"}
+    gauges = {"gauges": [{"gauge": f"G{i}", "value": 1.0, "d20_pct": 1.0, "vs_50d_pct": 1.0, "range": "r" * 30, "reading": "x" * 30,
+                          "warning": False} for i in range(9)], "warnings": ["India VIX"], "warning_texts": ["India VIX is above 20"],
+              "skipped": 0, "note": "n"}
+    data = {"kind": "morning", "date": "2026-10-12", "mood": {"regime": "neutral", "score": 0, "summary": "s" * 300, "no_new_buys": True,
+                                                              "why": ["Nifty is in a downtrend"], "rules": "r" * 100},
+            "world": world, "gauges": gauges, "buy_ideas": {"ideas": ideas, "wait": True, "too_expensive": ["A"], "universe": "X"},
+            "watch": {"items": items, "total": 30, "healthy": 4, "checked": 34, "notes": ["n" * 200] * 5},
+            "deals": {"deals": [{"ticker": "T", "transaction": "Purchase", "who": ["W"], "investor": "I" * 50}] * 15, "total": 15}}
+    facts = digest_writer.summary_facts("morning", data)
+    assert len(facts["watch"]["items"]) == 5 and facts["buy_ideas"]["count"] == 10 and len(facts["buy_ideas"]["ideas"]) == 3
+    assert facts["gauges"] == {"warnings": ["India VIX"], "warning_texts": ["India VIX is above 20"], "note": "n"}
+    assert facts["world"]["region_lines"][0] == "US: uptrend (3 of 3 up)" and "us" not in facts["world"]
+    assert facts["deals"]["total"] == 15
+    full = len(json.dumps(data))
+    prompt = digest_writer.build_prompt("morning", data)
+    assert len(json.dumps(facts)) < full / 2 and len(prompt) < 4500, (full, len(prompt))
+    assert "at most 5 plain sentences, under 700 characters" in digest_writer.SYSTEM and digest_writer.MAX_CHARS == 1200
+    sess = ollama("The market is neutral and there are no new buys because Nifty is in a downtrend.")
+    text, who = digest_writer.write_summary("morning", data, s, session=sess, client=Claude())
+    assert who.startswith("ollama") and "downtrend" in text
+    sent = [c for c in sess.calls if c[0] == "POST"][0][2]["json"]["messages"][1]["content"]
+    assert "S29" not in sent and "S04" in sent and "I09" not in sent
+
+
+def test_the_evening_facts_keep_the_signed_numbers_the_direction_check_needs(s):
+    data = {"kind": "evening", "date": "2026-10-12",
+            "groww": {"value": 1000.0, "invested": 900.0, "pl": 100.0, "pl_pct": 11.1, "day_pl": -120.0, "day_pct": -1.2, "no_price": ["B"],
+                      "holdings": [{"symbol": f"H{i}", "day_pct": 3.0 - i} for i in range(6)]},
+            "practice": {"equity": 500.0, "total_pl": 5.0, "positions": [{"symbol": "P"}] * 9, "stop_fills_today": []},
+            "news": {"items": [{"symbol": "H0", "title": f"t{i}", "sentiment": "negative"} for i in range(9)], "total": 9},
+            "deals": {"deals": [], "total": 0}}
+    f = digest_writer.summary_facts("evening", data)
+    assert f["groww"]["day_pl"] == -120.0 and f["groww"]["best"][0]["symbol"] == "H0" and f["groww"]["worst"][-1]["symbol"] == "H5"
+    assert "positions" not in f["practice"] and len(f["news"]["items"]) == 5 and f["news"]["total"] == 9
+    assert not digest_writer.validate_summary("Your portfolio is up ₹120 today.", f)[0]
+
+
+# ===================== fix round 4 (continued) =====================
+import csv as _csv
+from pathlib import Path as _Path
+
+FIXTURE = _Path(__file__).parent / "fixtures" / "nse_equity_sample.csv"
+
+
+class FixtureNames:
+    """~500 real rows of the NSE equity list (tests/fixtures), standing in for CompanyNames."""
+
+    def _nse_names(self):
+        rows = _csv.DictReader(FIXTURE.open(encoding="utf-8"))
+        return {r["SYMBOL"].strip().upper(): r["NAME OF COMPANY"].strip() for r in rows}
+
+
+def fixture_ctx():
+    ctx = DigestContext(settings=None, names=FixtureNames())
+    digest.load_known(ctx)
+    return ctx
+
+
+MORNING_FACTS = {"kind": "morning", "date": "2026-10-12",
+                 "mood": {"regime": "neutral", "score": 0, "trend": "down", "no_new_buys": False, "why": [], "rules": "r"},
+                 "world": {"region_lines": ["US: uptrend (2 of 3 up, Dow mixed)", "Asia: mixed (Japan up; China down)"],
+                           "trends": {"S&P 500": "UP", "Dow": "mixed", "Nikkei": "UP"}, "note": "Current trends, not a forecast."},
+                 "watch": {"items": [{"symbol": "INFY", "source": "Groww", "reasons": ["below its 200-day average (1,233.95)"]}],
+                           "total": 1, "healthy": 4, "checked": 5}}
+
+
+def test_ordinary_words_are_not_company_names_against_real_nse_rows():
+    ctx = fixture_ctx()
+    assert len(ctx.known_symbols) >= 400 and "INFY" in ctx.known_symbols and len(ctx.known) > len(ctx.known_symbols)
+    words = ("Overall, Growth and Money themes with Banking, Metals and Funds, plus Fresh Investment, Wealth, Quality, Future, "
+             "United, Star, Super, Silver, Bright, Focus, Premier and Asia stayed steady.")
+    for text in ("US markets are in an uptrend while Asia is mixed.", "INFY is the one holding to watch.",
+                 "Stocks around the world were mostly steady.", "Holding values and Markets and World trends were calm.", words):
+        ok, why = digest_writer.validate_summary(text, MORNING_FACTS, ctx.known, ctx.known_symbols)
+        assert ok, (text, why)
+    evening = {"kind": "evening", "date": "2026-10-12", "groww": {"value": 1000.0, "day_pl": 50.0, "day_pct": 1.0}}
+    assert digest_writer.validate_summary("Stocks around the world were mostly steady and your portfolio gained ₹50.", evening,
+                                          ctx.known, ctx.known_symbols)[0]
+
+
+def test_symbols_stay_checked_in_any_case_and_name_words_only_when_capitalised_mid_sentence():
+    ctx = fixture_ctx()
+    only_names = sorted(w for w in ctx.known - ctx.known_symbols if len(w) >= 5 and w.lower() not in digest.english_words())
+    assert only_names, "the fixture should have distinctive name words"
+    word = only_names[0].capitalize()
+    kn, ks = ctx.known, ctx.known_symbols
+    assert not digest_writer.validate_summary(f"Today {word} looks steady.", MORNING_FACTS, kn, ks)[0]
+    assert digest_writer.validate_summary(f"{word} looks steady.", MORNING_FACTS, kn, ks)[0]               # sentence-initial: not checked
+    assert digest_writer.validate_summary(f"Today {word.lower()} looks steady.", MORNING_FACTS, kn, ks)[0]  # lower case: not checked
+    sym = next(x for x in sorted(ctx.known_symbols) if x not in ("INFY",) and x.lower() not in digest.english_words() and len(x) >= 5)
+    assert not digest_writer.validate_summary(f"Today {sym.lower()} looks steady.", MORNING_FACTS, kn, ks)[0]   # a symbol, any case
+    # the email's own words (region lines, readings) are always allowed
+    assert "Asia" in " ".join(MORNING_FACTS["world"]["region_lines"])
+
+
+def test_a_no_buy_day_summary_cannot_say_buying_is_allowed():
+    off = {"kind": "morning", "date": "2026-10-12", "mood": {"regime": "neutral", "no_new_buys": True, "why": ["Nifty is in a downtrend"]}}
+    on = {**off, "mood": {**off["mood"], "no_new_buys": False}}
+    for text in ("New buys are allowed today.", "Buying is allowed today.", "You can buy today."):
+        assert not digest_writer.validate_summary(text, off)[0], text
+    for text in ("No new buys today.", "There are no new buys because Nifty is in a downtrend.", "Buying is not on today."):
+        ok, why = digest_writer.validate_summary(text, off)
+        assert ok or "buying" in why or "advice" in why, (text, why)
+    assert digest_writer.validate_summary("No new buys today.", off)[0]
+    assert not digest_writer.validate_summary("Buying is allowed today.", on)[0]                 # "buying" is advice anyway
+
+
+@pytest.mark.parametrize("text", [
+    "Consider lightening INFY.", "Hold off for now.", "Rotate into banks.", "A good entry point for ABC.", "ABC may rebound soon.",
+    "ABC could bounce.", "ABC looks oversold.", "ABC looks overbought.", "It would be wise to wait.", "Keep an eye on ABC.",
+    "Watch ABC closely.", "ABC may rise tomorrow.", "ABC could recover.", "The mood is bullish.", "The mood is bearish.",
+    "Cut the position in ABC.", "Close your ABC position.", "Let go of ABC."])
+def test_more_advice_and_forecast_phrases_are_rejected(text):
+    data = {"kind": "morning", "date": "2026-10-12", "buy_ideas": {"ideas": [{"symbol": "ABC", "price": 1.0}]}}
+    assert not digest_writer.validate_summary(text, data, {"ABC", "INFY"})[0], text
+
+
+def test_a_trend_word_must_match_the_trend_of_the_index_named_in_the_same_clause():
+    d = MORNING_FACTS
+    ok = "US markets are in an uptrend while Asia is mixed."
+    assert digest_writer.validate_summary(ok, d)[0]
+    for text in ("The Dow is in an uptrend.", "The S&P 500 is in a downtrend.", "The US is in a downtrend.", "Asia is in an uptrend.",
+                 "US markets are in an uptrend while Asia is in a downtrend.", "The Nikkei is mixed."):
+        ok2, why = digest_writer.validate_summary(text, d)
+        assert not ok2 and "trend" in why, (text, why)
+    assert digest_writer.validate_summary("The S&P 500 is in an uptrend.", d)[0]
+
+
+def test_an_asian_market_still_open_at_nine_contributes_its_last_completed_session(s):
+    def asia_src(last_date):
+        t = {k: line(100, 200) for k in ("^GSPC", "^IXIC", "^DJI", "^N225", "^HSI", "ES=F", "^NSEI")}
+        src = Src(t)
+        for k in ("^N225", "^HSI", "^NSEI"):
+            src.table[k][-1]["date"] = last_date
+        return src
+    src = asia_src("2026-10-12")                                                           # today's partial bars
+    w = digest._world(ctx_for(s, world_prices=src))                                       # Monday 09:05 IST
+    by = {r["index"]: r for r in w["asia"] + w["india"]}
+    assert by["Nikkei"]["close"] == round(src.table["^N225"][-2]["close"], 2)           # today's bar is left out
+    assert by["Nifty"]["close"] == round(src.table["^NSEI"][-1]["close"], 2)            # India is not an open Asian market here
+    late = digest._world(ctx_for(s, world_prices=src, now=lambda: datetime(2026, 10, 12, 14, 0, tzinfo=IST)))
+    assert {r["index"]: r for r in late["asia"]}["Nikkei"]["close"] == round(src.table["^N225"][-1]["close"], 2)   # closed by 14:00
+
+
+def test_the_futures_and_vix_reads_stop_once_the_build_is_cancelled(s):
+    ctx = ctx_for(s)
+    calls = []
+
+    class Cancelling(Src):
+        def history(self, symbol, range_="1y"):
+            calls.append(symbol)
+            if symbol == "^AXJO":
+                ctx.cancel = threading.Event()
+                ctx.cancel.set()
+            return super().history(symbol, range_)
+    ctx.world_prices = Cancelling({k: line(100, 200) for k in ("^GSPC", "^AXJO", "ES=F", "NQ=F", "^VIX")})
+    w = digest._world(ctx)
+    assert "ES=F" not in calls and "^VIX" not in calls and w["skipped"] >= 3
+
+
+def test_foreign_levels_use_international_grouping_and_rupee_amounts_stay_indian(s):
+    src = Src({"^GSPC": flat(123456.0), "^NSEI": flat(123456.0), "^VIX": flat(20.0)})
+    w = digest._world(ctx_for(s, world_prices=src))
+    mail = digest_render.render({**digest._header(ctx_for(s), "morning"), "mood": digest.unavailable("x"), "world": w,
+                                "buy_ideas": digest.unavailable("x"), "watch": digest.unavailable("x"), "deals": digest.unavailable("x")})
+    assert "123,456.00" in mail["text"] and "1,23,456.00" in mail["text"]                 # S&P international, Nifty Indian
+    assert digest.inr(123456) == "₹1,23,456"
+
+
+# ---------- evening: pricing, copies, non-trading days ----------
+def test_practice_prices_fall_back_to_bse_like_the_groww_rows(s):
+    class NseOnly:
+        def latest_price(self, symbol):
+            raise LookupError("not on NSE")
+
+        def history(self, symbol, range_="1y"):
+            raise LookupError("none")
+
+    class Bse:
+        def latest_price(self, symbol):
+            return 1730.9
+    pb = LocalPaperBroker(s.state_dir / "paper_broker.json", starting_cash=100_000, price_fn=lambda x: 1730.9)
+    pb.submit_order("NSE", "buy", qty=8)
+    ctx = runner_context(s, NseOnly(), Bse())
+    p = digest._practice_close(ctx, date(2026, 10, 12), True, None)
+    assert p["positions"][0]["symbol"] == "NSE" and p["positions"][0]["price"] == 1730.9
+
+
+def runner_context(s, prices, prices_bse):
+    ctx = digest.make_context(s, prices=prices, prices_bse=prices_bse, news=News(), context=Regime(), data=None,
+                              groww=lambda: {"linked": False})
+    ctx.names = None
+    ctx.now = lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST)
+    return ctx
+
+
+def test_a_practice_copy_of_the_groww_portfolio_is_one_line_not_a_second_table(s):
+    rows = [holding("AAA", 10, 100.0, 110.0), holding("BBB", 5, 200.0, 190.0)]
+    after = lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST)
+    pb = LocalPaperBroker(s.state_dir / "copy.json", starting_cash=100_000, price_fn=lambda x: 110.0)
+    pb.seed([Position("AAA", 10, 100.0, 110.0), Position("BBB", 5, 200.0, 190.0)])
+    ctx = ctx_for(s, practice=pb, groww=lambda: portfolio(rows), prices=Prices({}), now=after)
+    e = evening_report(ctx)
+    assert e["practice"]["same_as_groww"] == 2 and e["practice"]["positions"] == []
+    text = digest_render.render(e)["text"]
+    assert "Practice account holds the same 2 stocks as your Groww portfolio (a copy); equity ₹" in text and "since the start" in text
+    assert "Stock    Qty      Avg" not in text.split("PRACTICE ACCOUNT")[1].split("NEWS")[0]
+    other = LocalPaperBroker(s.state_dir / "other.json", starting_cash=100_000, price_fn=lambda x: 110.0)
+    other.seed([Position("AAA", 3, 100.0, 110.0)])
+    e2 = evening_report(ctx_for(s, practice=other, groww=lambda: portfolio(rows), prices=Prices({}), now=after))
+    assert e2["practice"]["same_as_groww"] is None and len(e2["practice"]["positions"]) == 1
+
+
+def test_a_day_without_a_fresh_close_says_so_and_drops_the_today_figures(s):
+    rows = [holding("X", 10, 100.0, 110.0), holding("Y", 5, 200.0, 190.0)]
+    px = Prices({"X": bars(110, n=30), "Y": bars(190, n=30)})
+    sat = lambda: datetime(2026, 10, 10, 16, 0, tzinfo=IST)
+    e = evening_report(ctx_for(s, groww=lambda: portfolio(rows), prices=px, now=sat))
+    assert e["stale_close"]["label"] == "Fri 9 Oct" and e["groww"]["day_pl"] is None
+    mail = digest_render.render(e)
+    assert mail["subject"].startswith("Close (Fri 9 Oct): total ₹") and "today" not in mail["subject"]
+    assert "No trading today; figures are from the last close (Fri 9 Oct)." in mail["text"]
+    assert "Today" not in mail["text"].replace("Today's", "") and "Today ₹" not in mail["text"] and "Today ₹" not in mail["html"]
+    holiday = ctx_for(s, groww=lambda: portfolio(rows), prices=px, calendar=Cal(closed={date(2026, 10, 12)}),
+                      now=lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST))
+    assert evening_report(holiday)["stale_close"]["label"] == "Fri 9 Oct"
+    early = evening_report(ctx_for(s, groww=lambda: portfolio(rows), prices=px, now=lambda: datetime(2026, 10, 12, 14, 0, tzinfo=IST)))
+    assert "The market has not closed yet; figures are from the last close (Fri 9 Oct)." in digest_render.render(early)["text"]
+    normal = evening_report(ctx_for(s, groww=lambda: portfolio(rows), prices=px, now=lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST)))
+    assert "stale_close" not in normal and "Today ₹" in digest_render.render(normal)["text"]
+
+
+# ---------- phone cards and the mood list ----------
+def test_the_watch_list_is_cards_on_a_phone_and_the_mood_has_no_duplicated_indices(s):
+    long_reason = "negative news: " + "x" * 200
+    watch = {"items": [{"symbol": "VEDL", "source": "Groww", "price": 264.0, "also_practice": True, "loss_pct": -5.0,
+                        "reasons": ["below the stop level 250.00 (buy price minus 15%)", long_reason]},
+                       {"symbol": "TCS", "source": "Practice", "price": 2156.0, "loss_pct": -1.0, "reasons": ["fell 6.0% in the last session"]}],
+             "total": 2, "more": 0, "healthy": 1, "checked": 3, "notes": []}
+    ctx = ctx_for(s, context=SimpleNamespace(fetch=lambda force=False: {
+        "regime": "neutral", "score": 0, "trend": "down", "summary": "neutral; Nifty 22,520; S&P 500 5,000; VIX 14.4; USD/INR 90; Brent 80", "guidance": "g",
+        "markets": {"nifty50": {"last": 22520.0, "ret_1d": 0.013, "ret_20d": -0.039, "above_200dma": False},
+                    "sp500": {"last": 5000.0}, "india_vix": {"last": 14.4}, "usdinr": {"last": 90.0}, "brent": {"last": 80.0}}, "errors": {}}))
+    data = {**digest._header(ctx, "morning"), "mood": digest._mood(ctx), "watch": watch, "buy_ideas": digest.unavailable("x"),
+            "deals": digest.unavailable("x")}
+    mail = digest_render.render(data)
+    html, text = mail["html"], mail["text"]
+    assert html.count("<ul") == 2 and ">Why</th>" not in html and "VEDL ₹264.00" in html and "Groww · also in practice" in html
+    assert "x" * 100 not in html and "..." in html                                         # headlines are clipped to ~90 characters
+    assert "VEDL" in text and "; " in text.split("HOLDINGS TO WATCH")[1]                    # the text part keeps its one-line rows
+    mood_text = text.split("MARKET MOOD")[1].split("HOLDINGS TO WATCH")[0]
+    assert "Regime: neutral, score 0, trend down" in mood_text
+    assert "Nifty: 22,520, +1.3% today, −3.9% in 20 days, below its 200-day average" in mood_text
+    for dup in ("S&P", "VIX", "USD/INR", "Brent"):
+        assert dup not in mood_text and dup not in html.split("Market mood")[1].split("Holdings to watch")[0], dup
