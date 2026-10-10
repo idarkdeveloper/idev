@@ -166,7 +166,11 @@ def make_data_source(settings: Settings) -> Any:
     if settings.data_source == "nse":
         from .nse import NSEClient
 
-        return NSEClient(cache_dir=settings.state_dir / "cache")
+        client = NSEClient(cache_dir=settings.state_dir / "cache")
+        if settings.bse_deals:
+            from .bse import make_bse_client
+            client.bse = make_bse_client(settings)  # BSE_DEALS=false: no BSE calls at all
+        return client
     from .quiver import QuiverClient
 
     if not settings.quiver_api_key:

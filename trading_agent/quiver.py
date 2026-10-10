@@ -28,15 +28,19 @@ class DisclosedTrade:
     report_date: str
     size: str  # dollar range or share count as reported
     raw: dict[str, Any]
+    exchange: str = "NSE"  # "NSE" | "BSE" (Indian bulk/block deals are published by both)
 
     @property
     def key(self) -> str:
-        """Stable id used to remember which trades we've already seen."""
-        material = json.dumps(
-            [self.source, self.investor, self.ticker, self.transaction,
-             self.transaction_date, self.report_date, self.size],
-            sort_keys=True,
-        )
+        """Stable id used to remember which trades we've already seen.
+
+        NSE (and US) keys are exactly what they always were, so saved state stays valid; any other
+        exchange is added to the material so a BSE deal never collides with the same-looking NSE one."""
+        fields = [self.source, self.investor, self.ticker, self.transaction,
+                  self.transaction_date, self.report_date, self.size]
+        if self.exchange != "NSE":
+            fields.append(self.exchange)
+        material = json.dumps(fields, sort_keys=True)
         return hashlib.sha1(material.encode()).hexdigest()[:16]
 
     def to_dict(self) -> dict[str, Any]:
@@ -45,7 +49,8 @@ class DisclosedTrade:
         return d
 
     def summary(self) -> str:
-        return (f"{self.investor} {self.transaction.lower()} {self.ticker} "
+        where = f" on {self.exchange}" if self.exchange != "NSE" else ""
+        return (f"{self.investor} {self.transaction.lower()} {self.ticker}{where} "
                 f"({self.size}) traded {self.transaction_date}, reported {self.report_date}")
 
 

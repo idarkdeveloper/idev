@@ -504,6 +504,12 @@ on Indian markets supports:
 
 `WATCH_SOURCE`: `deals` (bulk + block, default), `bulk`, `block`, or `insider`.
 
+`BSE_DEALS` (default `true`): also read BSE's bulk and block deals (public page, no login) beside NSE's,
+so mid and small-cap deals made only on BSE are followed too. They show in the deals table with an
+Exchange column, in alerts ("on BSE"), the Claude check, the daily emails and the deal backtest. Set
+`false` for NSE only (the Settings page has the same switch). A BSE failure is logged once a day and
+never stops the NSE read. Today's BSE deals are published after 16:00 IST, so they reach the next morning's email, not the 15:45 evening one.
+
 ## Configuration (`.env`)
 
 | Variable | Purpose |

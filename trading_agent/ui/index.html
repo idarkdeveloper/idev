@@ -113,7 +113,7 @@
       <div class="card">
         <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
         <div class="row" id="deal-filter" role="group" aria-label="Show deals by investor" style="gap:6px;padding:8px 16px" hidden></div>
-        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Who</th><th>Client type</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Exchange</th><th>Source</th><th>Who</th><th>Client type</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Order history</h2><span class="sub" id="fees-note"></span></div>
@@ -236,6 +236,9 @@
         <div class="field"><label for="f-every">Poll every (seconds)</label><input id="f-every" type="number" min="15" max="3600" step="15" value="60"></div>
         <div class="radio" style="align-items:center;border:none;padding:0"><input type="checkbox" id="f-autoexit" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-autoexit" style="color:var(--ink)">Sell paper positions that hit their trailing stop</label></div>
       </div>
+    </div>
+    <div class="group"><span class="group-title">Deal sources</span>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-bse" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-bse" style="color:var(--ink)">Also read BSE bulk and block deals</label><div class="sub">Many mid and small-cap deals happen only on BSE. Public data, no login; NSE is always read.</div></div></div>
     </div>
     <div class="group"><span class="group-title">Stop-losses at Groww</span>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-gtt" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-gtt" style="color:var(--ink)">Keep a GTT stop-loss at Groww for each live holding</label><div class="sub" id="f-gtt-note">A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Only acts when GROWW_LIVE_ORDERS=true.</div></div></div>
@@ -395,18 +398,18 @@
     renderTiles();
 
     $("newcount").textContent = `${newDeals} new`; $("newcount").className = "pill ok"; $("newcount").style.fontWeight = "600";
-    $("dealsrc").textContent = S.deals_error ? "fetch failed: " + S.deals_error : (s.data_source === "nse" ? "NSE, last 30 days" : "QuiverQuant");
+    $("dealsrc").textContent = S.deals_error ? "fetch failed: " + S.deals_error : (s.data_source === "nse" ? (s.bse_deals ? "NSE + BSE, last 30 days" : "NSE, last 30 days") : "QuiverQuant");
     renderDealFilter(inv);
     const shown = dealsShown(inv);
     $("deals").innerHTML = shown.length ? shown.map(d => `<tr>
         <td class="mono" style="white-space:nowrap">${esc(d.transaction_date)}</td>
         <td><span class="side-chip ${d.transaction==="Sale"?"sell":"buy"}">${d.transaction==="Sale"?"SELL":d.transaction==="Purchase"?"BUY":esc(d.transaction)}</span></td>
         <td><div style="font-weight:600"><a href="#" data-lookup="${esc(d.ticker)}" style="text-decoration:none">${esc(d.ticker)}</a></div><div class="sub">${esc(d.investor)}</div></td>
-        <td class="num">${esc(d.size)}</td><td>${esc(d.source)}</td>
+        <td class="num">${esc(d.size)}</td><td>${esc(d.exchange||"NSE")}</td><td>${esc(d.source)}</td>
         <td>${esc((d.who||[]).join(", "))}</td>
         <td><span class="pill">${esc(WHO[d.client_type]||d.client_type||"")}</span></td>
         <td><span class="pill ${d.status==="new"?"ok":""}">${d.status==="new"?"New":"Analysed"}</span></td></tr>`).join("")
-      : `<tr><td colspan="8" class="empty">${S.deals.length ? "No deals by the selected investors in the window." : `No disclosed deals by ${esc(inv.join(", "))} in the window.`}</td></tr>`;
+      : `<tr><td colspan="9" class="empty">${S.deals.length ? "No deals by the selected investors in the window." : `No disclosed deals by ${esc(inv.join(", "))} in the window.`}</td></tr>`;
 
     if(MODE === "demo"){
     $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
@@ -1146,7 +1149,7 @@
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
-    $("f-gtt").checked = !!s.groww_gtt_stops;
+    $("f-gtt").checked = !!s.groww_gtt_stops; $("f-bse").checked = s.bse_deals !== false;
     $("f-dg-writer").value = s.digest_writer || "claude";
     $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on;
     $("f-dg-am-t").value = s.digest_morning || "09:00"; $("f-dg-pm-t").value = s.digest_evening || "15:45";
@@ -1177,7 +1180,7 @@
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked;
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.bse_deals = $("f-bse").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked;
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);
