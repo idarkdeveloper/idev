@@ -55,7 +55,8 @@ def test_parse_investors_refuses_empty_and_too_many():
 def clean_env(monkeypatch):
     for k in ("INVESTORS", "WATCH_INVESTOR", "MARKET", "BROKER", "DATA_SOURCE", "GROWW_ACCESS_TOKEN", "GROWW_API_KEY",
               "ALPACA_API_KEY_ID", "ALPACA_API_SECRET_KEY"):
-        monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv(k, "x")      # so the undo removes anything load_settings(dotenv=...) sets later
+        monkeypatch.delenv(k)
     return monkeypatch
 
 
@@ -304,13 +305,13 @@ def test_live_fetch_uses_every_followed_name(settings):
 
 def test_settings_post_writes_investors_to_env_on_live(server):
     base, app = server
-    status, j = _post(base + "/api/settings", {"watch_investors": "Ashish Kacholia\nvijay kedia\nASHISH KACHOLIA"})
+    status, j = _post(base + "/api/settings", {"watch_investors": "Ashish Kacholia,vijay kedia,ASHISH KACHOLIA"})
     assert status == 200 and j["applied"]["INVESTORS"] == "Ashish Kacholia,vijay kedia"
     assert "INVESTORS=Ashish Kacholia,vijay kedia" in (app.settings.state_dir / ".env").read_text()
     assert app.settings.investors == ["Ashish Kacholia", "vijay kedia"]
     _, st = _get(base + "/api/state")
     assert st["settings"]["investors"] == ["Ashish Kacholia", "vijay kedia"]
-    status, j = _post(base + "/api/settings", {"watch_investors": " \n "})
+    status, j = _post(base + "/api/settings", {"watch_investors": " , "})
     assert status == 400 and "at least one investor" in j["error"]
     assert app.settings.investors == ["Ashish Kacholia", "vijay kedia"]
     status, j = _post(base + "/api/settings", {"watch_investors": ",".join(f"N{i}" for i in range(11))})

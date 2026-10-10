@@ -464,6 +464,11 @@ class NSEClient:
             rows += self.insider_trades(days)
         return rows
 
+    def history_for_ticker_many(self, investors: Iterable[str], ticker: str, days: int = 365) -> list[DisclosedTrade]:
+        """One fetch of the ticker's deals, filtered to any of the followed names."""
+        rows = self.historical_deals(days, "bulk") + self.historical_deals(days, "block")
+        return _dedupe(filter_by_investors([t for t in rows if t.ticker == ticker.upper()], investors))
+
     def history_for_ticker(self, investor: str, ticker: str, days: int = 365) -> list[DisclosedTrade]:
         rows = self.historical_deals(days, "bulk") + self.historical_deals(days, "block")
         return _dedupe(filter_by_investor([t for t in rows if t.ticker == ticker.upper()], investor))

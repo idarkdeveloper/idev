@@ -14,7 +14,7 @@ from .broker import Broker
 from .config import Settings
 from .investors import classify_client, describe
 from .momentum import momentum_summary
-from .notify import Notifier
+from .notify import Notifier, clean_text
 from .risk import atr, position_size
 from .quiver import DisclosedTrade, followed_names, matches_investor
 from .state import State
@@ -215,9 +215,13 @@ def build_tools(ctx: AgentContext) -> list[Any]:
         names = [investor.strip()] if investor.strip() else followed
         merged: dict[str, DisclosedTrade] = {}
         try:
-            for n in names:
-                for t in ctx.data.history_for_ticker(n, ticker):
-                    merged.setdefault(t.key, t)
+            many = getattr(ctx.data, "history_for_ticker_many", None)
+            if many is not None:   # one fetch for every name
+                found = list(many(names, ticker))
+            else:
+                found = [t for n in names for t in ctx.data.history_for_ticker(n, ticker)]
+            for t in found:
+                merged.setdefault(t.key, t)
         except Exception as e:  # noqa: BLE001
             return json.dumps({"error": str(e)})
         rows = sorted(merged.values(), key=lambda t: (t.report_date, t.transaction_date), reverse=True)
@@ -255,9 +259,10 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                "investor": _rec_investor(ctx, investor, ticker)}
         ctx.result.recommendations.append(rec)
         ctx.state.record_recommendation(rec)
-        who = rec["investor"]
-        subject = (f"[DEAL] {who}: {action.upper()} {rec['ticker']} - {headline}" if who
-                   else f"[{action.upper()} {rec['ticker']}] {headline}")
+        who = clean_text(rec["investor"], 120)
+        head = clean_text(headline, 200)
+        subject = (f"[DEAL] {who}: {action.upper()} {clean_text(rec['ticker'], 30)} - {head}" if who
+                   else f"[{action.upper()} {clean_text(rec['ticker'], 30)}] {head}")
         body = (f"Investor: {who or 'n/a'}\n"
                 f"Action: {action.upper()} {rec['ticker']} (confidence: {rec['confidence']})\n"
                 + (f"Suggested size: {_money(rec['suggested_notional_usd'], ctx.settings.currency)}\n"
@@ -408,10 +413,11 @@ def _rec_investor(ctx: AgentContext, given: str, ticker: str) -> str:
     followed = ctx.settings.investors
     given = (given or "").strip()
     if given:
-        for n in followed:
-            if n.upper() == given.upper() or matches_investor(given, n) or matches_investor(n, given):
-                return n
-        return given
+        # only followed names ever come back: Claude's text is matched to the list, never passed through
+        hits = [n for n in followed if any(n.upper() == g.upper() or matches_investor(g, n) or matches_investor(n, g)
+                                           for g in (p.strip() for p in given.split(",")) if g)]
+        if hits:
+            return ", ".join(hits)
     found: list[str] = []
     for t in ctx.result.new_trades:
         if t.ticker == ticker.upper():

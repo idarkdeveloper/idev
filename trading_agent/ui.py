@@ -30,7 +30,7 @@ from . import taxes
 from .broker import AlreadyCopied, Broker, LocalPaperBroker
 from .config import Settings, load_settings, parse_investors
 from .investors import classify_client
-from .quiver import DisclosedTrade, fetch_followed, followed_names
+from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
 from .runner import check, free_prices, make_broker, equity_key, make_data_source, make_notifier, make_practice_broker
 from .state import STATE_LOCK, State
@@ -551,6 +551,7 @@ class App:
 
         names = self.backtest_names(investor)
         label = names[0] if len(names) == 1 else ", ".join(names)
+        bt_label = "All followed" if names == self.settings.investors else ", ".join(names)
         job = Job(id=len(self.jobs) + 1, kind="backtest")
         with self._slot_lock:  # the check and the claim of the slot are one step
             if self.busy:
@@ -566,7 +567,7 @@ class App:
                     from .cli import _DemoHistory
                     back = (dt.date.today() - dt.timedelta(days=100)).isoformat()
                     deals = [dataclasses.replace(d, transaction_date=back, report_date=back)
-                             for d in self.demo_trades]
+                             for d in filter_by_investors(self.demo_trades, names)]
                     prices: Any = _DemoHistory(getattr(self.broker, "price_fn", None) or (lambda s: 100.0))
                 else:
                     data = self.data
@@ -576,7 +577,7 @@ class App:
                 if len(names) == 1:
                     result = run_backtest(names[0], deals, prices, horizons=horizons, cost_bps=cost_bps)
                 else:  # pooled result plus one row per investor
-                    result = run_backtest_followed(names, deals, prices, label="All followed",
+                    result = run_backtest_followed(names, deals, prices, label=bt_label,
                                                    horizons=horizons, cost_bps=cost_bps)
                 self.last_backtest = {"at": _now(), "days": days, **result.to_dict()}
                 job.result = self.last_backtest["summary"]
@@ -1012,47 +1013,61 @@ class App:
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
         self._on_live_page("Settings change the real agent")
         applied: dict[str, str] = {}
+        ops: list[Callable[[], None]] = []   # memory changes, run only after every value checked and .env written
         is_demo = self.dotenv is None and self.demo_trades is not None
+        st = self.settings
         for key, env_key in EDITABLE_ENV_KEYS.items():
             if key not in changes:
                 continue
             if is_demo and key.startswith("notify"):
                 continue  # the Demo page never sends notifications
             value = changes[key]
+            if key in ("watch_investors", "watch_investor"):   # the page sends one comma list; line breaks are never a separator here
+                for item in (value if isinstance(value, (list, tuple)) else [value]):
+                    _check_env_value(env_key, item)
             if key in ("auto_trade", "groww_gtt_stops"):
                 value = "true" if value in (True, "true", "1", 1, "on") else "false"
-                setattr(self.settings, key, value == "true")
+                ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
                 value = str(value).strip().lower()
                 if value not in ("in", "us"):
                     raise ValueError("market must be 'in' or 'us'")
-                if value == self.settings.market:
+                if value == st.market:
                     continue
-                self._switch_market(value)
+                ops.append(lambda v=value: self._switch_market(v))
             elif key == "paper_starting_cash":
                 cash = float(value)
                 if cash <= 0:
                     raise ValueError("starting cash must be positive")
-                self.settings.paper_starting_cash = cash
+                ops.append(lambda c=cash: setattr(st, "paper_starting_cash", c))
                 value = f"{cash:g}"
             elif key == "watch_investors":
                 names = parse_investors(value)  # a list, or text with one name per line or commas
-                self.settings.investors = names
+                ops.append(lambda n=names: setattr(st, "investors", n))
                 value = ",".join(names)
+            elif key == "watch_investor":
+                names = parse_investors(value)
+                if st.watch_investors or len(names) > 1:
+                    # INVESTORS is set (or several names came), so the list replaces it, or the old list would win
+                    ops.append(lambda n=names: setattr(st, "investors", n))
+                    applied["INVESTORS"] = ",".join(names)
+                else:
+                    ops.append(lambda n=names: setattr(st, "watch_investor", n[0]))
+                value = names[0]
             else:
                 value = str(value).strip()
-                setattr(self.settings, key, (value or None) if key.startswith("notify") else value)
-                if key == "watch_investor" and self.settings.watch_investors:
-                    # INVESTORS is set, so the one-name form replaces the list, or the list would win
-                    self.settings.investors = [value]
-                    applied["INVESTORS"] = value
+                ops.append(lambda k=key, v=value: setattr(st, k, (v or None) if k.startswith("notify") else v))
             applied[env_key] = value
+        for k, v in applied.items():
+            _check_env_value(k, v)   # nothing is written or changed if any value is unsafe
+        if applied and self.dotenv is not None:
+            _write_env(self.dotenv, applied)
+        for op in ops:
+            op()
         if "watch_investor" in changes or "watch_investors" in changes or "watch_source" in changes:
             self._deals, self._deals_at = None, 0.0
         if applied:
             self._settings_version += 1
-        if applied and self.dotenv is not None:
-            _write_env(self.dotenv, applied)
         return applied
 
     def _switch_market(self, market: str) -> None:
@@ -1330,10 +1345,19 @@ def _cost_table(market: str) -> dict[str, Any]:
             "slippage_bps_one_way": m.slippage_bps}
 
 
+def _check_env_value(key: str, value: Any) -> None:
+    """A .env value must stay on one line: a line break (or NUL) would let a form field add another setting."""
+    text = str(value)
+    if chr(0) in text or text != "".join(text.splitlines()):
+        raise ValueError(f"{key}: the value must be on one line (no line breaks or control characters)")
+
+
 def _write_env(path: Path, values: dict[str, str]) -> None:
-    """Upsert KEY=value lines; keeps comments and other keys as they are."""
+    """Upsert KEY=value lines; keeps comments and other keys as they are. Refuses unsafe values before writing."""
+    for k, v in values.items():
+        _check_env_value(k, v)
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = path.read_text().splitlines() if path.exists() else []
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     done: set[str] = set()
     out = []
     for line in lines:
@@ -1346,7 +1370,7 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
     for key, value in values.items():
         if key not in done:
             out.append(f"{key}={value}")
-    path.write_text("\n".join(out) + "\n")
+    path.write_text(chr(10).join(out) + chr(10), encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #

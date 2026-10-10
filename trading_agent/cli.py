@@ -436,7 +436,8 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         # Sample deals are dated today; pretend they happened a quarter ago so there is
         # price history after them to measure.
         back = (dt.date.today() - dt.timedelta(days=100)).isoformat()
-        deals = [dataclasses.replace(d, transaction_date=back, report_date=back) for d in deals]
+        deals = [dataclasses.replace(d, transaction_date=back, report_date=back)
+                 for d in filter_by_investors(deals, names)]
         prices = _DemoHistory(broker.price_fn)
     else:
         data = make_data_source(settings)

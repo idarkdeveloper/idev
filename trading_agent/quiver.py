@@ -123,6 +123,11 @@ class QuiverClient:
         rows = self.congress_trades() if source == "congress" else self.insider_trades()
         return filter_by_investors(rows, investors)
 
+    def history_for_ticker_many(self, investors: Iterable[str], ticker: str,
+                                source: str = "congress") -> list[DisclosedTrade]:
+        rows = self.congress_trades(ticker) if source == "congress" else self.insider_trades(ticker)
+        return filter_by_investors(rows, investors)
+
     def history_for_ticker(self, investor: str, ticker: str,
                            source: str = "congress") -> list[DisclosedTrade]:
         rows = self.congress_trades(ticker) if source == "congress" else self.insider_trades(ticker)

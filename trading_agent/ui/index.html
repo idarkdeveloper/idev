@@ -755,7 +755,7 @@
       const hs = Object.keys(Object.assign({}, (sm.by_side || {}).Purchase, (sm.by_side || {}).Sale)), lastH = hs[hs.length - 1];
       const buy = lastH && q.by_side.Purchase ? q.by_side.Purchase[lastH] : null, sell = lastH && q.by_side.Sale ? q.by_side.Sale[lastH] : null;
       return `<tr><td>${esc(name)}</td><td class="num">${q.priced}/${q.deals}</td>
-        <td class="num">${buy ? buy.n : "–"}</td><td class="num ${buy && buy.mean_excess>=0?"up":"down"}">${buy ? pct(buy.mean_excess,2) : "–"}</td><td class="num">${buy ? Math.round(buy.hit_rate*100)+"%" : "–"}</td>
+        <td class="num">${buy ? buy.n : "–"}</td><td class="num ${!buy ? "" : buy.mean_excess>=0?"up":"down"}">${buy ? pct(buy.mean_excess,2) : "–"}</td><td class="num">${buy ? Math.round(buy.hit_rate*100)+"%" : "–"}</td>
         <td class="num">${sell ? sell.n : "–"}</td><td class="num">${sell ? Math.round(sell.hit_rate*100)+"%" : "–"}</td></tr>`; });
     const perTable = per.length ? `<h3 style="margin-top:6px">Per investor (buys after cost, sells vs index; longest horizon)</h3>
       <div class="scroll"><table><thead><tr><th>Investor</th><th class="num">Priced</th><th class="num">Buys</th><th class="num">Mean excess</th><th class="num">Hit rate</th><th class="num">Sells</th><th class="num">Hit rate</th></tr></thead><tbody>${per.join("")}</tbody></table></div>` : "";
@@ -1233,7 +1233,7 @@
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.groww_gtt_stops = $("f-gtt").checked;
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked;
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);

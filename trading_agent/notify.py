@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import requests
 
 log = logging.getLogger(__name__)
+
+
+def clean_text(text: object, limit: int = 200) -> str:
+    """Third-party or model text going into a subject or webhook line: one line, no Slack/Discord mentions or
+    markup openers (<! <@ <# @everyone @here @channel), capped in length."""
+    t = " ".join(str(text).split())
+    for bad in ("<!", "<@", "<#"):
+        t = t.replace(bad, bad[0] + " " + bad[1])
+    t = re.sub(r"@(everyone|here|channel)", lambda m: "@ " + m.group(1), t)
+    return t if len(t) <= limit else t[:limit - 3].rstrip() + "..."
 
 
 class Notifier:

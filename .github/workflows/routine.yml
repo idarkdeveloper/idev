@@ -62,6 +62,7 @@ jobs:
           NOTIFY_EMAIL_TO: ${{ vars.NOTIFY_EMAIL_TO }}
           NOTIFY_EMAIL_FROM: ${{ vars.NOTIFY_EMAIL_FROM }}
           NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          INVESTORS: ${{ vars.INVESTORS }}
           WATCH_INVESTOR: ${{ vars.WATCH_INVESTOR || 'ASHISH KACHOLIA' }}
           WATCH_SOURCE: ${{ vars.WATCH_SOURCE || 'deals' }}
           AUTO_TRADE: ${{ vars.AUTO_TRADE || 'false' }}
