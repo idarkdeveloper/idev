@@ -35,6 +35,7 @@ def clean_text(text: object, limit: int = 200) -> str:
 
 
 TELEGRAM_LIMIT = 4000   # Telegram allows 4096 characters per message; stay under it
+CAPTION_LIMIT = 1024    # Telegram's limit for a photo caption
 _BOT_URL = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
 
 
@@ -250,8 +251,18 @@ class Notifier:
         already escaped) goes as one message with the optional URL ``button``; if Telegram answers 400 (cannot parse
         it), ``plain`` goes once without parse mode."""
         ok = False
+        one_bubble = False   # the text went as the caption of the first photo: nothing more to send
         try:
             if html is not None:
+                if images and len(html) <= CAPTION_LIMIT:
+                    try:   # one bubble: the charts with the brief as the first photo's caption
+                        self._telegram_album(images[:10], caption=html)
+                        one_bubble = True
+                    except Exception as e:  # noqa: BLE001 - fall back to the text message alone (no second try at the pictures)
+                        log.warning("telegram album with caption failed; sending the text alone: %s: %s", type(e).__name__, redact(e, self.telegram_token))
+                        images = None
+                if one_bubble:
+                    return True
                 msg: dict[str, Any] = {"chat_id": self.telegram_chat_id, "text": html, "parse_mode": "HTML", "disable_web_page_preview": True}
                 if button:
                     msg["reply_markup"] = button
@@ -283,12 +294,18 @@ class Notifier:
                 log.warning("telegram pictures not sent: %s: %s", type(e).__name__, redact(e, self.telegram_token))
         return ok
 
-    def _telegram_album(self, images: list[dict[str, Any]]) -> None:
+    def _telegram_album(self, images: list[dict[str, Any]], caption: str | None = None) -> None:
+        """The pictures as one photo or one album; ``caption`` (HTML, at most CAPTION_LIMIT characters) goes on the first."""
         if len(images) == 1:
             i = images[0]
-            self._tg("sendPhoto", data={"chat_id": self.telegram_chat_id},
+            data = {"chat_id": self.telegram_chat_id}
+            if caption:
+                data.update(caption=caption, parse_mode="HTML")
+            self._tg("sendPhoto", data=data,
                      files={"photo": (i["filename"], i["content"], i.get("content_type", "image/png"))})
             return
-        media = [{"type": "photo", "media": f"attach://p{n}"} for n, _ in enumerate(images)]
+        media: list[dict[str, Any]] = [{"type": "photo", "media": f"attach://p{n}"} for n, _ in enumerate(images)]
+        if caption:
+            media[0].update(caption=caption, parse_mode="HTML")
         files = {f"p{n}": (i["filename"], i["content"], i.get("content_type", "image/png")) for n, i in enumerate(images)}
         self._tg("sendMediaGroup", data={"chat_id": self.telegram_chat_id, "media": json.dumps(media)}, files=files)

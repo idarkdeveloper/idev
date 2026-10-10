@@ -206,9 +206,10 @@ def test_daily_email_gives_telegram_the_summary_and_key_lines():
     assert "A calm start." in text and "AAA at 100.0" in text and "BBB: down 12%; results due" in text
     s = Session()
     send_digest(tg_notifier(s), email, "morning", "2026-10-12")
-    sent = [c for c in s.calls if c[1].endswith("/sendMessage")]
-    assert "FULL EMAIL TEXT" not in sent[0][2]["json"]["text"] and "Holdings to review (1 flagged)" in sent[0][2]["json"]["text"] and "BBB" in sent[0][2]["json"]["text"]
-    assert s.calls[-1][1].endswith("/sendPhoto")
+    # the brief is short enough for a caption (1,024 characters): one bubble, the single photo carries it
+    assert len(s.calls) == 1 and s.calls[0][1].endswith("/sendPhoto")
+    cap = s.calls[0][2]["data"]["caption"]
+    assert "FULL EMAIL TEXT" not in cap and "Holdings to review (1 flagged)" in cap and "BBB" in cap and s.calls[0][2]["data"]["parse_mode"] == "HTML"
 
 
 # ---------------------------------------------------------------- email headers and subjects

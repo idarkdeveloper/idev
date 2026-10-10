@@ -249,9 +249,24 @@ def adx_text(adx: float | None, plus_di: float | None, minus_di: float | None, l
 def rsi_text(value: float | None) -> str | None:
     if value is None:
         return None
-    zone = ("above 70, the range usually called stretched" if value >= 70
+    return f"Daily RSI(14) is {value:.0f}: {rsi_zone(value)}."
+
+
+def rsi_zone(value: float) -> str:
+    return ("above 70, the range usually called stretched" if value >= 70
             else "below 30, the range usually called stretched" if value <= 30 else "between 30 and 70")
-    return f"Daily RSI(14) is {value:.0f}: {zone}."
+
+
+def adx_reading(adx: float | None, plus_di: float | None, minus_di: float | None) -> str | None:
+    """'uptrend, very strong (+DI above −DI)' for the matrix: the band and the direction, without the label."""
+    if adx is None or plus_di is None or minus_di is None:
+        return None
+    up = plus_di >= minus_di
+    lead = "+DI above −DI" if up else "−DI above +DI"
+    band = adx_band(adx)
+    if band == "weak":
+        return f"weak or no trend ({lead})"
+    return f"{'uptrend' if up else 'downtrend'}, {band} ({lead})"
 
 
 def gap_clause(gap: float, gap_pct: float) -> str:
@@ -323,6 +338,51 @@ def four_hour_text(candles: list[dict[str, Any]], all_candles: list[dict[str, An
         names = classify_candle(c, all_candles[idx - 1] if idx > 0 else None)
         bits.append(f"{c['bucket']} {' and '.join(names) if names else 'no named pattern'}")
     return "4-hour candles: " + ", ".join(bits) + "."
+
+
+def _matrix(out: dict[str, Any], today_bar: dict[str, Any], piv: dict[str, float], levels: dict[str, Any], session: str,
+            names: list[str], a4: tuple[float, float, float] | None, differ: bool) -> list[dict[str, str]]:
+    """The levels and momentum table under the Nifty charts: rows of {metric, value, reading}, only for what could be
+    worked out. Readings of past prices, never a forecast."""
+    rows: list[dict[str, str]] = []
+
+    def add(metric: str, value: str, reading: str) -> None:
+        rows.append({"metric": metric, "value": value, "reading": reading})
+    gap_word = gap_clause(out["gap"], out["gap_pct"])
+    reading = gap_word[0].upper() + gap_word[1:]
+    intra = out.get("intraday")
+    if intra:
+        reading += f"; low at {intra['low_time']}, high at {intra['high_time']}"
+    add("Session", f"{num(out['low'], 0)} – {num(out['high'], 0)} · gap {sgn(out['gap'], 0)}", reading)
+    add("Pivots", f"S1 {num(piv['S1'], 0)} · P {num(piv['P'], 0)} · R1 {num(piv['R1'], 0)}",
+        f"next session, from the {_day_month(session)} candle")
+    r, s = levels.get("resistance"), levels.get("support")
+    add("Watch levels",
+        " · ".join([f"R {num(r['price'], 0)}" if r else "R none", f"S {num(s['price'], 0)}" if s else "S none"]),
+        "; ".join([f"resistance: swing high {_day_month(r['date'])}" if r else "no swing high at least 0.3% above the close",
+                   f"support: swing low {_day_month(s['date'])}" if s else "no swing low at least 0.3% below the close"]))
+    if out.get("adx") is not None:
+        value = f"Daily ADX {int(out['adx'] + 0.5)}" + (f" · 4-hour ADX {int(a4[0] + 0.5)}" if a4 else "")
+        reading = f"Daily: {adx_reading(out['adx'], out['plus_di'], out['minus_di'])}"
+        if a4:
+            reading += f". 4-hour: {adx_reading(*a4)}"
+        if differ:
+            reading += ". The 4-hour and daily trends point in different directions"
+        add("Trend strength", value, reading)
+    if out.get("rsi") is not None:
+        add("RSI(14)", f"{out['rsi']:.0f}", rsi_zone(out["rsi"]))
+    rng = today_bar["high"] - today_bar["low"]
+    body = 0 if rng <= 0 else abs(today_bar["close"] - today_bar["open"]) / rng * 100
+    four = (out.get("four_hour") or {}).get("candles") or []
+    four_txt = ", ".join(f"{c['bucket']} {' and '.join(c['patterns']) if c['patterns'] else 'no named pattern'}" for c in four)
+    add("Candle", f"Daily: {' and '.join(names) if names else 'no named pattern'}",
+        f"body {body:.0f}% of the day's range" + (f". 4-hour: {four_txt}" if four_txt else ""))
+    share = (intra or {}).get("ema_share")
+    if share:
+        side = ("above" if share["above_pct"] >= SHARE_MOST else "below" if share["below_pct"] >= SHARE_MOST else None)
+        add("Time above 21 EMA", f"{share['above_pct']}% of 15-min bars",
+            f"{side} it for most of the session" if side else "on both sides of it during the session")
+    return rows
 
 
 # =============================================================================
@@ -409,6 +469,8 @@ def analyse_nifty(daily: list[dict[str, Any]], bars15: list[dict[str, Any]] | No
 
     # 4-hour candles from the 1-hour bars
     out["four_hour"] = None
+    a4_last: tuple[float, float, float] | None = None   # 4-hour ADX, +DI, -DI
+    differ = False
     if bars1h:
         c4 = resample_4h(bars1h)
         last_day = [c for c in c4 if c["date"] == session]
@@ -416,8 +478,10 @@ def analyse_nifty(daily: list[dict[str, Any]], bars15: list[dict[str, Any]] | No
             a4 = wilder_adx(c4)
             lines["four_hour"] = four_hour_text(last_day, c4)
             if a4["adx"][-1] is not None:
+                a4_last = (a4["adx"][-1], a4["plus_di"][-1], a4["minus_di"][-1])
                 lines["four_hour_adx"] = adx_text(a4["adx"][-1], a4["plus_di"][-1], a4["minus_di"][-1], "4-hour ADX")
                 if adx["adx"][-1] is not None and (a4["plus_di"][-1] >= a4["minus_di"][-1]) != (adx["plus_di"][-1] >= adx["minus_di"][-1]):
+                    differ = True
                     lines["four_hour_adx"] += " The 4-hour and daily trends point in different directions."
             out["four_hour"] = {"candles": [{"bucket": c["bucket"], "patterns": classify_candle(c, c4[c4.index(c) - 1] if c4.index(c) else None)}
                                             for c in last_day],
@@ -430,6 +494,7 @@ def analyse_nifty(daily: list[dict[str, Any]], bars15: list[dict[str, Any]] | No
             notes.append(f"No 4-hour candles for {_day_month(session)}.")
     else:
         notes.append("1-hour bars are not available for the 4-hour candles.")
+    out["matrix"] = _matrix(out, today_bar, piv, levels, session, names, a4_last, differ)
     out["lines"] = {k: v for k, v in lines.items() if v}
     out["notes"] = notes
     out["chart_input"] = chart
@@ -497,10 +562,9 @@ def _global(ctx: DigestContext) -> dict[str, Any]:
         rows.append(row)
     if not rows:
         return unavailable("none of the world indices could be read")
-    return {"markets": rows, "region_lines": w["region_lines"], "futures_line": w.get("futures_line"), "vix_line": w.get("vix_line"),
+    return {"markets": rows, "world": w, "region_lines": w["region_lines"], "futures_line": w.get("futures_line"), "vix_line": w.get("vix_line"),
             "skipped": w["skipped"],
-            "note": "Latest completed session of each market (US markets close after the Indian day). Headlines are shown only "
-                    "when one names the market; they are not a stated cause."}
+            "note": "Latest completed session of each market. A headline is shown only when it names the market; it is not a stated cause."}
 
 
 COMMODITIES = [("GC=F", "Gold", "$/oz"), ("SI=F", "Silver", "$/oz"), ("CL=F", "Crude oil (WTI)", "$/barrel"),

@@ -456,8 +456,8 @@ def test_send_digest_passes_images_and_old_notifiers_still_work():
 
 
 # ---------- the evening email ----------
-TITLES = ["YOUR GROWW PORTFOLIO", "PRACTICE ACCOUNT", "MARKET BULLETIN: NIFTY 50", "GLOBAL MARKETS", "COMMODITIES CORNER",
-          "CONCEPT OF THE DAY", "NEWS FOR YOUR STOCKS TODAY", "TODAY'S DEALS BY FOLLOWED INVESTORS"]
+TITLES = ["MARKET BULLETIN: NIFTY 50", "GLOBAL MARKETS", "COMMODITIES CORNER", "YOUR GROWW PORTFOLIO", "PRACTICE ACCOUNT",
+          "NEWS FOR YOUR STOCKS TODAY", "TODAY'S DEALS BY FOLLOWED INVESTORS", "CONCEPT OF THE DAY"]
 
 
 def evening_ctx(s, **kw):
@@ -476,15 +476,17 @@ def test_evening_email_has_the_bulletin_sections_in_order(s):
     assert pos == sorted(pos), TITLES
     assert [i["cid"] for i in mail["images"]] == ["nifty15", "nifty4h"] and all(i["content"][:4] == b"\x89PNG" for i in mail["images"])
     html = mail["html"]
-    assert html.index("Nifty opened") < html.index('src="cid:nifty15"') < html.index("21 EMA") < html.index('src="cid:nifty4h"') < html.index("4-hour candles:")
+    assert html.index("Nifty opened") < html.index('src="cid:nifty15"') < html.index('src="cid:nifty4h"') < html.index(">Metric<")
     assert 'src="cid:nifty4h"' in html and html.count("<img") == 2 and "alt=" in html
     assert "[Chart: Nifty 50 15-minute candles" in text and "[Chart: Nifty 50 4-hour candles" in text
-    # chart 1 comes after the headline and before the EMA text; chart 2 after the EMA text and before the 4-hour text
-    order = [text.index(x) for x in ("Nifty opened", "[Chart: Nifty 50 15-minute", "21 EMA", "[Chart: Nifty 50 4-hour", "4-hour candles:",
-                                      "Watch levels:", "Pivot points", "Daily RSI(14)", "Daily candle:")]
-    assert text.index("ADX ", text.index("Pivot points")) < text.index("Daily RSI(14)")
+    # headline, chart 1, chart 2, then one levels-and-momentum table, then the not-a-forecast line
+    order = [text.index(x) for x in ("Nifty opened", "[Chart: Nifty 50 15-minute", "[Chart: Nifty 50 4-hour", "Metric ",
+                                      "Session ", "Pivots ", "Watch levels ", "Trend strength ", "RSI(14) ", "Candle ", "Time above 21 EMA ",
+                                      "Readings of past prices and fixed rules, not a forecast")]
     assert order == sorted(order), order
-    assert "Readings of past prices and fixed rules, not a forecast" in text
+    for gone in ("Pivot points from", "Daily candle:", "Daily RSI(14) is", "It traded", "Day range"):   # the loose paragraphs are gone
+        assert gone not in text, gone
+    assert text.count("Readings of past prices and fixed rules, not a forecast") == 1
     assert "Where you see it:" in text and "Nikkei slips as exporters fall (ET)" in text
     assert mail["subject"].startswith("Close")                                         # the subject is unchanged
     for bad in ("open interest", "straddle", "option chain"):   # no options data in the bulletin
@@ -496,7 +498,7 @@ def test_charts_off_sends_the_bulletin_as_text_only(s):
     s.digest_charts = False
     mail = build_digest("evening", evening_ctx(s))
     assert mail["images"] == [] and "<img" not in mail["html"] and "[Chart:" not in mail["text"]
-    assert "MARKET BULLETIN: NIFTY 50" in mail["text"] and "Watch levels:" in mail["text"]
+    assert "MARKET BULLETIN: NIFTY 50" in mail["text"] and "Watch levels " in mail["text"]
 
 
 def test_bulletin_off_leaves_the_evening_email_as_before(s):
@@ -512,7 +514,7 @@ def test_each_bulletin_section_degrades_on_its_own(s):
     src = Src(world_hist(), daily_bars(), {})
     mail = build_digest("evening", evening_ctx(s, world_prices=src))
     t = mail["text"]
-    assert mail["images"] == [] and "Nifty opened" in t and "Watch levels:" in t and "GLOBAL MARKETS" in t and "Note: 15-minute bars are not available." in t
+    assert mail["images"] == [] and "Nifty opened" in t and "Watch levels " in t and "GLOBAL MARKETS" in t and "Note: 15-minute bars are not available." in t
     # no daily OHLC: Nifty says unavailable, the rest stays
     mail = build_digest("evening", evening_ctx(s, world_prices=Src(world_hist())))
     t = mail["text"]
@@ -526,7 +528,7 @@ def test_each_bulletin_section_degrades_on_its_own(s):
         def history(self, symbol, range_="1y"):
             raise RuntimeError("boom")
     mail = build_digest("evening", evening_ctx(s, world_prices=Boom(daily=daily_bars(), intra={"15m": sessions(), "1h": sessions(step=60)})))
-    assert "Watch levels:" in mail["text"] and "GLOBAL MARKETS\nUnavailable:" in mail["text"]
+    assert "Watch levels " in mail["text"] and "GLOBAL MARKETS\nUnavailable:" in mail["text"]
 
 
 def test_html_of_the_bulletin_is_escaped_and_the_preview_inlines_the_pictures(s):
@@ -722,7 +724,8 @@ def test_unfinished_or_stale_session_is_never_called_closed(s):
     nf = data["bulletin"]["nifty"]
     assert nf["session"] == "2026-10-09" and nf["pivots"]
     mail = build_digest("evening", evening_ctx(s, now=lambda: before))
-    assert "Figures are for the session of 2026-10-09" in mail["text"] and "12 Oct session" not in mail["text"]
+    assert "Snapshot: Fri 9 Oct close (market not closed yet)" in mail["text"] and "12 Oct session" not in mail["text"]
+    assert "Figures are for the session of" not in mail["text"]          # the subtitle already names the day
     sat = datetime(2026, 10, 10, 18, 0, tzinfo=IST)               # a weekend: bars after the last close are dropped too
     assert digest.evening_report(evening_ctx(s, now=lambda: sat))["bulletin"]["nifty"]["session"] <= "2026-10-09"
     assert digest.evening_report(evening_ctx(s))["bulletin"]["nifty"]["session"] == "2026-10-12"   # after the close

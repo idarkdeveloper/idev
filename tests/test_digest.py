@@ -338,7 +338,7 @@ def test_digest_reads_the_saved_snapshot_when_groww_refuses(s, monkeypatch):
     assert e["groww"]["saved"].startswith("saved holdings from ") and e["groww"]["value"] == 1200.0
     w = digest._watch(ctx, MON.date())
     assert any(n.startswith("Using saved holdings from") for n in w["notes"])
-    assert "Using saved holdings from" in digest_render.render(e)["text"]
+    assert "holdings saved " in digest_render.render(e)["text"]
 
 
 def test_groww_blocked_without_snapshot_says_unavailable_until(s):
@@ -1773,13 +1773,13 @@ def test_a_day_without_a_fresh_close_says_so_and_drops_the_today_figures(s):
     assert e["stale_close"]["label"] == "Fri 9 Oct" and e["groww"]["day_pl"] is None
     mail = digest_render.render(e)
     assert mail["subject"].startswith("Close (Fri 9 Oct): total ₹") and "today" not in mail["subject"]
-    assert "No trading today; figures are from the last close (Fri 9 Oct)." in mail["text"]
+    assert "Snapshot: Fri 9 Oct close (no trading today)" in mail["text"] and mail["text"].lower().count("no trading today") == 1
     assert "Today" not in mail["text"].replace("Today's", "") and "Today ₹" not in mail["text"] and "Today ₹" not in mail["html"]
     holiday = ctx_for(s, groww=lambda: portfolio(rows), prices=px, calendar=Cal(closed={date(2026, 10, 12)}),
                       now=lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST))
     assert evening_report(holiday)["stale_close"]["label"] == "Fri 9 Oct"
     early = evening_report(ctx_for(s, groww=lambda: portfolio(rows), prices=px, now=lambda: datetime(2026, 10, 12, 14, 0, tzinfo=IST)))
-    assert "The market has not closed yet; figures are from the last close (Fri 9 Oct)." in digest_render.render(early)["text"]
+    assert "Snapshot: Fri 9 Oct close (market not closed yet)" in digest_render.render(early)["text"]
     normal = evening_report(ctx_for(s, groww=lambda: portfolio(rows), prices=px, now=lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST)))
     assert "stale_close" not in normal and "Today ₹" in digest_render.render(normal)["text"]
 
@@ -2104,8 +2104,8 @@ def test_the_saved_holdings_note_appears_once_near_the_top(s):
     px = Prices({"X": bars(110, n=30)})
     e = evening_report(ctx_for(s, prices=px, groww=saved, now=lambda: datetime(2026, 10, 12, 16, 0, tzinfo=IST)))
     text = digest_render.render(e, "S.", "rules")["text"]
-    assert text.count("saved holdings from") == 1 and text.index("saved holdings from") < text.index("YOUR GROWW PORTFOLIO")
-    assert text.index("IN SHORT") < text.index("saved holdings from")
+    assert text.count("holdings saved 09 Oct 15:40") == 1 and text.index("holdings saved") < text.index("YOUR GROWW PORTFOLIO")
+    assert "Using saved" not in text and text.index("holdings saved") < text.index("IN SHORT")   # one subtitle in the header
     m = {**digest._header(ctx_for(s), "morning"), "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"),
          "watch": digest._watch(ctx_for(s, prices=Prices({"X": bars(110, step=0.002)}), groww=saved), MON.date()), "deals": digest.unavailable("x")}
     mt = digest_render.render(m, "S.", "rules")["text"]

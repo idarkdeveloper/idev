@@ -237,19 +237,48 @@ def _deals_line(deals: Any) -> str | None:
     return f"🤝 <b>Deals:</b> {total} new\n" + "\n".join(lines)
 
 
+def _signed(v: float) -> str:
+    s = num(v, 0)
+    return s if float(s.replace(",", "")) == 0 else ("−" if v < 0 else "+") + s
+
+
+def _cheat_lines(nf: dict[str, Any]) -> list[str]:
+    """Session range and gap, next-session pivots, trend strength: three short lines from the bulletin data, each only
+    when its numbers are there."""
+    out: list[str] = []
+    n = lambda v: isinstance(v, (int, float))   # noqa: E731
+    if n(nf.get("low")) and n(nf.get("high")):
+        out.append(f"📊 Session: range {num(nf['low'], 0)} – {num(nf['high'], 0)}" + (f" · gap {_signed(nf['gap'])}" if n(nf.get("gap")) else ""))
+    piv: dict[str, Any] = nf["pivots"] if isinstance(nf.get("pivots"), dict) else {}
+    if all(n(piv.get(k)) for k in ("S1", "P", "R1")):
+        out.append(f"📐 Next pivots: S1 {num(piv['S1'], 0)} · P {num(piv['P'], 0)} · R1 {num(piv['R1'], 0)}")
+    four: dict[str, Any] = nf["four_hour"] if isinstance(nf.get("four_hour"), dict) else {}
+    bits = ([f"Daily ADX {nf['adx']:.0f}"] if n(nf.get("adx")) else []) + ([f"4h ADX {four['adx']:.0f}"] if n(four.get("adx")) else []) \
+        + ([f"RSI {nf['rsi']:.0f}"] if n(nf.get("rsi")) else [])
+    if bits:
+        out.append("⚡ " + " · ".join(bits))
+    return out
+
+
 def _evening_lines(data: dict[str, Any]) -> list[str]:
     out: list[str] = []
     stale = data.get("stale_close")
     g = data.get("groww")
     if _ok(g):
-        s = f"💼 <b>₹{_e(num(g['value']))}</b> · total {_e(srupee(g.get('pl')))} ({_e(pct_text(g.get('pl_pct')))})"
-        if not stale and g.get("day_pl") is not None:
-            s += f" · today {_e(srupee(g['day_pl']))} ({_e(pct_text(g.get('day_pct')))})"
-        out.append(s)
+        # always shows today: the day's move, or "no trading" on a stale day; then the total
+        if stale:
+            today = "Today: no trading"
+        elif g.get("day_pl") is not None:
+            today = f"Today {_e(srupee(g['day_pl']))} ({_e(pct_text(g.get('day_pct')))})"
+        else:
+            today = "Today: n/a"
+        out.append(f"💼 <b>₹{_e(num(g['value']))}</b> · {today} · Total {_e(srupee(g.get('pl')))} ({_e(pct_text(g.get('pl_pct')))})")
     bulletin: dict[str, Any] = data["bulletin"] if isinstance(data.get("bulletin"), dict) else {}
     nf = bulletin.get("nifty")
     if _ok(nf) and nf.get("close") is not None:
         out.append(f"📈 Nifty {_e(num(nf['close'], 2))} ({_e(pct_text(nf.get('change_pct'), 2))})")
+    if _ok(nf):
+        out += _cheat_lines(nf)
     if stale:
         out.append("<i>" + _e("No trading today" if stale.get("reason") == "no trading today" else "The market has not closed yet") + "</i>")
     movers = _movers_table(g, stale)

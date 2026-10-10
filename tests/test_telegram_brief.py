@@ -83,7 +83,7 @@ def test_escaping_of_names_and_codes():
 def test_evening_lines_and_deals():
     h = telegram_brief(evening())["html"]
     assert h.startswith("<b>🌆 Close · Mon 12 Oct</b>")
-    assert "💼 <b>₹1,23,456</b>" in h and "today +₹500 (+0.4%)" in h and "📈 Nifty 24,100.50 (−0.40%)" in h
+    assert "💼 <b>₹1,23,456</b> · Today +₹500 (+0.4%) · Total −₹2,000 (−1.6%)" in h and "📈 Nifty 24,100.50 (−0.40%)" in h
     assert "🤝 <b>Deals:</b> 1 new\nX bought Infosys (INFY) ₹12 cr (NSE)" in h
 
 

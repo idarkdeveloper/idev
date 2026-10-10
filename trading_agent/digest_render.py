@@ -276,14 +276,18 @@ def _world_block(w: dict[str, Any]) -> dict[str, Any]:
     lines.append(w["note"])
     if w["skipped"]:
         lines.append(f"{w['skipped']} index(es) could not be read and are left out.")
+    return _block("World markets", lines, _world_table(w))
+
+
+def _world_table(w: dict[str, Any]) -> dict[str, Any] | None:
+    """The index table shared by the morning World markets and the evening Global markets: Index, Close, 1d, 5d, 20d, Trend."""
     rows_all = w["us"] + w["asia"] + ([w["vix"]] if w.get("vix") else []) + w["futures"] + w["india"]
     rows = [[r["index"], (num if r["index"] == "Nifty" else num_intl)(r["close"], 2), pct_text(r["d1_pct"]), pct_text(r["d5_pct"]), pct_text(r["d20_pct"]), r["trend"] or ""]
             for r in rows_all]
-    table = {"head": ["Index", "Close", "1d", "5d", "20d", "Trend"], "rows": rows, "num": [1, 2, 3, 4],
-             # phone: the close sits under the name
-             "html": {"head": ["Index", "1d", "5d", "20d", "Trend"], "num": [1, 2, 3], "nowrap": [4], "rows": [r[:1] + r[2:] for r in rows],
-                      "sub": [r[1] for r in rows]}} if rows else None
-    return _block("World markets", lines, table)
+    return {"head": ["Index", "Close", "1d", "5d", "20d", "Trend"], "rows": rows, "num": [1, 2, 3, 4],
+            # phone: the close sits under the name
+            "html": {"head": ["Index", "1d", "5d", "20d", "Trend"], "num": [1, 2, 3], "nowrap": [4], "rows": [r[:1] + r[2:] for r in rows],
+                     "sub": [r[1] for r in rows]}} if rows else None
 
 
 def _gauge_block(g: dict[str, Any]) -> dict[str, Any]:
@@ -322,68 +326,75 @@ def _picture(images: list[dict[str, Any]] | None, cid: str) -> list[dict[str, st
     return []
 
 
-def _bulletin_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """The market bulletin: Nifty 50 (close, 15-minute chart, text, 4-hour chart, text, levels, indicators, candle),
-    global markets, commodities and the concept of the day. A part that is unavailable says so; the rest stays."""
+def _bulletin_parts(d: dict[str, Any], images: list[dict[str, Any]] | None
+                    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """The market bulletin in three parts: (Nifty 50: headline, 15-minute chart, 4-hour chart, levels and momentum table),
+    (macro wrap: global markets table, commodities table) and (concept of the day). A part that is unavailable says so;
+    the rest stays."""
     b = d.get("bulletin")
     if not isinstance(b, dict):
-        return []
-    blocks: list[dict[str, Any]] = []
+        return [], [], []
+    nifty: list[dict[str, Any]] = []
     nf = b.get("nifty")
     if isinstance(nf, dict) and "unavailable" in nf:
-        blocks.append(_unavail("Market bulletin: Nifty 50", nf))
+        nifty.append(_unavail("Market bulletin: Nifty 50", nf))
     elif isinstance(nf, dict):
         L = nf.get("lines") or {}
         head = [L["headline"]] if L.get("headline") else []
-        if str(nf.get("session")) != str(d.get("date") or nf.get("session")):
+        stale = d.get("stale_close")
+        expected = str(stale["date"]) if isinstance(stale, dict) and stale.get("date") else str(d.get("date") or nf.get("session"))
+        if str(nf.get("session")) != expected:   # the header already names the snapshot day; only a different session needs saying
             head.insert(0, f"Figures are for the session of {nf['session']}.")
-        blocks.append(_block("Market bulletin: Nifty 50", head, images=_picture(images, "nifty15")))
-        mid = [L[k] for k in ("ema", "range") if L.get(k)]
-        blocks.append(_block(None, mid, images=_picture(images, "nifty4h"), cont=True))
-        rest = [L[k] for k in ("four_hour", "levels", "pivots", "adx", "four_hour_adx", "rsi", "candle") if L.get(k)]
-        rest += [f"Note: {n}" for n in nf.get("notes") or []]
+        nifty.append(_block("Market bulletin: Nifty 50", head, images=_picture(images, "nifty15")))
+        nifty.append(_block(None, [], images=_picture(images, "nifty4h"), cont=True))
+        matrix = nf.get("matrix") or []
+        table = {"head": ["Metric", "Value", "Reading"], "rows": [[m["metric"], m["value"], m["reading"]] for m in matrix], "num": [],
+                 # phone: two columns, the reading under the value in small type
+                 "html": {"head": ["Metric", "Value"], "rows": [[m["metric"], m["value"]] for m in matrix], "num": [], "nowrap": [0],
+                          "sub": [m["reading"] for m in matrix], "sub_col": 1, "compact": True}} if matrix else None
+        if table:
+            nifty.append(_block(None, [], table, cont=True))
+        rest = [f"Note: {n}" for n in nf.get("notes") or []]
         rest.append(b.get("note") or "")
-        blocks.append(_block(None, [x for x in rest if x], cont=True))
+        nifty.append(_block(None, [x for x in rest if x], cont=True))
+    macro: list[dict[str, Any]] = []
     g = b.get("global")
     if isinstance(g, dict) and "unavailable" in g:
-        blocks.append(_unavail("Global markets", g))
+        macro.append(_unavail("Global markets", g))
     elif isinstance(g, dict):
-        lines = list(g.get("region_lines") or [])
-        lines += [x for x in (g.get("futures_line"), g.get("vix_line")) if x]
-        lines.append(g.get("note") or "")
+        w = g.get("world")
+        table = _world_table(w) if isinstance(w, dict) else None
+        lines = [g["note"]] if g.get("note") else []   # one short lead line; the table says the rest
+        lines += [f"In the news: {r['market']}: {r['why']['title']} ({r['why']['source']})" for r in g.get("markets") or [] if r.get("why")]
         if g.get("skipped"):
             lines.append(f"{g['skipped']} index(es) could not be read and are left out.")
-        rows = [[r["market"], num_intl(r["close"], 2), pct_text(r["d1_pct"], 2), r["trend"] or "",
-                 (f"{r['why']['title']} ({r['why']['source']})" if r.get("why") else "")] for r in g["markets"]]
-        cards = [{"style": "market", "meta": r["line"],
-                  "why": (f"In the news: {r['why']['title']} ({r['why']['source']})" if r.get("why") else "")} for r in g["markets"]]
-        blocks.append(_block("Global markets", [x for x in lines if x],
-                             {"head": ["Market", "Close", "1d", "Trend", "In the news"], "rows": rows, "num": [1, 2]}, cards=cards))
+        macro.append(_block("Global markets", lines, table))
     c = b.get("commodities")
     if isinstance(c, dict) and "unavailable" in c:
-        blocks.append(_unavail("Commodities corner", c))
+        macro.append(_unavail("Commodities corner", c))
     elif isinstance(c, dict):
         rows = [[r["name"], f"${num_intl(r['last'], 2)}", pct_text(r["d1_pct"], 2), pct_text(r["d5_pct"], 2), r["trend"] or ""]
                 for r in c["rows"]]
-        lines = [r["reading"] for r in c["rows"]] + [c.get("note") or ""]
+        lines = [c.get("note") or ""]   # the table has every number; the rule-written sentences only repeated it
         if c.get("skipped"):
             lines.append(f"{c['skipped']} commodity price(s) could not be read and are left out.")
-        blocks.append(_block("Commodities corner", [x for x in lines if x],
-                             {"head": ["Commodity", "Last", "1d", "5d", "Trend"], "rows": rows, "num": [1, 2, 3],
-                              "html": {"head": ["Commodity", "Last", "1d", "5d"], "num": [1, 2, 3], "nowrap": [0],
-                                       "rows": [r[:4] for r in rows]}}))
+        macro.append(_block("Commodities corner", [x for x in lines if x],
+                            {"head": ["Commodity", "Last", "1d", "5d", "Trend"], "rows": rows, "num": [1, 2, 3],
+                             "html": {"head": ["Commodity", "Last", "1d", "5d"], "num": [1, 2, 3], "nowrap": [0],
+                                      "rows": [r[:4] for r in rows]}}))
+    concept: list[dict[str, Any]] = []
     k = b.get("concept")
     if isinstance(k, dict) and "unavailable" not in k and k.get("title"):
-        blocks.append(_block(f"{k.get('label', 'Concept of the day')}: {k['title']}", [k["text"], "Where you see it: " + k["uses"]]))
-    return blocks
+        concept.append(_block(f"{k.get('label', 'Concept of the day')}: {k['title']}", [k["text"], "Where you see it: " + k["uses"]]))
+    return nifty, macro, concept
 
 
 def _evening_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    blocks: list[dict[str, Any]] = []
+    """Order: market bulletin (Nifty charts and matrix), macro wrap (global markets, commodities), your Groww portfolio,
+    practice account, news, deals, concept of the day. The stale-day / saved-holdings note is the header subtitle."""
+    nifty_blocks, macro_blocks, concept_blocks = _bulletin_parts(d, images)
+    blocks: list[dict[str, Any]] = nifty_blocks + macro_blocks
     stale = d.get("stale_close")
-    if stale:
-        why = "No trading today" if stale["reason"] == "no trading today" else "The market has not closed yet"
-        blocks.append(_block(None, [f"{why}; figures are from the last close ({stale['label']})."], tone="warn"))
     g = d["groww"]
     if "unavailable" in g:
         blocks.append(_unavail("Your Groww portfolio", g))
@@ -402,24 +413,29 @@ def _evening_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None = Non
         if not stale:
             notes.append("today's buys show from tomorrow (T+1)")
         lines = [" · ".join(n[0].upper() + n[1:] if i == 0 else n for i, n in enumerate(notes))] if notes else []
+        def value_of(h: dict[str, Any]) -> str:   # value = qty × price
+            v = h.get("value")
+            if not isinstance(v, (int, float)) and isinstance(h.get("qty"), (int, float)) and isinstance(h.get("price"), (int, float)):
+                v = h["qty"] * h["price"]
+            return inr(v) if isinstance(v, (int, float)) else "n/a"
         if stale:
             hold = sorted(g["holdings"], key=lambda h: h["pl_pct"] if isinstance(h.get("pl_pct"), (int, float)) else 0.0)
-            rows = [[label(h), str(h["qty"]), inr(h["price"], 2), inr(h["pl"], 0, True) if h["pl"] is not None else "n/a",
+            rows = [[label(h), str(h["qty"]), inr(h["price"], 2), value_of(h), inr(h["pl"], 0, True) if h["pl"] is not None else "n/a",
                      pct_text(h["pl_pct"])] for h in hold]
-            table = {"head": ["Stock", "Qty", "Price", "Total ₹", "Total %"], "rows": rows, "num": [1, 2, 3, 4],
-                     "html": {"head": ["Stock", "Price", "Total ₹", "Total %"], "rows": [[r[0], r[2], r[3], r[4]] for r in rows],
-                              "num": [1, 2, 3], "tones": [[None, None, _tone(r[3]), _tone(r[4])] for r in rows], "compact": True}} if rows else None
+            table = {"head": ["Stock", "Qty", "Price", "Value ₹", "P&L ₹", "P&L %"], "rows": rows, "num": [1, 2, 3, 4, 5],
+                     "html": {"head": ["Stock", "Price", "P&L ₹", "P&L %"], "rows": [[r[0], r[2], r[4], r[5]] for r in rows],
+                              "num": [1, 2, 3], "tones": [[None, None, _tone(r[4]), _tone(r[5])] for r in rows], "compact": True}} if rows else None
             tone = None
-            lines.insert(0, "Worst total loss first.")
+            lines.insert(0, "Worst loss first.")
         else:
             hold = sorted(g["holdings"], key=lambda h: h["day_pct"] if isinstance(h.get("day_pct"), (int, float)) else 0.0)
-            rows = [[label(h), str(h["qty"]), inr(h["price"], 2), pct_text(h["day_pct"]),
-                     inr(h["day_pl"], 0, True) if h["day_pl"] is not None else "n/a",
+            rows = [[label(h), inr(h["price"], 2), pct_text(h["day_pct"]),
+                     inr(h["day_pl"], 0, True) if h["day_pl"] is not None else "n/a", value_of(h),
                      inr(h["pl"], 0, True) if h["pl"] is not None else "n/a", pct_text(h["pl_pct"])] for h in hold]
-            table = {"head": ["Stock", "Qty", "Price", "Today", "Today ₹", "Total ₹", "Total %"], "rows": rows,
+            table = {"head": ["Stock", "Price", "Today", "Today ₹", "Value ₹", "P&L ₹", "P&L %"], "rows": rows,
                      "num": [1, 2, 3, 4, 5, 6],
-                     "html": {"head": ["Stock", "Price", "Today", "Total %"], "rows": [[r[0], r[2], r[3], r[6]] for r in rows],
-                              "num": [1, 2, 3], "tones": [[None, None, _tone(r[3]), _tone(r[6])] for r in rows], "compact": True}} if rows else None
+                     "html": {"head": ["Stock", "Price", "Today", "P&L %"], "rows": [[r[0], r[1], r[2], r[6]] for r in rows],
+                              "num": [1, 2, 3], "tones": [[None, None, _tone(r[2]), _tone(r[6])] for r in rows], "compact": True}} if rows else None
             tone = "good" if (g.get("day_pl") or 0) > 0 else "bad" if (g.get("day_pl") or 0) < 0 else None
             lines.insert(0, "Biggest fall today first.")
         blocks.append(_block("Your Groww portfolio", lines, table, tone=tone, kv=kv))
@@ -449,7 +465,6 @@ def _evening_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None = Non
                  inr(x["pl"], 0, True) if x["pl"] is not None else "n/a", pct_text(x["pl_pct"])] for x in pos]
         blocks.append(_block("Practice account", lines, {"head": ["Stock", "Qty", "Avg", "Price", "P&L", "P&L %"], "rows": rows,
                                                          "num": [1, 2, 3, 4, 5]} if rows else None))
-    blocks += _bulletin_blocks(d, images)
     n = d["news"]
     if "unavailable" in n:
         blocks.append(_unavail("News for your stocks today", n))
@@ -466,7 +481,7 @@ def _evening_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None = Non
                              cards=cards,
                              tone="warn" if any(i["sentiment"] == "negative" for i in n["items"]) else None))
     blocks.append(_deals_block(d["deals"], "Today's deals by followed investors"))
-    return blocks
+    return blocks + concept_blocks
 
 
 def document(data: dict[str, Any], summary: str | None = None, writer: str = "none",
@@ -478,21 +493,40 @@ def document(data: dict[str, Any], summary: str | None = None, writer: str = "no
         day = data.get("date", "")
     head = (f"Today: what to buy and what to watch, {day}" if kind == "morning" else f"Close: your portfolio, {day}")
     blocks = []
+    subtitle = _evening_subtitle(data) if kind == "evening" else None
+    if subtitle and summary:   # the subtitle already says "no trading today"; the summary does not repeat it
+        summary = re.sub(r"^(?:No trading today|The market has not closed yet)\.\s*", "", summary) or None
     if summary and writer == "rules":
         blocks.append(_block("In short (written by the rules)", [summary]))
     elif summary:   # a model wrote it: say which, and to check the numbers
         who = "Claude Haiku" if "claude-haiku" in writer else writer
         blocks.append(_block(f"In short (written by {who} — check the numbers below)", [summary]))
     saved = None
-    if kind == "evening" and isinstance(data.get("groww"), dict):
-        saved = data["groww"].get("saved")
-    elif kind == "morning" and isinstance(data.get("watch"), dict):
+    if kind == "morning" and isinstance(data.get("watch"), dict):
         saved = next((n[len("Using "):] for n in data["watch"].get("notes", []) if n.startswith("Using ")), None)
     if saved:
         blocks.append(_block(None, ["Using " + saved + "."], tone="warn"))
     blocks += _morning_blocks(data) if kind == "morning" else _evening_blocks(data, images)
     foot = [FOOTER] + ([DELAYED] if data.get("delayed") else [])
-    return {"title": head, "blocks": blocks, "footer": foot}
+    return {"title": head, "subtitle": subtitle, "blocks": blocks, "footer": foot}
+
+
+def _evening_subtitle(data: dict[str, Any]) -> str | None:
+    """One line under the evening title: 'Snapshot: Fri 9 Oct close (no trading today) · holdings saved 09 Oct 15:30'.
+    Only on a stale day or when the holdings come from the saved copy; nothing is said twice."""
+    parts: list[str] = []
+    stale = data.get("stale_close")
+    if isinstance(stale, dict):
+        why = "no trading today" if stale.get("reason") == "no trading today" else "market not closed yet"
+        parts.append(f"Snapshot: {stale.get('label')} close ({why})")
+    g = data.get("groww")
+    saved = g.get("saved") if isinstance(g, dict) else None
+    if saved:
+        m = re.search(r"saved holdings from (\d\d \w{3} \d\d:\d\d)", str(saved))
+        age = re.search(r"(\d+ trading days old)", str(saved))
+        bit = f"holdings saved {m.group(1)}" if m else "holdings from the saved copy"
+        parts.append(bit + (f", {age.group(1)}" if age else ""))
+    return " · ".join(parts) or None
 
 
 # -- plain text ---------------------------------------------------------------------------
@@ -515,6 +549,8 @@ def _text_table(t: dict[str, Any]) -> list[str]:
 
 def to_text(doc: dict[str, Any]) -> str:
     out = [doc["title"], "=" * len(doc["title"]), ""]
+    if doc.get("subtitle"):
+        out.insert(2, doc["subtitle"])
     for b in doc["blocks"]:
         head, sep, tail = (b["title"] or "").partition(" (")   # "IN SHORT (written by ...)": only the name is upper-cased
         if b["title"] is None and b.get("cont") and out and out[-1] == "":
@@ -542,7 +578,9 @@ def to_html(doc: dict[str, Any]) -> str:
              '<tr><td align="center" style="padding:16px">'
              '<table role="presentation" cellpadding="0" cellspacing="0" '
              'style="max-width:640px;width:100%;background:#ffffff;border:1px solid #e5e7eb">'
-             f'<tr><td style="padding:16px 20px;background:#111827;color:#ffffff;font-size:18px;font-weight:bold;{font}">{_e(doc["title"])}</td></tr>']
+             f'<tr><td style="padding:16px 20px;background:#111827;color:#ffffff;font-size:18px;font-weight:bold;{font}">{_e(doc["title"])}'
+             + (f'<div style="font-size:12px;font-weight:normal;color:#d1d5db;padding-top:4px">{_e(doc["subtitle"])}</div>' if doc.get("subtitle") else "")
+             + "</td></tr>"]
     for b in doc["blocks"]:
         colour = TONES.get(b["tone"], TONES[None])
         side = "border-left:3px solid #d1d5db;" if b["tone"] == "muted" else ""   # a held-back candidate list: grey, never green
@@ -580,7 +618,7 @@ def to_html(doc: dict[str, Any]) -> str:
                          + "</ul></div>")
         if t:
             t = t.get("html") or t     # the phone layout may differ from the text one
-            num, nowrap, sub = set(t.get("num") or []), set(t.get("nowrap") or []), t.get("sub")
+            num, nowrap, sub, sub_col = set(t.get("num") or []), set(t.get("nowrap") or []), t.get("sub"), t.get("sub_col", 0)
             tones, pad, fs = t.get("tones"), ("4px 3px" if t.get("compact") else "4px 6px"), ("12px" if t.get("compact") else "13px")
             parts.append('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;border-collapse:collapse;width:100%">')
             parts.append("<tr>" + "".join(
@@ -594,7 +632,7 @@ def to_html(doc: dict[str, Any]) -> str:
                     if i in num or i in nowrap:
                         style += "white-space:nowrap;"
                     extra = ""
-                    if i == 0 and sub and sub[n]:
+                    if i == sub_col and sub and sub[n]:
                         tip = f' title="{_e(t["sub_title"][n])}"' if t.get("sub_title") and t["sub_title"][n] else ""
                         extra = f'<div{tip} style="font-size:11px;color:#6b7280;white-space:normal">{_e(sub[n])}</div>'
                     cls = f' class="pl-{"profit" if tone == "good" else "loss"}"' if tone else ""
