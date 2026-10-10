@@ -36,6 +36,7 @@
     </div>
   </div>
 </header>
+<div class="modestrip live" id="modestrip" role="status" aria-live="polite"><span id="modestrip-icon"></span><span id="modestrip-text">LIVE · your real Groww account · read-only on this page · checking the live-orders setting</span></div>
 
 <main>
   <div class="mode-banner demo" id="demo-banner" hidden><span id="demo-title"></span> <span class="sub" id="demo-sub"></span>
@@ -47,6 +48,7 @@
   <section class="card regime-card">
     <div class="regime-row">
       <div class="regime" id="regime"><span class="sub">Loading global context…</span></div>
+      <span class="pill fresh idle" id="freshness" role="status" title=""><span class="dot" aria-hidden="true"></span><span id="fresh-text">Checking data freshness…</span></span>
       <button type="button" class="small" id="btn-regime" style="width:36px;padding:0" aria-label="Refresh global context" title="Refresh global context"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"></path></svg></button>
     </div>
     <div class="mkts" id="mkts"></div>
@@ -62,7 +64,7 @@
 
   <section class="cols">
     <div class="main">
-      <div class="card" id="mp-card">
+      <div class="card" id="mp-card" data-anchor="portfolio">
         <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
           <button type="button" class="small primary" id="mp-copy" style="margin-left:auto" hidden>Copy into practice account</button>
           <button type="button" class="small" id="mp-refresh">Refresh</button></div>
@@ -72,9 +74,9 @@
             <button type="button" class="small" id="copy-no">Cancel</button></div></div>
         <div class="cardbody sub" id="copy-result" aria-live="polite" hidden style="border-bottom:1px solid var(--line)"></div>
         <div class="cardbody" id="mp-body" style="padding-top:0;border-top:none"><div class="stats" id="mp-stats"></div></div>
-        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th class="prot-cell" id="mp-prot-th">Protection</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
       </div>
-      <div class="card" id="pp-card" hidden>
+      <div class="card" id="pp-card" hidden data-anchor="practice">
         <div class="cardhead"><h2>Practice portfolio</h2><span class="sub" id="pricesrc"></span></div>
         <div class="cardbody" style="padding-top:0;border-top:none;border-bottom:1px solid var(--line)"><div class="stats" id="pp-stats"></div></div>
         <div class="cardbody sub" id="pp-tax" style="border-bottom:1px solid var(--line)"></div>
@@ -110,16 +112,16 @@
           </div>
         </form>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="deals">
         <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
         <div class="row" id="deal-filter" role="group" aria-label="Show deals by investor" style="gap:6px;padding:8px 16px" hidden></div>
         <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Exchange</th><th>Source</th><th>Who</th><th>Client type</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="orders">
         <div class="cardhead"><h2>Order history</h2><span class="sub" id="fees-note"></span></div>
         <div class="scroll"><table><thead><tr><th>Time</th><th>Side</th><th>Stock</th><th class="num">Qty</th><th class="num">Price</th><th class="num">Value</th><th class="num">Charges</th><th>Status</th></tr></thead><tbody id="orders"></tbody></table></div>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="screen">
         <div class="cardhead"><h2>Factor screen</h2><span class="sub">12-1 momentum + 6m return − volatility, above 200-day MA, liquid</span></div>
         <form class="cardbody" id="sc-form">
           <div class="row">
@@ -146,11 +148,11 @@
           <div id="fb-result"></div>
         </form>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="forward">
         <div class="cardhead"><h2>Factor screen, forward</h2><span class="sub" id="fw-sub">paper-trading the screen month by month against its index fund</span></div>
         <div class="cardbody" id="fw-body"></div>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="signal-lab">
         <div class="cardhead"><h2>Signal lab</h2><span class="sub">Do algo-trading signals predict the next move? Measured, not assumed</span></div>
         <form class="cardbody" id="sl-form">
           <div class="row">
@@ -162,7 +164,7 @@
           <div id="sl-result"></div>
         </form>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="backtest">
         <div class="cardhead"><h2>Backtest</h2><span class="sub">replay disclosed deals: entry next close, excess return vs NIFTY 50 after cost</span></div>
         <form class="cardbody" id="bt-form">
           <div class="grid4">
@@ -176,24 +178,24 @@
           <div id="bt-result"></div>
         </form>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="track-record">
         <div class="cardhead"><h2>Claude's track record</h2><span class="sub">each call vs the index afterwards</span><button type="button" class="small" id="scd-run" style="margin-left:auto">Refresh</button></div>
         <div class="cardbody" id="scd-result"><div class="sub">Scores every recommendation once it has 5 trading days of history: buys are right when they beat the index by more than the trading cost, sells when the stock then lagged.</div></div>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="runs">
         <div class="cardhead"><h2>Recent runs</h2><span class="sub" id="runs-spend"></span></div>
         <div class="runs" id="runs"></div>
       </div>
     </div>
     <aside class="side">
-      <div class="card">
+      <div class="card" data-anchor="lookup">
         <div class="cardhead"><h2>Look up a stock</h2></div>
         <form class="cardbody" id="lk-form">
           <div class="row"><input id="lk-ticker" autocomplete="off" placeholder="Ticker or company name, e.g. Tata Steel" style="flex:1 1 160px"><button type="submit" class="small">Check</button></div>
           <div id="lk-result" class="sub">Momentum, latest price and NSE announcements.</div>
         </form>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="size">
         <div class="cardhead"><h2>Position size</h2></div>
         <form class="cardbody" id="sz-form">
           <div class="row"><input id="sz-ticker" name="ticker" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 140px" required><button type="submit" class="small">Size it</button></div>
@@ -204,7 +206,7 @@
           <div id="sz-result" class="sub">Shares so that a 2× ATR move costs your chosen risk, plus a stop level.</div>
         </form>
       </div>
-      <div class="card">
+      <div class="card" data-anchor="costs">
         <div class="cardhead"><h2>Trade cost</h2></div>
         <form class="cardbody" id="cs-form">
           <div class="row"><input id="cs-amount" name="amount" type="number" min="1" step="any" value="25000" style="flex:1 1 140px" aria-label="Trade amount"><button type="submit" class="small">Calculate</button></div>
@@ -286,6 +288,8 @@
   TA.setCurrency(() => (S && S.settings && S.settings.currency) || "INR");
   const MODE = document.body.dataset.mode || "live";
   document.querySelectorAll(".tabs a").forEach(a => { if(a.dataset.tab === MODE) a.setAttribute("aria-current", "page"); });
+  const SAFE = TA.safety;
+  SAFE.paintStrip(SAFE.modeStrip(MODE, {}));   // refined in render() once the live-orders setting is known
   // Live shows only real things. Demo is the same page on the same real data plus the practice account
   // (the offline sample dashboard, data-sample, is a Demo page that owns everything, so it keeps its controls).
   const SAMPLE = document.body.dataset.sample === "1";
@@ -350,6 +354,54 @@
     sel.innerHTML = `<option value="">All followed</option>` + inv.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
     sel.value = inv.includes(cur) ? cur : "";
   }
+  // ---- URL state (history.replaceState, no reloads): deals investor filter, signal-lab horizon, open section ----
+  // The query string wins over localStorage on load; unknown values are ignored (see TA.safety.parseUrl).
+  const ANCHORS = ["portfolio", "practice", "deals", "orders", "screen", "forward", "signal-lab", "backtest", "track-record", "runs", "lookup", "size", "costs"];
+  const here = () => (typeof location !== "undefined" ? location : null);
+  let urlH = null, curAnchor = "", urlApplied = false, spyTimer = null;
+  { const l = here(); if(l){ const u = SAFE.parseUrl(l.search, l.hash, {investors: [], anchors: ANCHORS}); urlH = u.h || null; curAnchor = u.anchor || ""; } }
+  function syncUrl(){
+    const l = here();
+    if(!l || !S || typeof history === "undefined" || !history.replaceState) return;
+    try {
+      const inv = investorsOf(S.settings), st = {};
+      if(inv.length > 1) st.investor = activeSel(inv);
+      if(urlH) st.h = urlH;
+      if(curAnchor) st.anchor = curAnchor;
+      history.replaceState(null, "", SAFE.buildUrl(l.pathname, st));
+    } catch(e){}
+  }
+  function applyUrlOnce(){   // first state answer: the investor filter from the URL (names are only known now)
+    if(urlApplied) return;
+    urlApplied = true;
+    const l = here(); if(!l) return;
+    const u = SAFE.parseUrl(l.search, l.hash, {investors: investorsOf(S.settings), anchors: ANCHORS});
+    if(u.investor !== undefined){ dealSel = u.investor.slice(); saveDealSel(); }
+  }
+  function restoreAnchor(){
+    if(!curAnchor) return;
+    setTimeout(() => { try { const e = document.querySelector(`[data-anchor="${curAnchor}"]`); if(e && e.scrollIntoView) e.scrollIntoView(); } catch(err){} }, 150);
+  }
+  function spy(){   // name the section under the top of the page in the URL
+    clearTimeout(spyTimer);
+    spyTimer = setTimeout(() => {
+      try {
+        const tops = Array.from(document.querySelectorAll("[data-anchor]")).map(e => { const r = e.getBoundingClientRect(); return {anchor: e.dataset.anchor, top: r.top, bottom: r.bottom}; });
+        const a = SAFE.pickSection(tops, 120);
+        if(tops.length && a !== curAnchor){ curAnchor = a; syncUrl(); }
+      } catch(e){}
+    }, 250);
+  }
+  if(typeof window.addEventListener === "function") window.addEventListener("scroll", spy, {passive: true});
+
+  // ---- stop protection per real holding, and the freshness chip ----
+  const protFor = (sym) => { const P = S && S.protection; return P ? ((P.by_symbol || {})[String(sym).toUpperCase()] || P.default) : null; };
+  const protHtml = (sym) => { const p = protFor(sym); return p ? SAFE.protectionHtml(p) : '<span class="sub">checking…</span>'; };
+  async function loadFreshness(){
+    try { SAFE.paintChip(SAFE.freshnessChip(await api("/api/freshness"))); }
+    catch(e){ SAFE.paintChip({level: "idle", text: "Freshness unavailable", title: e.message}); }
+  }
+
   let MP = null;  // the last My Groww portfolio answer: it fills the Live tiles
   if(MODE !== "demo") $("tiles").innerHTML = ["Holdings value", "Profit / loss", "Holdings"].map(l => tile(l, "\u2026", "Loading your holdings\u2026")).join("");
   const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"]],
@@ -375,6 +427,7 @@
 
   function render(keepPositions){   // keepPositions: leave the positions table alone (a stop editor is open in it)
     const s = S.settings, a = S.account, c = S.connections, w = S.watch || {};
+    SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: c.groww_live_orders === true}));
     $("subtitle").textContent = s.market === "in" ? "Groww · NSE bulk & block deals" : "Alpaca · QuiverQuant disclosures";
     const inv = investorsOf(s);
     $("investor").textContent = inv.length === 1 ? inv[0] : `${inv.length} investors`;
@@ -392,6 +445,7 @@
     $("lastcheck").textContent = lastRun ? "Last check " + when(lastRun.at) : "No checks yet";
     const wb = $("btn-watch"); wb.className = w.on ? "on" : ""; wb.querySelector("span").textContent = w.on ? `Stop watch (${w.ticks||0} ticks)` : "Start watch";
     renderRegime();
+    if(MP && MODE !== "demo") renderMyPortfolio(MP);   // the protection column follows the state answer
 
     const newDeals = S.deals.filter(d => d.status === "new").length;
     $("summary").textContent = `${newDeals} new disclosure${newDeals===1?"":"s"} · ${S.recommendations.length} recommendation${S.recommendations.length===1?"":"s"} so far · ${S.deals.length} deals in window`;
@@ -673,6 +727,8 @@
     catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; MP = {linked: true, error: e.message}; if(S) renderTiles(); }
     finally { btn.disabled = false; }
   }
+  const MPCOLS = MODE === "demo" ? 8 : 9;   // the Protection column is a Live-page thing: the Demo page has its own stops
+  if(MODE === "demo") $("mp-prot-th").hidden = true;
   function renderMyPortfolio(m, force){
     MP = m; if(S) renderTiles();
     const keepRows = !force && sellEdit !== null && sellEdit.source === "groww";   // a what-if panel is open: don't rebuild under it
@@ -681,13 +737,13 @@
     if(!m.linked){
       $("mp-sub").textContent = "Groww isn't linked";
       stats.innerHTML = "";
-      rows.innerHTML = `<tr><td colspan="8" class="empty">Add GROWW_API_KEY with GROWW_API_SECRET or GROWW_TOTP_SECRET (or GROWW_ACCESS_TOKEN) to .env to see your real holdings here.</td></tr>`;
+      rows.innerHTML = `<tr><td colspan="${MPCOLS}" class="empty">Add GROWW_API_KEY with GROWW_API_SECRET or GROWW_TOTP_SECRET (or GROWW_ACCESS_TOKEN) to .env to see your real holdings here.</td></tr>`;
       return;
     }
     if(m.error){
       $("mp-sub").textContent = "Groww didn't answer";
       stats.innerHTML = "";
-      rows.innerHTML = `<tr><td colspan="8" class="empty">${esc(m.error)}</td></tr>`;
+      rows.innerHTML = `<tr><td colspan="${MPCOLS}" class="empty">${esc(m.error)}</td></tr>`;
       return;
     }
     const tone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
@@ -702,15 +758,15 @@
       + stat("Return", spct(m.pl_pct), "vs what you paid", tone(m.pl_pct));
     if(!keepRows) rows.innerHTML = m.holdings.length ? m.holdings.map(h => `<tr>
         <td><div style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.kind === "bond" ? ' <span class="pill warn" style="font-size:10px;padding:1px 6px">Bond</span>' : ""}${h.exchange === "BSE" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">BSE</span>' : ""}</div>
-          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}${h.kind === "bond" ? ` · bond${h.maturity ? " maturing " + esc(h.maturity) : ""}` : ""}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}${h.price != null ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
+          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}${h.kind === "bond" ? ` · bond${h.maturity ? " maturing " + esc(h.maturity) : ""}` : ""}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}${MODE === "demo" ? "" : `<div class="prot-line">${protHtml(h.symbol)}</div>`}${h.price != null ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
         <td class="num">${h.qty}</td><td class="num">${inr(h.avg_price, 2)}</td>
         <td class="num">${h.price != null ? inr(h.price, 2) : '<span class="sub">no price</span>'}</td>
         <td class="num">${inr(h.invested)}</td><td class="num">${inr(h.value)}</td>
-        <td class="num ${tone(h.pl)}">${sinr(h.pl)}</td><td class="num ${tone(h.pl_pct)}">${spct(h.pl_pct)}</td></tr>${sellEdit && sellEdit.source === "groww" && sellEdit.symbol === h.symbol ? sellPanelRow(8) : ""}`).join("")
-      : `<tr><td colspan="8" class="empty">No holdings in your Groww account.</td></tr>`;
+        <td class="num ${tone(h.pl)}">${sinr(h.pl)}</td><td class="num ${tone(h.pl_pct)}">${spct(h.pl_pct)}</td>${MODE === "demo" ? "" : `<td class="prot-cell">${protHtml(h.symbol)}</td>`}</tr>${sellEdit && sellEdit.source === "groww" && sellEdit.symbol === h.symbol ? sellPanelRow(MPCOLS) : ""}`).join("")
+      : `<tr><td colspan="${MPCOLS}" class="empty">No holdings in your Groww account.</td></tr>`;
     $("mp-foot").innerHTML = m.holdings.length ? `<tr><td>Total<div class="sub" style="font-weight:400;font-size:12px">${m.holdings.length} holdings${m.unpriced.length ? `, ${m.unpriced.length} without a price` : ""}</div></td>
         <td></td><td></td><td></td><td class="num">${inr(m.invested)}</td><td class="num">${inr(m.value)}</td>
-        <td class="num ${tone(m.pl)}">${sinr(m.pl)}</td><td class="num ${tone(m.pl_pct)}">${spct(m.pl_pct)}</td></tr>` : "";
+        <td class="num ${tone(m.pl)}">${sinr(m.pl)}</td><td class="num ${tone(m.pl_pct)}">${spct(m.pl_pct)}</td>${MODE === "demo" ? "" : "<td></td>"}</tr>` : "";
   }
   $("mp-refresh").addEventListener("click", () => loadMyPortfolio(true));
 
@@ -839,7 +895,7 @@
                .concat(r.index_fund ? [{name: `Index fund (${r.index_fund_symbol})`, label: "Fund", color: C.s3, width: 1.5, values: idx(r.index_fund)}] : [])});
   }
 
-  async function refresh(){ try { S = await api("/api/state"); render(stopEdit !== null || (sellEdit !== null && sellEdit.source === "practice")); } catch(e){ toast("Could not load: "+e.message); } }
+  async function refresh(){ try { S = await api("/api/state"); const first = !urlApplied; applyUrlOnce(); if(first) restoreAnchor(); render(stopEdit !== null || (sellEdit !== null && sellEdit.source === "practice")); } catch(e){ toast("Could not load: "+e.message); } }
   const VERDICT = {"predictive": ["ok", "Predictive"], "could be luck": ["warn", "Could be luck"], "too small to trade": ["warn", "Too small to trade"],
                    "reversed": ["bad", "Reversed"], "no edge": ["", "No edge"], "not enough data": ["", "Not enough data"]};
   function tBars(el, rows, cfg){
@@ -864,7 +920,7 @@
 
   function renderSignalLab(r, h){
     if(!r || !r.results){ return; }
-    h = String(h || $("sl-result").dataset.h || (r.horizons.includes(20) ? 20 : r.horizons[0]));
+    h = String(h || $("sl-result").dataset.h || (urlH && r.horizons.includes(urlH) ? urlH : null) || (r.horizons.includes(20) ? 20 : r.horizons[0]));
     if(!r.results[h]) h = String(r.horizons[0]);
     $("sl-result").dataset.h = h;
     const res = r.results[h], label = k => (r.signals[k] || {}).label || k;
@@ -884,7 +940,7 @@
       ${it && it.difference != null ? `<div class="sub">Market timing: when NIFTY was above its 200-day average, it returned ${pct(it.above.mean, 2)} over the next ${h} days on average (${it.above.n} periods), against ${pct(it.below.mean, 2)} when below (${it.below.n}); t ${it.t_stat >= 0 ? "+" : ""}${(it.t_stat || 0).toFixed(2)}.</div>` : ""}
       <div class="sub">A coin toss scores a rank correlation near 0 and t near 0. "Predictive" needs t ≥ 3 and a top-minus-bottom gap larger than the charges, because with a dozen signals and three horizons about one test in twenty passes t ≥ 2 by luck.</div>`;
     tBars($("sl-chart"), rows, {label: `t-statistic of each signal, next ${h} trading days`});
-    document.querySelectorAll("#sl-tabs button").forEach(b => b.addEventListener("click", () => renderSignalLab(r, b.dataset.h)));
+    document.querySelectorAll("#sl-tabs button").forEach(b => b.addEventListener("click", () => { urlH = Number(b.dataset.h); renderSignalLab(r, b.dataset.h); syncUrl(); }));
   }
   // Wait for the running job, then report that job (by id), not whatever came last.
   let waitingFor = null;
@@ -1101,7 +1157,7 @@
       const n = b.dataset.dealFilter, inv = investorsOf(S.settings);
       if(n === "") dealSel = [];
       else { dealSel = dealSel.includes(n) ? dealSel.filter(x => x !== n) : dealSel.concat([n]); if(inv.every(x => dealSel.includes(x))) dealSel = []; }
-      saveDealSel(); render(true);
+      saveDealSel(); render(true); syncUrl();
       return;
     }
     if(b.dataset.stopEdit !== undefined){
@@ -1197,6 +1253,8 @@
   loadMyPortfolio(false);
   setInterval(() => loadMyPortfolio(false), 120000);
   setInterval(refresh, 60000);
+  loadFreshness();
+  setInterval(loadFreshness, 60000);
 })();
 </script>
 </body>

@@ -125,6 +125,13 @@ PAIRS = [
     ("focus ring on page", "--color-accent", "--color-bg", NONTEXT),
     ("focus ring on card", "--color-accent", "--color-surface", NONTEXT),
     ("input border on card", "--color-input-border", "--color-surface", NONTEXT),
+    ("amber warning text on card", "--color-replay", "--color-surface", TEXT),
+    ("freshness dot ok on card", "--color-profit", "--color-surface", NONTEXT),
+    ("freshness dot warn on card", "--color-replay", "--color-surface", NONTEXT),
+    ("freshness dot bad on card", "--color-loss", "--color-surface", NONTEXT),
+    ("freshness dot idle on card", "--color-neutral-500", "--color-surface", NONTEXT),
+    *[(f"mode strip {k} text", f"--strip-{k}-fg", f"--strip-{k}-bg", TEXT) for k in ("live", "liveon", "practice", "replay")],
+    *[(f"mode strip {k} border/icon", f"--strip-{k}-bd", f"--strip-{k}-bg", NONTEXT) for k in ("live", "liveon", "practice", "replay")],
 ]
 # Dark mode must keep its existing look, and these dark values were already under the bar before the light theme.
 DARK_BASELINE_EXCEPTIONS = {"input border on card", "link hover on card"}

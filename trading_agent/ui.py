@@ -35,6 +35,7 @@ from .momentum import MomentumScreen, momentum_summary
 from .groww import GrowwTokenUnavailable, warn_token_block_once
 from .runner import (check, free_prices, make_broker, equity_key, make_data_source, make_notifier,
                      make_practice_broker, read_groww_portfolio, cached_notifier)
+from . import safety
 from .state import STATE_LOCK, State
 from .stops import FILLS_KEY, PracticeStopChecker
 from .digest_schedule import build_digest, make_scheduler
@@ -143,6 +144,7 @@ class App:
         self._deals: list[DisclosedTrade] | None = demo_trades
         self._deals_at = time.time() if demo_trades else 0.0
         self._deals_error: str | None = None
+        self._bar_seen: str | None = None  # newest price-bar date a lookup used (shown in the freshness chip)
         self.jobs: list[Job] = []
         self.lock = threading.Lock()
         self._slot_lock = threading.Lock()  # guards busy/running only; never held across a job
@@ -432,7 +434,44 @@ class App:
             "running": ({"kind": self.running.kind, "label": self.JOB_LABELS.get(self.running.kind, self.running.kind),
                          "started_at": self.running.started_at} if self.busy and self.running else None),
             "jobs": [j.to_dict() for j in self.jobs[-5:]],
+            "protection": self.protection(positions, gtt),
         }
+
+    # -- safety and freshness ---------------------------------------------------
+    def _live_orders_on(self) -> bool:
+        s = self.settings
+        return bool(s.groww_live_orders and s.use_groww and self._parent is None and self.demo_trades is None)
+
+    def protection(self, positions: list[dict[str, Any]], gtt: dict[str, Any]) -> dict[str, Any] | None:
+        """Which stop protects each real holding (Live page only; the practice page has its own stops)."""
+        if self.page != "live":
+            return None
+        now = self._now_dt()
+        watch = safety.watch_info(self.settings.state_dir, now, safety.market_open(now, self._safe_holidays()))
+        return safety.protection_map(positions if self._live_orders_on() else [], gtt,
+                                     live_orders=self._live_orders_on(), watch=watch)
+
+    def _safe_holidays(self) -> Any | None:
+        try:
+            return self.holidays
+        except Exception:  # noqa: BLE001
+            return None
+
+    def note_bar(self, lookup: dict[str, Any] | None) -> None:
+        """Remember the newest price-bar date a stock lookup returned."""
+        try:
+            d = str(((lookup or {}).get("history") or [])[-1]["d"])[:10]
+        except (IndexError, KeyError, TypeError):
+            return
+        root = self._parent or self
+        if not root._bar_seen or d > root._bar_seen:
+            root._bar_seen = d
+
+    def freshness(self) -> dict[str, Any]:
+        root = self._parent or self
+        return safety.freshness(self.settings.state_dir, self._now_dt(), holidays=self._safe_holidays(),
+                                live_orders=self._live_orders_on(), bar_at=root._bar_seen,
+                                deals_at=root._deals_at or None)
 
     # -- actions --------------------------------------------------------------
     def start_check(self, *, force: bool, dry_run: bool) -> Job:
@@ -1565,6 +1604,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self.end_headers()
             elif path == "/api/state":
                 self._json(app.snapshot())
+            elif path == "/api/freshness":
+                self._json(app.freshness())
             elif path == "/api/my-portfolio":
                 from urllib.parse import parse_qs
                 q = parse_qs(urlparse(self.path).query)
@@ -1585,7 +1626,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if not ticker:
                     self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
                 else:
-                    self._json(app.lookup(ticker))
+                    found = app.lookup(ticker)
+                    app.note_bar(found)
+                    self._json(found)
             elif path == "/api/news":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()
@@ -1622,7 +1665,31 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             else:
                 self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
+        def _post_refusal(self) -> tuple[int, str] | None:
+            """Cross-site request protection for every POST: JSON only, and same-origin only. A browser sends a
+            text/plain cross-site POST without a preflight, so the content type and the Origin are both checked."""
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                return 415, "POST bodies must be Content-Type: application/json"
+            origin = self.headers.get("Origin")
+            if origin is not None:
+                hosts = {("http", self.headers.get("Host") or "")}
+                if self.client_address[0] in ("127.0.0.1", "::1"):   # tailscale serve proxies from localhost
+                    fh = (self.headers.get("X-Forwarded-Host") or "").split(",")[0].strip()
+                    fp = (self.headers.get("X-Forwarded-Proto") or "https").split(",")[0].strip()
+                    if fh:
+                        hosts.add((fp, fh))
+                if origin not in {f"{sch}://{h}" for sch, h in hosts if h}:
+                    return 403, "cross-origin request refused"
+            elif self.headers.get("Sec-Fetch-Site") not in (None, "same-origin", "none"):
+                return 403, "cross-site request refused"
+            return None
+
         def do_POST(self) -> None:  # noqa: N802
+            refused = self._post_refusal()
+            if refused:
+                self._json({"error": refused[1]}, refused[0])
+                return
             path = urlparse(self.path).path
             if path.startswith("/replay/api/"):
                 try:

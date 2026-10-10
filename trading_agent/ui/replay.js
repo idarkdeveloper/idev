@@ -42,6 +42,7 @@
   }
   function show(which){
     $("home").hidden = which !== "home"; $("trial").hidden = which !== "trial"; $("banner").hidden = which !== "trial";
+    if(which !== "trial") TA.safety.paintStrip(TA.safety.modeStrip("replay", {}));   // no replay open: no clock date to show
   }
   $("new-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -70,6 +71,7 @@
   }
   function render(){
     const t = T.trial, ended = !!t.ended;
+    TA.safety.paintStrip(TA.safety.modeStrip("replay", {date: t.clock}));
     $("banner").innerHTML = `Replay · ${esc(fmtDay(t.clock))}${ended ? " · ended" : ""} <span class="sub">${esc(t.name)} · ${esc(t.universe)} vs ${esc(t.benchmark)} · started ${esc(fmtDay(t.start))} · dividends ${t.dividends === "cash" ? "taken as cash" : "reinvested"}</span>`;
     document.querySelectorAll("[data-step], #b-end, #ask-btn, #ro-form button, #ro-form input").forEach(b => b.disabled = ended);
     $("step-status").textContent = `${T.race.dates.length - 1} trading days since the start`;
