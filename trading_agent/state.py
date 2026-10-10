@@ -24,15 +24,16 @@ def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(text, encoding="utf-8")
-    for attempt in range(5):
+    attempts = 20  # Windows: a reader (or antivirus) can hold the file open briefly; ~2 s in total, then give up
+    for attempt in range(attempts):
         try:
             os.replace(tmp, path)
             return
-        except PermissionError:  # Windows: a reader has the file open for a moment
-            if attempt == 4:
+        except PermissionError:
+            if attempt == attempts - 1:
                 tmp.unlink(missing_ok=True)
                 raise
-            time.sleep(0.02 * (attempt + 1))
+            time.sleep(min(0.02 * (attempt + 1), 0.2))
 
 
 class State:

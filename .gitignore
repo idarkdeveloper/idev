@@ -7,3 +7,8 @@ state/
 *.egg-info/
 .pytest_cache/
 .playwright-mcp/
+
+# graphify outputs (local only)
+graphify-out/
+**/graphify-out/
+.graphify_python

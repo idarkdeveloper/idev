@@ -388,7 +388,7 @@ def test_ollama_down_uses_claude_and_logs_the_cost(s, caplog):
         text, who = digest_writer.write_summary("morning", DATA, s, session=ollama(up=False), client=claude)
     assert text == GOOD and who == "claude:claude-haiku-4-5"
     kw = claude.calls[0]
-    assert kw["model"] == "claude-haiku-4-5" and kw["temperature"] == 0 and kw["timeout"] == 60
+    assert kw["model"] == "claude-haiku-4-5" and "temperature" not in kw and kw["timeout"] == 60
     assert any("input / 100 output tokens" in r.getMessage() and "$" in r.getMessage() for r in caplog.records)
 
 
@@ -1976,7 +1976,7 @@ def test_claude_haiku_is_the_default_writer_and_the_model_id_is_passed(monkeypat
     base.anthropic_api_key = "test"
     text, who = digest_writer.write_summary("morning", DATA, base, session=ollama(), client=claude)
     assert who == "claude:claude-haiku-4-5" and text == GOOD and claude.calls[0]["model"] == "claude-haiku-4-5"
-    assert claude.calls[0]["temperature"] == 0
+    assert "temperature" not in claude.calls[0]  # the installed SDK rejects it
 
 
 def dataclasses_replace(st):

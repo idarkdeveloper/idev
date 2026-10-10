@@ -398,7 +398,7 @@ class ClaudeTagger(_Tagger):
 
     def _batch(self, batch: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
         msg = self.client.messages.create(
-            model=self.model, max_tokens=2000, temperature=0, tools=[self.TOOL],
+            model=self.model, max_tokens=2000, tools=[self.TOOL],
             tool_choice={"type": "tool", "name": self.TOOL["name"]},
             messages=[{"role": "user", "content": build_prompt(batch)}])
         out: dict[str, dict[str, str]] = {}

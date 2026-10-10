@@ -414,7 +414,7 @@ def _claude(settings: Any, prompt: str, client: Any, usage: Any) -> str | None:
     client = client or make_client(settings)
     if hasattr(client, "with_options"):
         client = client.with_options(max_retries=1)   # a slow day is not worth minutes of retries
-    msg = client.messages.create(model=settings.digest_claude_model, max_tokens=800, temperature=0, system=SYSTEM,
+    msg = client.messages.create(model=settings.digest_claude_model, max_tokens=800, system=SYSTEM,
                                  messages=[{"role": "user", "content": prompt}], timeout=CLAUDE_TIMEOUT)
     u = usage if usage is not None else Usage()
     u.add(settings.digest_claude_model, getattr(msg, "usage", None))
