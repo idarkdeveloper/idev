@@ -27,7 +27,7 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from . import taxes
-from .broker import Broker, LocalPaperBroker
+from .broker import AlreadyCopied, Broker, LocalPaperBroker
 from .config import Settings, load_settings
 from .investors import classify_client
 from .quiver import DisclosedTrade
@@ -826,10 +826,7 @@ class App:
                          + ", ".join(res["merged"]) + ".")
         if skipped:
             parts.append("Skipped: " + "; ".join(f"{k['symbol']} — {k['reason']}" for k in skipped) + ".")
-        deep = [h["symbol"] for h in usable if h["avg_price"] * 0.85 > h["price"]]
-        if deep:
-            parts.append(f"{', '.join(deep)} {'is' if len(deep) == 1 else 'are'} more than 15% below your buy price, so the default "
-                         "trailing stop may sell it in practice at the next stop check; change its stop if you want to keep it.")
+        parts.append("Copied holdings have no stop-loss; set one per stock with Edit stop.")
         parts.append("Practice cash is unchanged and Groww was not touched.")
         return " ".join(parts)
 
@@ -847,7 +844,11 @@ class App:
         flags = {str(k).upper(): bool(v) for k, v in (held_over_year or {}).items()} if isinstance(held_over_year, dict) else {}
         for h in usable:
             h["held_over_year"] = flags.get(h["symbol"].upper(), False)
-        res = broker.copy_in(usable)
+        try:
+            res = broker.copy_in(usable, only_if_not_copied=not confirm_again)
+        except AlreadyCopied as e:  # another request copied between the check above and the lock
+            day = self._ist_day(e.last_copy_at)
+            raise NeedsConfirmation(f"Already copied on {day}; copy again adds the holdings again?", day) from None
         self._record_equity()
         return {"ok": True, **res, "skipped": skipped, "message": self._copy_message(res, skipped, usable)}
 
@@ -857,17 +858,21 @@ class App:
         self._demo_only("Resetting to your Groww portfolio")
         usable, skipped = self._copyable()  # raises before anything is touched
         broker = self.practice_broker
-        broker.reset(self.settings.paper_starting_cash)
-        res = broker.copy_in(usable)
+        out: dict[str, Any] = {}
+        broker.reset(self.settings.paper_starting_cash, then=lambda: out.update(broker.copy_in(usable)))  # one transaction
+        res = out
         self._record_equity()
         msg = (f"Practice account reset to {_inr(self.settings.paper_starting_cash)} cash plus a fresh copy of your Groww "
                f"holdings. " + self._copy_message(res, skipped, usable))
         return {"ok": True, **res, "skipped": skipped, "message": msg}
 
-    def sell_preview(self, symbol: Any, qty: Any = None, held_over_year: Any = None) -> dict[str, Any]:
+    def sell_preview(self, symbol: Any, qty: Any = None, held_over_year: Any = None,
+                     source: Any = None) -> dict[str, Any]:
         """What selling would mean, without trading: sale value, charges, proceeds, realised profit or loss and the
         estimated capital-gains tax. A symbol held in the practice account is priced from that position; otherwise
-        from the Groww holding (read-only). ``held_over_year``, when given for a practice position, is remembered."""
+        from the Groww holding (read-only). ``source="groww"`` prices the Groww holding (its quantity and average) even
+        when the symbol is also held in practice. ``held_over_year`` is remembered in the practice position when it is
+        given (not None); None leaves the saved setting alone."""
         self._demo_only("The sell what-if")
         if self.settings.market != "in":
             raise ValueError("the sale and tax estimate cover Indian shares; switch the market to India")
@@ -877,20 +882,23 @@ class App:
         broker = self.practice_broker
         pos = broker.position(sym)
         flag = None if held_over_year is None else bool(held_over_year)
-        if pos is not None:
+        if pos is not None and flag is not None and flag != pos.held_over_year:
+            broker.set_held_over_year(sym, flag)
+        saved_flag = pos.held_over_year if pos is not None else False
+        want_groww = str(source or "").lower() == "groww"
+        if pos is not None and not want_groww:
             basis, held, avg, price = "practice", float(pos.qty), float(pos.avg_entry_price), pos.current_price
-            if flag is not None and flag != pos.held_over_year:
-                broker.set_held_over_year(sym, flag)
-            state = {"held_over_year": pos.held_over_year if flag is None else flag, "source": pos.source,
+            state = {"held_over_year": saved_flag if flag is None else flag, "source": pos.source,
                      "opened_at": pos.opened_at}
         else:
             m = self.my_portfolio()
             row = next((h for h in (m.get("holdings") or []) if str(h["symbol"]).upper() == sym), None) \
                 if m.get("linked") and not m.get("error") else None
             if row is None:
-                raise LookupError(f"{sym} is not in your practice account or your Groww portfolio")
+                raise LookupError(f"{sym} is not in your practice account or your Groww portfolio" if pos is None
+                                  else f"{sym} is not in your Groww portfolio")
             basis, held, avg, price = "groww", float(row["qty"]), float(row["avg_price"]), row.get("price")
-            state = {"held_over_year": bool(flag), "source": "groww", "opened_at": None}
+            state = {"held_over_year": saved_flag if flag is None else flag, "source": "groww", "opened_at": None}
         if price is None or not price > 0:
             raise ValueError(f"{sym} has no market price right now, so a sale can't be priced")
         if qty in (None, ""):
@@ -914,7 +922,7 @@ class App:
         charges = float(model.charges("sell", value))
         proceeds = value - charges
         cost = q * avg
-        realised = proceeds - cost
+        realised = round(proceeds - cost, 2)  # rounded once, exactly as the sale records it, so preview and sale agree
         est = taxes.estimate_sale(realised, long_term, broker.orders(), now.isoformat())
         if basis == "practice" and state["source"] != "groww" and state["opened_at"]:
             hold_note = (f"Holding period counted from your first buy on {self._ist_day(state['opened_at'])} "
@@ -925,6 +933,13 @@ class App:
         avg_note = ("Average price is what you paid per share; buy charges were paid from cash and are not in it, "
                     "so they don't reduce this profit." if basis == "practice" and state["source"] != "groww"
                     else "Average price is your Groww buy average; the charges you paid when buying are not included.")
+        avg_note += " The estimate may be slightly low: STT is not deductible from the gain, and a top-up is dated from your first buy."
+        practice_qty = float(pos.qty) if pos is not None else None
+        practice_note = None
+        if basis == "groww" and pos is not None:
+            practice_note = (f"Priced on your Groww holding. You hold {practice_qty:g} in practice"
+                             + (f", so Sell in practice sells at most {practice_qty:g}." if q > practice_qty
+                                else "; Sell in practice sells from that position at its own average price."))
         if long_term:
             left = est["exemption_left_before"]
             tax_text = (f"Long term: 12.5% of the gain above the {_inr(taxes.LT_EXEMPTION)} yearly exemption "
@@ -938,7 +953,8 @@ class App:
         return {"symbol": sym, "basis": basis, "in_practice": pos is not None, "held": held, "qty": q, "price": price,
                 "avg_price": avg, "long_term": long_term, "held_over_year": bool(state["held_over_year"]),
                 "sale_value": round(value, 2), "charges": round(charges, 2), "proceeds": round(proceeds, 2),
-                "cost": round(cost, 2), "realised_pl": round(realised, 2),
+                "cost": round(cost, 2), "realised_pl": realised,
+                "practice_qty": practice_qty, "practice_note": practice_note,
                 "charges_breakdown": ({k: round(v, 2) for k, v in model.breakdown("sell", value).items()}
                                       if hasattr(model, "breakdown") else None),
                 "tax": est, "tax_text": tax_text, "holding_note": hold_note, "cost_note": avg_note,
@@ -946,10 +962,22 @@ class App:
 
     def practice_sell(self, symbol: Any, qty: Any = None, held_over_year: Any = None) -> dict[str, Any]:
         """Sell a practice position at the latest price (charges as usual) and record the realised profit or loss
-        and the tax estimate with the order. Only a symbol held in the practice account can be sold."""
-        pv = self.sell_preview(symbol, qty, held_over_year)
-        if not pv["in_practice"]:
-            raise LookupError(f"{pv['symbol']} is not in the practice account; copy your portfolio first")
+        and the tax estimate with the order. Only a symbol held in the practice account can be sold; a quantity above
+        what the practice account holds is capped at that quantity."""
+        self._demo_only("Selling in practice")
+        sym = str(symbol or "").strip().upper()
+        pos = self.practice_broker.position(sym) if sym else None
+        if pos is None:
+            raise LookupError(f"{sym or 'that stock'} is not in the practice account; copy your portfolio first")
+        capped = False
+        if qty not in (None, ""):
+            try:
+                want = float(qty)
+            except (TypeError, ValueError):
+                raise ValueError("enter the number of shares to sell") from None
+            if want > pos.qty:
+                qty, capped = pos.qty, True
+        pv = self.sell_preview(sym, qty, held_over_year, source="practice")
         broker = self.practice_broker
 
         def tax_fields(order: dict[str, Any], orders: list[dict[str, Any]]) -> dict[str, Any]:
@@ -962,6 +990,8 @@ class App:
         proceeds = order["notional"] - order["fees"]
         msg = (f"Practice sale: {_inr(proceeds, 2)} proceeds, P&L {_inr(order['realised_pl'], 2)}, "
                f"estimated tax {_inr(order['tax_estimate'], 2)}")
+        if capped:
+            msg += f" (capped at the {pos.qty:g} you hold in practice)"
         return {"ok": True, "order": order, "proceeds": round(proceeds, 2), "message": msg}
 
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
@@ -1478,7 +1508,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 elif path == "/api/practice/copy-groww":
                     self._json(app.copy_groww(bool(body.get("confirm_again")), body.get("held_over_year")))
                 elif path == "/api/practice/sell-preview":
-                    self._json(app.sell_preview(body.get("symbol"), body.get("qty"), body.get("held_over_year")))
+                    self._json(app.sell_preview(body.get("symbol"), body.get("qty"), body.get("held_over_year"),
+                                                body.get("source")))
                 elif path == "/api/practice/sell":
                     self._json(app.practice_sell(body.get("symbol"), body.get("qty"), body.get("held_over_year")))
                 elif path == "/api/practice/reset-to-groww":

@@ -696,7 +696,8 @@ def test_tiles_and_recommendation_buttons_depend_on_mode():
             assert "not tax advice" in out["preview_text"] and "Estimated tax" in out["preview_text"] and "A loss, so no tax" in out["preview_text"]
             for k in ("practice_panel", "practice_panel_after_refresh"):
                 assert 'id="sp-qty"' in out[k] and "Sell in practice" in out[k], k
-            assert out["preview_requests"] and json.loads(out["preview_requests"][0])["symbol"] == "TCS"
+            first = json.loads(out["preview_requests"][0])
+            assert first["symbol"] == "TCS" and first["source"] == "groww" and first["held_over_year"] is None   # untouched tick: nothing sent
         else:
             assert "sp-qty" not in out["groww_panel"] and "sell-panel" not in out["practice_panel"]
         assert out["check_hidden"] is out["settings_hidden"] is out["watch_hidden"] is (mode == "demo"), mode
@@ -1147,7 +1148,7 @@ def test_copy_adds_positions_keeps_cash_and_profit_and_never_writes_to_groww(cop
     _, after = _get(base + "/demo/api/state")
     pos = {p["symbol"]: p for p in after["positions"]}
     assert pos["TCS"]["qty"] == 100 and pos["TCS"]["avg_entry_price"] == 50.0 and pos["TCS"]["source"] == "groww"
-    assert pos["TCS"]["stop_type"] == "trailing" and pos["TCS"]["high_water"] == 100.0
+    assert pos["TCS"]["stop_type"] == "none" and pos["TCS"]["high_water"] == 100.0
     assert pos["LAURUSLABS"]["qty"] == 20 and pos["LAURUSLABS"]["avg_entry_price"] == pytest.approx(110.0)
     assert "13PCL31" not in pos
     assert after["account"]["cash"] == before["account"]["cash"]          # cash not reduced, no charges
@@ -1241,7 +1242,8 @@ def test_practice_sell_records_realised_pl_and_tax(copy_pages):
     assert after["account"]["cash"] == pytest.approx(before["account"]["cash"] + 4000 - o["fees"])
     assert after["practice_tax"]["st_gain"] == pytest.approx(o["realised_pl"]) and after["practice_tax"]["sales"] == 1
     assert after["practice_tax"]["estimate"] == pytest.approx(o["tax_estimate"], abs=0.02)
-    assert _post(base + SELL, {"symbol": "TCS", "qty": 1000})[0] == 400
+    status, j = _post(base + SELL, {"symbol": "TCS", "qty": 1000})   # more than held in practice: capped, and says so
+    assert status == 200 and j["order"]["qty"] == 60 and "capped at the 60 you hold in practice" in j["message"]
 
 
 def test_long_term_tax_uses_the_exemption_already_used_this_year():
@@ -1299,3 +1301,108 @@ def test_reset_to_groww_refuses_and_changes_nothing_when_groww_is_unavailable(co
     assert (settings.state_dir / "paper_broker.json").read_text() == before
     _, st = _get(base + "/demo/api/state")
     assert [p["symbol"] for p in st["positions"]] == ["LAURUSLABS"]
+
+
+def test_preview_and_sale_tax_are_the_same_number(copy_pages):
+    base, app, fake, settings = copy_pages
+    big = dict(PORTFOLIO, holdings=[dict(PORTFOLIO["holdings"][0], qty=137, avg_price=61.37)])
+    app.my_portfolio = lambda refresh=False: big
+    _post(base + COPY, {})
+    _, pv = _post(base + PREVIEW, {"symbol": "TCS", "qty": 137})
+    _, sale = _post(base + SELL, {"symbol": "TCS", "qty": 137})
+    assert sale["order"]["tax_estimate"] == pv["tax"]["estimate"] and sale["order"]["realised_pl"] == pv["realised_pl"]
+
+
+def test_held_over_year_is_not_wiped_by_a_preview_that_did_not_change_it(copy_pages):
+    base, app, fake, settings = copy_pages
+    _post(base + COPY, {})
+    assert _post(base + PREVIEW, {"symbol": "TCS", "source": "groww", "held_over_year": True})[1]["long_term"] is True
+    p = _post(base + PREVIEW, {"symbol": "TCS", "source": "practice", "held_over_year": None})[1]   # the practice row opens
+    assert p["long_term"] is True and app.practice_broker.position("TCS").held_over_year is True
+    assert _post(base + PREVIEW, {"symbol": "TCS", "source": "groww"})[1]["long_term"] is True
+    assert _post(base + PREVIEW, {"symbol": "TCS", "held_over_year": False})[1]["long_term"] is False   # only an explicit untick clears it
+
+
+def test_groww_row_prices_the_groww_holding_and_practice_row_the_practice_one(copy_pages):
+    base, app, fake, settings = copy_pages
+    _post(base + COPY, {})                                    # LAURUSLABS: practice 20 @ 110 (merged), Groww 10 @ 120
+    _post(base + SELL, {"symbol": "LAURUSLABS", "qty": 8})    # practice now holds 12
+    g = _post(base + PREVIEW, {"symbol": "LAURUSLABS", "source": "groww"})[1]
+    assert (g["basis"], g["held"], g["avg_price"], g["practice_qty"]) == ("groww", 10, 120.0, 12)
+    assert "You hold 12 in practice" in g["practice_note"]
+    q = _post(base + PREVIEW, {"symbol": "LAURUSLABS", "source": "practice"})[1]
+    assert (q["basis"], q["held"], q["avg_price"]) == ("practice", 12, pytest.approx(110.0))
+    assert _post(base + PREVIEW, {"symbol": "LAURUSLABS"})[1]["basis"] == "practice"
+    status, j = _post(base + SELL, {"symbol": "LAURUSLABS", "qty": 15})
+    assert status == 200 and j["order"]["qty"] == 12 and "capped" in j["message"]
+
+
+def test_copy_stop_is_none_and_merged_keeps_its_stop(copy_pages):
+    base, app, fake, settings = copy_pages
+    app.practice_broker.set_stop("LAURUSLABS", {"type": "fixed", "value": 90.0})
+    _, j = _post(base + COPY, {})
+    assert "Copied holdings have no stop-loss; set one per stock with Edit stop." in j["message"] and "trailing" not in j["message"]
+    assert app.practice_broker.position("TCS").stop_type == "none"
+    assert (app.practice_broker.position("LAURUSLABS").stop_type, app.practice_broker.position("LAURUSLABS").stop_value) == ("fixed", 90.0)
+
+
+def test_copy_in_rechecks_already_copied_under_the_lock(copy_pages):
+    from trading_agent.broker import AlreadyCopied
+    base, app, fake, settings = copy_pages
+    b = app.practice_broker
+    rows = [{"symbol": "TCS", "qty": 1, "avg_price": 50.0, "price": 100.0}]
+    b.copy_in(rows, only_if_not_copied=True)
+    with pytest.raises(AlreadyCopied):
+        b.copy_in(rows, only_if_not_copied=True)
+    assert b.position("TCS").qty == 1
+
+
+def test_reset_to_groww_is_one_transaction(copy_pages):
+    base, app, fake, settings = copy_pages
+    b = app.practice_broker
+    seen = []
+    orig = b.copy_in
+    b.copy_in = lambda rows, **k: (seen.append(b._depth), orig(rows, **k))[1]
+    assert _post(base + RESET_G, {})[0] == 200
+    assert seen == [1]          # copied while the reset's transaction was still open
+
+
+def test_position_without_opened_at_is_dated_from_its_first_buy_order(tmp_path):
+    from trading_agent.costs import cost_model_for
+    prices = {"X": 100.0}
+    b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=1_000_000, price_fn=lambda s: prices[s], currency="INR",
+                         whole_shares=True, cost_model=cost_model_for("in"), now_fn=lambda: "2025-01-01T00:00:00+00:00")
+    b.submit_order("X", "buy", qty=10)
+    del b._state["positions"]["X"]["opened_at"]            # an older file
+    assert b.position("X").opened_at == "2025-01-01T00:00:00+00:00"
+    b.now_fn = lambda: "2026-10-10T00:00:00+00:00"
+    assert b.submit_order("X", "sell", qty=1)["long_term"] is True
+
+
+def test_tax_edge_cases_exemption_boundary_loss_netting_and_chained_sales(copy_pages):
+    from trading_agent import taxes
+    assert taxes.tax_on(0, 125_000.0)["tax"] == 0 and taxes.tax_on(0, 125_001.0)["tax"] > 0
+    orders = [{"side": "sell", "realised_pl": -10_000.0, "long_term": True, "filled_at": "2026-06-01T05:00:00+00:00"},
+              {"side": "sell", "realised_pl": 200_000.0, "long_term": True, "filled_at": "2026-06-02T05:00:00+00:00"},
+              {"side": "sell", "realised_pl": 30_000.0, "long_term": False, "filled_at": "2026-06-03T05:00:00+00:00"}]
+    f = taxes.fy_summary(orders, "2026-10-10T05:00:00+00:00")
+    assert f["lt_loss"] == -10_000 and f["lt_gain"] == 200_000 and f["exemption_used"] == 125_000
+    assert f["taxable_lt"] == 65_000 and f["estimate"] == pytest.approx((0.2 * 30_000 + 0.125 * 65_000) * 1.04, abs=0.01)
+    # two real practice sales: the first long-term sale uses part of the exemption, the second the rest and more
+    base, app, fake, settings = copy_pages
+    big = dict(PORTFOLIO, holdings=[dict(PORTFOLIO["holdings"][0], qty=1500, avg_price=10.0)])
+    app.my_portfolio = lambda refresh=False: big
+    _post(base + COPY, {})
+    o1 = _post(base + SELL, {"symbol": "TCS", "qty": 1000, "held_over_year": True})[1]["order"]
+    o2 = _post(base + SELL, {"symbol": "TCS", "qty": 500})[1]["order"]
+    assert o1["long_term"] and o2["long_term"] and o1["tax_estimate"] == 0
+    assert o1["realised_pl"] < 125_000 < o1["realised_pl"] + o2["realised_pl"]
+    assert o2["tax_estimate"] == pytest.approx(0.125 * (o1["realised_pl"] + o2["realised_pl"] - 125_000) * 1.04, abs=0.01)
+
+
+def test_scorecard_dividends_still_count_with_a_copy_credit(tmp_path):
+    from trading_agent.replay.scorecard import dividends
+    b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=1000, price_fn=lambda s: 10.0, currency="INR")
+    b.credit(25.0, "dividend X", "2026-01-01")
+    b.copy_in([{"symbol": "X", "qty": 1, "avg_price": 5.0, "price": 10.0}])
+    assert dividends(b) == 25.0

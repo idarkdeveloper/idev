@@ -29,6 +29,14 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+class AlreadyCopied(Exception):
+    """copy_in(only_if_not_copied=True) found copied-in positions still held (another request copied first)."""
+
+    def __init__(self, last_copy_at: str | None):
+        super().__init__("already copied")
+        self.last_copy_at = last_copy_at
+
+
 @dataclass
 class Position:
     symbol: str
@@ -272,9 +280,11 @@ class LocalPaperBroker:
         """A copy of a real account (see ``seed``) with no paper orders placed in it."""
         return bool(self._state.get("mirrors")) and not self._state.get("orders")
 
-    def reset(self, starting_cash: float) -> bool:
+    def reset(self, starting_cash: float, then: Any | None = None) -> bool:
         """Start the account over in place (same object, so every holder of it sees the fresh account).
-        Removes the file; it is written again by the next order. True if a file was removed."""
+        Removes the file; it is written again by the next order. True if a file was removed.
+        ``then()`` runs in the same transaction on the fresh account (reset to a copy of real holdings), so no other
+        process sees the empty account in between. It must not fetch prices."""
         with self._txn():
             existed = self.path.exists()
             if existed:
@@ -282,6 +292,8 @@ class LocalPaperBroker:
             self._state = self._fresh_state(starting_cash)
             self._persisted = False
             self.__dict__.pop("name", None)
+            if then is not None:
+                then()
             return existed
 
     @property
@@ -362,11 +374,19 @@ class LocalPaperBroker:
                 out.append(Position(symbol=sym, qty=p["qty"], avg_entry_price=p["avg_entry_price"],
                                     current_price=px, high_water=p.get("high_water"),
                                     stop_type=stop.get("type"), stop_value=stop.get("value"),
-                                    source=p.get("source"), opened_at=p.get("opened_at"),
+                                    source=p.get("source"), opened_at=self._opened_at(sym, p),
                                     copied_at=p.get("copied_at"), held_over_year=bool(p.get("held_over_year"))))
             if dirty:
                 self._save()
             return out
+
+    def _opened_at(self, sym: str, raw: dict[str, Any]) -> str | None:
+        """When a position was first bought: stored, else the earliest buy order of the symbol (older files)."""
+        if raw.get("opened_at"):
+            return raw["opened_at"]
+        buys = [o.get("filled_at") for o in self._state.get("orders", [])
+                if o.get("symbol") == sym and o.get("side") == "buy" and o.get("filled_at")]
+        return min(buys) if buys else None
 
     def position(self, symbol: str) -> Position | None:
         """One open position with its latest price (no other price is fetched), or None."""
@@ -376,6 +396,7 @@ class LocalPaperBroker:
             if raw is None:
                 return None
             raw = dict(raw)
+            raw["opened_at"] = self._opened_at(sym, raw)
         try:
             px: float | None = self.latest_price(sym)
         except LookupError:
@@ -455,7 +476,7 @@ class LocalPaperBroker:
             from .taxes import is_long_term
             sale_facts = {"avg_entry_price": pos["avg_entry_price"],
                           "realised_pl": round(cost - fees - qty * pos["avg_entry_price"], 2),
-                          "long_term": is_long_term(pos, now)}
+                          "long_term": is_long_term({**pos, "opened_at": self._opened_at(symbol, pos)}, now)}
             pos["qty"] -= qty
             self._state["cash"] += cost - fees
             if pos["qty"] <= 1e-9:
@@ -497,7 +518,8 @@ class LocalPaperBroker:
                 pos["held_over_year"] = bool(flag)
                 self._save()
 
-    def copy_in(self, holdings: list[dict[str, Any]], note: str = "copied from Groww") -> dict[str, Any]:
+    def copy_in(self, holdings: list[dict[str, Any]], note: str = "copied from Groww",
+                only_if_not_copied: bool = False) -> dict[str, Any]:
         """Copy real holdings into the account as practice positions without touching cash and without charges.
         Each holding is {symbol, qty, avg_price, price, held_over_year?}. A symbol already held is merged (quantity
         added, average price weighted). The copied cost is recorded as a credit entry (``kind: "copy"``) that adds no
@@ -505,6 +527,11 @@ class LocalPaperBroker:
         show up as profit. Returns what was added and merged."""
         at = self.now_fn()
         with self._txn():
+            if only_if_not_copied:  # checked on the account as just re-read under the lock
+                held = [s for s, p in self._state["positions"].items() if p.get("source") == "groww"]
+                if held:
+                    copies = [c for c in self._state.get("credits", []) if c.get("kind") == "copy"]
+                    raise AlreadyCopied(copies[-1]["at"] if copies else None)
             added, merged, cost, value = [], [], 0.0, 0.0
             for h in holdings:
                 sym, qty = str(h["symbol"]).upper(), float(h["qty"])
@@ -523,7 +550,7 @@ class LocalPaperBroker:
                     merged.append(sym)
                 else:
                     pos = {"qty": qty, "avg_entry_price": avg, "high_water": max(avg, price),
-                           "stop": {"type": "trailing", "value": None}, "opened_at": at, "copied_qty": qty,
+                           "stop": {"type": "none", "value": None}, "opened_at": at, "copied_qty": qty,
                            "held_over_year": bool(h.get("held_over_year"))}
                     added.append(sym)
                 pos["source"], pos["copied_at"] = "groww", at

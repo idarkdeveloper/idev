@@ -528,6 +528,7 @@
       ${stat("Proceeds after charges", inr(v.proceeds, 2), "what lands in cash")}
       ${stat("Profit / loss if sold", sinr(v.realised_pl, 2), `against ${inr(v.cost, 2)} paid (${inr(v.avg_price, 2)} average)`, tone(v.realised_pl))}
       ${stat("Estimated tax", inr(t.estimate, 2), `${v.long_term ? "long term" : "short term"} \u00b7 FY ${esc(t.fy)}`)}</div>
+      <div><b>${v.basis === "groww" ? "Priced on your Groww holding" : "Priced on your practice position"}</b>${v.practice_note && v.basis === "groww" ? ": " + esc(v.practice_note.replace(/^Priced on your Groww holding\.\s*/, "")) : ""}</div>
       <div>${esc(v.tax_text)}</div><div>${esc(v.holding_note)}</div><div>${esc(v.cost_note)}</div>
       <div><i>${esc(v.disclaimer.charAt(0).toUpperCase() + v.disclaimer.slice(1))}.</i></div>`;
   }
@@ -544,7 +545,7 @@
     if(!sellEdit) return;
     const e = sellEdit, seq = ++spSeq;
     try {
-      const pv = await api("/api/practice/sell-preview", {symbol: e.symbol, qty: e.qty === "" ? null : Number(e.qty), held_over_year: !!e.held});
+      const pv = await api("/api/practice/sell-preview", {symbol: e.symbol, qty: e.qty === "" ? null : Number(e.qty), held_over_year: e.heldChanged ? !!e.held : null, source: e.source});
       if(seq !== spSeq || sellEdit !== e) return;
       e.pv = pv; e.err = null;
     } catch(err){ if(seq !== spSeq || sellEdit !== e) return; e.pv = null; e.err = err.message; }
@@ -555,9 +556,9 @@
   function openSell(sym, src){
     if(MODE !== "demo") return;   // Live has no sell tools
     const prev = sellEdit && sellEdit.source;
-    const row = src === "practice" ? (S.positions || []).find(p => p.symbol === sym) : null;
+    const row = (S.positions || []).find(p => p.symbol === sym);   // the practice position, whichever row was clicked
     const held = heldFlags[sym] !== undefined ? heldFlags[sym] : !!(row && row.held_over_year);
-    sellEdit = {source: src, symbol: sym, qty: "", held, confirming: false, pv: null, err: null};
+    sellEdit = {source: src, symbol: sym, qty: "", held, heldChanged: false, confirming: false, pv: null, err: null};
     sellEdit.qty = String(sellHeld(sellEdit));
     if(prev && prev !== src) redrawFor(prev);
     redrawFor(src); schedulePreview(true);
@@ -565,11 +566,11 @@
   }
   function closeSell(){ const src = sellEdit && sellEdit.source; sellEdit = null; clearTimeout(spTimer); if(src) redrawFor(src); }
   document.addEventListener("input", (ev) => { if(ev.target && ev.target.id === "sp-qty" && sellEdit){ sellEdit.qty = ev.target.value; sellEdit.confirming = false; sellEdit.pv = null; renderPreview(); schedulePreview(false); } });
-  document.addEventListener("change", (ev) => { if(ev.target && ev.target.id === "sp-held" && sellEdit){ sellEdit.held = !!ev.target.checked; heldFlags[sellEdit.symbol] = sellEdit.held; sellEdit.confirming = false; sellEdit.pv = null; renderPreview(); schedulePreview(true); } });
+  document.addEventListener("change", (ev) => { if(ev.target && ev.target.id === "sp-held" && sellEdit){ sellEdit.held = !!ev.target.checked; sellEdit.heldChanged = true; heldFlags[sellEdit.symbol] = sellEdit.held; sellEdit.confirming = false; sellEdit.pv = null; renderPreview(); schedulePreview(true); } });
   async function doSell(){
     const e = sellEdit; if(!e) return;
     try {
-      const j = await api("/api/practice/sell", {symbol: e.symbol, qty: Number(e.qty), held_over_year: !!e.held});
+      const j = await api("/api/practice/sell", {symbol: e.symbol, qty: Number(e.qty), held_over_year: e.heldChanged ? !!e.held : null});
       toast(j.message); closeSell(); await refresh();
     } catch(err){ e.confirming = false; renderPreview(); toast(err.message); }
   }
@@ -590,7 +591,7 @@
     const skipped = MP.holdings.length - priced.length;
     const already = extra || (S && S.copy_info && S.copy_info.held ? `Already copied on ${S.copy_info.copied_on}; copy again adds the holdings again?` : "");
     copyAgain = !!already;
-    $("copy-confirm-text").textContent = `Add ${priced.length} holding${priced.length === 1 ? "" : "s"} to the practice account at your real buy prices? Practice cash stays as it is, and Groww is not touched.`
+    $("copy-confirm-text").textContent = `Add ${priced.length} holding${priced.length === 1 ? "" : "s"} to the practice account at your real buy prices? Practice cash stays as it is, and Groww is not touched. Copied holdings have no stop-loss; set one per stock with Edit stop.`
       + (skipped ? ` ${skipped} without a market price will be skipped.` : "") + (already ? " " + already : "");
     $("copy-confirm").hidden = false; $("mp-copy").hidden = true;
   }

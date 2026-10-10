@@ -28,6 +28,11 @@ def _per_symbol(broker: Any) -> dict[str, float]:
     return pnl
 
 
+def dividends(b: Any) -> float:
+    """Cash credits paid out (dividends); copies of real holdings are credit entries but add no cash."""
+    return round(sum(c["amount"] for c in b.credits() if c.get("kind") != "copy"), 2)
+
+
 def _card(trial: Any, who: str) -> dict[str, Any]:
     b, cash0 = trial.broker(who), trial.data["cash"]
     values = [p[who] for p in trial.data["equity"]]
@@ -37,7 +42,7 @@ def _card(trial: Any, who: str) -> dict[str, Any]:
     ranked = sorted(pnl.items(), key=lambda kv: kv[1])
     return {"final": final, "return": final / cash0 - 1, "cagr": (final / cash0) ** (1 / years) - 1,
             "max_drawdown": _max_drawdown(values), "charges": b.performance()["fees_paid"],
-            "trades": len(b.orders()), "dividends": round(sum(c["amount"] for c in b.credits() if c.get("kind") != "copy"), 2),
+            "trades": len(b.orders()), "dividends": dividends(b),
             "best": {"symbol": ranked[-1][0], "pnl": round(ranked[-1][1], 2)} if ranked else None,
             "worst": {"symbol": ranked[0][0], "pnl": round(ranked[0][1], 2)} if ranked else None,
             "hit_rate": sum(1 for v in pnl.values() if v > 0) / len(pnl) if pnl else None}
