@@ -1158,11 +1158,7 @@
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
-<<<<<<< HEAD
-    $("f-gtt").checked = !!s.groww_gtt_stops; $("f-bse").checked = s.bse_deals !== false; $("f-flows").checked = s.flows_breadth !== false; $("f-bands").checked = s.price_band_filter !== false;
-=======
-    $("f-gtt").checked = !!s.groww_gtt_stops; $("f-ddpi").checked = !!s.groww_ddpi_confirmed; $("f-t1").checked = !!s.groww_sell_t1; $("f-bse").checked = s.bse_deals !== false;
->>>>>>> worktree-agent-ac251b8bfa7bdbc52
+    $("f-gtt").checked = !!s.groww_gtt_stops; $("f-ddpi").checked = !!s.groww_ddpi_confirmed; $("f-t1").checked = !!s.groww_sell_t1; $("f-bse").checked = s.bse_deals !== false; $("f-flows").checked = s.flows_breadth !== false; $("f-bands").checked = s.price_band_filter !== false;
     $("f-dg-writer").value = s.digest_writer || "claude";
     $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on; $("f-dg-bul").checked = s.digest_bulletin !== false; $("f-dg-chart").checked = s.digest_charts !== false;
     $("f-dg-am-t").value = s.digest_morning || "09:00"; $("f-dg-pm-t").value = s.digest_evening || "15:45";
@@ -1193,11 +1189,7 @@
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-<<<<<<< HEAD
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.bse_deals = $("f-bse").checked; body.flows_breadth = $("f-flows").checked; body.price_band_filter = $("f-bands").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked; body.telegram_alerts = $("f-tg-on").checked; if($("f-tg-token").value.trim()) body.telegram_bot_token = $("f-tg-token").value.trim().toLowerCase() === "clear" ? "" : $("f-tg-token").value.trim(); if($("f-hb").value.trim()) body.heartbeat_url = $("f-hb").value.trim().toLowerCase() === "clear" ? "" : $("f-hb").value.trim();
-=======
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.groww_ddpi_confirmed = $("f-ddpi").checked; body.groww_sell_t1 = $("f-t1").checked; body.bse_deals = $("f-bse").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked; body.telegram_alerts = $("f-tg-on").checked; if($("f-tg-token").value.trim()) body.telegram_bot_token = $("f-tg-token").value.trim().toLowerCase() === "clear" ? "" : $("f-tg-token").value.trim(); if($("f-hb").value.trim()) body.heartbeat_url = $("f-hb").value.trim().toLowerCase() === "clear" ? "" : $("f-hb").value.trim();
->>>>>>> worktree-agent-ac251b8bfa7bdbc52
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.groww_ddpi_confirmed = $("f-ddpi").checked; body.groww_sell_t1 = $("f-t1").checked; body.bse_deals = $("f-bse").checked; body.flows_breadth = $("f-flows").checked; body.price_band_filter = $("f-bands").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked; body.telegram_alerts = $("f-tg-on").checked; if($("f-tg-token").value.trim()) body.telegram_bot_token = $("f-tg-token").value.trim().toLowerCase() === "clear" ? "" : $("f-tg-token").value.trim(); if($("f-hb").value.trim()) body.heartbeat_url = $("f-hb").value.trim().toLowerCase() === "clear" ? "" : $("f-hb").value.trim();
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);
