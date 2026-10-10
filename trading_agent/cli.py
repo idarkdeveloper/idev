@@ -918,7 +918,7 @@ def cmd_digest(args: argparse.Namespace) -> int:
         if set(notifier.channels) == {"console"}:
             print("Not sent: no email (RESEND_API_KEY + NOTIFY_EMAIL_TO) or webhook is configured.", file=sys.stderr)
             return 1
-        delivered = send_digest(notifier, email)
+        delivered = send_digest(notifier, email, allowed_hosts=getattr(settings, "allowed_hosts", None))
         print(f"Sent via: {', '.join(d for d in delivered if d != 'console') or 'nothing (delivery failed)'}")
         return 0 if set(delivered) - {"console", "telegram"} else 1
     return 0

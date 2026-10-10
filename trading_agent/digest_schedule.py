@@ -81,7 +81,8 @@ def telegram_summary(email: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
-def send_digest(notifier: Any, email: dict[str, Any], kind: str | None = None, day: str | None = None) -> list[str]:
+def send_digest(notifier: Any, email: dict[str, Any], kind: str | None = None, day: str | None = None,
+                allowed_hosts: Any = None) -> list[str]:
     """Send one built email. ``kind`` and ``day`` name the logical send (the scheduler's retry of the same kind and day
     must not make a second email), and go to a notifier that takes an ``idempotency_key``."""
     import inspect
@@ -98,6 +99,13 @@ def send_digest(notifier: Any, email: dict[str, Any], kind: str | None = None, d
             extra["telegram_text"] = telegram_summary(email)
         except Exception:  # noqa: BLE001 - Telegram gets the full text instead
             pass
+    if "telegram_html" in params or takes_var:
+        try:
+            from .telegram_brief import telegram_brief
+            b = telegram_brief(email, allowed_hosts)
+            extra.update(telegram_html=b["html"], telegram_plain=b["plain"], telegram_button=b["button"])
+        except Exception:  # noqa: BLE001 - Telegram gets the short text instead
+            log.exception("telegram brief failed")
     if images and ("images" in params or takes_var):
         return notifier.send(email["subject"], email["text"], html=email["html"], images=images, **extra)
     text, html = email["text"], email["html"]
@@ -333,7 +341,7 @@ class DigestScheduler:
             detail = result["error"]
         else:
             try:
-                delivered = send_digest(self._notifier(), result["email"], kind, day)
+                delivered = send_digest(self._notifier(), result["email"], kind, day, getattr(self.settings, "allowed_hosts", None))
                 if _external(delivered, self._notifier()):
                     outcome = "sent"
                 else:
