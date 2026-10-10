@@ -209,6 +209,7 @@
   table { width: 100%; border-collapse: collapse; min-width: 560px; font-size: 14px; }
   th { text-align: left; font-weight: 400; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
        color: var(--color-th); padding: 8px; white-space: nowrap; }
+  #pp-card thead th { white-space: normal; }  /* the practice table sits beside Look up: let long headers wrap so Close fits */
   td { padding: 8px; vertical-align: top; }
   thead tr { background: linear-gradient(to right, transparent, var(--color-divider) 48px, var(--color-divider) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px; }
   tbody tr { background: var(--fade-rule) no-repeat bottom / 100% 1px; }
