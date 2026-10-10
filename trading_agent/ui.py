@@ -33,7 +33,8 @@ from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
 from .groww import GrowwTokenUnavailable, warn_token_block_once
-from .runner import check, free_prices, make_broker, equity_key, make_data_source, make_notifier, make_practice_broker
+from .runner import (check, free_prices, make_broker, equity_key, make_data_source, make_notifier,
+                     make_practice_broker, read_groww_portfolio)
 from .state import STATE_LOCK, State
 from .stops import FILLS_KEY, PracticeStopChecker
 from .watch import Watcher
@@ -828,6 +829,9 @@ class App:
             raise ValueError("Groww isn't linked, so there is nothing to copy; add your Groww keys to .env")
         if m.get("error"):
             raise ValueError(f"Groww didn't answer: {m['error']}")
+        if m.get("source") == "saved":  # last known holdings with delayed prices: may be stale, never copied
+            raise ValueError(f"Groww didn't answer ({m.get('reason')}); the saved holdings are not copied "
+                             "because they may be out of date. Try again when Groww is back.")
         usable: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         for h in m.get("holdings") or []:
@@ -1252,48 +1256,9 @@ class App:
             return self._parent.my_portfolio(refresh)
         if self._my_portfolio is not None and not refresh and time.time() - self._my_portfolio_at < 60:
             return self._my_portfolio
-        s = self.settings
-        if not s.has_groww_credentials:
-            return {"linked": False}
-        from .groww import GrowwBroker
-        from .runner import resolve_groww_token
-        from .instruments import CompanyNames, nse_then_bse
-        from .prices import YahooPrices
-        bse = YahooPrices(suffix=".BO", cache_dir=s.state_dir / "cache")
-        try:
-            g = GrowwBroker(resolve_groww_token(s), live_orders=False, exchange=s.groww_exchange,
-                            price_fallback=nse_then_bse(self.prices, bse))
-            positions = g.positions()
-        except (SystemExit, GrowwTokenUnavailable) as e:
-            return {"linked": True, "error": str(e)}
-        except Exception as e:  # noqa: BLE001
-            return {"linked": True, "error": f"{type(e).__name__}: {e}"}
-        try:
-            names = CompanyNames(s.state_dir / "cache").lookup([p.symbol for p in positions])
-        except Exception:  # noqa: BLE001 - names are optional
-            names = {}
-        rows = []
-        for p in positions:
-            invested = p.qty * p.avg_entry_price
-            value = p.qty * p.current_price if p.current_price is not None else None
-            info = names.get(p.symbol.upper()) or {}
-            rows.append({"symbol": p.symbol, "name": info.get("name"), "exchange": info.get("exchange"),
-                         "kind": info.get("kind") or "equity", "maturity": info.get("maturity"),
-                         "qty": p.qty, "sellable_qty": p.free_qty,
-                         "avg_price": p.avg_entry_price, "price": p.current_price,
-                         "invested": round(invested, 2), "value": round(value, 2) if value is not None else None,
-                         "pl": round(value - invested, 2) if value is not None else None,
-                         "pl_pct": (p.current_price / p.avg_entry_price - 1)
-                         if p.current_price is not None and p.avg_entry_price else None})
-        rows.sort(key=lambda r: -(r["value"] if r["value"] is not None else r["invested"]))
-        priced = [r for r in rows if r["value"] is not None]
-        inv_priced = sum(r["invested"] for r in priced)
-        value = sum(r["value"] for r in priced)
-        out = {"linked": True, "at": _now(), "holdings": rows,
-               "invested": round(sum(r["invested"] for r in rows), 2),
-               "value": round(value, 2), "pl": round(value - inv_priced, 2),
-               "pl_pct": (value / inv_priced - 1) if inv_priced else None,
-               "unpriced": [r["symbol"] for r in rows if r["value"] is None]}
+        out = read_groww_portfolio(self.settings, self.prices, _now())
+        if not out.get("at"):  # not linked, or an error: not cached
+            return out
         self._my_portfolio, self._my_portfolio_at = out, time.time()
         return out
 

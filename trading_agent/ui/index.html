@@ -456,9 +456,10 @@
       else if(MP.error) t = na("Couldn't load: " + esc(MP.error));
       else {
         const cls = MP.pl == null ? "" : MP.pl >= 0 ? "up" : "down";
-        t = [tile("Holdings value", inr(MP.value), `invested ${inr(MP.invested)}`),
-             tile("Profit / loss", sinr(MP.pl), `<span class="${cls}">${spct(MP.pl_pct)} vs what you paid</span>`),
-             tile("Holdings", String(MP.holdings.length), MP.unpriced.length ? `${MP.unpriced.length} without a price` : "all priced")];
+        const sv = MP.source === "saved" ? " (saved)" : "";   // the Groww message is shown once, on the My Groww portfolio card
+        t = [tile("Holdings value" + sv, inr(MP.value), `invested ${inr(MP.invested)}`),
+             tile("Profit / loss" + sv, sinr(MP.pl), `<span class="${cls}">${spct(MP.pl_pct)} vs what you paid</span>`),
+             tile("Holdings" + sv, String(MP.holdings.length), MP.unpriced.length ? `${MP.unpriced.length} without a price` : "all priced")];
       }
     }
     $("tiles").innerHTML = t.concat(model).join("");
@@ -667,7 +668,10 @@
       return;
     }
     const tone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
-    $("mp-sub").textContent = `${m.holdings.length} holdings · read-only from Groww · ${when(m.at)}`;
+    if(m.source === "saved"){
+      const until = m.blocked_until ? new Date(m.blocked_until).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false}) : null;
+      $("mp-sub").textContent = `Saved holdings from ${new Date(m.saved_at).toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false})} IST · ${until ? "Groww unavailable until " + until + " IST" : m.reason} · prices from Yahoo (delayed)`;
+    } else $("mp-sub").textContent = `${m.holdings.length} holdings · read-only from Groww · ${when(m.at)}`;
     const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
     stats.innerHTML = stat("Invested", inr(m.invested), "what you paid, all holdings")
       + stat("Value now", inr(m.value), m.unpriced.length ? `excludes ${m.unpriced.map(esc).join(", ")} (no market price)` : "at current prices")

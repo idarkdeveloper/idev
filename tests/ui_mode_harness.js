@@ -7,6 +7,7 @@ const vm = require("vm");
 const mode = process.argv[2] || "live";
 const sample = process.argv[3] === "sample";
 const mpFail = process.argv[3] === "mpfail";
+const savedMode = process.argv[3] === "saved";   // Groww refusing logins: the saved holdings, priced from Yahoo
 const noMarker = process.argv[3] === "nomarker";
 const multi = process.argv[3] === "multi" || process.argv[3] === "multi-saved";   // several followed investors
 const intervals = [], stored = process.argv[3] === "multi-saved" ? {dealFilter: JSON.stringify(["VIJAY KEDIA"])} : {};
@@ -62,6 +63,8 @@ const portfolio = {linked: true, at: "2026-10-10T10:00:00+00:00", holdings: [{sy
   price: 110, invested: 100, value: 110, pl: 10, pl_pct: 0.1, kind: "equity"},
   {symbol: "LAURUSLABS", qty: 50, sellable_qty: 50, avg_price: 90, price: 100, invested: 4500, value: 5000, pl: 500, pl_pct: 0.1, kind: "equity"}], invested: 100, value: 110, pl: 10, pl_pct: 0.1, unpriced: []};
 
+if (savedMode) Object.assign(portfolio, {source: "saved", saved_at: "2026-10-09T15:40:00+05:30", blocked_until: "2026-10-10T14:30:00+05:30",
+  reason: "Groww refused a new login token (429 Too Many Requests).", prices: "yahoo (delayed)"});
 const preview = {symbol: "TCS", basis: "groww", in_practice: false, held: 1, qty: 1, price: 110, avg_price: 100, long_term: false,
   held_over_year: false, sale_value: 110, charges: 30, proceeds: 80, cost: 100, realised_pl: -20, fy: "2026-27",
   tax: {estimate: 0, fy: "2026-27"}, tax_text: "A loss, so no tax on this sale.", holding_note: "Groww gives no buy date.",
@@ -153,7 +156,7 @@ setTimeout(async () => {
   const banner = els["demo-banner"] && !els["demo-banner"].hidden
     ? els["demo-title"].textContent + " | " + els["btn-demo-reset"].textContent : "";
   console.log(JSON.stringify({
-    tiles: el("tiles").innerHTML.replace(/<[^>]+>/g, " "),
+    tiles: el("tiles").innerHTML.replace(/<[^>]+>/g, " "), mp_sub: el("mp-sub").textContent, mp_rows_html: el("mp-rows").innerHTML,
     paper_buy_button: el("recs").innerHTML.includes("data-order"),
     dismiss_button: el("recs").innerHTML.includes("data-dismiss"),
     pp_card_hidden: el("pp-card").hidden,

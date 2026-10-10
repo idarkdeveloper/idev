@@ -174,6 +174,133 @@ def make_data_source(settings: Settings) -> Any:
     return QuiverClient(settings.quiver_api_key)
 
 
+SNAPSHOT_FILE = "groww_holdings.json"
+_SNAPSHOT_KEYS = ("symbol", "name", "exchange", "kind", "maturity", "qty", "sellable_qty", "avg_price")
+
+
+def _assemble(entries: list[dict[str, Any]], stamp: str) -> dict[str, Any]:
+    """Holdings rows (each with a ``price`` or None) and the totals, the way the dashboard shows them."""
+    rows = []
+    for e in entries:
+        price, qty, avg = e.get("price"), e["qty"], e["avg_price"]
+        invested = qty * avg
+        value = qty * price if price is not None else None
+        rows.append({"symbol": e["symbol"], "name": e.get("name"), "exchange": e.get("exchange"),
+                     "kind": e.get("kind") or "equity", "maturity": e.get("maturity"),
+                     "qty": qty, "sellable_qty": e.get("sellable_qty"),
+                     "avg_price": avg, "price": price,
+                     "invested": round(invested, 2), "value": round(value, 2) if value is not None else None,
+                     "pl": round(value - invested, 2) if value is not None else None,
+                     "pl_pct": (price / avg - 1) if price is not None and avg else None})
+    rows.sort(key=lambda r: -(r["value"] if r["value"] is not None else r["invested"]))
+    priced = [r for r in rows if r["value"] is not None]
+    inv_priced = sum(r["invested"] for r in priced)
+    value = sum(r["value"] for r in priced)
+    return {"linked": True, "at": stamp, "holdings": rows,
+            "invested": round(sum(r["invested"] for r in rows), 2),
+            "value": round(value, 2), "pl": round(value - inv_priced, 2),
+            "pl_pct": (value / inv_priced - 1) if inv_priced else None,
+            "unpriced": [r["symbol"] for r in rows if r["value"] is None]}
+
+
+def save_groww_snapshot(settings: Settings, rows: list[dict[str, Any]]) -> None:
+    """Remember the holdings (no prices, no tokens or keys) so the page and the daily emails still work while
+    Groww refuses a login. Atomic, owner-only; a failure to save is logged, never raised."""
+    import json
+    import os
+    from datetime import datetime
+    from .state import atomic_write
+    from .timezones import IST
+    path = settings.state_dir / SNAPSHOT_FILE
+    try:
+        body = {"saved_at": datetime.now(IST).isoformat(timespec="seconds"),
+                "holdings": [{k: r.get(k) for k in _SNAPSHOT_KEYS} for r in rows]}
+        atomic_write(path, json.dumps(body, indent=2))
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not save the Groww holdings snapshot: %s", e)
+
+
+def load_groww_snapshot(settings: Settings) -> dict[str, Any] | None:
+    import json
+    try:
+        data = json.loads((settings.state_dir / SNAPSHOT_FILE).read_text(encoding="utf-8"))
+        rows = [r for r in data["holdings"] if isinstance(r, dict) and r.get("symbol")
+                and isinstance(r.get("qty"), (int, float)) and isinstance(r.get("avg_price"), (int, float))]
+        return {"saved_at": str(data["saved_at"]), "holdings": rows}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _from_snapshot(settings: Settings, prices: Any, bse: Any, reason: str, error_extra: dict[str, Any]) -> dict[str, Any] | None:
+    from .instruments import nse_then_bse
+    snap = load_groww_snapshot(settings)
+    if snap is None:
+        return None
+    price_fn = nse_then_bse(prices, bse)
+    entries = []
+    for r in snap["holdings"]:
+        try:
+            price = float(price_fn(r["symbol"]))
+        except Exception:  # noqa: BLE001 - stays "no price"
+            price = None
+        entries.append({**{k: r.get(k) for k in _SNAPSHOT_KEYS}, "price": price})
+    out = _assemble(entries, snap["saved_at"])
+    out.update({"source": "saved", "saved_at": snap["saved_at"], "reason": reason,
+                "prices": "yahoo (delayed)", **error_extra})
+    return out
+
+
+def read_groww_portfolio(settings: Settings, prices: Any, stamp: str = "") -> dict[str, Any]:
+    """Your real Groww holdings with buy price, current price and profit or loss. Read-only: the client is built
+    with live orders off and never places an order. After every successful read the holdings are saved to
+    ``groww_holdings.json``. When Groww cannot be read (cool-down after a refusal, any error, not linked) and a
+    snapshot exists, that is returned priced from the free source with ``source: "saved"``, ``saved_at``,
+    ``reason`` and ``prices``; with no snapshot: {"linked": False} without credentials, or
+    {"linked": True, "error": text[, "blocked_until": iso]}. A successful read has {"linked": True, "at",
+    "holdings", "invested", "value", "pl", "pl_pct", "unpriced"}. The dashboard and the daily emails use it."""
+    from .groww import GrowwBroker
+    from .instruments import CompanyNames, nse_then_bse
+    bse = YahooPrices(suffix=".BO", cache_dir=settings.state_dir / "cache")
+    if not settings.has_groww_credentials:
+        return _from_snapshot(settings, prices, bse, "Groww is not linked", {}) or {"linked": False}
+    failure: dict[str, Any]
+    try:
+        g = GrowwBroker(resolve_groww_token(settings), live_orders=False, exchange=settings.groww_exchange,
+                        price_fallback=nse_then_bse(prices, bse))
+        positions = g.positions()
+        failure = {}
+    except GrowwTokenUnavailable as e:
+        failure = {"linked": True, "error": str(e)}
+        if e.until is not None:
+            failure["blocked_until"] = e.until.isoformat()
+    except SystemExit as e:
+        failure = {"linked": True, "error": str(e)}
+    except Exception as e:  # noqa: BLE001
+        failure = {"linked": True, "error": f"{type(e).__name__}: {e}"}
+    if failure:
+        extra = {k: failure[k] for k in ("blocked_until",) if k in failure}
+        saved = _from_snapshot(settings, prices, bse, failure["error"], {"linked": True, **extra})
+        return saved or failure
+    try:
+        names = CompanyNames(settings.state_dir / "cache").lookup([p.symbol for p in positions])
+    except Exception:  # noqa: BLE001 - names are optional
+        names = {}
+    entries = []
+    for p in positions:
+        info = names.get(p.symbol.upper()) or {}
+        entries.append({"symbol": p.symbol, "name": info.get("name"), "exchange": info.get("exchange"),
+                        "kind": info.get("kind") or "equity", "maturity": info.get("maturity"),
+                        "qty": p.qty, "sellable_qty": p.free_qty, "avg_price": p.avg_entry_price,
+                        "price": p.current_price})
+    out = _assemble(entries, stamp)
+    save_groww_snapshot(settings, out["holdings"])
+    return out
+
+
 def make_notifier(settings: Settings) -> Notifier:
     return Notifier(resend_api_key=settings.resend_api_key, email_to=settings.notify_email_to,
                     email_from=settings.notify_email_from, webhook_url=settings.notify_webhook_url)
