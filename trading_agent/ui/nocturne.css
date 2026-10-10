@@ -381,3 +381,14 @@ td.prot-cell > * + * { margin-top: 4px; }
   td a, .ann a, .cardbody a[data-lookup], .sell-panel a, table a { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }
   .suggest .opt { min-height: 44px; }
 }
+
+/* Look up a stock: Lightweight Charts controls and legend. */
+.ck-controls { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; margin: 6px 0 4px; }
+.ck-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ck-chip { min-height: 28px; padding: 0 10px; font-size: 12px; border-radius: 999px; background: transparent;
+  color: var(--color-muted); border: 1px solid var(--color-divider); cursor: pointer; }
+.ck-chip[aria-pressed="true"] { color: var(--color-text); border-color: var(--color-accent); background: var(--color-hover); }
+.ck-legend { font-size: 12px; line-height: 1.5; color: var(--color-muted); min-height: 36px; font-variant-numeric: tabular-nums; }
+.ck-legend b { color: var(--color-text); font-weight: 600; }
+.ck-up { color: var(--color-profit); font-weight: 600; } .ck-down { color: var(--color-loss); font-weight: 600; }
+.ck-box { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; touch-action: pan-y; }

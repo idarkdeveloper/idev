@@ -544,8 +544,271 @@ window.TA = (function(){
     }
     return {modeStrip, paintStrip, freshnessChip, paintChip, ageText, protectionHtml, icon, slug, parseUrl, buildUrl, pickSection, day};
   })();
+  // ---- stock chart: TradingView Lightweight Charts v5 (vendored at /static/lightweight-charts.js) for the lookup card.
+  // Candles + volume + EMA/BB lines in the main pane, RSI and MACD in their own panes, a hover legend, range and
+  // indicator chips (remembered in localStorage). Colours are the nocturne.css tokens, resolved to rgb() through a probe
+  // element because the tokens use color-mix() which the library's canvas colour parser cannot read. ----
+  const STOCK_RANGES = ["1M", "3M", "6M", "1Y", "2Y", "5Y"];
+  const STOCK_TOGGLES = [["ema", "EMA"], ["bb", "BB"], ["rsi", "RSI"], ["macd", "MACD"], ["vol", "Volume"]];
+  const STOCK_KEY = "lkChart";
+  const stockDefaults = () => ({range: "1Y", on: {ema: true, bb: false, rsi: true, macd: false, vol: true}});
+  function stockPrefs(){
+    const p = stockDefaults();
+    try {
+      const v = JSON.parse(localStorage.getItem(STOCK_KEY) || "null");
+      if(v && STOCK_RANGES.includes(v.range)) p.range = v.range;
+      if(v && v.on) STOCK_TOGGLES.forEach(([k]) => { if(typeof v.on[k] === "boolean") p.on[k] = v.on[k]; });
+    } catch(e){}
+    return p;
+  }
+  function saveStockPrefs(p){ try { localStorage.setItem(STOCK_KEY, JSON.stringify(p)); } catch(e){} }
+
+  // One token -> "rgb(r, g, b)" / "rgba(r, g, b, a)". Probe element first (resolves var() and color-mix()), then a 1px
+  // canvas so even the `color(srgb ...)` form that browsers return for color-mix() becomes plain rgba.
+  function resolveColor(token, fallback){
+    let probe = null;
+    try {
+      probe = document.createElement("span");
+      probe.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden;color:" + fallback;
+      probe.style.color = "var(" + token + ", " + fallback + ")";
+      document.body.appendChild(probe);
+      const css = getComputedStyle(probe).color;
+      if(/^rgba?\(/.test(css)) return css;
+      const cv = document.createElement("canvas"); cv.width = cv.height = 1;
+      const cx = cv.getContext("2d");
+      cx.clearRect(0, 0, 1, 1); cx.fillStyle = css; cx.fillRect(0, 0, 1, 1);
+      const d = cx.getImageData(0, 0, 1, 1).data;
+      return d[3] === 255 ? `rgb(${d[0]}, ${d[1]}, ${d[2]})` : `rgba(${d[0]}, ${d[1]}, ${d[2]}, ${+(d[3] / 255).toFixed(3)})`;
+    } catch(e){ return fallback; }
+    finally { if(probe && probe.parentNode) probe.parentNode.removeChild(probe); }
+  }
+  function withAlpha(rgb, a){
+    const m = String(rgb).match(/[\d.]+/g);
+    return m && m.length >= 3 ? `rgba(${m[0]}, ${m[1]}, ${m[2]}, ${a})` : rgb;
+  }
+  function stockColors(){
+    const c = (t, f) => resolveColor(t, f);
+    const x = {
+      bg: c("--color-surface", "#232532"), text: c("--color-muted", "#9a9ba5"), grid: c("--color-rule", "#2c2e3b"),
+      border: c("--color-divider", "#3a3c4a"), ink: c("--color-text", "#e9e9ed"),
+      up: c("--color-profit", "#3ddc84"), down: c("--color-loss", "#ff6b6b"),
+      accent: c("--color-accent", "#9184d9"), amber: c("--color-replay", "#e0b354"), teal: c("--color-demo", "#56c2b0"),
+      accent2: c("--color-accent-2", "#a7a1db")
+    };
+    x.volUp = withAlpha(x.up, 0.35); x.volDown = withAlpha(x.down, 0.35);
+    x.band = withAlpha(x.text, 0.8);
+    return x;
+  }
+
+  const fmtVol = (v) => v == null ? "n/a" : v >= 1e7 ? (v / 1e7).toFixed(2) + " Cr" : v >= 1e5 ? (v / 1e5).toFixed(2) + " L"
+    : Math.round(v).toLocaleString("en-IN");
+  const timeKey = (t) => typeof t === "string" ? t
+    : t && typeof t === "object" && t.year ? `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}` : null;
+
+  // stockChart(host, {ticker, fetchCandles(range) -> Promise<payload>, isCurrent() -> bool, fallback(message)})
+  // Builds the controls, legend and chart inside ``host``; returns {destroy()}. Throws if the library is missing so the
+  // caller can draw the old line chart instead; async failures call ``fallback``.
+  function stockChart(host, cfg){
+    const LW = window.LightweightCharts;
+    if(!LW || typeof LW.createChart !== "function" || !LW.CandlestickSeries) throw new Error("chart library missing");
+    const prefs = stockPrefs();
+    let chart = null, data = null, dead = false, seq = 0, colors = null, ro = null, mo = null, mq = null;
+    let series = {}, byDate = new Map(), legendFor = null, savedRange = null;
+    host.innerHTML = `<div class="ck-controls"><div class="ck-chips" role="group" aria-label="Chart range">${STOCK_RANGES.map(r =>
+        `<button type="button" class="ck-chip" data-range="${r}" aria-pressed="false">${r}</button>`).join("")}</div>
+      <div class="ck-chips" role="group" aria-label="Indicators">${STOCK_TOGGLES.map(([k, l]) =>
+        `<button type="button" class="ck-chip" data-tog="${k}" aria-pressed="false">${l}</button>`).join("")}</div></div>
+      <div class="ck-legend" aria-live="off"></div><div class="ck-box"></div><div class="ck-note sub"></div>`;
+    const box = host.querySelector(".ck-box"), legend = host.querySelector(".ck-legend"), note = host.querySelector(".ck-note");
+
+    function paintChips(){
+      host.querySelectorAll("[data-range]").forEach(b => b.setAttribute("aria-pressed", b.dataset.range === prefs.range ? "true" : "false"));
+      host.querySelectorAll("[data-tog]").forEach(b => b.setAttribute("aria-pressed", prefs.on[b.dataset.tog] ? "true" : "false"));
+    }
+    const heights = () => {
+      const narrow = (box.clientWidth || host.clientWidth || 360) < 560;
+      return {main: narrow ? 260 : 360, rsi: narrow ? 70 : 100, macd: narrow ? 80 : 110};
+    };
+    const totalHeight = () => {
+      const h = heights();
+      return h.main + (prefs.on.rsi ? h.rsi + 1 : 0) + (prefs.on.macd ? h.macd + 1 : 0) + 26;
+    };
+    function layoutPanes(){
+      if(!chart) return;
+      const h = heights(), panes = chart.panes();
+      chart.applyOptions({width: Math.max(box.clientWidth, 100), height: totalHeight()});   // size first, then each pane
+      // Panes share the plot height by stretch factor, so the factors are the wanted heights (main 260 : RSI 70 : MACD 80).
+      let i = 1;
+      if(panes[0]) panes[0].setStretchFactor(h.main);
+      if(prefs.on.rsi && panes[i]) panes[i++].setStretchFactor(h.rsi);
+      if(prefs.on.macd && panes[i]) panes[i++].setStretchFactor(h.macd);
+    }
+
+    function applyColors(){
+      if(!chart) return;
+      colors = stockColors();
+      const k = colors;
+      chart.applyOptions({
+        layout: {background: {type: LW.ColorType ? LW.ColorType.Solid : "solid", color: k.bg}, textColor: k.text,
+                 panes: {separatorColor: k.border, separatorHoverColor: k.border, enableResize: false}},
+        grid: {vertLines: {color: k.grid}, horzLines: {color: k.grid}},
+        rightPriceScale: {borderColor: k.border}, timeScale: {borderColor: k.border},
+        crosshair: {vertLine: {color: k.text, labelBackgroundColor: k.accent}, horzLine: {color: k.text, labelBackgroundColor: k.accent}}
+      });
+      const s = series;
+      if(s.candle) s.candle.applyOptions({upColor: k.up, downColor: k.down, wickUpColor: k.up, wickDownColor: k.down});
+      if(s.vol && data) s.vol.setData(data.bars.map(b => ({time: b.time, value: b.volume, color: b.close >= b.open ? k.volUp : k.volDown})));
+      if(s.ema20) s.ema20.applyOptions({color: k.teal});
+      if(s.ema50) s.ema50.applyOptions({color: k.amber});
+      if(s.ma200) s.ma200.applyOptions({color: k.accent});
+      ["bbU", "bbM", "bbL"].forEach(n => { if(s[n]) s[n].applyOptions({color: k.band}); });
+      if(s.rsi) s.rsi.applyOptions({color: k.accent});
+      if(s.guides) s.guides.forEach(g => g.applyOptions({color: k.text}));
+      if(s.macd) s.macd.applyOptions({color: k.accent});
+      if(s.sig) s.sig.applyOptions({color: k.amber});
+      if(s.hist && data) s.hist.setData(data.macd_hist.map(p => ({time: p.time, value: p.value, color: p.value >= 0 ? k.volUp : k.volDown})));
+      if(s.costLine) s.costLine.applyOptions({color: k.ink});
+      if(s.stopLine) s.stopLine.applyOptions({color: k.down});
+      updateLegend(legendFor);
+    }
+
+    function teardown(){
+      if(chart){
+        try { savedRange = chart.timeScale().getVisibleLogicalRange(); } catch(e){}
+        try { chart.remove(); } catch(e){}
+      }
+      chart = null; series = {}; byDate = new Map();
+    }
+
+    function build(keepRange){
+      teardown();
+      if(!keepRange) savedRange = null;
+      if(dead || !data || !data.bars || !data.bars.length) return;
+      const k = colors = stockColors(), on = prefs.on;
+      const fmt = (v) => money(v, 2);
+      chart = LW.createChart(box, {
+        width: Math.max(box.clientWidth, 100), height: totalHeight(),
+        layout: {fontFamily: getComputedStyle(document.body).fontFamily, fontSize: 11, attributionLogo: true},
+        handleScroll: {mouseWheel: false, vertTouchDrag: false}, handleScale: {mouseWheel: true, pinch: true, axisPressedMouseMove: true},
+        timeScale: {timeVisible: false, rightOffset: 2},
+        crosshair: {mode: 0}
+      });
+      const line = (opts, pane) => chart.addSeries(LW.LineSeries, Object.assign({lineWidth: 1, lastValueVisible: false,
+        priceLineVisible: false, crosshairMarkerVisible: false}, opts), pane);
+      series.candle = chart.addSeries(LW.CandlestickSeries, {borderVisible: false, priceLineVisible: false,
+        priceFormat: {type: "custom", formatter: fmt, minMove: 0.01}}, 0);
+      series.candle.setData(data.bars.map(b => ({time: b.time, open: b.open, high: b.high, low: b.low, close: b.close})));
+      if(on.vol){
+        series.vol = chart.addSeries(LW.HistogramSeries, {priceFormat: {type: "volume"}, priceScaleId: "vol",
+          lastValueVisible: false, priceLineVisible: false}, 0);
+        chart.priceScale("vol").applyOptions({scaleMargins: {top: 0.8, bottom: 0}});
+        series.candle.priceScale().applyOptions({scaleMargins: {top: 0.06, bottom: 0.22}});
+      }
+      const setLine = (name, pts, opts) => { series[name] = line(opts, 0); series[name].setData(pts || []); };
+      if(on.ema){ setLine("ema20", data.ema20, {}); setLine("ema50", data.ema50, {}); setLine("ma200", data.ma200, {lineWidth: 2}); }
+      if(on.bb){
+        setLine("bbU", data.bb_upper, {}); setLine("bbM", data.bb_mid, {lineStyle: 2}); setLine("bbL", data.bb_lower, {});
+      }
+      const pos = data.position;
+      if(pos && pos.cost != null) series.costLine = series.candle.createPriceLine({price: pos.cost, lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: "Your cost", color: k.ink});
+      if(pos && pos.stop != null) series.stopLine = series.candle.createPriceLine({price: pos.stop, lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: "Stop", color: k.down});
+      let pane = 1;
+      if(on.rsi){
+        series.rsi = line({lineWidth: 1, priceFormat: {type: "custom", formatter: (v) => v.toFixed(0)},
+          autoscaleInfoProvider: () => ({priceRange: {minValue: 0, maxValue: 100}})}, pane++);
+        series.rsi.setData(data.rsi14 || []);
+        series.guides = [70, 30].map(p => series.rsi.createPriceLine({price: p, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: "", color: k.text}));
+      }
+      if(on.macd){
+        const pf = {priceFormat: {type: "custom", formatter: (v) => v.toFixed(2)}};
+        series.hist = chart.addSeries(LW.HistogramSeries, Object.assign({lastValueVisible: false, priceLineVisible: false}, pf), pane);
+        series.macd = line(pf, pane); series.sig = line(pf, pane);
+        series.macd.setData(data.macd || []); series.sig.setData(data.macd_signal || []);
+        pane++;
+      }
+      data.bars.forEach((b, i) => byDate.set(b.time, i));
+      layoutPanes();
+      if(keepRange && savedRange) { try { chart.timeScale().setVisibleLogicalRange(savedRange); } catch(e){ chart.timeScale().fitContent(); } }
+      else chart.timeScale().fitContent();
+      chart.subscribeCrosshairMove((param) => updateLegend(param && param.time ? timeKey(param.time) : null));
+      applyColors();
+    }
+
+    // Legend: the hovered bar's date, O H L C, change vs previous close, volume and every visible indicator; the
+    // latest bar when nothing is hovered.
+    function valueAt(arr, key){
+      if(!arr) return null;
+      let lo = 0, hi = arr.length - 1;
+      while(lo <= hi){ const m = (lo + hi) >> 1; if(arr[m].time === key) return arr[m].value; if(arr[m].time < key) lo = m + 1; else hi = m - 1; }
+      return null;
+    }
+    function updateLegend(key){
+      legendFor = key;
+      if(!data || !data.bars || !data.bars.length){ legend.textContent = ""; return; }
+      let i = key != null && byDate.has(key) ? byDate.get(key) : data.bars.length - 1;
+      const b = data.bars[i], prev = i > 0 ? data.bars[i - 1].close : null, on = prefs.on;
+      const chg = prev ? (b.close - prev) / prev : null, cls = chg == null ? "" : chg >= 0 ? "ck-up" : "ck-down";
+      const p = [`<b>${esc(b.time)}</b>`, `O ${esc(money(b.open, 2))}`, `H ${esc(money(b.high, 2))}`, `L ${esc(money(b.low, 2))}`,
+        `C ${esc(money(b.close, 2))}`];
+      if(chg != null) p.push(`<span class="${cls}">${chg >= 0 ? "+" : "−"}${Math.abs(chg * 100).toFixed(2)}%</span>`);
+      if(on.vol) p.push(`Vol ${esc(fmtVol(b.volume))}`);
+      const add = (label, arr, d, color) => { const v = valueAt(arr, b.time); if(v != null) p.push(`<span style="color:${color || "inherit"}">${label} ${esc(Number(v).toFixed(d))}</span>`); };
+      const k = colors || {};
+      if(on.ema){ add("EMA20", data.ema20, 2, k.teal); add("EMA50", data.ema50, 2, k.amber); add("200d", data.ma200, 2, k.accent); }
+      if(on.bb){ add("BB↑", data.bb_upper, 2); add("BB mid", data.bb_mid, 2); add("BB↓", data.bb_lower, 2); }
+      if(on.rsi) add("RSI", data.rsi14, 1, k.accent);
+      if(on.macd){ add("MACD", data.macd, 2, k.accent); add("Signal", data.macd_signal, 2, k.amber); add("Hist", data.macd_hist, 2); }
+      legend.innerHTML = p.join(" · ");
+    }
+
+    async function load(){
+      const mine = ++seq;
+      note.textContent = "Loading chart…";
+      let payload;
+      try { payload = await cfg.fetchCandles(prefs.range); }
+      catch(e){ if(mine === seq && !dead && cfg.isCurrent()) cfg.fallback(e.message || "chart data unavailable"); return; }
+      if(mine !== seq || dead || !cfg.isCurrent()) return;   // a newer range or another stock was asked for meanwhile
+      if(!payload || payload.error || !payload.bars || !payload.bars.length){ cfg.fallback((payload && payload.error) || "no price history"); return; }
+      data = payload; note.textContent = "";
+      try { build(false); } catch(e){ cfg.fallback(e.message || "chart failed"); }
+    }
+
+    host.addEventListener("click", (ev) => {
+      const t = ev.target.closest && ev.target.closest("button[data-range], button[data-tog]");
+      if(!t || dead) return;
+      ev.preventDefault();
+      if(t.dataset.range){ if(t.dataset.range === prefs.range) return; prefs.range = t.dataset.range; paintChips(); saveStockPrefs(prefs); load(); return; }
+      prefs.on[t.dataset.tog] = !prefs.on[t.dataset.tog]; paintChips(); saveStockPrefs(prefs);
+      try { build(true); } catch(e){ cfg.fallback(e.message || "chart failed"); }
+    });
+
+    // Repaint on a change of the theme attribute on <html> (the Dark / Light / Auto switch) and on a change of the
+    // system colour scheme (Auto follows it). Always re-applied: harmless when a fixed theme is chosen.
+    try { mo = new MutationObserver(() => applyColors()); mo.observe(document.documentElement, {attributes: true, attributeFilter: ["data-theme"]}); } catch(e){}
+    const onScheme = () => applyColors();
+    try {
+      mq = typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: dark)") : null;
+      if(mq){ if(mq.addEventListener) mq.addEventListener("change", onScheme); else if(mq.addListener) mq.addListener(onScheme); }
+    } catch(e){ mq = null; }
+    try { if(typeof ResizeObserver === "function"){ ro = new ResizeObserver(() => { if(chart && !dead) layoutPanes(); }); ro.observe(box); } } catch(e){}
+
+    paintChips(); load();
+    return {
+      destroy(){
+        dead = true; seq++;
+        if(mo) mo.disconnect();
+        if(ro) ro.disconnect();
+        if(mq){ if(mq.removeEventListener) mq.removeEventListener("change", onScheme); else if(mq.removeListener) mq.removeListener(onScheme); }
+        teardown();
+      },
+      get chart(){ return chart; }
+    };
+  }
+
   return {$, esc, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct,
-          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety};
+          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart};
 })();
 window.TA.theme.init();

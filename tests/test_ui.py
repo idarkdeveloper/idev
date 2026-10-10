@@ -1439,3 +1439,105 @@ def test_failing_copy_in_a_reset_leaves_the_old_account_untouched(tmp_path):
     assert (tmp_path / "pb.json").read_text() == before and b.position("X").qty == 5
     assert b.reset(1000, then=lambda: b.copy_in([{"symbol": "Y", "qty": 1, "avg_price": 5.0, "price": 10.0}])) is True
     assert b.position("X") is None and b.position("Y").qty == 1
+
+
+# ---- /api/candles and the vendored chart library ----
+def _ohlc_bars(n=320):
+    from datetime import date, timedelta
+    d, out = date(2025, 1, 1), []
+    while len(out) < n:
+        if d.weekday() < 5:
+            px = 100 + len(out) * 0.1
+            out.append({"date": d.isoformat(), "ts": d.isoformat(), "open": px, "high": px + 1, "low": px - 1,
+                        "close": px + 0.3, "volume": 5000.0})
+        d += timedelta(days=1)
+    return out
+
+
+class _NoGroww:
+    def __getattr__(self, name):
+        raise AssertionError("the candle endpoint must not touch Groww: " + name)
+
+
+def test_candles_endpoint_payload_and_errors(server):
+    base, app = server
+    calls = []
+
+    class Src:
+        def history_ohlc(self, sym, range_="1y", ttl=None):
+            calls.append((sym, range_))
+            return _ohlc_bars()
+    app.prices = Src()
+    status, p = _get(base + "/api/candles?ticker=senco")
+    assert status == 200 and p["ticker"] == "SENCO" and p["range"] == "1Y" and p["position"] is None
+    assert p["bars"] and {"time", "open", "high", "low", "close", "volume"} == set(p["bars"][0])
+    assert p["ema20"] and p["rsi14"] and p["macd_hist"]
+    status, p3 = _get(base + "/api/candles?ticker=senco&range=3m")
+    assert status == 200 and p3["range"] == "3M" and len(p3["bars"]) < len(p["bars"])
+    assert len(calls) == 1      # the second request came from the per-ticker cache
+    assert _get(base + "/api/candles")[0] == 400
+    assert _get(base + "/api/candles?ticker=")[0] == 400
+    assert _get(base + "/api/candles?ticker=bad%20ticker!")[0] == 400
+    status, err = _get(base + "/api/candles?ticker=senco&range=9Y")
+    assert status == 400 and "error" in err
+
+
+def test_candles_endpoint_reports_unavailable_history_and_a_held_position(server):
+    base, app = server
+
+    class Boom:
+        def history_ohlc(self, *a, **k):
+            raise RuntimeError("no data today")
+
+        def history(self, *a, **k):
+            return []
+    app.prices = Boom()
+    status, p = _get(base + "/api/candles?ticker=zzz")
+    assert status == 200 and p["bars"] == [] and p["error"] == "no data today"
+    app.broker.set_price("NVDA", 180.0)
+    app.broker.submit_order("NVDA", "buy", qty=2)
+    app.prices = type("S", (), {"history_ohlc": lambda self, *a, **k: _ohlc_bars(),
+                                "history": lambda self, *a, **k: []})()
+    _, held = _get(base + "/api/candles?ticker=nvda")
+    assert held["position"]["cost"] == pytest.approx(180.0) and "stop" in held["position"]
+
+
+def test_candles_endpoint_never_calls_groww_and_keeps_the_host_guard(server):
+    import http.client
+    base, app = server
+    app._broker = app.broker      # keep the paper broker; the Groww client must never be reached
+    app.prices = type("S", (), {"history_ohlc": lambda self, *a, **k: _ohlc_bars()})()
+    host, port = base.split("//")[1].split(":")
+    for hdrs, want in (({"Host": "evil.example"}, 421), ({"Sec-Fetch-Site": "cross-site"}, 403)):
+        c = http.client.HTTPConnection(host, int(port))
+        c.putrequest("GET", "/api/candles?ticker=senco", skip_host="Host" in hdrs)
+        for k, v in hdrs.items():
+            c.putheader(k, v)
+        c.endheaders()
+        assert c.getresponse().status == want
+        c.close()
+    assert _get(base + "/api/candles?ticker=senco")[0] == 200
+
+
+def test_vendored_chart_library_is_served_with_a_pinned_hash(settings):
+    import hashlib
+    import threading
+    import urllib.request
+    from trading_agent.ui import App, make_server
+
+    srv = make_server(App(settings, dotenv=None), port=0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        with urllib.request.urlopen(base + "/static/lightweight-charts.js") as r:
+            body = r.read()
+            assert r.headers["Content-Type"].startswith("text/javascript") and r.headers["Cache-Control"]
+        assert hashlib.sha256(body).hexdigest().upper() == "E21CC5CAA0226EF30BD8549C50B9EF926615F2A4EE6B4E486353477A55F598CF"
+        page = urllib.request.urlopen(base + "/").read().decode()
+        assert '<script src="/static/lightweight-charts.js"></script>' in page
+        assert "cdn" not in page.lower() and "unpkg" not in page.lower() and "jsdelivr" not in page.lower()
+        common = urllib.request.urlopen(base + "/static/common.js").read().decode()
+        assert "unpkg" not in common and "jsdelivr" not in common and "addSeries(LW.CandlestickSeries" in common
+    finally:
+        srv.shutdown()
+        srv.server_close()

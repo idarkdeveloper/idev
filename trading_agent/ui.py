@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import math
 import logging
 import sys
@@ -45,11 +46,15 @@ from .watch import Watcher
 log = logging.getLogger(__name__)
 
 DEALS_TTL_SECONDS = 600
+CANDLES_TTL_SECONDS = 300
 # The only static files besides the page: Inter, served locally so the page needs no network.
 FONT_FILES = {"/fonts/inter-latin.woff2", "/fonts/inter-latin-ext.woff2"}
 STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-8"),
                 "/static/common.js": ("common.js", "text/javascript; charset=utf-8"),
-                "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8")}
+                "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8"),
+                # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
+                "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
+                                                  "text/javascript; charset=utf-8")}
 EDITABLE_ENV_KEYS = {
     "watch_investor": "WATCH_INVESTOR",  # one name (older form); watch_investors below is the list
     "watch_investors": "INVESTORS",
@@ -157,6 +162,7 @@ class App:
         self._deals: list[DisclosedTrade] | None = demo_trades
         self._deals_at = time.time() if demo_trades else 0.0
         self._deals_error: str | None = None
+        self._candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._bar_seen: str | None = None  # newest price-bar date a lookup used (shown in the freshness chip)
         self.jobs: list[Job] = []
         self.lock = threading.Lock()
@@ -658,21 +664,56 @@ class App:
             out["history"] = pts
         except Exception as e:  # noqa: BLE001
             out["history_error"] = str(e)
-        pos = next((p for p in self.broker.positions() if p.symbol == ticker.upper()), None) \
-            if self.paper_only else None
-        if pos is not None:
-            from .risk import position_stop
-            try:
-                bars = self.prices.history(ticker, "1y") if (pos.stop_type or "trailing") == "trailing" else []
-            except Exception:  # noqa: BLE001
-                bars = []
-            st_ = position_stop(pos, bars)
-            out["position"] = {"qty": pos.qty, "avg_entry_price": pos.avg_entry_price,
-                               "stop": round(st_["level"], 2) if st_["level"] is not None else None,
-                               "stop_type": st_["type"], "stop_label": st_["label"]}
+        held = self.holding(ticker)
+        if held is not None:
+            out["position"] = held
         from .bands import book_for
         rule = book_for(self.settings).rule(ticker)
         out["band"], out["band_note"], out["band_skip"] = (rule["label"] if isinstance(rule["band"], int) else None), rule["reason"], rule["skip"]
+        return out
+
+    def holding(self, ticker: str) -> dict[str, Any] | None:
+        """The user's practice holding in ``ticker`` as {qty, avg_entry_price, stop, stop_type, stop_label}, else None."""
+        pos = next((p for p in self.broker.positions() if p.symbol == ticker.upper()), None) \
+            if self.paper_only else None
+        if pos is None:
+            return None
+        from .risk import position_stop
+        try:
+            bars = self.prices.history(ticker, "1y") if (pos.stop_type or "trailing") == "trailing" else []
+        except Exception:  # noqa: BLE001
+            bars = []
+        st_ = position_stop(pos, bars)
+        return {"qty": pos.qty, "avg_entry_price": pos.avg_entry_price,
+                "stop": round(st_["level"], 2) if st_["level"] is not None else None,
+                "stop_type": st_["type"], "stop_label": st_["label"]}
+
+    def candles(self, ticker: str, range_key: str) -> dict[str, Any]:
+        """Daily candles plus indicators for the lookup chart, from the same price source the lookup uses. Read-only;
+        the full 5-year series is cached per ticker for a few minutes and sliced to the range."""
+        from .candles import build_candles
+        ticker = self.resolve(ticker)[0].upper()
+        now = time.time()
+        with self.lock:
+            hit = self._candle_cache.get(ticker)
+        error = None
+        bars: list[dict[str, Any]] | None
+        if hit is not None and now - hit[0] < CANDLES_TTL_SECONDS:
+            bars = hit[1]
+        else:
+            bars = None
+            try:
+                bars = self.prices.history_ohlc(ticker, "5y")
+            except Exception as e:  # noqa: BLE001
+                error = str(e) or "price history unavailable"
+            if bars:
+                with self.lock:
+                    self._candle_cache[ticker] = (now, bars)
+        held = self.holding(ticker)
+        out = build_candles(ticker, range_key, bars or [],
+                            {"cost": held["avg_entry_price"], "stop": held["stop"]} if held else None)
+        if error and not out["bars"]:
+            out["error"] = error
         return out
 
     def backtest_names(self, investor: Any) -> list[str]:
@@ -1734,6 +1775,19 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     found = app.lookup(ticker)
                     app.note_bar(found)
                     self._json(found)
+            elif path == "/api/candles":
+                from urllib.parse import parse_qs
+
+                from .candles import parse_range
+                q = parse_qs(urlparse(self.path).query)
+                ticker = (q.get("ticker") or [""])[0].strip().upper()
+                range_key = parse_range((q.get("range") or [""])[0])
+                if not ticker or not re.fullmatch(r"[A-Z0-9&.^=-]{1,25}", ticker):
+                    self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
+                elif range_key is None:
+                    self._json({"error": "range must be one of 1M, 3M, 6M, 1Y, 2Y, 5Y"}, HTTPStatus.BAD_REQUEST)
+                else:
+                    self._json(app.candles(ticker, range_key))
             elif path == "/api/news":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()

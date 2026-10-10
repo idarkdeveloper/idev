@@ -295,6 +295,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="/static/common.js"></script>
+<script src="/static/lightweight-charts.js"></script>
 <script>
 (function(){
   const {$, esc, money, signed, pct, when, cap, toast, api, tile, C, NS, niceTicks, shortDate, lineChart,
@@ -1114,7 +1115,7 @@
     return `<h3 style="margin-top:6px">News, last 7 days</h3>${rows || `<div class="sub">none found</div>`}${errs}${note ? `<div class="sub" style="font-size:12px">${esc(note)}</div>` : ""}`;
   }
   const takeawayHtml = (r) => { const t = lookupTakeaway(r, undefined, {regime: S && S.regime, screen: S && S.screen}); return t ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${t}</div>` : ""; };
-  let lookupSeq = 0;
+  let lookupSeq = 0, stockCtl = null;
 
   // Labels land a few seconds after the headlines: ask again every 5 s (at most 2 minutes) and update in place.
   function pollNews(r, seq, startedAt){
@@ -1131,6 +1132,7 @@
   }
   async function lookup(t){
     const seq = ++lookupSeq;
+    if(stockCtl){ stockCtl.destroy(); stockCtl = null; }   // chart.remove() before the card is redrawn
     $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
     try {
       const r = await api("/api/lookup?ticker=" + encodeURIComponent(t));
@@ -1149,10 +1151,20 @@
       }).catch(e => { if(seq === lookupSeq && $("lk-news")) $("lk-news").innerHTML = `<div class="sub">News unavailable: ${esc(e.message)}</div>`; });
       const hist = r.history || [], pos = r.position, refs = [];
       if(pos){ refs.push({y: pos.avg_entry_price, label: "Your cost"}); if(pos.stop != null) refs.push({y: pos.stop, label: "Stop", color: C.neg}); }
-      lineChart($("lk-chart"), {x: hist.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, refs,
-        yFmt: v => sym() + Math.round(v).toLocaleString("en-IN"), label: `${r.ticker} price, last year`,
-        empty: r.history_error ? "Price history unavailable: " + r.history_error : "No price history.",
-        series: [{name: "Price", color: C.s1, values: hist.map(p => p.c)}, {name: "200-day average", color: C.ctx, width: 1.5, values: hist.map(p => p.ma200)}]});
+      // The old SVG line chart stays as the fallback when the library is missing or the candle data fails.
+      const drawLine = (why) => {
+        if(seq !== lookupSeq || !$("lk-chart")) return;
+        if(stockCtl){ stockCtl.destroy(); stockCtl = null; }
+        $("lk-chart").innerHTML = "";
+        lineChart($("lk-chart"), {x: hist.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, refs,
+          yFmt: v => sym() + Math.round(v).toLocaleString("en-IN"), label: `${r.ticker} price, last year`,
+          empty: r.history_error ? "Price history unavailable: " + r.history_error : "No price history.",
+          series: [{name: "Price", color: C.s1, values: hist.map(p => p.c)}, {name: "200-day average", color: C.ctx, width: 1.5, values: hist.map(p => p.ma200)}]});
+      };
+      try {
+        stockCtl = TA.stockChart($("lk-chart"), {ticker: r.ticker, isCurrent: () => seq === lookupSeq, fallback: drawLine,
+          fetchCandles: (range) => api("/api/candles?ticker=" + encodeURIComponent(r.ticker) + "&range=" + encodeURIComponent(range))});
+      } catch(e){ drawLine(e.message); }
     } catch(e){ $("lk-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   }
   async function loadScorecard(){
