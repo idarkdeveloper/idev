@@ -309,7 +309,7 @@ def test_only_the_watch_passes_a_breaker_file(s, tmp_path):
 def test_dev_requirements_are_pinned_exactly():
     lines = [x.strip() for x in (Path(__file__).resolve().parents[1] / "requirements-dev.txt").read_text().splitlines() if x.strip()]
     assert lines and all("==" in x and not any(c in x for c in "<>~") for x in lines)
-    assert {x.split("==")[0] for x in lines} == {"ruff", "mypy", "types-requests"}
+    assert {x.split("==")[0] for x in lines} == {"ruff", "mypy", "types-requests", "pytest-xdist"}
 
 
 # ------------------------------------------------------------------ 11. backups
