@@ -22,8 +22,9 @@ window.TA = (function(){
   const tile = (l, v, s) => `<div class="tile"><div class="label">${l}</div><div class="big">${v}</div><div class="sub">${s}</div></div>`;
 
   // ---- charts: plain SVG, one y-axis, hairline grid, crosshair tooltip ----
-  // Nocturne chart palette: the accent leads, the text color and a neutral support it.
-  const C = {s1:"#9184d9", s2:"#e9e9ed", s3:"#9397ab", ctx:"#75798c", grid:"rgba(233,233,237,.08)", base:"#595d6c", pos:"#9184d9", neg:"#75798c", ring:"#232532"};
+  // Chart colours are theme tokens from nocturne.css (--chart-*), handed to SVG/CSS as var(...) strings, so a chart
+  // repaints the moment data-theme flips and nothing here holds a colour literal.
+  const C = {s1:"var(--chart-s1)", s2:"var(--chart-s2)", s3:"var(--chart-s3)", ctx:"var(--chart-ctx)", grid:"var(--chart-grid)", base:"var(--chart-base)", pos:"var(--chart-pos)", neg:"var(--chart-neg)", ring:"var(--chart-ring)"};
   const NS = "http://www.w3.org/2000/svg";
   function niceTicks(min, max, n){
     n = n || 4; let span = max - min; if(!(span > 0)) span = Math.abs(max) || 1;
@@ -257,7 +258,51 @@ window.TA = (function(){
   const newsPollNext = (n, startedAt, now, stillCurrent) =>
     (!stillCurrent || now - startedAt >= NEWS_POLL_MAX_MS || !newsNeedsLabels(n)) ? "stop" : "poll";
 
+  // ---- theme: Dark / Light / Auto. The head script of each page has already set data-theme (no flash); this keeps it
+  // live. The choice lives in localStorage "theme" ("dark" or "light"; absent means Auto) and every read or write is
+  // guarded: storage may throw (private window, blocked site data) and the page must still work. ----
+  const theme = (function(){
+    const KEY = "theme", listeners = [];
+    let choice = "auto", mq = null, bound = false;
+    const root = () => (typeof document !== "undefined" && document.documentElement) || null;
+    const readStored = () => { try { const v = localStorage.getItem(KEY); return v === "dark" || v === "light" ? v : "auto"; } catch(e){ return "auto"; } };
+    const media = () => { try { return typeof matchMedia === "function" ? matchMedia("(prefers-color-scheme: light)") : null; } catch(e){ return null; } };
+    // Auto follows the OS; when the OS gives no answer the dashboard stays dark, as it always was.
+    const resolve = (c) => c === "dark" || c === "light" ? c : (mq && mq.matches ? "light" : "dark");
+    function paint(){
+      const r = resolve(choice), el = root();
+      if(el && el.dataset){ el.dataset.theme = r; el.dataset.themeChoice = choice; }
+      if(typeof document !== "undefined" && typeof document.querySelectorAll === "function"){
+        document.querySelectorAll("[data-theme-choice]").forEach(b => {
+          const on = b.dataset.themeChoice === choice;
+          b.setAttribute("aria-pressed", on ? "true" : "false");
+          if(b.classList) b.classList.toggle("on", on);
+        });
+      }
+      listeners.slice().forEach(fn => { try { fn(r, choice); } catch(e){} });
+      return r;
+    }
+    function set(c){
+      choice = c === "dark" || c === "light" ? c : "auto";
+      try { if(choice === "auto") localStorage.removeItem(KEY); else localStorage.setItem(KEY, choice); } catch(e){}
+      return paint();
+    }
+    function init(){
+      choice = readStored(); mq = media();
+      if(!bound){
+        bound = true;
+        if(mq){ const on = () => { if(choice === "auto") paint(); }; if(mq.addEventListener) mq.addEventListener("change", on); else if(mq.addListener) mq.addListener(on); }
+        if(typeof window !== "undefined" && window.addEventListener) window.addEventListener("storage", (e) => { if(!e || e.key === KEY || e.key == null){ choice = readStored(); paint(); } });
+        if(typeof document !== "undefined" && typeof document.querySelectorAll === "function")
+          document.querySelectorAll("[data-theme-choice]").forEach(b => b.addEventListener("click", () => set(b.dataset.themeChoice)));
+      }
+      return paint();
+    }
+    return {init, set, get: () => choice, resolved: () => resolve(choice), onChange: (fn) => { listeners.push(fn); }};
+  })();
+
   return {$, esc, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct,
-          daysAgo, shortDay, clip, lookupTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS};
+          daysAgo, shortDay, clip, lookupTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme};
 })();
+window.TA.theme.init();

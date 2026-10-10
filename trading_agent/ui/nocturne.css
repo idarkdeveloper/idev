@@ -16,6 +16,16 @@
     --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
     --color-rule: color-mix(in srgb, #e9e9ed 8%, transparent);
     --color-muted: color-mix(in srgb, #e9e9ed 55%, transparent);
+    --color-th: color-mix(in srgb, #e9e9ed 60%, transparent);
+    --color-label: color-mix(in srgb, #e9e9ed 70%, transparent);
+    --color-input-border: color-mix(in srgb, #e9e9ed 16%, transparent);
+    --color-input-border-hover: color-mix(in srgb, #e9e9ed 45%, transparent);
+    --color-hover: color-mix(in srgb, #e9e9ed 7%, transparent);
+    --color-press: color-mix(in srgb, #e9e9ed 14%, transparent);
+    --color-row-hover: color-mix(in srgb, #e9e9ed 4%, transparent);
+    --color-profit: #3ddc84; --color-loss: #ff6b6b;
+    --color-scrim: rgba(10, 11, 18, 0.6);
+    --color-replay: #e0b354; --color-demo: #56c2b0;
     --color-neutral-100: #f3f5fe; --color-neutral-300: #cfd3e5; --color-neutral-400: #b2b6ca; --color-neutral-500: #9397ab;
     --color-neutral-600: #75798c; --color-neutral-700: #595d6c; --color-neutral-800: #3f424d; --color-neutral-900: #292b31;
     --color-accent-100: #f5f4ff; --color-accent-200: #e7e5fe; --color-accent-300: #d2cefd; --color-accent-400: #b5abfc;
@@ -27,8 +37,54 @@
     --shadow-sm: 0 0 0 1px #3f424d;
     --shadow-md: 0 0 0 1px #595d6c, 0 6px 18px rgba(0,0,0,0.55);
     --shadow-lg: 0 0 0 1px #9397ab, 0 16px 40px rgba(0,0,0,0.65);
+    /* Chart palette (read by common.js as var(...) strings, so charts repaint with the theme). */
+    --chart-s1: var(--color-accent); --chart-s2: var(--color-text); --chart-s3: var(--color-neutral-500);
+    --chart-ctx: var(--color-neutral-600); --chart-base: var(--color-neutral-700);
+    --chart-grid: color-mix(in srgb, #e9e9ed 8%, transparent);
+    --chart-pos: var(--color-accent); --chart-neg: var(--color-neutral-600); --chart-ring: var(--color-surface);
     --fade-rule: linear-gradient(to right, transparent, var(--color-rule) 48px, var(--color-rule) calc(100% - 48px), transparent);
     /* Names the page script already uses, pointed at Nocturne values. */
+    --bg: var(--color-bg); --card: var(--color-surface); --line: var(--color-divider); --line2: var(--color-rule);
+    --ink: var(--color-text); --ink2: var(--color-neutral-400); --mute: var(--color-muted);
+    --teal: var(--color-accent); --teal2: var(--color-accent-400); --tealbg: var(--color-accent-900);
+    --amber: var(--color-accent-2); --red: var(--color-accent-300); --redbg: var(--color-accent-900);
+    --chip: var(--color-neutral-800); --mono: var(--font-body);
+  }
+  /* Light theme: same token names, light values. The head script of every page sets data-theme to the resolved
+     "dark" or "light"; with no attribute (script blocked) the dark tokens above apply. */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --color-bg: #f1f2f7; --color-surface: #ffffff; --color-text: #1a1c28;
+    --color-accent: #5546b8; --color-accent-2: #5b53a0;
+    --color-divider: color-mix(in srgb, #1a1c28 18%, transparent);
+    --color-rule: color-mix(in srgb, #1a1c28 10%, transparent);
+    --color-muted: color-mix(in srgb, #1a1c28 72%, transparent);
+    --color-th: color-mix(in srgb, #1a1c28 72%, transparent);
+    --color-label: color-mix(in srgb, #1a1c28 78%, transparent);
+    --color-input-border: #7d8196;
+    --color-input-border-hover: #4f5366;
+    --color-hover: color-mix(in srgb, #1a1c28 6%, transparent);
+    --color-press: color-mix(in srgb, #1a1c28 12%, transparent);
+    --color-row-hover: color-mix(in srgb, #1a1c28 4%, transparent);
+    --color-profit: #0a7a3c; --color-loss: #c1272d;
+    --color-scrim: rgba(26, 28, 40, 0.45);
+    --color-replay: #8a5a00; --color-demo: #0b6b5c;
+    --color-neutral-100: #1a1c28; --color-neutral-300: #343848; --color-neutral-400: #474b5e; --color-neutral-500: #6a6e82;
+    --color-neutral-600: #7d8196; --color-neutral-700: #a9adbd; --color-neutral-800: #e4e6ee; --color-neutral-900: #eceef5;
+    --color-accent-100: #2a2066; --color-accent-200: #cfc9f3; --color-accent-300: #4a3a9e; --color-accent-400: #5f50c8;
+    --color-accent-600: #3f3290; --color-accent-800: #e1dcf8; --color-accent-900: #ebe8fa;
+    --font-heading: "Inter", "Inter Fallback", system-ui, -apple-system, "Segoe UI", sans-serif; --font-heading-weight: 500;
+    --font-body: "Inter", "Inter Fallback", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --space-1: 2.8px; --space-2: 5.6px; --space-3: 8.4px; --space-4: 11.2px;
+    --radius-sm: 4px; --radius-md: 8px; --radius-lg: 14px;
+    --shadow-sm: 0 0 0 1px #d6d9e4, 0 1px 2px rgba(26,28,40,0.06);
+    --shadow-md: 0 0 0 1px #b9bdcc, 0 6px 18px rgba(26,28,40,0.14);
+    --shadow-lg: 0 0 0 1px #9ca0b3, 0 16px 40px rgba(26,28,40,0.22);
+    --chart-s1: var(--color-accent); --chart-s2: var(--color-text); --chart-s3: var(--color-neutral-500);
+    --chart-ctx: var(--color-neutral-600); --chart-base: var(--color-neutral-700);
+    --chart-grid: color-mix(in srgb, #1a1c28 10%, transparent);
+    --chart-pos: var(--color-accent); --chart-neg: var(--color-neutral-600); --chart-ring: var(--color-surface);
+    --fade-rule: linear-gradient(to right, transparent, var(--color-rule) 48px, var(--color-rule) calc(100% - 48px), transparent);
     --bg: var(--color-bg); --card: var(--color-surface); --line: var(--color-divider); --line2: var(--color-rule);
     --ink: var(--color-text); --ink2: var(--color-neutral-400); --mute: var(--color-muted);
     --teal: var(--color-accent); --teal2: var(--color-accent-400); --tealbg: var(--color-accent-900);
@@ -85,8 +141,8 @@
                  font-weight: var(--font-heading-weight); font-size: 14px; line-height: 1.2; white-space: nowrap;
                  color: var(--color-text); background: transparent; border: 1px solid var(--color-divider);
                  border-radius: var(--radius-md); }
-  button:hover, .btn:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
-  button:active, .btn:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
+  button:hover, .btn:hover { background: var(--color-hover); }
+  button:active, .btn:active { background: var(--color-press); }
   button.primary { color: var(--color-accent); border-color: var(--color-accent); }
   button.primary:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
   button.primary:active { background: color-mix(in srgb, var(--color-accent) 22%, transparent); }
@@ -145,19 +201,19 @@
   .big { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 30px; line-height: 34px; overflow-wrap: anywhere; }
   .sub { font-size: 13px; color: var(--color-muted); }
   /* My Groww portfolio: profit in green, loss in red */
-  .pl-profit { color: #3ddc84; font-weight: 600; } .pl-loss { color: #ff6b6b; font-weight: 600; }
+  .pl-profit { color: var(--color-profit); font-weight: 600; } .pl-loss { color: var(--color-loss); font-weight: 600; }
   #mp-card tfoot td { font-weight: 700; border-top: 1px solid var(--color-divider); padding-top: 10px; }
   .up { color: var(--color-accent-300); font-weight: 600; } .down { color: var(--color-neutral-400); font-weight: 600; }
 
   /* tables: row rules fade out at both ends */
   table { width: 100%; border-collapse: collapse; min-width: 560px; font-size: 14px; }
   th { text-align: left; font-weight: 400; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-       color: color-mix(in srgb, var(--color-text) 60%, transparent); padding: 8px; white-space: nowrap; }
+       color: var(--color-th); padding: 8px; white-space: nowrap; }
   td { padding: 8px; vertical-align: top; }
   thead tr { background: linear-gradient(to right, transparent, var(--color-divider) 48px, var(--color-divider) calc(100% - 48px), transparent) no-repeat bottom / 100% 1px; }
   tbody tr { background: var(--fade-rule) no-repeat bottom / 100% 1px; }
   tbody tr:last-child { background: none; }
-  tbody tr:hover { background: linear-gradient(color-mix(in srgb, var(--color-text) 4%, transparent), color-mix(in srgb, var(--color-text) 4%, transparent)) no-repeat 0 0 / 100% 100%, var(--fade-rule) no-repeat bottom / 100% 1px; }
+  tbody tr:hover { background: linear-gradient(var(--color-row-hover), var(--color-row-hover)) no-repeat 0 0 / 100% 100%, var(--fade-rule) no-repeat bottom / 100% 1px; }
   td.num, th.num { text-align: right; } .mono { font-variant-numeric: tabular-nums; }
 
   /* recommendations */
@@ -175,11 +231,11 @@
 
   /* forms */
   .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-  label { font-size: 12px; color: color-mix(in srgb, var(--color-text) 70%, transparent); }
+  label { font-size: 12px; color: var(--color-label); }
   input, select { width: 100%; min-height: 36px; padding: 6px 10px; font: inherit; font-size: 14px; color: var(--color-text);
-                  caret-color: var(--color-accent); background: var(--color-surface); border: 1px solid var(--color-divider);
+                  caret-color: var(--color-accent); background: var(--color-surface); border: 1px solid var(--color-input-border);
                   border-radius: var(--radius-md); }
-  input:hover, select:hover { border-color: color-mix(in srgb, var(--color-text) 45%, transparent); }
+  input:hover, select:hover { border-color: var(--color-input-border-hover); }
   input:focus-visible, select:focus-visible { border-color: var(--color-accent); outline-offset: 0; }
   input[type=checkbox], input[type=radio] { width: 18px; height: 18px; min-height: 18px; padding: 0; margin: 2px 0 0; flex: none; accent-color: var(--color-accent); }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
@@ -209,7 +265,7 @@
   /* settings dialog */
   dialog { border: none; border-radius: var(--radius-lg); padding: 0; max-width: 760px; width: calc(100vw - 32px);
            background: var(--color-surface); color: var(--color-text); box-shadow: var(--shadow-lg); }
-  dialog::backdrop { background: rgba(10, 11, 18, 0.6); }
+  dialog::backdrop { background: var(--color-scrim); }
   .form { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
   .dialog-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 20px; }
   .group { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--color-divider); padding-top: 16px; }
@@ -246,9 +302,13 @@
 .tabs a { padding: 6px 12px; border-radius: calc(var(--radius-md) - 2px); color: var(--color-muted); text-decoration: none; font-size: 13px; font-weight: 500; }
 .tabs a:hover { color: var(--color-text); }
 .tabs a[aria-current="page"] { background: var(--color-neutral-900); color: var(--color-text); box-shadow: inset 0 0 0 1px var(--color-accent); }
-:root { --replay: #e0b354; --demo: #56c2b0; }
 .mode-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; border-radius: var(--radius-md); font-weight: 600; }
-.mode-banner.replay { color: var(--replay); background: color-mix(in srgb, var(--replay) 12%, transparent); box-shadow: inset 0 0 0 1px var(--replay); }
-.mode-banner.demo { color: var(--demo); background: color-mix(in srgb, var(--demo) 12%, transparent); box-shadow: inset 0 0 0 1px var(--demo); }
+.mode-banner.replay { color: var(--color-replay); background: color-mix(in srgb, var(--color-replay) 12%, transparent); box-shadow: inset 0 0 0 1px var(--color-replay); }
+.mode-banner.demo { color: var(--color-demo); background: color-mix(in srgb, var(--color-demo) 12%, transparent); box-shadow: inset 0 0 0 1px var(--color-demo); }
 .mode-banner .sub { font-weight: 400; }
 [hidden] { display: none !important; }
+
+/* Theme switch (Dark / Light / Auto) */
+.theme-switch { display: inline-flex; align-items: center; gap: 8px; }
+.theme-switch .theme-label { font-size: 12px; color: var(--color-label); }
+.theme-switch .seg button { min-height: 32px; padding: 0 10px; font-size: 13px; }

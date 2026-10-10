@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Replay · Trading Agent</title>
 <meta name="description" content="Start a practice portfolio on a past date, step forward in time and race the agent's rules and the Nifty.">
+<script>(function(){var d=document.documentElement,c="auto",t;try{var v=localStorage.getItem("theme");if(v==="dark"||v==="light")c=v}catch(e){}t=c;if(c==="auto"){try{t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"}catch(e){t="dark"}}d.dataset.theme=t;d.dataset.themeChoice=c})();</script>
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/nocturne.css">
 </head>
@@ -16,6 +17,7 @@
       <div><div class="brand-name">Trading Agent</div><div class="sub">Replay: practise on a past date</div></div>
     </div>
     <nav class="tabs" aria-label="Pages"><a href="/" data-tab="live">Live</a><a href="/replay" data-tab="replay" aria-current="page">Replay</a><a href="/demo" data-tab="demo">Demo</a></nav>
+    <div class="row controls"><div class="theme-switch" role="group" aria-labelledby="theme-label"><span class="theme-label" id="theme-label">Theme</span><div class="seg"><button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button></div></div></div>
   </div>
 </header>
 <main>

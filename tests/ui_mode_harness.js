@@ -67,6 +67,7 @@ const answers = (url) => url.includes("/api/practice/sell-preview") ? preview : 
 const listeners = {};
 const document = {
   addEventListenerOrig: null,
+  documentElement: {dataset: {}},   // the inline theme head script sets data-theme on it
   body: {dataset: Object.assign({mode}, sample ? {sample: "1"} : {})},
   getElementById: el, querySelectorAll: () => [], addEventListener(t, fn) { (listeners[t] = listeners[t] || []).push(fn); }, createElement: () => el("_new"),
 };
