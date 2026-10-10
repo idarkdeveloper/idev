@@ -16,7 +16,7 @@ window.TA = (function(){
   const api = async (path, body) => {
     const r = await fetch((path.startsWith("/api/") ? BASE() : "") + path, body ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)} : {});
     const j = await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(j.error || r.statusText);
+    if(!r.ok){ const err = new Error(j.error || r.statusText); err.data = j; err.status = r.status; throw err; }
     return j;
   };
   const tile = (l, v, s) => `<div class="tile"><div class="label">${l}</div><div class="big">${v}</div><div class="sub">${s}</div></div>`;

@@ -42,6 +42,12 @@ class Position:
     # Practice stop-loss (LocalPaperBroker only): "trailing" (None = the default), "fixed", "percent" or "none".
     stop_type: str | None = None
     stop_value: float | None = None
+    # Practice account only: "groww" for shares copied in from the real portfolio, when the position was first bought
+    # (or copied), and whether the person says the shares were held more than a year (Groww gives no buy date).
+    source: str | None = None
+    opened_at: str | None = None
+    copied_at: str | None = None
+    held_over_year: bool = False
 
     @property
     def free_qty(self) -> float:
@@ -69,6 +75,10 @@ class Position:
             "sellable_qty": self.free_qty,
             "stop_type": self.stop_type or "trailing",
             "stop_value": self.stop_value,
+            "source": self.source,
+            "opened_at": self.opened_at,
+            "copied_at": self.copied_at,
+            "held_over_year": self.held_over_year,
         }
 
 
@@ -351,10 +361,37 @@ class LocalPaperBroker:
                 stop = p.get("stop") or {}
                 out.append(Position(symbol=sym, qty=p["qty"], avg_entry_price=p["avg_entry_price"],
                                     current_price=px, high_water=p.get("high_water"),
-                                    stop_type=stop.get("type"), stop_value=stop.get("value")))
+                                    stop_type=stop.get("type"), stop_value=stop.get("value"),
+                                    source=p.get("source"), opened_at=p.get("opened_at"),
+                                    copied_at=p.get("copied_at"), held_over_year=bool(p.get("held_over_year"))))
             if dirty:
                 self._save()
             return out
+
+    def position(self, symbol: str) -> Position | None:
+        """One open position with its latest price (no other price is fetched), or None."""
+        sym = symbol.upper()
+        with self._txn():
+            raw = self._state["positions"].get(sym)
+            if raw is None:
+                return None
+            raw = dict(raw)
+        try:
+            px: float | None = self.latest_price(sym)
+        except LookupError:
+            px = None
+        stop = raw.get("stop") or {}
+        return Position(symbol=sym, qty=raw["qty"], avg_entry_price=raw["avg_entry_price"], current_price=px,
+                        high_water=raw.get("high_water"), stop_type=stop.get("type"), stop_value=stop.get("value"),
+                        source=raw.get("source"), opened_at=raw.get("opened_at"), copied_at=raw.get("copied_at"),
+                        held_over_year=bool(raw.get("held_over_year")))
+
+    def copy_status(self) -> dict[str, Any]:
+        """Copied-in holdings still held, and when the last copy was made (no prices fetched)."""
+        with self._txn():
+            held = [s for s, p in self._state["positions"].items() if p.get("source") == "groww"]
+            copies = [c for c in self._state.get("credits", []) if c.get("kind") == "copy"]
+            return {"held": held, "last_copy_at": copies[-1]["at"] if copies else None, "copies": len(copies)}
 
     def account(self) -> Account:
         equity = self._state["cash"] + sum(
@@ -364,19 +401,23 @@ class LocalPaperBroker:
                        currency=self.currency)
 
     def submit_order(self, symbol: str, side: str, notional: float | None = None, qty: float | None = None,
-                     stop: dict[str, Any] | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+                     stop: dict[str, Any] | None = None, extra: dict[str, Any] | None = None,
+                     extra_fn: Any | None = None) -> dict[str, Any]:
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
         if (notional is None) == (qty is None):
             raise ValueError("pass exactly one of notional or qty")
         price = self.latest_price(symbol)  # may be a network call: no lock held
         with self._txn():
-            return self._submit_order(symbol, side, notional, qty, stop, extra, price=price)
+            return self._submit_order(symbol, side, notional, qty, stop, extra, price=price, extra_fn=extra_fn)
 
     def _submit_order(self, symbol: str, side: str, notional: float | None = None,
                       qty: float | None = None, stop: dict[str, Any] | None = None,
-                      extra: dict[str, Any] | None = None, price: float | None = None) -> dict[str, Any]:
-        """``stop`` ({"type", "value"}) is stored with the position on a buy; ``extra`` is merged into the order."""
+                      extra: dict[str, Any] | None = None, price: float | None = None,
+                      extra_fn: Any | None = None) -> dict[str, Any]:
+        """``stop`` ({"type", "value"}) is stored with the position on a buy; ``extra`` is merged into the order.
+        ``extra_fn(order, orders_so_far)`` runs inside the transaction and returns more fields for the order (the
+        practice tax estimate needs the account's earlier sales, read at the moment of the sale)."""
         symbol = symbol.upper()
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
@@ -393,6 +434,8 @@ class LocalPaperBroker:
         cost = qty * price
         fees = float(self.cost_model.charges(side, cost)) if self.cost_model else 0.0
         pos = self._state["positions"].get(symbol, {"qty": 0.0, "avg_entry_price": 0.0})
+        now = self.now_fn()
+        sale_facts: dict[str, Any] = {}  # what a sale adds to its order: cost basis, realised P&L, holding period
 
         if side == "buy":
             if cost + fees > self._state["cash"] + 1e-9:
@@ -401,6 +444,7 @@ class LocalPaperBroker:
             pos["avg_entry_price"] = (pos["qty"] * pos["avg_entry_price"] + cost) / new_qty
             pos["qty"] = new_qty
             pos["high_water"] = max(pos.get("high_water") or 0.0, price)
+            pos.setdefault("opened_at", now)  # the first buy; used for the holding period
             if stop is not None:
                 pos["stop"] = {"type": stop["type"], "value": stop.get("value")}
             self._state["cash"] -= cost + fees
@@ -408,6 +452,10 @@ class LocalPaperBroker:
         else:
             if qty > pos["qty"] + 1e-9:
                 raise ValueError(f"Cannot sell {qty} {symbol}: only hold {pos['qty']}")
+            from .taxes import is_long_term
+            sale_facts = {"avg_entry_price": pos["avg_entry_price"],
+                          "realised_pl": round(cost - fees - qty * pos["avg_entry_price"], 2),
+                          "long_term": is_long_term(pos, now)}
             pos["qty"] -= qty
             self._state["cash"] += cost - fees
             if pos["qty"] <= 1e-9:
@@ -420,9 +468,12 @@ class LocalPaperBroker:
             "id": uuid.uuid4().hex[:12], "symbol": symbol, "side": side, "qty": qty,
             "filled_avg_price": price, "notional": round(cost, 2), "fees": round(fees, 2),
             "status": "filled",
-            "filled_at": self.now_fn(),
+            "filled_at": now,
+            **sale_facts,
             **(extra or {}),
         }
+        if extra_fn is not None:
+            order.update(extra_fn(order, self._state["orders"]))
         self._state["orders"].append(order)
         self._save()
         return order
@@ -435,6 +486,57 @@ class LocalPaperBroker:
                 raise LookupError(f"no open position in {symbol.upper()}")
             pos["stop"] = {"type": stop["type"], "value": stop.get("value")}
             self._save()
+
+    def set_held_over_year(self, symbol: str, flag: bool) -> None:
+        """Remember that the shares of an open position were held more than a year (for the tax estimate)."""
+        with self._txn():
+            pos = self._state["positions"].get(symbol.upper())
+            if pos is None:
+                raise LookupError(f"no open position in {symbol.upper()}")
+            if bool(pos.get("held_over_year")) != bool(flag):
+                pos["held_over_year"] = bool(flag)
+                self._save()
+
+    def copy_in(self, holdings: list[dict[str, Any]], note: str = "copied from Groww") -> dict[str, Any]:
+        """Copy real holdings into the account as practice positions without touching cash and without charges.
+        Each holding is {symbol, qty, avg_price, price, held_over_year?}. A symbol already held is merged (quantity
+        added, average price weighted). The copied cost is recorded as a credit entry (``kind: "copy"``) that adds no
+        cash; ``performance()`` counts the value at copy time as part of the starting point, so copying does not
+        show up as profit. Returns what was added and merged."""
+        at = self.now_fn()
+        with self._txn():
+            added, merged, cost, value = [], [], 0.0, 0.0
+            for h in holdings:
+                sym, qty = str(h["symbol"]).upper(), float(h["qty"])
+                avg, price = float(h["avg_price"]), float(h["price"])
+                if qty <= 0 or avg <= 0 or price <= 0:
+                    raise ValueError(f"{sym}: quantity and prices must be positive")
+                cur = self._state["positions"].get(sym)
+                if cur:
+                    total = cur["qty"] + qty
+                    cur["avg_entry_price"] = (cur["qty"] * cur["avg_entry_price"] + qty * avg) / total
+                    cur["qty"] = total
+                    cur["high_water"] = max(cur.get("high_water") or 0.0, price)
+                    cur["copied_qty"] = cur.get("copied_qty", 0.0) + qty
+                    cur["held_over_year"] = bool(cur.get("held_over_year") or h.get("held_over_year"))
+                    pos = cur
+                    merged.append(sym)
+                else:
+                    pos = {"qty": qty, "avg_entry_price": avg, "high_water": max(avg, price),
+                           "stop": {"type": "trailing", "value": None}, "opened_at": at, "copied_qty": qty,
+                           "held_over_year": bool(h.get("held_over_year"))}
+                    added.append(sym)
+                pos["source"], pos["copied_at"] = "groww", at
+                self._state["positions"][sym] = pos
+                self._state["prices"][sym] = price
+                cost += qty * avg
+                value += qty * price
+            if added or merged:
+                self._state.setdefault("credits", []).append(
+                    {"at": at, "amount": round(cost, 2), "note": note, "kind": "copy",
+                     "value_at_copy": round(value, 2), "symbols": added + merged})
+                self._save()
+            return {"added": added, "merged": merged, "cost": round(cost, 2), "value": round(value, 2), "at": at}
 
     def sell_if_stopped(self, symbol: str, *, qty: float, level: float, stop: dict[str, Any],
                         extra: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -467,7 +569,8 @@ class LocalPaperBroker:
         return list(self._state["orders"])
 
     def credit(self, amount: float, note: str, at: str) -> None:
-        """Add cash that isn't a trade (a dividend paid out in Replay)."""
+        """Add cash that isn't a trade (a dividend paid out in Replay). Copies of real holdings (``copy_in``) are
+        also stored in this list, with ``kind: "copy"``; they add no cash."""
         with self._txn():
             self._state["cash"] += float(amount)
             self._state.setdefault("credits", []).append({"at": at, "amount": round(float(amount), 2), "note": note})
@@ -479,12 +582,18 @@ class LocalPaperBroker:
     def performance(self) -> dict[str, Any]:
         acct = self.account()
         start = self._state["starting_cash"]
+        # Holdings copied in from a real account count at their value when copied: that is where the account
+        # starts from, so copying them in is not a profit.
+        copied = sum(c.get("value_at_copy", 0.0) for c in self._state.get("credits", []) if c.get("kind") == "copy")
+        base = start + copied
         return {
             "starting_cash": start,
+            "copied_in": round(copied, 2),
+            "baseline": round(base, 2),
             "equity": acct.equity,
             "cash": acct.cash,
-            "pnl": round(acct.equity - start, 2),
-            "pnl_pct": round((acct.equity - start) / start * 100, 2) if start else 0.0,
+            "pnl": round(acct.equity - base, 2),
+            "pnl_pct": round((acct.equity - base) / base * 100, 2) if base else 0.0,
             "orders": len(self._state["orders"]),
             "fees_paid": round(self._state.get("fees_paid", 0.0), 2),
         }

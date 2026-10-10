@@ -55,7 +55,12 @@ const state = {
 const portfolio = {linked: true, at: "2026-10-10T10:00:00+00:00", holdings: [{symbol: "TCS", qty: 1, sellable_qty: 1, avg_price: 100,
   price: 110, invested: 100, value: 110, pl: 10, pl_pct: 0.1, kind: "equity"}], invested: 100, value: 110, pl: 10, pl_pct: 0.1, unpriced: []};
 
-const answers = (url) => url.includes("/api/state") ? state : url.includes("/api/my-portfolio") ? portfolio
+const preview = {symbol: "TCS", basis: "groww", in_practice: false, held: 1, qty: 1, price: 110, avg_price: 100, long_term: false,
+  held_over_year: false, sale_value: 110, charges: 30, proceeds: 80, cost: 100, realised_pl: -20, fy: "2026-27",
+  tax: {estimate: 0, fy: "2026-27"}, tax_text: "A loss, so no tax on this sale.", holding_note: "Groww gives no buy date.",
+  cost_note: "Average price is your Groww buy average.", disclaimer: "estimate — not tax advice; surcharge, other income and grandfathering are ignored"};
+const requests = [];
+const answers = (url) => url.includes("/api/practice/sell-preview") ? preview : url.includes("/api/state") ? state : url.includes("/api/my-portfolio") ? portfolio
   : url.includes("/api/scorecard") ? {summary: {by_action: {}, horizons: [5], pending: 0, benchmark: "^NSEI"}, rows: []} : {};
 
 const listeners = {};
@@ -67,9 +72,9 @@ const document = {
 const ctx = {document, console, setTimeout, clearTimeout, setInterval: (fn, ms) => { intervals.push([fn, ms]); return 0; },
   localStorage: {getItem: () => noMarker ? null : "2026-10-09T00:00:00+05:30", setItem: (k, v) => { stored[k] = v; }}, Intl, Date, Math, JSON, Number, String, Object, Array,
   Set, Map, Promise, URLSearchParams, encodeURIComponent, isNaN, isFinite, parseFloat, parseInt,
-  fetch: async (url) => String(url).includes("/api/my-portfolio") && mpFail
+  fetch: async (url, opts) => (requests.push([String(url), opts && opts.body]), String(url).includes("/api/my-portfolio") && mpFail
     ? ({ok: false, status: 500, statusText: "err", json: async () => ({error: "Groww didn't answer"})})
-    : ({ok: true, status: 200, statusText: "OK", json: async () => JSON.parse(JSON.stringify(answers(String(url))))}),
+    : ({ok: true, status: 200, statusText: "OK", json: async () => JSON.parse(JSON.stringify(answers(String(url))))})),
   confirm: () => { throw new Error("window.confirm must not be used for the reset"); }};
 ctx.window = ctx;
 ctx.addEventListener = () => {};
@@ -95,6 +100,24 @@ setTimeout(async () => {
   const editorAfterRefresh = el("positions").innerHTML;
   await click({stopCancel: ""});
   const editorClosed = el("positions").innerHTML;
+  const mpRowsBefore = el("mp-rows").innerHTML;
+  await click({sellOpen: "TCS", sellSrc: "groww"});
+  await new Promise(r => setTimeout(r, 30));
+  const grammPanel = el("mp-rows").innerHTML, previewText = el("sp-result").innerHTML;
+  const mpTick = intervals.find(([, ms]) => ms === 120000);
+  await mpTick[0]();
+  await new Promise(r => setTimeout(r, 20));
+  const grammPanelAfterRefresh = el("mp-rows").innerHTML;
+  await click({sellClose: ""});
+  const grammClosed = el("mp-rows").innerHTML;
+  await click({sellOpen: "LAURUSLABS", sellSrc: "practice"});
+  await new Promise(r => setTimeout(r, 30));
+  const practicePanel = el("positions").innerHTML;
+  state.positions[0].current_price = 96;
+  await tick[0]();
+  await new Promise(r => setTimeout(r, 20));
+  const practicePanelAfterRefresh = el("positions").innerHTML;
+  await click({sellClose: ""});
   const banner = els["demo-banner"] && !els["demo-banner"].hidden
     ? els["demo-title"].textContent + " | " + els["btn-demo-reset"].textContent : "";
   console.log(JSON.stringify({
@@ -105,6 +128,11 @@ setTimeout(async () => {
     banner,
     editor_after_refresh_html: editorAfterRefresh, stored,
     positions_html: positionsBefore, editor_open_html: editorOpen, editor_closed_html: editorClosed, toast: toastText,
+    copy_hidden: el("mp-copy").hidden, reset_groww_hidden: el("btn-demo-reset-groww").hidden,
+    mp_rows_before: mpRowsBefore, groww_panel: grammPanel, groww_panel_after_refresh: grammPanelAfterRefresh, groww_closed: grammClosed,
+    practice_panel: practicePanel, practice_panel_after_refresh: practicePanelAfterRefresh,
+    preview_text: previewText,
+    preview_requests: requests.filter(r => r[0].includes("sell-preview")).map(r => r[1]),
     order_stop_select: html.includes('id="tk-stop"'), stop_banner: el("stop-banner").textContent,
     check_hidden: el("check-split").hidden, settings_hidden: el("btn-settings").hidden, watch_hidden: el("btn-watch").hidden,
   }));

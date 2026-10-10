@@ -39,6 +39,7 @@
   <div class="mode-banner demo" id="demo-banner" hidden><span id="demo-title"></span> <span class="sub" id="demo-sub"></span>
     <span style="margin-left:auto;display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button type="button" class="small" id="btn-demo-reset"></button>
+      <button type="button" class="small" id="btn-demo-reset-groww" hidden>Reset to my Groww portfolio</button>
       <span id="demo-confirm" hidden><span id="demo-confirm-text" style="font-weight:400"></span> <button type="button" class="small danger" id="btn-demo-yes">Yes, reset</button> <button type="button" class="small" id="btn-demo-no">Cancel</button></span>
     </span></div>
   <section class="card regime-card">
@@ -60,17 +61,20 @@
     <div class="main">
       <div class="card" id="mp-card">
         <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
-          <button type="button" class="small" id="mp-refresh" style="margin-left:auto">Refresh</button></div>
+          <button type="button" class="small primary" id="mp-copy" style="margin-left:auto" hidden>Copy into practice account</button>
+          <button type="button" class="small" id="mp-refresh">Refresh</button></div>
+        <div class="cardbody" id="copy-confirm" role="group" aria-label="Confirm copying your Groww portfolio" hidden style="border-bottom:1px solid var(--line)">
+          <div class="row"><span id="copy-confirm-text"></span>
+            <button type="button" class="small primary" id="copy-yes">Yes, copy</button>
+            <button type="button" class="small" id="copy-no">Cancel</button></div></div>
+        <div class="cardbody sub" id="copy-result" aria-live="polite" hidden style="border-bottom:1px solid var(--line)"></div>
         <div class="cardbody" id="mp-body" style="padding-top:0;border-top:none"><div class="stats" id="mp-stats"></div></div>
         <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
-      </div>
-      <div class="card">
-        <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
-        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Who</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
       </div>
       <div class="card" id="pp-card" hidden>
         <div class="cardhead"><h2>Practice portfolio</h2><span class="sub" id="pricesrc"></span></div>
         <div class="cardbody" style="padding-top:0;border-top:none;border-bottom:1px solid var(--line)"><div class="stats" id="pp-stats"></div></div>
+        <div class="cardbody sub" id="pp-tax" style="border-bottom:1px solid var(--line)"></div>
         <div class="cardbody" style="border-bottom:1px solid var(--line)">
           <div class="row" style="justify-content:space-between"><h3>Account value</h3><span class="sub" id="eq-note"></span></div>
           <div class="chart" id="eq-chart"></div>
@@ -102,6 +106,10 @@
             <span class="sub" id="tk-note">Fills at the latest price, charges deducted. Never touches your real Groww account.</span>
           </div>
         </form>
+      </div>
+      <div class="card">
+        <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
+        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Who</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Order history</h2><span class="sub" id="fees-note"></span></div>
@@ -259,18 +267,33 @@
     $("demo-title").textContent = SAMPLE ? "Demo \u00b7 bundled sample data (offline)" : "Demo \u00b7 practice money on real market data";
     $("demo-sub").textContent = SAMPLE ? "Bundled sample deals and prices, its own practice account. Never touches Groww."
                                        : "Real deals, prices and recommendations. Practice orders only: never Groww, never your .env.";
-    $("btn-demo-reset").textContent = SAMPLE ? "Reset demo" : "Reset practice account";
+    $("btn-demo-reset").textContent = SAMPLE ? "Reset demo" : "Reset to practice cash only";
+    if(!SAMPLE){ $("btn-demo-reset-groww").hidden = false; $("mp-copy").hidden = false; }
     if(!SAMPLE) [$("check-split"), $("btn-settings"), $("btn-watch")].forEach(el => { el.hidden = true; });  // these run the real agent
-    const ask = (on) => { $("demo-confirm").hidden = !on; $("btn-demo-reset").hidden = on; };
+    let resetKind = "cash";
+    const ask = (on) => { $("demo-confirm").hidden = !on; $("btn-demo-reset").hidden = on; $("btn-demo-reset-groww").hidden = on || SAMPLE; };
+    const cashTxt = () => money(S && S.settings ? S.settings.paper_starting_cash : null);
     $("btn-demo-reset").addEventListener("click", () => {
+      resetKind = "cash";
       $("demo-confirm-text").textContent = SAMPLE ? "Put the demo back to its starting sample data?"
-        : `Reset the practice account to ${money(S && S.settings ? S.settings.paper_starting_cash : null)}? Your deals and recommendations stay.`;
+        : `Reset the practice account to ${cashTxt()} cash only, with no positions? Your deals and recommendations stay, and Groww is not touched.`;
+      ask(true);
+    });
+    $("btn-demo-reset-groww").addEventListener("click", () => {
+      resetKind = "groww";
+      const n = MP && MP.linked && !MP.error ? MP.holdings.filter(h => h.price != null).length : null;
+      $("demo-confirm-text").textContent = `Reset the practice account to ${cashTxt()} cash plus a fresh copy of ${n == null ? "your Groww holdings" : n + " of your Groww holdings"} at your real buy prices? `
+        + "Your current practice positions are removed. Your deals and recommendations stay, and Groww is not touched.";
       ask(true);
     });
     $("btn-demo-no").addEventListener("click", () => ask(false));
     $("btn-demo-yes").addEventListener("click", async () => {
       ask(false);
-      try { await api("/api/reset", {}); toast(SAMPLE ? "Demo reset" : "Practice account reset"); await refresh(); } catch(e){ toast(e.message); }
+      try {
+        if(resetKind === "groww"){ const j = await api("/api/practice/reset-to-groww", {}); sellEdit = null; showCopyResult(j.message); toast("Practice account reset to your Groww portfolio"); }
+        else { await api("/api/reset", {}); sellEdit = null; $("copy-result").hidden = true; toast(SAMPLE ? "Demo reset" : "Practice account reset to cash only"); }
+        await refresh();
+      } catch(e){ toast(e.message); }
     });
   }
   let MP = null;  // the last My Groww portfolio answer: it fills the Live tiles
@@ -333,14 +356,15 @@
     if(MODE === "demo"){
     $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
     renderPaperStats(a, perf);
+    renderPracticeTax();
     noticeStopFills();
     const plTone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
-    if(!keepPositions) $("positions").innerHTML = S.positions.length ? S.positions.map(p => { const inv = p.qty * p.avg_entry_price, pc = inv ? p.unrealized_pl / inv : null; return `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a></td>
+    if(!keepPositions) $("positions").innerHTML = S.positions.length ? S.positions.map(p => { const inv = p.qty * p.avg_entry_price, pc = inv ? p.unrealized_pl / inv : null; return `<tr><td style="font-weight:600"><a href="#" data-lookup="${esc(p.symbol)}" style="text-decoration:none">${esc(p.symbol)}</a>${p.source === "groww" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">from Groww</span>' : ""}<div>${sellBtn("practice", p.symbol)}</div></td>
         <td class="num">${p.qty}</td><td class="num">${money(p.avg_entry_price,2)}</td><td class="num">${money(p.current_price,2)}</td>
         <td class="num">${money(inv)}</td><td class="num">${money(p.market_value)}</td>
         <td class="num ${plTone(p.unrealized_pl)}">${signed(p.unrealized_pl)}</td><td class="num ${plTone(pc)}">${pc == null ? "n/a" : spctP(pc)}</td>
         <td>${stopCell(p)}</td>
-        <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>${stopEdit && stopEdit.symbol === p.symbol ? stopEditorRow(p) : ""}`; }).join("")
+        <td>${s.broker.startsWith("local-paper") ? `<button type="button" class="small" data-close="${esc(p.symbol)}">Close</button>` : ""}</td></tr>${stopEdit && stopEdit.symbol === p.symbol ? stopEditorRow(p) : ""}${sellEdit && sellEdit.source === "practice" && sellEdit.symbol === p.symbol ? sellPanelRow(10) : ""}`; }).join("")
       : `<tr><td colspan="10" class="empty">No practice trades yet. ${s.auto_trade ? "The agent buys here when a check finds a good deal." : "Place a paper order below, or use a recommendation's paper-buy button."}</td></tr>`;
     }
 
@@ -473,6 +497,112 @@
       <div class="scroll"><table><thead><tr><th class="num">#</th><th>Stock</th><th class="num">12-1</th><th class="num">6m</th><th class="num">1m</th><th class="num">Vol</th><th class="num">vs 52w high</th>${fx ? '<th class="num">ROE</th><th class="num">Debt/equity</th><th class="num">P/E</th>' : ""}<th class="num">Score</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
+  // ---- "What if I sell?" panel, copy into practice, practice tax line (Demo page) ----
+  // Nothing here sells at Groww: the preview trades nothing, and "Sell in practice" only touches the practice account.
+  let sellEdit = null;   // {source: "groww"|"practice", symbol, qty, held, confirming, pv, err}: the open panel
+  const heldFlags = {};  // symbol -> "held more than a year", remembered here and, for practice positions, in the account
+  let spTimer = null, spSeq = 0;
+  const sellBtn = (src, sym) => MODE !== "demo" ? "" : `<button type="button" class="small" data-sell-open="${esc(sym)}" data-sell-src="${src}" aria-label="What if I sell ${esc(sym)}?" style="margin-top:4px">What if I sell?</button>`;
+  const sellHeld = (e) => { const r = e.source === "groww" ? ((MP && MP.holdings) || []).find(h => h.symbol === e.symbol) : (S.positions || []).find(p => p.symbol === e.symbol); return r ? r.qty : 0; };
+  const inPractice = (sym) => (S && S.positions || []).some(p => p.symbol === sym);
+  function sellPanelRow(cols){
+    const e = sellEdit, max = sellHeld(e);
+    return `<tr class="sell-panel"><td colspan="${cols}"><div role="group" aria-label="What if I sell ${esc(e.symbol)}?" style="display:flex;flex-direction:column;gap:10px;padding:6px 0">
+      <div class="row">
+        <label for="sp-qty" class="sub">Shares of ${esc(e.symbol)} to sell (you hold ${max})</label>
+        <input id="sp-qty" type="number" min="1" max="${max}" step="1" value="${esc(e.qty)}" style="flex:0 1 120px">
+        <label for="sp-held" style="display:inline-flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" id="sp-held"${e.held ? " checked" : ""}>Held more than a year</label>
+        <span class="sub">This preview trades nothing.</span></div>
+      <div id="sp-result" aria-live="polite" class="sub">${previewHtml()}</div>
+      <div class="row" id="sp-actions">${sellActions()}</div></div></td></tr>`;
+  }
+  function previewHtml(){
+    const e = sellEdit;
+    if(e.err) return `<span class="down">${esc(e.err)}</span>`;
+    const v = e.pv; if(!v) return "Working it out\u2026";
+    const tone = x => x > 0 ? "pl-profit" : x < 0 ? "pl-loss" : "";
+    const stat = (k, val, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${val}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
+    const t = v.tax;
+    return `<div class="stats">${stat("Sale value", inr(v.sale_value, 2), `${v.qty} \u00d7 ${inr(v.price, 2)} latest price`)}
+      ${stat("Charges", inr(v.charges, 2), "brokerage, STT, exchange, GST, DP")}
+      ${stat("Proceeds after charges", inr(v.proceeds, 2), "what lands in cash")}
+      ${stat("Profit / loss if sold", sinr(v.realised_pl, 2), `against ${inr(v.cost, 2)} paid (${inr(v.avg_price, 2)} average)`, tone(v.realised_pl))}
+      ${stat("Estimated tax", inr(t.estimate, 2), `${v.long_term ? "long term" : "short term"} \u00b7 FY ${esc(t.fy)}`)}</div>
+      <div>${esc(v.tax_text)}</div><div>${esc(v.holding_note)}</div><div>${esc(v.cost_note)}</div>
+      <div><i>${esc(v.disclaimer.charAt(0).toUpperCase() + v.disclaimer.slice(1))}.</i></div>`;
+  }
+  function sellActions(){
+    const e = sellEdit, mine = inPractice(e.symbol);
+    let go;
+    if(!mine) go = `<button type="button" class="small" disabled>Copy your portfolio first</button>`;
+    else if(e.confirming) go = `<span>Sell ${esc(e.qty)} ${esc(e.symbol)} in practice?</span> <button type="button" class="small danger" data-sell-do>Yes, sell in practice</button> <button type="button" class="small" data-sell-back>Not yet</button>`;
+    else go = `<button type="button" class="small primary" data-sell-confirm${e.pv ? "" : " disabled"}>Sell in practice</button>`;
+    return go + ` <button type="button" class="small" data-sell-close>Close</button><span class="sub">Practice account only; Groww is never touched.</span>`;
+  }
+  function renderPreview(){ const r = $("sp-result"), a = $("sp-actions"); if(!sellEdit) return; if(r) r.innerHTML = previewHtml(); if(a) a.innerHTML = sellActions(); }
+  async function runPreview(){
+    if(!sellEdit) return;
+    const e = sellEdit, seq = ++spSeq;
+    try {
+      const pv = await api("/api/practice/sell-preview", {symbol: e.symbol, qty: e.qty === "" ? null : Number(e.qty), held_over_year: !!e.held});
+      if(seq !== spSeq || sellEdit !== e) return;
+      e.pv = pv; e.err = null;
+    } catch(err){ if(seq !== spSeq || sellEdit !== e) return; e.pv = null; e.err = err.message; }
+    renderPreview();
+  }
+  const schedulePreview = (now) => { clearTimeout(spTimer); spTimer = setTimeout(runPreview, now ? 0 : 250); };
+  function redrawFor(src){ if(src === "groww") renderMyPortfolio(MP, true); else render(); }
+  function openSell(sym, src){
+    if(MODE !== "demo") return;   // Live has no sell tools
+    const prev = sellEdit && sellEdit.source;
+    const row = src === "practice" ? (S.positions || []).find(p => p.symbol === sym) : null;
+    const held = heldFlags[sym] !== undefined ? heldFlags[sym] : !!(row && row.held_over_year);
+    sellEdit = {source: src, symbol: sym, qty: "", held, confirming: false, pv: null, err: null};
+    sellEdit.qty = String(sellHeld(sellEdit));
+    if(prev && prev !== src) redrawFor(prev);
+    redrawFor(src); schedulePreview(true);
+    const q = $("sp-qty"); if(q && q.focus) q.focus();
+  }
+  function closeSell(){ const src = sellEdit && sellEdit.source; sellEdit = null; clearTimeout(spTimer); if(src) redrawFor(src); }
+  document.addEventListener("input", (ev) => { if(ev.target && ev.target.id === "sp-qty" && sellEdit){ sellEdit.qty = ev.target.value; sellEdit.confirming = false; sellEdit.pv = null; renderPreview(); schedulePreview(false); } });
+  document.addEventListener("change", (ev) => { if(ev.target && ev.target.id === "sp-held" && sellEdit){ sellEdit.held = !!ev.target.checked; heldFlags[sellEdit.symbol] = sellEdit.held; sellEdit.confirming = false; sellEdit.pv = null; renderPreview(); schedulePreview(true); } });
+  async function doSell(){
+    const e = sellEdit; if(!e) return;
+    try {
+      const j = await api("/api/practice/sell", {symbol: e.symbol, qty: Number(e.qty), held_over_year: !!e.held});
+      toast(j.message); closeSell(); await refresh();
+    } catch(err){ e.confirming = false; renderPreview(); toast(err.message); }
+  }
+  function renderPracticeTax(){
+    const t = S.practice_tax, el = $("pp-tax");
+    if(!t){ el.hidden = true; return; }
+    el.hidden = false;
+    el.innerHTML = `<b>This year's practice tax estimate</b> (FY ${esc(t.fy)}): short-term gains ${inr(t.st_gain)}, losses ${inr(Math.abs(t.st_loss))}; long-term gains ${inr(t.lt_gain)}, losses ${inr(Math.abs(t.lt_loss))}; `
+      + `exemption used ${inr(t.exemption_used)} of ${inr(t.exemption_limit)}; estimated tax ${inr(t.estimate)}. `
+      + `${t.untracked_sales ? t.untracked_sales + " earlier sale" + (t.untracked_sales === 1 ? "" : "s") + " this year had no profit record and " + (t.untracked_sales === 1 ? "is" : "are") + " left out. " : ""}<i>${esc(t.disclaimer.charAt(0).toUpperCase() + t.disclaimer.slice(1))}.</i>`;
+  }
+  // copy into the practice account
+  let copyAgain = false;
+  function showCopyResult(msg){ const el = $("copy-result"); el.textContent = msg; el.hidden = !msg; }
+  function copyAsk(extra){
+    const priced = MP && MP.linked && !MP.error ? MP.holdings.filter(h => h.price != null) : [];
+    if(!priced.length){ toast("Your Groww holdings aren't loaded yet, or none has a market price."); return; }
+    const skipped = MP.holdings.length - priced.length;
+    const already = extra || (S && S.copy_info && S.copy_info.held ? `Already copied on ${S.copy_info.copied_on}; copy again adds the holdings again?` : "");
+    copyAgain = !!already;
+    $("copy-confirm-text").textContent = `Add ${priced.length} holding${priced.length === 1 ? "" : "s"} to the practice account at your real buy prices? Practice cash stays as it is, and Groww is not touched.`
+      + (skipped ? ` ${skipped} without a market price will be skipped.` : "") + (already ? " " + already : "");
+    $("copy-confirm").hidden = false; $("mp-copy").hidden = true;
+  }
+  const copyDone = () => { $("copy-confirm").hidden = true; $("mp-copy").hidden = MODE !== "demo" || SAMPLE; };
+  $("mp-copy").addEventListener("click", () => copyAsk(""));
+  $("copy-no").addEventListener("click", copyDone);
+  $("copy-yes").addEventListener("click", async () => {
+    copyDone();
+    try { const j = await api("/api/practice/copy-groww", {confirm_again: copyAgain, held_over_year: heldFlags}); showCopyResult(j.message); toast(j.message.split(". ")[0] + "."); await refresh(); }
+    catch(e){ if(e.data && e.data.needs_confirm) copyAsk(e.error || e.message); else toast(e.message); }
+  });
+
   // ---- My Groww portfolio: real holdings, read-only ----
   async function loadMyPortfolio(refresh){
     const btn = $("mp-refresh"); btn.disabled = true;
@@ -480,8 +610,9 @@
     catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; MP = {linked: true, error: e.message}; if(S) renderTiles(); }
     finally { btn.disabled = false; }
   }
-  function renderMyPortfolio(m){
+  function renderMyPortfolio(m, force){
     MP = m; if(S) renderTiles();
+    const keepRows = !force && sellEdit !== null && sellEdit.source === "groww";   // a what-if panel is open: don't rebuild under it
     const rows = $("mp-rows"), stats = $("mp-stats");
     $("mp-foot").innerHTML = "";
     if(!m.linked){
@@ -503,13 +634,13 @@
       + stat("Value now", inr(m.value), m.unpriced.length ? `excludes ${m.unpriced.map(esc).join(", ")} (no market price)` : "at current prices")
       + stat("Profit / loss", sinr(m.pl), "on holdings with a price", tone(m.pl))
       + stat("Return", spct(m.pl_pct), "vs what you paid", tone(m.pl_pct));
-    rows.innerHTML = m.holdings.length ? m.holdings.map(h => `<tr>
+    if(!keepRows) rows.innerHTML = m.holdings.length ? m.holdings.map(h => `<tr>
         <td><div style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.kind === "bond" ? ' <span class="pill warn" style="font-size:10px;padding:1px 6px">Bond</span>' : ""}${h.exchange === "BSE" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">BSE</span>' : ""}</div>
-          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}${h.kind === "bond" ? ` · bond${h.maturity ? " maturing " + esc(h.maturity) : ""}` : ""}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}</td>
+          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}${h.kind === "bond" ? ` · bond${h.maturity ? " maturing " + esc(h.maturity) : ""}` : ""}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}${h.price != null ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
         <td class="num">${h.qty}</td><td class="num">${inr(h.avg_price, 2)}</td>
         <td class="num">${h.price != null ? inr(h.price, 2) : '<span class="sub">no price</span>'}</td>
         <td class="num">${inr(h.invested)}</td><td class="num">${inr(h.value)}</td>
-        <td class="num ${tone(h.pl)}">${sinr(h.pl)}</td><td class="num ${tone(h.pl_pct)}">${spct(h.pl_pct)}</td></tr>`).join("")
+        <td class="num ${tone(h.pl)}">${sinr(h.pl)}</td><td class="num ${tone(h.pl_pct)}">${spct(h.pl_pct)}</td></tr>${sellEdit && sellEdit.source === "groww" && sellEdit.symbol === h.symbol ? sellPanelRow(8) : ""}`).join("")
       : `<tr><td colspan="8" class="empty">No holdings in your Groww account.</td></tr>`;
     $("mp-foot").innerHTML = m.holdings.length ? `<tr><td>Total<div class="sub" style="font-weight:400;font-size:12px">${m.holdings.length} holdings${m.unpriced.length ? `, ${m.unpriced.length} without a price` : ""}</div></td>
         <td></td><td></td><td></td><td class="num">${inr(m.invested)}</td><td class="num">${inr(m.value)}</td>
@@ -570,7 +701,7 @@
       (es ? (es.drawdown_now < 0 ? ` · ${pct(es.drawdown_now)} from peak` : " · at its peak") +
             (es.max_drawdown < 0 ? ` · worst fall ${pct(es.max_drawdown)}` : "") : "") : "";
     lineChart(el, {x: h.map(p => p.at), series: [{name:"Account value", color:C.s1, area:true, values: h.map(p => p.equity)}],
-      refs: perf ? [{y: perf.starting_cash, label: "Starting cash"}] : [], yFmt: rupeesShort, height: 180, endLabels: false, left: 64,
+      refs: perf ? [{y: perf.baseline || perf.starting_cash, label: perf.copied_in > 0 ? "Starting value (cash + copied holdings)" : "Starting cash"}] : [], yFmt: rupeesShort, height: 180, endLabels: false, left: 64,
       label: "Paper account value over time",
       empty: "The curve starts with the next check or paper order. Each check records the account value."});
   }
@@ -671,7 +802,7 @@
                .concat(r.index_fund ? [{name: `Index fund (${r.index_fund_symbol})`, label: "Fund", color: C.s3, width: 1.5, values: idx(r.index_fund)}] : [])});
   }
 
-  async function refresh(){ try { S = await api("/api/state"); render(stopEdit !== null); } catch(e){ toast("Could not load: "+e.message); } }
+  async function refresh(){ try { S = await api("/api/state"); render(stopEdit !== null || (sellEdit !== null && sellEdit.source === "practice")); } catch(e){ toast("Could not load: "+e.message); } }
   const VERDICT = {"predictive": ["ok", "Predictive"], "could be luck": ["warn", "Could be luck"], "too small to trade": ["warn", "Too small to trade"],
                    "reversed": ["bad", "Reversed"], "no edge": ["", "No edge"], "not enough data": ["", "Not enough data"]};
   function tBars(el, rows, cfg){
@@ -990,6 +1121,11 @@
       const t = $("se-type"); if(t && t.focus) t.focus();
       return;
     }
+    if(b.dataset.sellOpen !== undefined){ openSell(b.dataset.sellOpen, b.dataset.sellSrc || "practice"); return; }
+    if(b.dataset.sellClose !== undefined){ closeSell(); return; }
+    if(b.dataset.sellConfirm !== undefined){ if(sellEdit){ sellEdit.confirming = true; renderPreview(); } return; }
+    if(b.dataset.sellBack !== undefined){ if(sellEdit){ sellEdit.confirming = false; renderPreview(); } return; }
+    if(b.dataset.sellDo !== undefined){ await doSell(); return; }
     if(b.dataset.stopCancel !== undefined){ stopEdit = null; render(); return; }
     if(b.dataset.stopSave !== undefined){
       if(!stopEdit) return;
