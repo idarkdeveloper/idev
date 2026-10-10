@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import anthropic
 from anthropic import beta_tool
@@ -281,7 +281,7 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                    else f"[{action.upper()} {clean_text(rec['ticker'], 30)}] {head}")
         body = (f"Investor: {who or 'n/a'}\n"
                 f"Action: {action.upper()} {rec['ticker']} (confidence: {rec['confidence']})\n"
-                + (f"Suggested size: {_money(rec['suggested_notional_usd'], ctx.settings.currency)}\n"
+                + (f"Suggested size: {_money(cast(float, rec['suggested_notional_usd']), ctx.settings.currency)}\n"
                    if rec['suggested_notional_usd'] else "")
                 + f"\n{rationale}\n")
         delivered = ctx.notifier.send(subject, body)

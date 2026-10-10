@@ -698,7 +698,7 @@ def test_lock_retries_permission_error_and_breaks_stale_lock(tmp_path, monkeypat
     assert len(calls) == 3 and not lock.exists()
     monkeypatch.undo()
     lock.write_text("")
-    old = time_ago = 1000
+    old = 1000
     news.os.utime(lock, (old, old))  # crashed owner, long ago
     with news._file_lock(lock, wait=5, stale=30):
         pass

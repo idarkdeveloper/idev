@@ -471,7 +471,7 @@ def _record_token_failure(cache: TokenCache, api_key: str, exc: BaseException, n
         until = now + timedelta(seconds=TOKEN_BLOCK_AUTH_S)
     else:
         until = now + timedelta(seconds=TOKEN_BLOCK_NETWORK_S)  # strikes / last_429 carried over unchanged
-    reason = _REASONS.get(status, f"HTTP {status}" if status else "network error")
+    reason = _REASONS.get(status or 0, f"HTTP {status}" if status else "network error")
     record = {"until": until.isoformat(timespec="seconds"), "status": status, "reason": reason,
               "at": now.isoformat(timespec="seconds"), "strikes": strikes, "last_429": last_429,
               "key": cache.fingerprint(api_key)}
@@ -654,7 +654,7 @@ class GrowwBroker:
         try:
             resp.raise_for_status()
         except requests.HTTPError as e:
-            e.body = str(getattr(resp, "text", ""))[:500]  # kept so a sell's authorisation text can be recognised
+            e.body = str(getattr(resp, "text", ""))[:500]  # type: ignore[attr-defined]  # kept so a sell's authorisation text can be recognised
             raise
         return data.get("payload", data) if isinstance(data, dict) else data
 
@@ -885,6 +885,7 @@ class GrowwBroker:
         symbol = symbol.upper()
         ltp = self.latest_price(symbol)
         if qty is None:
+            assert notional is not None  # exactly one of the two was given (checked above)
             qty = math.floor(float(notional) / ltp)
         qty = int(qty)
         if qty < 1:

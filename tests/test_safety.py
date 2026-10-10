@@ -4,7 +4,6 @@ No network, no orders, no real keys."""
 import json
 import shutil
 import subprocess
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,9 +11,8 @@ import pytest
 
 from trading_agent import safety
 from trading_agent.broker import Account, Position
-from trading_agent.quiver import filter_by_investor
 from trading_agent.timezones import IST
-from trading_agent.ui import App, make_server
+from trading_agent.ui import App
 
 from tests.test_ui import _FakeData, _get, _post, server  # noqa: F401  (server: the offline Demo fixture)
 

@@ -84,7 +84,7 @@ def nifty_intraday_png(bars15: list[dict[str, Any]] | None, ema21: list[float | 
     if not bars15:
         return None
     import matplotlib
-    with _LOCK, matplotlib.rc_context(RC):
+    with _LOCK, matplotlib.rc_context(RC):  # type: ignore[arg-type]
         fig = _new_figure()
         ax = fig.add_axes([0.11, 0.12, 0.72, 0.74])
         _style(ax)
@@ -128,7 +128,7 @@ def nifty_4h_png(bars4h: list[dict[str, Any]] | None, adx_series: dict[str, list
     n = len(bars4h)
     series = adx_series or {}
     has_adx = any(v is not None for v in (series.get("adx") or []))
-    with _LOCK, matplotlib.rc_context(RC):
+    with _LOCK, matplotlib.rc_context(RC):  # type: ignore[arg-type]
         fig = _new_figure()
         if has_adx:
             ax = fig.add_axes([0.11, 0.38, 0.86, 0.50])

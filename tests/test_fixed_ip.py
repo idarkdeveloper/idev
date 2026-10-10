@@ -2,7 +2,7 @@ import pytest
 
 from trading_agent.groww import GrowwBroker, LiveOrdersDisabled, WrongIP
 from trading_agent.netcheck import public_ip
-from .conftest import FakeSession, Seq
+from .conftest import FakeSession
 
 
 def test_public_ip_reads_json_or_text_and_falls_back():

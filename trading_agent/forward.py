@@ -96,7 +96,7 @@ class ForwardTest:
         self.universe = universe.upper()
         self.dir = Path(state_dir) / "forward"
         self.path = self.dir / f"{self.universe.lower()}.json"
-        self.price_fn = price_fn
+        self.price_fn: Callable[[str], float] = price_fn  # type: ignore[assignment]  # start/rebalance/mark need it
         self.cost_model = cost_model
         self.now = now or (lambda: _now())  # looked up at call time, so tests can patch it
         self.holidays = holidays  # NSEHolidays: nothing is due on an exchange holiday
@@ -210,7 +210,7 @@ class ForwardTest:
 
         strat = last["equity"] / cap - 1 if last else None
         bench = last["bench"] / cap - 1 if last and last.get("bench") else None
-        holdings = []
+        holdings: list[dict[str, Any]] = []
         if last:
             for p in self.broker.positions():
                 mv = p.market_value or 0.0

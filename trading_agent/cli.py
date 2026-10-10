@@ -8,7 +8,6 @@ import logging
 import sys
 import time
 from importlib import resources
-from pathlib import Path
 from typing import Any
 
 import requests
@@ -534,7 +533,7 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         back = (dt.date.today() - dt.timedelta(days=100)).isoformat()
         deals = [dataclasses.replace(d, transaction_date=back, report_date=back)
                  for d in filter_by_investors(deals, names)]
-        prices = _DemoHistory(broker.price_fn)
+        prices: Any = _DemoHistory(broker.price_fn)
     else:
         data = make_data_source(settings)
         deals = fetch_followed(data, names, settings.watch_source,
@@ -564,7 +563,7 @@ class _DemoHistory:
         import math
         try:
             last = float(self.price_fn(symbol.replace("^", "IDX_")))
-        except Exception:
+        except Exception:  # noqa: BLE001
             last = 100.0 if symbol.startswith("^") else 50.0
         out = []
         today = dt.date.today()
@@ -781,10 +780,10 @@ def cmd_factor_backtest(args: argparse.Namespace) -> int:
 
 
 def cmd_costs(args: argparse.Namespace) -> int:
-    from .costs import cost_model_for
+    from .costs import FlatCosts, cost_model_for
     settings = _settings(args)
     m = cost_model_for(settings.market)
-    if not hasattr(m, "round_trip"):
+    if isinstance(m, FlatCosts):
         print(f"flat model: {m.round_trip_bps(0):.0f} bps round trip")
         return 0
     for n in args.amounts:
@@ -854,12 +853,14 @@ def cmd_watch(args: argparse.Namespace) -> int:
                             practice=broker if isinstance(broker, LocalPaperBroker) else None)
     from .forward_schedule import ForwardScheduler, run_forward_due
     from .heartbeat import Heartbeat
+    from .integration import make_scheduler as make_integration_scheduler
     from .notify import install_log_redaction
     install_log_redaction()   # bot tokens and the heartbeat path never reach a log, even at -v
     forward_prices = free_prices(settings)
     forward = ForwardScheduler(settings.state_dir, lambda: print(run_forward_due(settings, forward_prices, holidays, notifier)),
                                holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
+                integration=make_integration_scheduler(settings, notifier, holidays),
                 heartbeat=Heartbeat(settings.heartbeat_url, fail_enabled=True if settings.heartbeat_fail else None),
                 window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
@@ -874,6 +875,20 @@ def cmd_watch(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     return 0
+
+
+def cmd_integration_check(args: argparse.Namespace) -> int:
+    """Read-only check of the real services (NSE, BSE, Yahoo, NSE archives, Groww with a cached token only, optionally
+    Claude). Stores state/integration_check.json and alerts once a day on failure. Never places an order."""
+    from .integration import format_result, run_and_record
+    from .runner import make_notifier
+    settings = _settings(args)
+    if args.claude:
+        settings.integration_claude = True
+    result = run_and_record(settings, notifier=None if args.no_alert else make_notifier(settings),
+                            holidays=_market_holidays(settings))
+    print(format_result(result))
+    return 0 if result["ok"] else 2
 
 
 def cmd_digest(args: argparse.Namespace) -> int:
@@ -1059,6 +1074,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--window-end", default="18:30", help="IST, HH:MM")
     sp.add_argument("--auto-trade", action="store_true", help="allow paper orders")
     sp.set_defaults(func=cmd_watch)
+    sp = sub.add_parser("integration-check",
+                        help="read-only check that NSE, BSE, Yahoo, Groww (cached token) and the rest still answer as expected")
+    sp.add_argument("--claude", action="store_true", help="also make one tiny Claude call (same as INTEGRATION_CLAUDE=true)")
+    sp.add_argument("--no-alert", action="store_true", help="do not send the once-a-day failure alert")
+    sp.set_defaults(func=cmd_integration_check)
     sp = sub.add_parser("digest", help="print (and with --send, email) the morning or evening digest")
     sp.add_argument("kind", choices=["morning", "evening"])
     sp.add_argument("--send", action="store_true", help="email it through the configured channels")
@@ -1090,7 +1110,7 @@ def _utf8_output() -> None:
     for stream in (sys.stdout, sys.stderr):
         try:
             if (getattr(stream, "encoding", "") or "").lower().replace("-", "") != "utf8":
-                stream.reconfigure(encoding="utf-8", errors="replace")
+                stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
         except (AttributeError, ValueError):  # not a real text stream (e.g. under a test capture)
             pass
 

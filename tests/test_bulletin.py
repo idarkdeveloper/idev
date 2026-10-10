@@ -10,7 +10,6 @@ import pytest
 
 from trading_agent import bulletin, charts, concepts, digest, digest_render, digest_rules, digest_writer
 from trading_agent.broker import LocalPaperBroker
-from trading_agent.digest import DigestContext, evening_report
 from trading_agent.digest_schedule import build_digest, send_digest
 from trading_agent.groww import IST
 from trading_agent.notify import Notifier
@@ -795,7 +794,7 @@ def test_concept_rotation_counts_monday_to_thursday_from_a_fixed_epoch_and_ignor
     assert concepts._EPOCH == epoch and epoch.weekday() == 0
     assert concepts.trading_day_number(epoch) == 0 and concepts.trading_day_number(date(2026, 1, 8)) == 3
     assert concepts.trading_day_number(date(2026, 1, 12)) == 4                                   # Fridays do not count
-    mon, tue, wed = date(2026, 10, 12), date(2026, 10, 13), date(2026, 10, 14)
+    tue, wed = date(2026, 10, 13), date(2026, 10, 14)
     assert concepts.concept_for(wed) == concepts.concept_for(wed) and concepts.concept_for(wed)["title"] != concepts.concept_for(tue)["title"]
     n = concepts.trading_day_number(wed)
     assert concepts.CONCEPTS[n % len(concepts.CONCEPTS)][0] == concepts.concept_for(wed)["title"]

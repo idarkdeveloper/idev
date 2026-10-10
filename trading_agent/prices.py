@@ -177,7 +177,7 @@ class YahooPrices:
         except (KeyError, IndexError, TypeError) as e:
             raise LookupError(f"Yahoo returned no dividend data for {ysym}") from e
         out = sorted(({"date": datetime.fromtimestamp(int(v["date"]), tz=timezone.utc).strftime("%Y-%m-%d"),
-                       "amount": float(v["amount"])} for v in events.values()), key=lambda d: d["date"])
+                       "amount": float(v["amount"])} for v in events.values()), key=lambda d: str(d["date"]))
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(out))

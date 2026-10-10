@@ -97,7 +97,8 @@ def parse_rss(xml_text: str, source: str, *, split_publisher: bool = False) -> l
     root = ET.fromstring(xml_text.lstrip("﻿"))
     out: list[dict[str, Any]] = []
     for it in root.iter("item"):
-        title = _clean("".join((it.find("title").itertext() if it.find("title") is not None else [])))
+        title_el = it.find("title")
+        title = _clean("".join(title_el.itertext() if title_el is not None else []))
         link = (it.findtext("link") or "").strip()
         if not title or not link:
             continue

@@ -368,7 +368,7 @@ class LocalPaperBroker:
                 price = float(self.price_fn(symbol))
                 self._state["prices"][symbol] = price
                 return price
-            except Exception:  # fall back to the last known price
+            except Exception:  # noqa: BLE001 - fall back to the last known price
                 pass
         if symbol in self._state["prices"]:
             return float(self._state["prices"][symbol])
@@ -490,6 +490,7 @@ class LocalPaperBroker:
         if price is None:
             price = self.latest_price(symbol)
         if qty is None:
+            assert notional is not None  # exactly one of the two was given (checked above)
             qty = round(float(notional) / price, 6)
         if self.whole_shares:
             qty = float(math.floor(qty))

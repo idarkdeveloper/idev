@@ -59,7 +59,8 @@ def parse_sec_list(text: str) -> dict[str, int | None]:
             band: int | None = int(float(raw))
         except ValueError:
             band = None   # "No Band"
-        if sym not in out or (band is not None and (out[sym] is None or band < out[sym])):
+        prev = out.get(sym)
+        if sym not in out or (band is not None and (prev is None or band < prev)):
             out[sym] = band
     if not out:
         raise ValueError("price band file has no rows")

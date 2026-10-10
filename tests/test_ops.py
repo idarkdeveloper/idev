@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import requests
 
-from trading_agent import digest_render, notify
+from trading_agent import digest_render
 from trading_agent.config import (load_settings, parse_heartbeat_url, parse_telegram_chat, parse_telegram_token)
 from trading_agent.costs import cost_model_for
 from trading_agent.forward import AsOfPrices, ForwardTest, IST, rebuild_from
@@ -752,7 +752,6 @@ def test_ten_check_errors_give_no_fail_a_raising_tick_gives_one_and_a_clean_tick
         beats.append(("clean", h.beat()))
     h.report_error, h.report_clean = rec_err, rec_clean
     w._stop = threading.Event()
-    real_wait = w._stop.wait
     w.run_forever()
     posts = [c for c in sess.calls if c[0] == "POST"]
     assert len(posts) == 1 and posts[0][2]["data"].startswith(b"RuntimeError: bug")

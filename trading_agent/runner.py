@@ -92,8 +92,9 @@ def groww_session(settings: Settings) -> requests.Session:
     """A session for every Groww call; through GROWW_PROXY_URL when set, so a runner without a
     fixed IP (GitHub Actions) can still reach Groww from the registered address."""
     s = requests.Session()
-    if getattr(settings, "groww_proxy_url", None):
-        s.proxies = {"https": settings.groww_proxy_url, "http": settings.groww_proxy_url}
+    proxy = getattr(settings, "groww_proxy_url", None)
+    if proxy:
+        s.proxies = {"https": proxy, "http": proxy}
     return s
 
 
@@ -120,7 +121,7 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
             # (a file read, no network, while the cool-down lasts) so it is used again once it is lifted.
             warn_token_block_once(e, log)
             groww = None
-        holder = {"g": groww}
+        holder: dict[str, Any] = {"g": groww}
 
         def groww_or_free(symbol: str) -> float:
             if holder["g"] is None:
@@ -170,7 +171,7 @@ def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
         # are never copied in, so the two never look like duplicates.
         return make_practice_broker(settings, price_fn, groww)
     if settings.use_alpaca:
-        return AlpacaPaperBroker(settings.alpaca_key_id, settings.alpaca_secret,
+        return AlpacaPaperBroker(settings.alpaca_key_id or "", settings.alpaca_secret or "",
                                  settings.alpaca_base_url)
     return make_practice_broker(settings, price_fn)
 
@@ -268,8 +269,8 @@ def trading_days_old(saved_at: str, now: Any = None) -> int | None:
     from datetime import datetime, timedelta
     from .timezones import IST
     try:
-        saved = datetime.fromisoformat(saved_at)
-        saved = (saved if saved.tzinfo else saved.replace(tzinfo=IST)).astimezone(IST).date()
+        parsed = datetime.fromisoformat(saved_at)
+        saved = (parsed if parsed.tzinfo else parsed.replace(tzinfo=IST)).astimezone(IST).date()
     except ValueError:
         return None
     today = (now or datetime.now(IST)).astimezone(IST).date()
@@ -422,6 +423,7 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     if live_run:
         data = data or make_data_source(settings)
         trades = fetch_followed(data, settings.investors, settings.watch_source)
+    assert trades is not None  # supplied by the caller, or fetched just above
 
     new = state.new_trades(trades)  # a deal is seen once for everyone who matches it
     names = settings.investors

@@ -6,6 +6,8 @@ venv/
 state/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 .playwright-mcp/
 
 # graphify outputs (local only)

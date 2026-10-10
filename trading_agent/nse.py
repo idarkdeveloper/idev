@@ -249,6 +249,13 @@ class NSEClient:
         headers = dict(HEADERS)
         if referer:
             headers["Referer"] = referer
+        self._ensure_warm(headers)
+        resp = self.session.get(f"{self.base_url}/{path.lstrip('/')}", headers=headers,
+                                params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _ensure_warm(self, headers: dict[str, str]) -> None:
         if not self._warm:
             # Best effort cookie bootstrap; NSE sometimes 403s the homepage, which is fine.
             try:
@@ -256,10 +263,6 @@ class NSEClient:
             except requests.RequestException:
                 pass
             self._warm = True
-        resp = self.session.get(f"{self.base_url}/{path.lstrip('/')}", headers=headers,
-                                params=params, timeout=self.timeout)
-        resp.raise_for_status()
-        return resp.json()
 
     def _get_text(self, path: str, params: dict[str, Any], referer: str) -> str:
         headers = {**HEADERS, "Accept": "*/*", "Referer": referer}
@@ -309,6 +312,21 @@ class NSEClient:
             data = self._get(path, params=params, referer=referer)
             rows = data.get("data", []) if isinstance(data, dict) else data
         return [t for t in (_norm_deal(r, kind) for r in rows) if t.investor]
+
+    def probe_deals(self, day: date) -> dict[str, int]:
+        """Integration check: the bulk and the block deals CSV for one day, read and parsed strictly (no JSON fallback).
+        Returns {kind: row count}. Raises when a download fails or the CSV lacks an expected column."""
+        referer = f"{self.base_url}/report-detail/display-bulk-and-block-deals"
+        self._ensure_warm({**HEADERS, "Referer": referer})
+        out: dict[str, int] = {}
+        for kind in ("bulk", "block"):
+            params = {"optionType": f"{kind}_deals", "from": _nse_date(day), "to": _nse_date(day), "csv": "true"}
+            text = self._get_text("api/historicalOR/bulk-block-short-deals", params, referer)
+            try:
+                out[kind] = len(_parse_deals_csv(text))
+            except KeyError as e:
+                raise ValueError(f"{kind} deals CSV has no {e.args[0]!r} column") from None
+        return out
 
     # -- insider (PIT) disclosures ------------------------------------------
     def insider_trades(self, days: int = 30, end: date | None = None,
@@ -479,11 +497,12 @@ class NSEClient:
     def _bse_rows(self, source: str, days: int, investors: Iterable[str] | None) -> list[DisclosedTrade]:
         """BSE's bulk/block deals for the followed names, or nothing: BSE problems never break the NSE read."""
         kinds = {"deals": ("bulk", "block"), "bulk": ("bulk",), "block": ("block",)}.get(source, ())
-        if getattr(self, "bse", None) is None or not kinds:  # off, or insider filings (BSE has no equivalent here)
+        bse = getattr(self, "bse", None)
+        if bse is None or not kinds:  # off, or insider filings (BSE has no equivalent here)
             return []
         try:
             end = datetime.now(IST).date()  # the exchange's calendar day, not the server's
-            return self.bse.deals(end - timedelta(days=days), end, kinds=kinds,
+            return bse.deals(end - timedelta(days=days), end, kinds=kinds,
                                   investors=None if investors is None else list(investors))
         except Exception as e:  # noqa: BLE001
             log_bse_failure_once(e)

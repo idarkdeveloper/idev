@@ -80,7 +80,7 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
                if isinstance(mood.get("score"), int) else regime)]
         nf = mood.get("nifty") or {}
         if nf.get("last") is not None:
-            above = {True: "above its 200-day average", False: "below its 200-day average"}.get(nf.get("above_200dma"), "200-day average n/a")
+            above = {True: "above its 200-day average", False: "below its 200-day average"}.get(nf.get("above_200dma"), "200-day average n/a")  # type: ignore[arg-type]
             kv.append(("Nifty", f"{num(nf['last'])}, {pct_text(nf.get('ret_1d_pct'))} today, "
                                 f"{pct_text(nf.get('ret_20d_pct'))} in 20 days, {above}"))
         lines = [] if kv else [mood.get("summary") or regime]
