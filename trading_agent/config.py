@@ -133,6 +133,10 @@ class Settings:
     news_claude_model: str = "claude-haiku-4-5"
     # Everyone followed, from INVESTORS. Empty means "just watch_investor" (the single-name setting).
     watch_investors: list[str] = field(default_factory=list)
+    # BSE bulk/block deals are read beside NSE's (Indian market only); bse_host is the page's host
+    # (www.bseindia.com, with beta.bseindia.com tried when it does not answer).
+    bse_deals: bool = True
+    bse_host: str = "www.bseindia.com"
     # Daily emails (digest.py): a morning "today" brief and an evening "close" report, sent by the watch service.
     digest_enabled: bool = True  # still needs an email or webhook channel
     digest_morning_on: bool = True
@@ -207,6 +211,9 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
     news_tagger = (env("NEWS_TAGGER") or "auto").lower()
     if news_tagger not in {"auto", "ollama", "claude", "none"}:
         raise SystemExit(f"NEWS_TAGGER must be auto, ollama, claude or none, got {news_tagger!r}")
+    bse_host = (env("BSE_HOST") or "www.bseindia.com").strip().lower()
+    if not re.fullmatch(r"[a-z0-9.-]+\.bseindia\.com", bse_host):
+        raise SystemExit(f"BSE_HOST must be a bseindia.com host such as www.bseindia.com, got {bse_host!r}")
     digest_writer = (env("DIGEST_WRITER") or "claude").lower()
     if digest_writer not in DIGEST_WRITERS:
         raise SystemExit(f"DIGEST_WRITER must be claude, auto, ollama, rules or none, got {digest_writer!r}")
@@ -261,6 +268,8 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),
         ollama_model=env("OLLAMA_MODEL") or "qwen2.5:3b",
         news_claude_model=env("NEWS_CLAUDE_MODEL") or "claude-haiku-4-5",
+        bse_deals=_bool(env("BSE_DEALS"), True),
+        bse_host=bse_host,
         digest_enabled=_bool(env("DIGEST_ENABLED"), True),
         digest_morning_on=_bool(env("DIGEST_MORNING_ON"), True),
         digest_evening_on=_bool(env("DIGEST_EVENING_ON"), True),

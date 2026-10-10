@@ -66,7 +66,7 @@ Rules:
 MARKET_NOTES = {
     "in": """\
 Market: India (NSE). Prices and amounts are in rupees (INR). Orders are in whole shares.
-The disclosed trades come from NSE bulk deals, block deals and SEBI insider (PIT) filings.
+The disclosed trades come from NSE and BSE bulk deals, block deals and SEBI insider (PIT) filings (each deal says its exchange).
 Bulk/block deals are published the same evening, so they are fresh. The client name in a
 bulk deal can be an investor, a fund, or a broker/prop desk acting for a client; weigh the
 name accordingly. A bulk deal has a counterparty: a SELL by a followed investor is as

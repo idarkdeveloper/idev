@@ -52,6 +52,7 @@ EDITABLE_ENV_KEYS = {
     "watch_investor": "WATCH_INVESTOR",  # one name (older form); watch_investors below is the list
     "watch_investors": "INVESTORS",
     "watch_source": "WATCH_SOURCE",
+    "bse_deals": "BSE_DEALS",  # also read BSE bulk/block deals beside NSE's
     "auto_trade": "AUTO_TRADE",
     "notify_email_to": "NOTIFY_EMAIL_TO",
     "notify_webhook_url": "NOTIFY_WEBHOOK_URL",
@@ -403,7 +404,7 @@ class App:
                 "notify_email_to": s.notify_email_to or "",
                 "notify_webhook_url": s.notify_webhook_url or "",
                 "paper_starting_cash": s.paper_starting_cash,
-                "groww_gtt_stops": s.groww_gtt_stops,
+                "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,
                 "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
                 "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
                 "digest_enabled": s.digest_enabled, "digest_writer": s.digest_writer,
@@ -1072,7 +1073,7 @@ class App:
             elif key in ("digest_morning", "digest_evening"):
                 value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
-            elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
+            elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on"):
                 value = "true" if value in (True, "true", "1", 1, "on") else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
@@ -1118,7 +1119,11 @@ class App:
             _write_env(self.dotenv, applied)
         for op in ops:
             op()
-        if "watch_investor" in changes or "watch_investors" in changes or "watch_source" in changes:
+        if "bse_deals" in changes and self._data is not None and hasattr(self._data, "bse"):
+            from .bse import make_bse_client
+            self._data.bse = make_bse_client(self.settings)  # None when switched off: no more BSE calls
+        if ("watch_investor" in changes or "watch_investors" in changes or "watch_source" in changes
+                or "bse_deals" in changes):
             self._deals, self._deals_at = None, 0.0
         if applied:
             self._settings_version += 1
@@ -1402,7 +1407,7 @@ def _check_type(key: str, value: Any) -> None:
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
+    elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on"):
         if isinstance(value, (list, tuple, dict)):
             raise ValueError(f"{key} must be true or false")
     elif key in ("digest_morning", "digest_evening", "digest_writer"):
