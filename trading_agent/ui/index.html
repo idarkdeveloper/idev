@@ -64,20 +64,28 @@
 
   <section class="tiles" id="tiles"></section>
 
+  <div class="card" id="mp-card" data-anchor="portfolio">
+    <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
+      <button type="button" class="small primary" id="mp-copy" style="margin-left:auto" hidden>Copy into practice account</button>
+      <button type="button" class="small" id="mp-refresh">Refresh</button></div>
+    <div class="cardbody" id="copy-confirm" role="group" aria-label="Confirm copying your Groww portfolio" hidden style="border-bottom:1px solid var(--line)">
+      <div class="row"><span id="copy-confirm-text"></span>
+        <button type="button" class="small primary" id="copy-yes">Yes, copy</button>
+        <button type="button" class="small" id="copy-no">Cancel</button></div></div>
+    <div class="cardbody sub" id="copy-result" aria-live="polite" hidden style="border-bottom:1px solid var(--line)"></div>
+    <div class="cardbody" id="mp-body" style="padding-top:0;border-top:none"><div class="stats" id="mp-stats"></div></div>
+    <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th class="prot-cell" id="mp-prot-th">Protection</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
+  </div>
+  <div class="card" data-anchor="lookup">
+    <div class="cardhead"><h2>Look up a stock</h2></div>
+    <form class="cardbody" id="lk-form">
+      <div class="row"><input id="lk-ticker" autocomplete="off" placeholder="Ticker or company name, e.g. Tata Steel" style="flex:1 1 160px"><button type="submit" class="small">Check</button></div>
+      <div id="lk-result" class="sub">Momentum, latest price and NSE announcements.</div>
+    </form>
+  </div>
+
   <section class="cols">
     <div class="main">
-      <div class="card" id="mp-card" data-anchor="portfolio">
-        <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
-          <button type="button" class="small primary" id="mp-copy" style="margin-left:auto" hidden>Copy into practice account</button>
-          <button type="button" class="small" id="mp-refresh">Refresh</button></div>
-        <div class="cardbody" id="copy-confirm" role="group" aria-label="Confirm copying your Groww portfolio" hidden style="border-bottom:1px solid var(--line)">
-          <div class="row"><span id="copy-confirm-text"></span>
-            <button type="button" class="small primary" id="copy-yes">Yes, copy</button>
-            <button type="button" class="small" id="copy-no">Cancel</button></div></div>
-        <div class="cardbody sub" id="copy-result" aria-live="polite" hidden style="border-bottom:1px solid var(--line)"></div>
-        <div class="cardbody" id="mp-body" style="padding-top:0;border-top:none"><div class="stats" id="mp-stats"></div></div>
-        <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th class="prot-cell" id="mp-prot-th">Protection</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
-      </div>
       <div class="card" id="pp-card" hidden data-anchor="practice">
         <div class="cardhead"><h2>Practice portfolio</h2><span class="sub" id="pricesrc"></span></div>
         <div class="cardbody" style="padding-top:0;border-top:none;border-bottom:1px solid var(--line)"><div class="stats" id="pp-stats"></div></div>
@@ -190,13 +198,6 @@
       </div>
     </div>
     <aside class="side">
-      <div class="card" data-anchor="lookup">
-        <div class="cardhead"><h2>Look up a stock</h2></div>
-        <form class="cardbody" id="lk-form">
-          <div class="row"><input id="lk-ticker" autocomplete="off" placeholder="Ticker or company name, e.g. Tata Steel" style="flex:1 1 160px"><button type="submit" class="small">Check</button></div>
-          <div id="lk-result" class="sub">Momentum, latest price and NSE announcements.</div>
-        </form>
-      </div>
       <div class="card" data-anchor="size">
         <div class="cardhead"><h2>Position size</h2></div>
         <form class="cardbody" id="sz-form">
@@ -1139,11 +1140,11 @@
       const m = r.momentum || {}; const v = m.verdict || "n/a";
       const cls = v==="strong"?"ok":v==="weak"?"bad":"";
       $("lk-ticker").value = r.ticker;
-      $("lk-result").innerHTML = `${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div><div id="lk-quote">${quoteHtml(null, r)}</div>${r.band_note ? `<div class="sub" style="font-size:12px">${esc(r.band_note)}</div>` : ""}
+      $("lk-result").innerHTML = `<div class="lk-grid"><div class="lk-head">${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div><div id="lk-quote">${quoteHtml(null, r)}</div>${r.band_note ? `<div class="sub" style="font-size:12px">${esc(r.band_note)}</div>` : ""}
         <div class="sub">${esc(r.momentum_summary)}</div>
         <div id="lk-take">${takeawayHtml(r)}</div>
-        <div class="chart" id="lk-chart" style="margin-top:6px"></div>
-        <div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div><div id="lk-news"><div class="sub" style="margin-top:6px">Loading news…</div></div>`;
+        </div><div class="chart lk-chart" id="lk-chart"></div>
+        <div class="lk-more"><div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div><div id="lk-news"><div class="sub" style="margin-top:6px">Loading news…</div></div></div></div></div>`;
       api("/api/news?ticker=" + encodeURIComponent(r.ticker)).then(n => {
         if(seq !== lookupSeq || !$("lk-news")) return;  // the user looked up another stock meanwhile
         r.news = n; $("lk-news").innerHTML = newsHtml(n); $("lk-take").innerHTML = takeawayHtml(r);

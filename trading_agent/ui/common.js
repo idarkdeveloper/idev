@@ -646,7 +646,7 @@ window.TA = (function(){
     }
     const heights = () => {
       const narrow = (box.clientWidth || host.clientWidth || 360) < 560;
-      return {main: narrow ? 260 : 360, rsi: narrow ? 70 : 100, macd: narrow ? 80 : 110};
+      return {main: narrow ? 260 : (box.clientWidth || 0) >= 700 ? 380 : 360, rsi: narrow ? 70 : 100, macd: narrow ? 80 : 110};
     };
     const totalHeight = () => {
       const h = heights();

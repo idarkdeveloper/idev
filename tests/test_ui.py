@@ -668,6 +668,15 @@ def test_practice_card_sits_right_under_my_groww_portfolio():
     assert "Copy into practice account" in html and "Reset to my Groww portfolio" in html and "window.confirm" not in html
 
 
+def test_portfolio_and_lookup_are_full_width_rows_above_the_columns():
+    html = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "index.html").read_text(encoding="utf-8")
+    mp, lk, cols = html.index('id="mp-card"'), html.index('data-anchor="lookup"'), html.index('<section class="cols">')
+    assert mp < lk < cols
+    assert html.index('data-anchor="size"') > cols and html.index('data-anchor="costs"') > cols   # these stay in the aside
+    css = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "nocturne.css").read_text(encoding="utf-8")
+    assert "main { max-width: 1600px;" in css
+
+
 def test_tiles_and_recommendation_buttons_depend_on_mode():
     """The page, not the server, decides what each mode shows: run it under node with a stub DOM."""
     import shutil
