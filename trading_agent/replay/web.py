@@ -305,29 +305,38 @@ class ReplayApp:
         """Position size for your replay account: your equity at the clock, and prices up to the clock only."""
         with self._guard(slug, "a position-size check"):
             t = self.trial(slug)
-            sym = check_ticker((query.get("ticker") or "").strip())
+            typed = (query.get("ticker") or "").strip()
+            sym, company = self.app.resolve(typed) if typed else ("", None)
+            sym = check_ticker(sym)
             risk, cap = _num(query.get("risk_pct"), "risk %", 1.0), _num(query.get("max_pct"), "max position %", 10.0)
             if not 0 < risk <= 100 or not 0 < cap <= 100:
                 raise ValueError("risk % and max position % must be between 0 and 100")
             price = t.prices.latest_price(sym)
             try:
                 a = atr(t.prices.history(sym, "1y"))
-            except LookupError:
+            except Exception:  # noqa: BLE001 - no volatility data: sized at half the cap, like Live
                 a = None
             equity = t.you.account().equity
             r = position_size(equity, price, a, risk_pct=risk / 100, max_pct=cap / 100, whole_shares=True)
-            r.update(ticker=sym, equity=equity, today=t.clock.today)
+            r.update(ticker=sym, name=company, equity=equity, today=t.clock.today)
+            try:
+                last = t.prices.last_trade_date(sym)
+            except Exception:  # noqa: BLE001
+                last = None
+            if last and (date.fromisoformat(t.clock.today) - date.fromisoformat(last)).days > 7:
+                r["warning"] = f"{sym} last traded {last}: it is suspended or delisted on the replay date, so this size cannot be bought."
             if r["notional"]:
                 r["round_trip_cost"] = cost_quote_for("in", r["notional"])
             return r
 
     def cost(self, slug: str, query: dict[str, str]) -> dict[str, Any]:
         """Charges for one amount under the same Indian delivery model the replay deducts."""
-        self.trial(slug)
-        amount = _num(query.get("amount"), "amount", 0.0)
-        if not 0 < amount <= 1e10:
-            raise ValueError("amount must be a positive number")
-        return cost_quote_for("in", amount)
+        with self._guard(slug, "a cost check"):
+            self.trial(slug)
+            amount = _num(query.get("amount"), "amount", 0.0)
+            if not 0 < amount <= 1e10:
+                raise ValueError("amount must be a positive number")
+            return cost_quote_for("in", amount)
 
     # -- the page's data ------------------------------------------------------------
     def snapshot(self, slug: str) -> dict[str, Any]:

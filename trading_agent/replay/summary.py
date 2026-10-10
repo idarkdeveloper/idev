@@ -86,7 +86,8 @@ def build_summary(trial: Any) -> dict[str, Any] | None:
     lines: list[dict[str, str]] = []
     r1 = lambda w: round(ret[w], 3)  # noqa: E731 - compare at the precision shown (0.1%)
     if not orders["you"]:
-        verdict = "You have not placed a trade yet, so your money is all cash."
+        verdict = ("You did not trade in this replay." if ended
+                   else "You have not placed a trade yet, so your money is all cash.")
     else:
         beat = [label[w] for w in ("agent", "nifty") if r1("you") > r1(w)]
         tied = [label[w] for w in ("agent", "nifty") if r1("you") == r1(w)]
@@ -95,14 +96,16 @@ def build_summary(trial: Any) -> dict[str, Any] | None:
             verdict = "You beat both."
         elif len(behind) == 2:
             verdict = "You trailed both."
+        elif len(tied) == 2:
+            verdict = "You matched both."
         else:
             bits = []
             if beat:
-                bits.append(f"beat {beat[0]}")
+                bits.append("beat " + " and ".join(beat))
             if tied:
-                bits.append(f"matched {tied[0]}")
+                bits.append("matched " + " and ".join(tied))
             if behind:
-                bits.append(f"trailed {behind[0]}")
+                bits.append("trailed " + " and ".join(behind))
             verdict = "You " + " and ".join(bits) + "."
     lines.append({"label": "Who is ahead",
                   "text": f"{_result('You', ret['you'], gain['you'])}, {_result(label['agent'], ret['agent'], gain['agent'])}, "
@@ -130,7 +133,8 @@ def build_summary(trial: Any) -> dict[str, Any] | None:
         if not c:
             return f"{_inr(0)} in charges"
         if g > 0:
-            return f"{_inr(c)} in charges ({c / g * 100:.0f}% of the gain)"
+            return (f"{_inr(c)} in charges (larger than the gain)" if c > g
+                    else f"{_inr(c)} in charges ({c / g * 100:.0f}% of the gain)")
         return f"{_inr(c)} in charges, which added to the loss" if g < 0 else f"{_inr(c)} in charges"
     lines.append({"label": "Costs",
                   "text": f"You made {_plural(len(orders['you']), 'trade')} with {charge_note('you')}; the agent made "
@@ -160,18 +164,28 @@ def build_summary(trial: Any) -> dict[str, Any] | None:
         return f"{sum(1 for v in pnl.values() if v > 0)} of {len(pnl)} ({sum(1 for v in pnl.values() if v > 0) / len(pnl) * 100:.0f}%)" if pnl else None
     h_me, h_ag = hit("you"), hit("agent")
     if h_me or h_ag:
-        lines.append({"label": "Stocks that made money",
-                      "text": f"Of the stocks traded so far, {h_me or 'none for you'} made money for you and "
-                              f"{h_ag or 'none'} for the agent (sold stocks count, charges included)."})
+        if not orders["you"]:
+            txt = (f"You have not traded yet; the agent: {h_ag} made money." if h_ag
+                   else "You have not traded yet, and the agent holds nothing.")
+        else:
+            txt = (f"Of the stocks traded so far, {h_me or 'none'} made money for you and "
+                   f"{h_ag or 'none'} for the agent (sold stocks count, charges included).")
+        lines.append({"label": "Stocks that made money", "text": txt})
 
     # -- why they differ (facts only) ------------------------------------------------------
     why = []
-    n_reb = len(trial.data["rebalances"])
+    d = trial.data
+    exact = "rebalance_count" in d
+    n_reb = d["rebalance_count"] if exact else max(len(d["rebalances"]) - 1, 0)
     if n_reb:
-        why.append(f"the agent rebalanced {_plural(n_reb, 'time')} ({_plural(len(orders['agent']), 'trade')})")
-    agent_stops = [s for s in trial.data.get("stops", []) if s.get("who") == "agent" and "error" not in s]
-    if agent_stops:
-        why.append(f"its trailing stop sold {_plural(len(agent_stops), 'position')}")
+        why.append(f"the agent rebalanced {'' if exact else 'at least '}{_plural(n_reb, 'time')} since the start "
+                   f"({_plural(len(orders['agent']), 'trade')} in all)")
+    if "agent_stop_count" in d:
+        n_stop, stop_exact = d["agent_stop_count"], True
+    else:
+        n_stop, stop_exact = sum(1 for x in d.get("stops", []) if x.get("who") == "agent" and "error" not in x), False
+    if n_stop:
+        why.append(f"its trailing stop sold {'' if stop_exact else 'at least '}{_plural(n_stop, 'position')}")
     eq_you, eq_agent = eq[-1]["you"], eq[-1]["agent"]
     if mine and eq_you:
         top = max(mine, key=lambda h: h["value"])
@@ -187,8 +201,9 @@ def build_summary(trial: Any) -> dict[str, Any] | None:
 
     # -- bottom line -----------------------------------------------------------------------
     if not orders["you"]:
-        bottom = "Place a trade of your own and this will compare your picks with the agent's."
-    elif ret["you"] <= 0 and ret["agent"] <= 0:
+        bottom = (f"You did not trade in this replay; the agent's rules {'made' if ret['agent'] >= 0 else 'lost'} {_pct(ret['agent'], False)}."
+                  if ended else "Place a trade of your own and this will compare your picks with the agent's.")
+    elif r1("you") <= 0 and r1("agent") <= 0:
         bottom = "Neither your picks nor the agent's rules are in profit over this period; one period is not proof of how either would do over time."
     elif r1("you") > r1("agent") and r1("you") >= r1("nifty"):
         bottom = "Your picks did better over this period; one period is not proof of skill."

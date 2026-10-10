@@ -226,16 +226,17 @@
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target).entries()), t = (f.ticker || "").trim().toUpperCase();
     if(!t) return;
+    $("suggest").classList.remove("open"); $("rz-ticker").blur();
     $("rz-result").innerHTML = `<span class="sub">Sizing ${esc(t)}…</span>`;
     try {
       const r = await api(`/replay/api/trial/${slug}/size?ticker=${encodeURIComponent(t)}&risk_pct=${encodeURIComponent(f.risk_pct)}&max_pct=${encodeURIComponent(f.max_pct)}`);
       const c = r.round_trip_cost, note = sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct));
-      $("rz-result").innerHTML = `<div class="kv"><span>Your equity</span><span>${inr(r.equity)}</span><span>Price</span><span>${inr(r.price, 2)}</span><span>ATR(14)</span><span>${r.atr != null ? inr(r.atr, 2) + " (" + pct(r.atr_pct) + ")" : "n/a"}</span>
+      $("rz-result").innerHTML = `${r.warning ? `<div class="callout" style="margin-bottom:6px">${esc(r.warning)}</div>` : ""}<div class="kv">${r.name ? `<span>Company</span><span>${esc(r.name)}</span>` : ""}<span>Your equity</span><span>${inr(r.equity)}</span><span>Price</span><span>${inr(r.price, 2)}</span><span>ATR(14)</span><span>${r.atr != null ? inr(r.atr, 2) + " (" + pct(r.atr_pct) + ")" : "n/a"}</span>
         <span>Shares</span><span>${r.qty}</span><span>Position</span><span>${inr(r.notional)}</span><span>Stop</span><span>${inr(r.stop, 2)}</span>
         <span>Max position</span><span>${inr(r.max_notional)}</span>${c ? `<span>Round-trip cost</span><span>${inr(c.total, 2)} (${c.total_bps.toFixed(0)} bps)</span>` : ""}</div>
         <div class="sub" style="margin-top:6px">${esc(r.basis || r.reason || "")} · as of ${esc(fmtDay(r.today))}</div>
         ${note ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${esc(note)}</div>` : ""}
-        ${T.trial.ended || !r.qty ? "" : '<div class="row" style="margin-top:8px"><button type="button" class="small" id="rz-use">Use on order</button></div>'}`;
+        ${T.trial.ended || !r.qty || r.warning ? "" : '<div class="row" style="margin-top:8px"><button type="button" class="small" id="rz-use">Use on order</button></div>'}`;
       if($("rz-use")) $("rz-use").addEventListener("click", () => { $("ro-symbol").value = r.ticker; $("ro-qty").value = r.qty; $("ro-amount").value = ""; document.querySelector('#ro-form [data-side="buy"]').click(); $("ro-form").scrollIntoView({behavior: "smooth", block: "center"}); });
     } catch(e){ $("rz-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   });

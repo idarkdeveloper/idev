@@ -76,10 +76,13 @@ def step(trial: Any, until: str, *, today: str | None = None,
                     progress(f"rebalancing the agent on {day}")
                 trial.rebalance_agent()
                 report["rebalances"].append(day)
+                trial.data["rebalance_count"] = trial.data.get("rebalance_count", 0) + 1
             stops = _stops(trial, "agent", day)
             if trial.data["auto_stop"]:
                 stops += _stops(trial, "you", day)
             trial.data["stops"] = (trial.data["stops"] + stops)[-500:]
+            trial.data["agent_stop_count"] = trial.data.get("agent_stop_count", 0) + sum(
+                1 for x in stops if x["who"] == "agent" and "error" not in x)
             report["stops"] += stops
             if trial.data["dividends"] == "cash":
                 report["dividends"] += _dividends(trial, prev, day)
