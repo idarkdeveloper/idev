@@ -196,8 +196,8 @@ def test_each_watch_reason_triggers_its_line_and_healthy_holdings_are_counted(s)
                   groww=lambda: portfolio(rows))
     w = digest._watch(ctx, MON.date())
     by = {i["symbol"]: i for i in w["items"]}
-    assert any("at or below its stop" in r and "estimated from your buy price" in r for r in by["STOPPED"]["reasons"])
-    assert any("within" in r and "of its stop" in r for r in by["NEAR"]["reasons"])
+    assert any(r.startswith("below its estimated stop") and "under your buy price" in r for r in by["STOPPED"]["reasons"])
+    assert any("within" in r and "of its estimated stop" in r for r in by["NEAR"]["reasons"])
     assert any("below its 200-day average" in r for r in by["BELOW"]["reasons"])
     assert any(r.startswith("negative news: NEWS Ltd faces probe") and "(ET)" in r for r in by["NEWS"]["reasons"])
     assert sum(r.startswith("negative news") for r in by["NEWS"]["reasons"]) == 1   # old, low-confidence, positive: no
@@ -899,7 +899,7 @@ def test_near_stop_is_within_one_atr_not_a_fixed_three_percent(s):
         ctx = ctx_for(s, prices=Prices({"ONE": bars(price, step=0.002)}), groww=lambda r=rows: portfolio(r))
         w = digest._watch(ctx, MON.date())
         # the level moves with the bars' own ATR, so recompute from the same bars the digest saw
-        got = any("of its stop" in r for i in w["items"] for r in i["reasons"])
+        got = any("of its estimated stop" in r for i in w["items"] for r in i["reasons"])
         assert got is flagged, (price, level, a)
 
 
@@ -1258,3 +1258,144 @@ def test_the_notifier_is_rebuilt_only_when_its_settings_change(s, monkeypatch):
     second = get()
     assert second is not first and second.email_to == "d@e.f" and len(built) == 2
 
+
+
+# ===================== fix round 3 =====================
+def named(symbol, name, **extra):
+    return {"symbol": symbol, "name": name, **extra}
+
+
+def test_company_name_words_for_companies_in_the_data_are_allowed():
+    data = {"kind": "morning", "date": "2026-10-12", "watch": {"items": [
+        named("HDFCBANK", "HDFC Bank Limited"), named("COALINDIA", "Coal India Limited"), named("TATASTEEL", "Tata Steel Limited")]}}
+    known = {"HDFCBANK", "HDFC", "COALINDIA", "TATASTEEL", "TATA", "RELIANCE", "PAYTM", "INFOSYS"}
+    for text in ("HDFC is on the watch list.", "Coal India and Tata Steel are on the watch list.", "HDFC Bank is weak."):
+        ok, why = digest_writer.validate_summary(text, data, known)
+        assert ok, (text, why)
+    for text in ("Reliance is on the watch list.", "RELIANCE is on the watch list.", "Paytm is on the watch list.",
+                 "INFOSYS is on the watch list."):
+        assert not digest_writer.validate_summary(text, data, known)[0], text
+
+
+def test_short_term_is_plain_english_but_short_as_a_verb_is_advice():
+    data = {"kind": "evening", "date": "2026-10-12", "groww": {"holdings": []}}
+    for text in ("Short-term moves were small.", "In the short term the market is steady.", "There were no stop-loss sells today.",
+                 "One stop-loss sell happened today.", "A stop-loss sells today in practice."):
+        ok, why = digest_writer.validate_summary(text, data, set())
+        assert ok, (text, why)
+    for text in ("Short TCS.", "It is time to go short.", "Short-sell the market."):
+        assert not digest_writer.validate_summary(text, data, set())[0], text
+
+
+def seeded_mirror(s, price, high_water, avg, symbol="TCS"):
+    pb = LocalPaperBroker(s.state_dir / "mirror.json", starting_cash=100_000, price_fn=lambda x: price)
+    pb.seed([Position(symbol, 20, avg, price)])
+    pb._state["positions"][symbol]["high_water"] = high_water        # an old mirror with a high from some earlier price
+    pb._save()
+    return pb
+
+
+def test_an_old_mirror_does_not_get_a_stop_from_a_stale_high(s):
+    pb = seeded_mirror(s, 2156.0, 4210.0, 2545.0)
+    pos = pb.positions()[0]
+    assert pos.opened_at is None and pos.stop_type is None and pos.high_water == 4210.0
+    ctx = ctx_for(s, prices=Prices({"TCS": bars(2156, step=0.0)}), practice=pb)
+    w = digest._watch(ctx, MON.date())
+    why = " ".join(r for i in w["items"] for r in i["reasons"])
+    assert "4,141" not in why and "4210" not in why
+    assert "estimated stop 2,163.25 (15% under your buy price)" in why
+    # far below the buy price: say so instead of quoting a stop
+    pb2 = seeded_mirror(s, 50.0, 400.0, 152.04, "VOGL")
+    w2 = digest._watch(ctx_for(s, prices=Prices({"VOGL": bars(50, step=0.0)}), practice=pb2), MON.date())
+    assert any("down 67% from your buy price (well past any stop)" in r for i in w2["items"] for r in i["reasons"])
+    assert not any("stop 129" in r for i in w2["items"] for r in i["reasons"])
+
+
+def test_copies_with_stop_none_are_not_flagged_and_real_trailing_stops_use_the_real_high(s):
+    pb = LocalPaperBroker(s.state_dir / "copy.json", starting_cash=100_000, price_fn=lambda x: 50.0)
+    pb.copy_in([{"symbol": "CPY", "qty": 10, "avg_price": 100.0, "price": 50.0}])
+    assert pb.positions()[0].stop_type == "none" and pb.positions()[0].high_water == 100.0
+    w = digest._watch(ctx_for(s, prices=Prices({"CPY": bars(50, step=0.0)}), practice=pb), MON.date())
+    assert not any("stop" in r for i in w["items"] for r in i["reasons"])
+    price = {"v": 100.0}
+    pb2 = LocalPaperBroker(s.state_dir / "real.json", starting_cash=100_000, price_fn=lambda x: price["v"])
+    pb2.submit_order("REAL", "buy", qty=10)
+    price["v"] = 120.0
+    pb2.positions()                                                    # high-water 120
+    price["v"] = 90.0
+    w2 = digest._watch(ctx_for(s, prices=Prices({}), practice=pb2), MON.date())
+    assert any(r.startswith("below its stop 102.00 (trailing)") for i in w2["items"] for r in i["reasons"])
+    pb2.set_stop("REAL", {"type": "none", "value": None})
+    w3 = digest._watch(ctx_for(s, prices=Prices({}), practice=pb2), MON.date())
+    assert not any("stop" in r for i in w3["items"] for r in i["reasons"])
+
+
+def test_one_line_per_stock_and_place_ordered_capped_and_deduplicated(s):
+    falling = lambda n: bars(100, step=-0.002)
+    rows = [holding(f"S{i:02d}", 10, 100.0, 100.0) for i in range(20)] + [holding("TWOREASON", 10, 100.0, 80.0), holding("TCS", 10, 100.0, 80.0)]
+    table = {f"S{i:02d}": falling(0) for i in range(20)} | {"TWOREASON": bars(80, step=-0.002), "TCS": bars(80, step=-0.002)}
+    pb = LocalPaperBroker(s.state_dir / "twin.json", starting_cash=100_000, price_fn=lambda x: 80.0)
+    pb.seed([Position("TCS", 10, 100.0, 80.0)])
+    ctx = ctx_for(s, prices=Prices(table), groww=lambda: portfolio(rows), practice=pb)
+    w = digest._watch(ctx, MON.date())
+    assert len(w["items"]) == 15 and w["more"] == 7 and w["total"] == 22
+    assert {i["symbol"] for i in w["items"][:2]} == {"TCS", "TWOREASON"}        # the stocks with most reasons / biggest loss first
+    assert len({(i["symbol"], i["source"]) for i in w["items"]}) == len(w["items"])
+    tcs = [i for i in w["items"] if i["symbol"] == "TCS"]
+    assert len(tcs) == 1 and tcs[0]["source"] == "Groww" and tcs[0]["also_practice"] is True
+    assert len(tcs[0]["reasons"]) >= 2 and w["items"][2]["loss_pct"] == 0.0
+    mail = digest_render.render({**digest._header(ctx, "morning"), "mood": digest.unavailable("x"), "buy_ideas": digest.unavailable("x"),
+                                 "watch": w, "deals": digest.unavailable("x")})
+    assert "Groww (also in practice)" in mail["text"] and f"and {w['more']} more not shown." in mail["text"]
+    assert any("; " in line and line.strip().startswith("TCS") for line in mail["text"].splitlines())
+    assert mail["subject"].endswith(f"· {w['total']} to watch")
+
+
+def test_ideas_the_account_cannot_afford_are_left_out_with_one_line(s):
+    px = Prices({"APARINDS": bars(17984, step=0.003), "CHEAP": bars(100, step=0.002)})
+    practice = LocalPaperBroker(s.state_dir / "pb.json", starting_cash=179426, price_fn=lambda x: 100.0)
+    uni = [{"symbol": "APARINDS", "name": "Apar Industries", "industry": "x"}, {"symbol": "CHEAP", "name": "Cheap Ltd", "industry": "x"}]
+    ideas = digest._buy_ideas(ctx_for(s, prices=px, practice=practice, universe=lambda n: uni), False)
+    assert [i["symbol"] for i in ideas["ideas"]] == ["CHEAP"] and ideas["too_expensive"] == ["APARINDS"]
+    data = {**digest._header(ctx_for(s), "morning"), "mood": {"regime": "risk_on", "summary": "ok", "no_new_buys": False, "why": []},
+            "buy_ideas": ideas, "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}
+    text = digest_render.render(data)["text"]
+    assert "Too expensive for this account size (one share > 10% of equity): APARINDS." in text
+    assert "APARINDS" not in text.split("BUY IDEAS")[1].split("Too expensive")[0].split("Stock")[-1]
+
+
+def test_the_prompt_states_the_rule_and_the_regime_label_and_the_validator_holds_the_writer_to_it():
+    mood = {"regime": "neutral", "score": 0, "summary": "neutral (score +0, trend down)", "no_new_buys": True,
+            "why": ["Nifty is in a downtrend (50-day average below the 200-day, price below both)"]}
+    data = {"kind": "morning", "date": "2026-10-12", "mood": mood}
+    prompt = digest_writer.build_prompt("morning", data)
+    assert "Market regime label: neutral." in prompt and "New buying is OFF" in prompt
+    assert "the rule that fired: Nifty is in a downtrend" in prompt and "never call the regime risk-off or risk-on" in prompt
+    assert not digest_writer.validate_summary("The market is risk-off, so there are no new buys.", data)[0]
+    assert not digest_writer.validate_summary("It is a risk on day.", data)[0]
+    assert digest_writer.validate_summary("The market is neutral with Nifty in a downtrend, so there are no new buys.", data)[0]
+    off = {"kind": "morning", "date": "2026-10-12", "mood": {**mood, "regime": "risk_off"}}
+    assert digest_writer.validate_summary("The regime is risk-off.", off)[0]
+    assert not digest_writer.validate_summary("The regime is risk-on.", off)[0]
+
+
+def test_phone_layout_puts_the_name_under_the_symbol_and_keeps_numbers_on_one_line(s):
+    import re
+    ideas = {"universe": "X", "universe_size": 1, "scored": 1, "eligible": 1, "errors": 0, "wait": False, "too_expensive": [],
+             "equity": 100000.0, "equity_basis": "practice account equity", "sizing": "s",
+             "ideas": [{"symbol": "AAA", "name": "Anand Rathi Wealth Management Limited", "price": 1234.5, "qty": 3, "notional": 3703.5,
+                        "stop": 1100.0, "ret_6m_pct": 12.3}]}
+    watch = {"items": [{"symbol": "TCS", "source": "Groww", "price": 2156.0, "reasons": ["below its 200-day average (₹2,456)", "negative news: x"],
+                        "loss_pct": -5.0, "also_practice": True}], "total": 1, "more": 0, "healthy": 0, "checked": 1, "notes": []}
+    data = {**digest._header(ctx_for(s), "morning"), "mood": digest.unavailable("x"), "buy_ideas": ideas, "watch": watch,
+            "deals": digest.unavailable("x")}
+    mail = digest_render.render(data)
+    html, text = mail["html"], mail["text"]
+    assert ">Name</th>" not in html and "Name" in text                                  # the text part keeps its Name column
+    cell = re.search(r"<td[^>]*>AAA<div[^>]*>Anand Rathi Wealth Management Limited</div></td>", html)
+    assert cell, html
+    assert re.search(r"<td align=\"right\" style=\"[^\"]*white-space:nowrap;\">₹1,234.50</td>", html)
+    assert "width=\"640\"" not in html and "max-width:640px;width:100%" in html
+    assert re.search(r"nowrap;\">TCS · Groww \(also in practice\)</td>", html)
+    assert ">Where</th>" not in html and ">Why</th>" in html
+    assert "below its 200-day average (₹2,456); negative news: x" in html

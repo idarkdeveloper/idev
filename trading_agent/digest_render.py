@@ -29,7 +29,7 @@ def subject(data: dict[str, Any]) -> str:
         ideas = data.get("buy_ideas") or {}
         n_buy = 0 if ("unavailable" in ideas or ideas.get("wait")) else len(ideas.get("ideas", []))
         watch = data.get("watch") or {}
-        n_watch = 0 if "unavailable" in watch else len(watch.get("items", []))
+        n_watch = 0 if "unavailable" in watch else watch.get("total", len(watch.get("items", [])))
         s = f"Today: {label} · {_plural(n_buy, 'buy idea')} · {n_watch} to watch"
     else:
         g, p = data.get("groww") or {}, data.get("practice") or {}
@@ -75,25 +75,36 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         rows = [[i["symbol"], inr(i["price"], 2), str(i["qty"]), inr(i["notional"]), inr(i["stop"], 2) if i["stop"] else "n/a",
                  pct_text(i["ret_6m_pct"]), i["name"]] for i in ideas["ideas"]]
+        pricey = ideas.get("too_expensive") or []
         lines = [f"Momentum screen of {ideas['universe']}: {ideas['scored']} of {ideas['universe_size']} scored, "
                  f"{ideas['eligible']} pass (above the 200-day average, liquid)"
                  + (f"; {ideas['errors']} could not be read" if ideas["errors"] else "") + ".",
                  f"Quantity: {ideas['sizing']}, on {inr(ideas['equity'])} ({ideas['equity_basis']})."]
-        if not rows:
+        if pricey:
+            lines.append("Too expensive for this account size (one share > 10% of equity): " + ", ".join(pricey) + ".")
+        if not rows and not pricey:
             lines.append("Nothing passes the screen today.")
-        blocks.append(_block(title, lines, {"head": ["Stock", "Price", "Qty", "Cost", "Stop", "6m", "Name"], "rows": rows,
-                                            "num": [1, 2, 3, 4, 5]} if rows else None, tone="warn" if wait else None))
+        table = {"head": ["Stock", "Price", "Qty", "Cost", "Stop", "6m", "Name"], "rows": rows, "num": [1, 2, 3, 4, 5],
+                 # on a phone the company name sits under the symbol instead of squeezing the numbers
+                 "html": {"head": ["Stock", "Price", "Qty", "Cost", "Stop", "6m"], "rows": [r[:6] for r in rows],
+                          "num": [1, 2, 3, 4, 5], "sub": [r[6] for r in rows]}} if rows else None
+        blocks.append(_block(title, lines, table, tone="warn" if wait else None))
     watch = d["watch"]
     if "unavailable" in watch:
         blocks.append(_unavail("Holdings to watch or consider selling", watch))
     else:
-        rows = [[i["symbol"], i["source"], inr(i["price"], 2), r] for i in watch["items"] for r in i["reasons"]]
+        rows = [[i["symbol"], i["source"] + (" (also in practice)" if i.get("also_practice") else ""), inr(i["price"], 2),
+                 "; ".join(i["reasons"])] for i in watch["items"]]
         lines = [f"{watch['checked']} holdings checked; {watch['healthy']} with nothing to flag."] if watch["checked"] else []
         lines += [f"Note: {n}" for n in watch.get("notes", [])]
+        if watch.get("more"):
+            lines.append(f"and {watch['more']} more not shown.")
         if not watch["items"] and watch["checked"]:
             lines.insert(0, "Nothing to watch today.")
         blocks.append(_block("Holdings to watch or consider selling", lines,
-                             {"head": ["Stock", "Where", "Price", "Why"], "rows": rows, "num": [2]} if rows else None,
+                             {"head": ["Stock", "Where", "Price", "Why"], "rows": rows, "num": [2],
+                              "html": {"head": ["Stock", "Price", "Why"], "num": [1], "nowrap": [0, 1],
+                                       "rows": [[f"{r[0]} · {r[1]}", r[2], r[3]] for r in rows]}} if rows else None,
                              tone="warn" if rows else None))
     blocks.append(_deals_block(d["deals"], "New deals by followed investors"))
     return blocks
@@ -221,7 +232,7 @@ def to_html(doc: dict[str, Any]) -> str:
     font = "font-family:Arial,Helvetica,sans-serif;"
     parts = [f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;{font}">'
              '<tr><td align="center" style="padding:16px">'
-             '<table role="presentation" width="640" cellpadding="0" cellspacing="0" '
+             '<table role="presentation" cellpadding="0" cellspacing="0" '
              'style="max-width:640px;width:100%;background:#ffffff;border:1px solid #e5e7eb">'
              f'<tr><td style="padding:16px 20px;background:#111827;color:#ffffff;font-size:18px;font-weight:bold;{font}">{_e(doc["title"])}</td></tr>']
     for b in doc["blocks"]:
@@ -233,15 +244,23 @@ def to_html(doc: dict[str, Any]) -> str:
             parts.append(f'<div style="font-size:14px;color:#111827;line-height:1.45;padding-top:6px">{_e(line)}</div>')
         t = b["table"]
         if t:
-            num = set(t.get("num") or [])
-            parts.append('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;border-collapse:collapse">')
+            t = t.get("html") or t     # the phone layout may differ from the text one
+            num, nowrap, sub = set(t.get("num") or []), set(t.get("nowrap") or []), t.get("sub")
+            parts.append('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;border-collapse:collapse;width:100%">')
             parts.append("<tr>" + "".join(
                 f'<th align="{"right" if i in num else "left"}" style="font-size:12px;color:#6b7280;padding:4px 6px;border-bottom:1px solid #e5e7eb">{_e(h)}</th>'
                 for i, h in enumerate(t["head"])) + "</tr>")
-            for r in t["rows"]:
-                parts.append("<tr>" + "".join(
-                    f'<td align="{"right" if i in num else "left"}" style="font-size:13px;color:#111827;padding:4px 6px;border-bottom:1px solid #f3f4f6">{_e(c)}</td>'
-                    for i, c in enumerate(r)) + "</tr>")
+            for n, r in enumerate(t["rows"]):
+                cells = []
+                for i, c in enumerate(r):
+                    style = "font-size:13px;color:#111827;padding:4px 6px;border-bottom:1px solid #f3f4f6;vertical-align:top;"
+                    if i in num or i in nowrap:
+                        style += "white-space:nowrap;"
+                    extra = ""
+                    if i == 0 and sub and sub[n]:
+                        extra = f'<div style="font-size:11px;color:#6b7280;white-space:normal">{_e(sub[n])}</div>'
+                    cells.append(f'<td align="{"right" if i in num else "left"}" style="{style}">{_e(c)}{extra}</td>')
+                parts.append("<tr>" + "".join(cells) + "</tr>")
             parts.append("</table>")
         parts.append("</td></tr>")
     foot = "<br>".join(_e(x) for x in doc["footer"])

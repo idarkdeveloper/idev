@@ -37,6 +37,7 @@ RESULTS_DAYS = 7
 NEWS_DAYS = 2
 MAX_DEALS = 15
 MAX_NEWS = 20
+MAX_WATCH = 15
 
 
 @dataclass
@@ -62,6 +63,7 @@ class DigestContext:
     screen_budget_s: float = 240.0
     names: Any = None  # CompanyNames: the full NSE equity list (cached), for the summary's known-name check
     calendar: Any = None  # NSEHolidays-like (is_trading_day): finds the previous trading day
+    name_of: dict = field(default_factory=dict)  # symbol -> company name (from the NSE list), for the summary check
     known: set = field(default_factory=set)  # every symbol / company word seen, so a summary cannot name others
     cancel: threading.Event | None = None  # set when the build has timed out
     deadline: float | None = None  # time.monotonic() after which the build stops asking for more
@@ -271,7 +273,7 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
             equity, basis = float(ctx.practice.account().equity), "practice account equity"
         except Exception:  # noqa: BLE001
             pass
-    ideas = []
+    ideas, too_expensive = [], []
     for row in res["top"][:int(s.digest_top)]:
         price = row.get("last_close")
         if not price:
@@ -284,13 +286,16 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
         size = position_size(equity, float(price), a)
         stop = position_stop({"stop_type": "trailing", "avg_entry_price": price, "current_price": price,
                               "high_water": price}, bars)
+        if not size["qty"]:
+            too_expensive.append(row["symbol"])   # one share is more than the per-stock cap on this account
+            continue
         ideas.append({"symbol": row["symbol"], "name": clean_text(row.get("name") or "", 80), "price": round(float(price), 2),
                       "qty": size["qty"], "notional": size["notional"],
                       "stop": round(stop["level"], 2) if stop["level"] is not None else None,
                       "ret_6m_pct": _pct(row.get("ret_6m")), "ret_12_1_pct": _pct(row.get("ret_12_1")),
                       "rank": row.get("rank")})
     return {"universe": name, "universe_size": res["universe_size"], "scored": res["scored"],
-            "eligible": res["eligible"], "errors": res["errors"], "ideas": ideas, "wait": bool(no_new_buys),
+            "eligible": res["eligible"], "errors": res["errors"], "ideas": ideas, "too_expensive": too_expensive, "wait": bool(no_new_buys),
             "equity": round(equity, 2), "equity_basis": basis,
             "sizing": "1% of equity at risk on a 2x ATR move, at most 10% of equity per stock"}
 
@@ -387,7 +392,7 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
                          "price": float(h["price"]), "exchange": h.get("exchange"),
                          "pos": {"stop_type": "trailing", "avg_entry_price": h["avg_price"],
                                  "current_price": h["price"], "high_water": h["avg_price"]},
-                         "estimated": True})
+                         "estimated": True, "avg": h["avg_price"]})
     if no_price:
         notes.append(f"{no_price} Groww holding(s) without a market price (bonds or unlisted) were not checked")
     if ctx.practice is None:
@@ -397,8 +402,14 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
             for p in ctx.practice.positions():
                 if p.current_price is None:
                     continue
-                holdings.append({"symbol": p.symbol, "name": None, "source": "Practice", "qty": p.qty,
-                                 "price": float(p.current_price), "pos": p, "estimated": False})
+                # A copy from Groww, or an old mirror, was never bought here: its stored high-water mark is not "the
+                # highest price since entry", so a stop is estimated from the buy price like a Groww holding.
+                est = p.source == "groww" or p.opened_at is None
+                pos: Any = ({"stop_type": p.stop_type, "stop_value": p.stop_value, "avg_entry_price": p.avg_entry_price,
+                             "current_price": p.current_price, "high_water": p.avg_entry_price} if est else p)
+                holdings.append({"symbol": p.symbol, "name": ctx.name_of.get(p.symbol.upper()), "source": "Practice",
+                                 "qty": p.qty, "price": float(p.current_price), "pos": pos, "estimated": est,
+                                 "avg": p.avg_entry_price})
         except Exception as e:  # noqa: BLE001
             notes.append(f"Practice account: unavailable ({type(e).__name__}: {e})")
     if g_info.get("unavailable") and ctx.practice is None:
@@ -427,14 +438,21 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
             st = position_stop(h["pos"], bars)
             level = st["level"]
             if level is not None and price is not None:
-                est = " (estimated from your buy price)" if h["estimated"] else ""
                 a = atr(bars) if bars else None
                 near = min(a, NEAR_STOP * level) if a else NEAR_STOP * level   # 1 ATR, but never more than 3%
+                avg = h["avg"]
+                if h["estimated"]:
+                    what = "its estimated stop"
+                    rule = "15% under your buy price" if abs(level - avg * 0.85) < 0.005 * avg else "3 ATR under your buy price"
+                else:
+                    what, rule = "its stop", st["label"]
                 if price <= level:
-                    reasons.append(f"price {num(price, 2)} is at or below its stop {num(level, 2)}{est}")
+                    if h["estimated"] and price < level * 0.75 and price < avg:
+                        reasons.append(f"down {(1 - price / avg) * 100:.0f}% from your buy price (well past any stop)")
+                    else:
+                        reasons.append(f"below {what} {num(level, 2)} ({rule})")
                 elif price - level <= near:
-                    reasons.append(f"price {num(price, 2)} is within {num(price - level, 2)} "
-                                   f"({(price / level - 1) * 100:.1f}%) of its stop {num(level, 2)}{est}")
+                    reasons.append(f"within {num(price - level, 2)} ({(price / level - 1) * 100:.1f}%) of {what} {num(level, 2)} ({rule})")
         except Exception as e:  # noqa: BLE001
             notes.append(f"{sym}: stop level unavailable ({type(e).__name__})")
         if bars:
@@ -464,10 +482,21 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
                     notes.append(f"Results dates: unavailable ({ann_err[0]})")
         if reasons:
             items.append({"symbol": sym, "name": clean_text(h.get("name") or "", 80), "source": h["source"],
-                          "price": round(price, 2), "reasons": reasons})
+                          "price": round(price, 2), "reasons": reasons, "loss_pct": round((price / h["avg"] - 1) * 100, 2)})
         else:
             healthy += 1
-    return {"items": items, "healthy": healthy, "checked": len(holdings), "notes": [clean_text(n, 300) for n in notes]}
+    # one line per stock and place; a practice position with the same reasons as its Groww twin is shown once
+    groww = {i["symbol"]: i for i in items if i["source"] == "Groww"}
+    kept = []
+    for i in items:
+        twin = groww.get(i["symbol"]) if i["source"] == "Practice" else None
+        if twin is not None and set(twin["reasons"]) == set(i["reasons"]):
+            twin["also_practice"] = True
+        else:
+            kept.append(i)
+    kept.sort(key=lambda i: (-len(i["reasons"]), i["loss_pct"]))   # most reasons first, then the biggest loss
+    return {"items": kept[:MAX_WATCH], "total": len(kept), "more": max(0, len(kept) - MAX_WATCH), "healthy": healthy,
+            "checked": len(holdings), "notes": [clean_text(n, 300) for n in notes]}
 
 
 def _within_days(published: Any, now: datetime, days: float) -> bool:
@@ -512,7 +541,8 @@ def _deals(ctx: DigestContext, kind: str, today: date) -> dict[str, Any]:
         keep = [t for t in trades if t.report_date >= since.isoformat()]
     keep.sort(key=lambda t: (t.report_date, t.transaction_date), reverse=True)
     rows = [{"investor": clean_text(t.investor, 80), "who": [clean_text(n, 60) for n in followed_names(t.investor, s.investors)],
-             "ticker": clean_text(t.ticker, 20), "transaction": clean_text(t.transaction, 20),
+             "ticker": clean_text(t.ticker, 20), "name": clean_text(ctx.name_of.get(t.ticker.upper()) or "", 80),
+             "transaction": clean_text(t.transaction, 20),
              "size": clean_text(t.size, 60), "reported": t.report_date, "traded": t.transaction_date}
             for t in keep[:MAX_DEALS]]
     return {"since": since.isoformat(), "deals": rows, "total": len(keep), "following": list(s.investors)}
@@ -540,6 +570,7 @@ def load_known(ctx: DigestContext) -> None:
     try:
         for sym, name in ctx.names._nse_names().items():
             _remember(ctx, sym, name)
+            ctx.name_of[sym] = name
     except Exception as e:  # noqa: BLE001
         log.warning("digest: the NSE equity list is unavailable for the name check: %s", e)
 
