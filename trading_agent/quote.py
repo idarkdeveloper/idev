@@ -63,6 +63,8 @@ def build_quote(ticker: str, parsed: dict[str, Any], *, fetched_at: float) -> di
     dy, pe = parsed.get("dividend_yield"), parsed.get("pe")
     if dy is not None and dy < 0:
         dy = None
+    elif dy is not None and dy > 0.25:   # quoteSummary gives a fraction; some Yahoo feeds give a percent (2.3 = 2.3%)
+        dy = dy / 100 if dy <= 25 else None
     out.update(
         fund=fund,
         pe=None if fund or pe is None or pe <= 0 else round(pe, 2),

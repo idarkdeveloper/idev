@@ -81,3 +81,8 @@ def test_quote_endpoint(server):  # noqa: F811
     assert _get(base + "/api/quote")[0] == 400
     assert _get(base + "/api/quote?ticker=")[0] == 400
     assert _get(base + "/api/quote?ticker=bad%20ticker!")[0] == 400
+
+
+def test_dividend_yield_fraction_or_percent():
+    as_text = lambda dy: build_quote("ABC", parse_summary(summary(dy=dy)), fetched_at=1.0)["dividend_yield_text"]  # noqa: E731
+    assert as_text(0.0123) == "1.23%" and as_text(2.3) == "2.30%" and as_text(80.0) is None
