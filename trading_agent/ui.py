@@ -28,7 +28,7 @@ from urllib.parse import urlparse
 
 from . import taxes
 from .broker import AlreadyCopied, Broker, LocalPaperBroker
-from .config import Settings, load_settings, parse_investors
+from .config import Settings, load_settings, parse_hhmm, parse_investors
 from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
@@ -37,6 +37,7 @@ from .runner import (check, free_prices, make_broker, equity_key, make_data_sour
                      make_practice_broker, read_groww_portfolio)
 from .state import STATE_LOCK, State
 from .stops import FILLS_KEY, PracticeStopChecker
+from .digest_schedule import build_digest, make_scheduler
 from .watch import Watcher
 
 log = logging.getLogger(__name__)
@@ -56,6 +57,11 @@ EDITABLE_ENV_KEYS = {
     "notify_webhook_url": "NOTIFY_WEBHOOK_URL",
     "market": "MARKET",
     "paper_starting_cash": "PAPER_STARTING_CASH",
+    # The daily emails (digest.py), sent by the watch service
+    "digest_morning_on": "DIGEST_MORNING_ON",
+    "digest_evening_on": "DIGEST_EVENING_ON",
+    "digest_morning": "DIGEST_MORNING",
+    "digest_evening": "DIGEST_EVENING",
     # Only has an effect when GROWW_LIVE_ORDERS=true, which the dashboard can never set.
     "groww_gtt_stops": "GROWW_GTT_STOPS",
 }
@@ -392,6 +398,10 @@ class App:
                 "notify_webhook_url": s.notify_webhook_url or "",
                 "paper_starting_cash": s.paper_starting_cash,
                 "groww_gtt_stops": s.groww_gtt_stops,
+                "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
+                "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
+                "digest_enabled": s.digest_enabled,
+                "digest_channel": bool(s.resend_api_key and s.notify_email_to) or bool(s.notify_webhook_url),
                 "max_slippage_pct": s.max_slippage_pct,
                 "demo": self.demo_trades is not None,
             },
@@ -643,11 +653,16 @@ class App:
                 except GrowwTokenUnavailable as e:  # live mode, Groww refusing a token: watch alerts-only for now
                     warn_token_block_once(e, log)
                     wbroker = None
+                notifier = make_notifier(self.settings)
                 self.watcher = Watcher(
                     self.settings, every=every or 60, data=self.data, broker=wbroker,
                     broker_factory=lambda: self.broker,
-                    notifier=make_notifier(self.settings), prices=self.prices,
+                    notifier=notifier, prices=self.prices,
                     auto_exit=want_exit, holidays=self.holidays,
+                    digest=make_scheduler(self.settings, notifier, data=self.data, prices=self.prices,
+                                          news=self.news, holidays=self.holidays,
+                                          practice=wbroker if isinstance(wbroker, LocalPaperBroker) else None,
+                                          groww=lambda: self.my_portfolio(), context=self.context),
                     # No Claude key: compare deals only, instead of failing every tick.
                     check_fn=lambda: check(self.settings, trades=self.deals(refresh=True), broker=self.broker,
                                            data=self.data, notifier=make_notifier(self.settings),
@@ -1043,7 +1058,10 @@ class App:
             if key in ("watch_investors", "watch_investor"):   # the page sends one comma list; line breaks are never a separator here
                 for item in (value if isinstance(value, (list, tuple)) else [value]):
                     _check_env_value(env_key, item)
-            if key in ("auto_trade", "groww_gtt_stops"):
+            if key in ("digest_morning", "digest_evening"):
+                value = parse_hhmm(value)   # ValueError (a 400) when it is not HH:MM
+                ops.append(lambda k=key, v=value: setattr(st, k, v))
+            elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
                 value = "true" if value in (True, "true", "1", 1, "on") else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
@@ -1262,6 +1280,24 @@ class App:
         self._my_portfolio, self._my_portfolio_at = out, time.time()
         return out
 
+    def digest_preview(self, kind: str, with_summary: bool = False) -> dict[str, Any]:
+        """The morning or evening email as it would be sent now, for the Settings dialog. Works on the Live and
+        Demo pages (read-only; nothing is sent). The written summary is only made on request, since it can use
+        Ollama or your Claude credit. On the offline sample dashboard the sections that need real data say so."""
+        from .digest import DigestContext, make_context
+        if kind not in ("morning", "evening"):
+            raise ValueError("kind must be morning or evening")
+        root = self._parent or self
+        if root.demo_trades is not None:   # the offline sample: no network, no real holdings
+            ctx = DigestContext(settings=root.settings, practice=root.broker,
+                                state_path=root.settings.state_dir / "state.json")
+        else:
+            ctx = make_context(root.settings, data=root.data, prices=root.prices, news=root.news,
+                               holidays=root.holidays, context=root.context, groww=lambda: root.my_portfolio(),
+                               practice=root._practice)
+        email = build_digest(kind, ctx, writer=None if with_summary else "none")
+        return {k: email[k] for k in ("subject", "text", "html", "writer")}
+
     def groww_test(self) -> dict[str, Any]:
         """Check Groww credentials end to end without ever returning the token."""
         from .groww import GrowwBroker
@@ -1343,9 +1379,12 @@ def _check_type(key: str, value: Any) -> None:
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops"):
+    elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
         if isinstance(value, (list, tuple, dict)):
             raise ValueError(f"{key} must be true or false")
+    elif key in ("digest_morning", "digest_evening"):
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a time as text, HH:MM")
     elif key == "paper_starting_cash":
         if isinstance(value, (bool, list, tuple, dict)):
             raise ValueError("starting cash must be a number")
@@ -1574,6 +1613,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json(app.reset_to_groww())
                 elif path == "/api/close":
                     self._json({"ok": True, "order": app.close_position(str(body.get("symbol", "")))})
+                elif path == "/api/digest/preview":
+                    self._json(app.digest_preview(str(body.get("kind") or ""), bool(body.get("summary"))))
                 elif path == "/api/groww-test":
                     self._json(app.groww_test())
                 elif path == "/api/factor-backtest":

@@ -34,6 +34,15 @@ def _bool(value: str | None, default: bool = False) -> bool:
 
 
 MAX_INVESTORS = 10
+DIGEST_WRITERS = ("auto", "ollama", "claude", "none")
+
+
+def parse_hhmm(value: object) -> str:
+    """"9:05" or "09:05" as "09:05"; ValueError with a plain message for anything that is not a time of day."""
+    m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", str(value))
+    if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+        raise ValueError("enter a time as HH:MM, for example 09:00")
+    return f"{int(m.group(1)):02d}:{m.group(2)}"
 
 
 def parse_investors(raw: "str | list[str] | tuple[str, ...] | None") -> list[str]:
@@ -111,6 +120,16 @@ class Settings:
     news_claude_model: str = "claude-haiku-4-5"
     # Everyone followed, from INVESTORS. Empty means "just watch_investor" (the single-name setting).
     watch_investors: list[str] = field(default_factory=list)
+    # Daily emails (digest.py): a morning "today" brief and an evening "close" report, sent by the watch service.
+    digest_enabled: bool = True  # still needs an email or webhook channel
+    digest_morning_on: bool = True
+    digest_evening_on: bool = True
+    digest_morning: str = "09:00"  # IST, HH:MM
+    digest_evening: str = "15:45"
+    digest_universe: str = "NIFTYMIDCAP150"
+    digest_top: int = 10
+    digest_writer: str = "auto"  # auto (Ollama, then Claude) | ollama | claude | none
+    digest_claude_model: str = "claude-sonnet-5-5"
 
     def __post_init__(self) -> None:
         self.watch_investors = list(self.watch_investors)  # never shared between copies of the settings
@@ -175,6 +194,17 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
     news_tagger = (env("NEWS_TAGGER") or "auto").lower()
     if news_tagger not in {"auto", "ollama", "claude", "none"}:
         raise SystemExit(f"NEWS_TAGGER must be auto, ollama, claude or none, got {news_tagger!r}")
+    digest_writer = (env("DIGEST_WRITER") or "auto").lower()
+    if digest_writer not in DIGEST_WRITERS:
+        raise SystemExit(f"DIGEST_WRITER must be auto, ollama, claude or none, got {digest_writer!r}")
+    try:
+        digest_top = int(env("DIGEST_TOP") or 10)
+        digest_morning = parse_hhmm(env("DIGEST_MORNING") or "09:00")
+        digest_evening = parse_hhmm(env("DIGEST_EVENING") or "15:45")
+    except ValueError as e:
+        raise SystemExit(f"DIGEST_TOP must be a whole number and DIGEST_MORNING / DIGEST_EVENING a time (HH:MM): {e}") from None
+    if not 1 <= digest_top <= 50:
+        raise SystemExit(f"DIGEST_TOP must be between 1 and 50, got {digest_top}")
     data_source = (env("DATA_SOURCE") or ("nse" if market == "in" else "quiver")).lower()
     default_investor = "ASHISH KACHOLIA" if market == "in" else "Nancy Pelosi"
     raw_investors = (env("INVESTORS") or "").strip()
@@ -218,4 +248,13 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),
         ollama_model=env("OLLAMA_MODEL") or "qwen2.5:3b",
         news_claude_model=env("NEWS_CLAUDE_MODEL") or "claude-haiku-4-5",
+        digest_enabled=_bool(env("DIGEST_ENABLED"), True),
+        digest_morning_on=_bool(env("DIGEST_MORNING_ON"), True),
+        digest_evening_on=_bool(env("DIGEST_EVENING_ON"), True),
+        digest_morning=digest_morning,
+        digest_evening=digest_evening,
+        digest_universe=(env("DIGEST_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),
+        digest_top=digest_top,
+        digest_writer=digest_writer,
+        digest_claude_model=env("DIGEST_CLAUDE_MODEL") or "claude-sonnet-5-5",
     )

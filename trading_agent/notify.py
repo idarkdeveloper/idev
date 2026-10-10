@@ -48,7 +48,7 @@ class Notifier:
             out.append("webhook")
         return out
 
-    def send(self, subject: str, body: str) -> list[str]:
+    def send(self, subject: str, body: str, html: str | None = None) -> list[str]:
         delivered = ["console"]
         print(f"\n=== {subject} ===\n{body}\n")
         if "email" in self.channels:
@@ -56,8 +56,8 @@ class Notifier:
                 r = self.session.post(
                     "https://api.resend.com/emails",
                     headers={"Authorization": f"Bearer {self.resend_api_key}"},
-                    json={"from": self.email_from, "to": [self.email_to],
-                          "subject": subject, "text": body},
+                    json={"from": self.email_from, "to": [self.email_to], "subject": subject, "text": body,
+                          **({"html": html} if html else {})},
                     timeout=30,
                 )
                 r.raise_for_status()

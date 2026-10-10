@@ -767,10 +767,15 @@ def cmd_watch(args: argparse.Namespace) -> int:
         from .news import NewsService
         from .instruments import CompanyNames
         news = NewsService(settings, names=CompanyNames(settings.state_dir / "cache"))
-    w = Watcher(settings, every=args.every, news=news, window=(args.window_start, args.window_end),
+    from .broker import LocalPaperBroker
+    from .digest_schedule import make_scheduler
+    holidays = _market_holidays(settings)
+    digest = make_scheduler(settings, notifier, data=data, prices=free_prices(settings), news=news, holidays=holidays,
+                            practice=broker if isinstance(broker, LocalPaperBroker) else None)
+    w = Watcher(settings, every=args.every, news=news, digest=digest, window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
                 auto_exit=settings.auto_trade,
-                holidays=_market_holidays(settings), broker_factory=lambda: make_broker(settings),
+                holidays=holidays, broker_factory=lambda: make_broker(settings),
                 check_fn=lambda: check(settings, broker=w._broker, data=data, notifier=notifier,
                                        dry_run=not settings.anthropic_api_key))
     print(f"Watching {', '.join(settings.investors)} every {w.every}s, {args.window_start}-{args.window_end} IST, "
@@ -779,6 +784,32 @@ def cmd_watch(args: argparse.Namespace) -> int:
         w.run_forever()
     except KeyboardInterrupt:
         pass
+    return 0
+
+
+def cmd_digest(args: argparse.Namespace) -> int:
+    """Print today's morning or evening email (rules, plus the written summary unless --writer none); --send
+    emails it through the configured channels. Never places an order."""
+    from .digest_schedule import build_digest, make_context, send_digest
+    from .runner import make_data_source, make_notifier
+    settings = _settings(args)
+    try:
+        data = make_data_source(settings)
+    except SystemExit:
+        data = None
+    holidays = _market_holidays(settings)
+    ctx = make_context(settings, data=data, holidays=holidays)
+    email = build_digest(args.kind, ctx, writer=args.writer)
+    print(f"Subject: {email['subject']}" + chr(10))
+    print(email["text"])
+    if args.send:
+        notifier = make_notifier(settings)
+        if set(notifier.channels) == {"console"}:
+            print("Not sent: no email (RESEND_API_KEY + NOTIFY_EMAIL_TO) or webhook is configured.", file=sys.stderr)
+            return 1
+        delivered = send_digest(notifier, email)
+        print(f"Sent via: {', '.join(d for d in delivered if d != 'console') or 'nothing (delivery failed)'}")
+        return 0 if set(delivered) - {"console"} else 1
     return 0
 
 
@@ -930,6 +961,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--window-end", default="18:30", help="IST, HH:MM")
     sp.add_argument("--auto-trade", action="store_true", help="allow paper orders")
     sp.set_defaults(func=cmd_watch)
+    sp = sub.add_parser("digest", help="print (and with --send, email) the morning or evening digest")
+    sp.add_argument("kind", choices=["morning", "evening"])
+    sp.add_argument("--send", action="store_true", help="email it through the configured channels")
+    sp.add_argument("--writer", choices=["auto", "ollama", "claude", "none"],
+                    help="who writes the summary on top (default DIGEST_WRITER); none = rules only")
+    sp.set_defaults(func=cmd_digest)
     sp = sub.add_parser("ui", help="open the local web dashboard")
     sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--port", type=int, default=8787)

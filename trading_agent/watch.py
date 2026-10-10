@@ -52,7 +52,8 @@ class Watcher:
                  data: Any | None = None, broker: Any | None = None, notifier: Any | None = None,
                  weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False,
                  holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
-                 news: Any | None = None, broker_factory: Callable[[], Any] | None = None):
+                 news: Any | None = None, broker_factory: Callable[[], Any] | None = None,
+                 digest: Any | None = None):
         self.settings = settings
         self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
         self._blocked_until: datetime | None = None
@@ -70,6 +71,7 @@ class Watcher:
         self._data = data
         self._warned_no_tagger = False
         self._news = news  # NewsService: negative headlines for held stocks
+        self._digest = digest  # DigestScheduler: the morning and evening emails (own worker thread)
         self._broker = broker
         self._notifier = notifier
         self._stop = threading.Event()
@@ -297,6 +299,11 @@ class Watcher:
     def tick(self, force: bool = False) -> dict[str, Any]:
         now = datetime.now(self.tz)
         info: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "in_window": self.market_window_open(now)}
+        if self._digest is not None:  # on its own schedule, whatever the market window; returns at once
+            try:
+                info["digest"] = self._digest.tick(now)
+            except Exception:  # noqa: BLE001 - the emails never stop the watch
+                log.exception("daily email check failed")
         if self._awake is not None and info["in_window"] != self._awake_on:
             self._awake(info["in_window"])
             self._awake_on = info["in_window"]

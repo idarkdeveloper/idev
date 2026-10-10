@@ -240,6 +240,17 @@
     <div class="group"><span class="group-title">Stop-losses at Groww</span>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-gtt" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-gtt" style="color:var(--ink)">Keep a GTT stop-loss at Groww for each live holding</label><div class="sub" id="f-gtt-note">A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Only acts when GROWW_LIVE_ORDERS=true.</div></div></div>
     </div>
+    <div class="group"><span class="group-title">Daily emails</span>
+      <div class="sub" id="f-dg-note">Sent by the watch service on NSE trading days to your email or webhook. They never place an order.</div>
+      <div class="grid2">
+        <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-am" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-am" style="color:var(--ink)">Morning: what to buy and watch</label></div>
+          <label for="f-dg-am-t">Send after (IST)</label><input id="f-dg-am-t" name="digest_morning" type="time" value="09:00"></div>
+        <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-pm" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-pm" style="color:var(--ink)">Evening: your close report</label></div>
+          <label for="f-dg-pm-t">Send after (IST)</label><input id="f-dg-pm-t" name="digest_evening" type="time" value="15:45"></div>
+      </div>
+      <div class="row"><button type="button" class="small" id="btn-dg-morning">Preview morning</button><button type="button" class="small" id="btn-dg-evening">Preview evening</button>
+        <input type="checkbox" id="dg-summary" style="width:20px;height:20px;min-height:20px;margin:0"><label for="dg-summary" class="sub">with the written summary (uses Ollama, then Claude)</label></div>
+    </div>
     <div class="group"><span class="group-title">Order mode</span>
       <div class="radio"><input type="radio" name="auto_trade" value="false" id="m-reco"><div><label for="m-reco" style="font-size:15px;color:var(--ink)">Recommendations only</label><div class="sub">Claude explains what changed. Nothing is bought or sold.</div></div></div>
       <div class="radio"><input type="radio" name="auto_trade" value="true" id="m-paper"><div><label for="m-paper" style="font-size:15px;color:var(--ink)">Paper trading</label><div class="sub">Claude places simulated orders, max 10% of equity each, whole shares.</div></div></div>
@@ -249,6 +260,13 @@
       <div class="row"><button type="button" class="small" id="btn-groww-test">Test Groww connection</button><span class="sub" id="groww-test-result"></span></div></div>
     <div class="row group" style="flex-direction:row"><button type="button" class="danger small" id="btn-reset">Forget seen deals</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
   </form>
+</dialog>
+<dialog id="dg-dlg">
+  <div class="form">
+    <div class="row"><div class="dialog-title" id="dg-title">Email preview</div><button type="button" class="small" style="margin-left:auto" id="dg-close">Close</button></div>
+    <div class="sub" id="dg-sub"></div>
+    <iframe id="dg-frame" title="Email preview" sandbox="" style="width:100%;height:60vh;border:1px solid var(--color-divider)"></iframe>
+  </div>
 </dialog>
 <div class="suggest" id="suggest" role="listbox" aria-label="Matching companies"></div>
 <div class="toast" id="toast"></div>
@@ -1223,6 +1241,9 @@
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
     $("f-gtt").checked = !!s.groww_gtt_stops;
+    $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on;
+    $("f-dg-am-t").value = s.digest_morning || "09:00"; $("f-dg-pm-t").value = s.digest_evening || "15:45";
+    $("f-dg-note").textContent = s.digest_channel ? "Sent by the watch service on NSE trading days to your email or webhook. They never place an order." : "Add RESEND_API_KEY with an email address (or a webhook) above, or nothing is sent. Preview still works.";
     $("f-gtt-note").textContent = c.groww_live_orders ? "A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Uses REAL orders on Groww." : "Saved, but inactive: GROWW_LIVE_ORDERS is not true in .env, so no GTT orders are placed.";
     $("groww-test-result").textContent = c.groww_credentials ? "" : "No Groww keys in .env";
     $("conns").innerHTML = [
@@ -1234,10 +1255,22 @@
     ].join("");
     $("dlg").showModal();
   });
+  async function digestPreview(kind){
+    const b = $("btn-dg-" + kind); b.disabled = true; const was = b.textContent; b.textContent = "Building…";
+    try {
+      const j = await api("/api/digest/preview", {kind, summary: $("dg-summary").checked});
+      $("dg-title").textContent = j.subject; $("dg-sub").textContent = j.writer && j.writer !== "none" ? "Summary written by " + j.writer : "Rules only, no written summary";
+      $("dg-frame").srcdoc = j.html; $("dg-dlg").showModal();
+    } catch(e){ toast(e.message); }
+    finally { b.disabled = false; b.textContent = was; }
+  }
+  $("btn-dg-morning").addEventListener("click", () => digestPreview("morning"));
+  $("btn-dg-evening").addEventListener("click", () => digestPreview("evening"));
+  $("dg-close").addEventListener("click", () => $("dg-dlg").close());
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked;
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked;
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);
