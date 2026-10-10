@@ -64,6 +64,7 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
         lines = [mood["summary"] or str(mood["regime"]).replace("_", "-")]
         if mood.get("no_new_buys"):
             lines.insert(0, "No new buys today: " + " and ".join(mood.get("why") or ["the market filter says wait"]) + ".")
+            lines.insert(1, "Rule: " + (mood.get("rules") or "the market filter") + ".")
         lines += [f"Note: {n}" for n in mood.get("notes", [])]
         blocks.append(_block("Market mood", lines, tone="bad" if mood.get("no_new_buys") else None))
     ideas = d["buy_ideas"]
@@ -122,6 +123,7 @@ def _evening_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
             lines.insert(0, "Today's change is unavailable (no previous close).")
         if g.get("saved"):
             lines.insert(0, "Using " + g["saved"] + ".")
+        lines.append("Today's buys appear in your holdings from the next day (T+1 settlement).")
         if g["no_price"]:
             lines.append("Without a market price (bonds or unlisted), not counted: " + ", ".join(g["no_price"]) + ".")
         if g["no_prev_close"]:
@@ -137,7 +139,9 @@ def _evening_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
     else:
         lines = [f"Equity {inr(p['equity'])}, cash {inr(p['cash'])}.",
                  (f"Today {inr(p['day_change'], 0, True)} ({pct_text(p['day_change_pct'])})." if p["day_change"] is not None
-                  else "Today's change is unavailable (no earlier equity point)."),
+                  else (f"No equity point from the previous trading day; since {p['since']}: {inr(p['since_change'], 0, True)} "
+                        f"({pct_text(p['since_change_pct'])})." if p.get("since") else
+                        "Today's change is unavailable (no earlier equity point).")),
                  f"Since the start {inr(p['total_pl'], 0, True)} ({pct_text(p['total_pl_pct'])})."]
         for f in p["stop_fills_today"]:
             lines.append(f"Stop hit today: sold {f['qty']:g} {f['symbol']} at {inr(f['price'], 2)} (stop {inr(f['stop'], 2)}, {f['label']}).")

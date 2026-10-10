@@ -64,7 +64,7 @@ const portfolio = {linked: true, at: "2026-10-10T10:00:00+00:00", holdings: [{sy
   {symbol: "LAURUSLABS", qty: 50, sellable_qty: 50, avg_price: 90, price: 100, invested: 4500, value: 5000, pl: 500, pl_pct: 0.1, kind: "equity"}], invested: 100, value: 110, pl: 10, pl_pct: 0.1, unpriced: []};
 
 if (savedMode) Object.assign(portfolio, {source: "saved", saved_at: "2026-10-09T15:40:00+05:30", blocked_until: "2026-10-10T14:30:00+05:30",
-  reason: "Groww refused a new login token (429 Too Many Requests).", prices: "yahoo (delayed)"});
+  reason: "Groww refused a new login token (429 Too Many Requests).", prices: "yahoo (delayed)", age_trading_days: 3, source_note: "from your CAS statement"});
 const preview = {symbol: "TCS", basis: "groww", in_practice: false, held: 1, qty: 1, price: 110, avg_price: 100, long_term: false,
   held_over_year: false, sale_value: 110, charges: 30, proceeds: 80, cost: 100, realised_pl: -20, fy: "2026-27",
   tax: {estimate: 0, fy: "2026-27"}, tax_text: "A loss, so no tax on this sale.", holding_note: "Groww gives no buy date.",

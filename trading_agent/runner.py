@@ -205,23 +205,30 @@ def _assemble(entries: list[dict[str, Any]], stamp: str) -> dict[str, Any]:
 
 def save_groww_snapshot(settings: Settings, rows: list[dict[str, Any]]) -> None:
     """Remember the holdings (no prices, no tokens or keys) so the page and the daily emails still work while
-    Groww refuses a login. Atomic, owner-only; a failure to save is logged, never raised."""
+    Groww refuses a login. Written beside the file and swapped in, owner-only from the moment it is created; a
+    failure to save is logged, never raised. A ``source_note`` already in the file (a statement the user loaded)
+    is dropped: this snapshot is Groww's own."""
     import json
     import os
+    import threading
     from datetime import datetime
-    from .state import atomic_write
     from .timezones import IST
     path = settings.state_dir / SNAPSHOT_FILE
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         body = {"saved_at": datetime.now(IST).isoformat(timespec="seconds"),
                 "holdings": [{k: r.get(k) for k in _SNAPSHOT_KEYS} for r in rows]}
-        atomic_write(path, json.dumps(body, indent=2))
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(body, indent=2))
+        os.replace(tmp, path)
     except Exception as e:  # noqa: BLE001
         log.warning("could not save the Groww holdings snapshot: %s", e)
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def load_groww_snapshot(settings: Settings) -> dict[str, Any] | None:
@@ -230,9 +237,30 @@ def load_groww_snapshot(settings: Settings) -> dict[str, Any] | None:
         data = json.loads((settings.state_dir / SNAPSHOT_FILE).read_text(encoding="utf-8"))
         rows = [r for r in data["holdings"] if isinstance(r, dict) and r.get("symbol")
                 and isinstance(r.get("qty"), (int, float)) and isinstance(r.get("avg_price"), (int, float))]
-        return {"saved_at": str(data["saved_at"]), "holdings": rows}
-    except (OSError, ValueError, KeyError, TypeError):
+        out = {"saved_at": str(data["saved_at"]), "holdings": rows}
+        if isinstance(data.get("source_note"), str) and data["source_note"].strip():
+            out["source_note"] = " ".join(data["source_note"].split())[:200]
+        return out
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
+
+
+def trading_days_old(saved_at: str, now: Any = None) -> int | None:
+    """Weekdays after the day the snapshot was saved, up to today (IST); None when the time cannot be read.
+    Exchange holidays are not known here, so a holiday counts as a day."""
+    from datetime import datetime, timedelta
+    from .timezones import IST
+    try:
+        saved = datetime.fromisoformat(saved_at)
+        saved = (saved if saved.tzinfo else saved.replace(tzinfo=IST)).astimezone(IST).date()
+    except ValueError:
+        return None
+    today = (now or datetime.now(IST)).astimezone(IST).date()
+    d, n = saved, 0
+    while d < today:
+        d += timedelta(days=1)
+        n += d.weekday() < 5
+    return n
 
 
 def _from_snapshot(settings: Settings, prices: Any, bse: Any, reason: str, error_extra: dict[str, Any]) -> dict[str, Any] | None:
@@ -250,7 +278,10 @@ def _from_snapshot(settings: Settings, prices: Any, bse: Any, reason: str, error
         entries.append({**{k: r.get(k) for k in _SNAPSHOT_KEYS}, "price": price})
     out = _assemble(entries, snap["saved_at"])
     out.update({"source": "saved", "saved_at": snap["saved_at"], "reason": reason,
-                "prices": "yahoo (delayed)", **error_extra})
+                "prices": "yahoo (delayed)", "age_trading_days": trading_days_old(snap["saved_at"]),
+                **error_extra})
+    if snap.get("source_note"):
+        out["source_note"] = snap["source_note"]
     return out
 
 
@@ -266,7 +297,7 @@ def read_groww_portfolio(settings: Settings, prices: Any, stamp: str = "") -> di
     from .instruments import CompanyNames, nse_then_bse
     bse = YahooPrices(suffix=".BO", cache_dir=settings.state_dir / "cache")
     if not settings.has_groww_credentials:
-        return _from_snapshot(settings, prices, bse, "Groww is not linked", {}) or {"linked": False}
+        return {"linked": False}   # no credentials: a leftover snapshot is not shown
     failure: dict[str, Any]
     try:
         g = GrowwBroker(resolve_groww_token(settings), live_orders=False, exchange=settings.groww_exchange,

@@ -37,6 +37,19 @@ MAX_INVESTORS = 10
 DIGEST_WRITERS = ("auto", "ollama", "claude", "none")
 
 
+DIGEST_TIME_RANGE = {"morning": ("06:00", "11:59"), "evening": ("15:30", "19:59")}
+
+
+def parse_digest_time(kind: str, value: object) -> str:
+    """HH:MM for the morning or evening email, inside the hours that make sense for it (the morning one is sent
+    before the market opens, the evening one after it closes). ValueError with a plain message otherwise."""
+    t = parse_hhmm(value)
+    lo, hi = DIGEST_TIME_RANGE[kind]
+    if not lo <= t <= hi:
+        raise ValueError(f"the {kind} email can be sent between {lo} and {hi} IST")
+    return t
+
+
 def parse_hhmm(value: object) -> str:
     """"9:05" or "09:05" as "09:05"; ValueError with a plain message for anything that is not a time of day."""
     m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", str(value))
@@ -199,10 +212,10 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         raise SystemExit(f"DIGEST_WRITER must be auto, ollama, claude or none, got {digest_writer!r}")
     try:
         digest_top = int(env("DIGEST_TOP") or 10)
-        digest_morning = parse_hhmm(env("DIGEST_MORNING") or "09:00")
-        digest_evening = parse_hhmm(env("DIGEST_EVENING") or "15:45")
+        digest_morning = parse_digest_time("morning", env("DIGEST_MORNING") or "09:00")
+        digest_evening = parse_digest_time("evening", env("DIGEST_EVENING") or "15:45")
     except ValueError as e:
-        raise SystemExit(f"DIGEST_TOP must be a whole number and DIGEST_MORNING / DIGEST_EVENING a time (HH:MM): {e}") from None
+        raise SystemExit(f"DIGEST_TOP must be a whole number; DIGEST_MORNING / DIGEST_EVENING a time (HH:MM): {e}") from None
     if not 1 <= digest_top <= 50:
         raise SystemExit(f"DIGEST_TOP must be between 1 and 50, got {digest_top}")
     data_source = (env("DATA_SOURCE") or ("nse" if market == "in" else "quiver")).lower()

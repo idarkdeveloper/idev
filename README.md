@@ -290,8 +290,8 @@ dashboard) to your email (Resend) and/or webhook. They never place an order.
 
 - **Morning, after 09:00 IST:** the market mood (and "No new buys today" when the regime is risk-off or Nifty is below
   its 200-day average), buy ideas from the momentum screen of `DIGEST_UNIVERSE` with a quantity sized to risk 1% of
-  your practice equity on a 2x ATR move and a stop level (under risk-off they appear as "Would pass, but the market
-  filter says wait"), holdings to watch or consider selling (price at or within 3% of its stop, below its 200-day
+  your practice equity on a 2x ATR move and a stop level (new buys are off when the regime is risk-off, Nifty is below its 200-day average or in a downtrend, and the email says which; they then appear as "Would pass, but the market
+  filter says wait"), holdings to watch or consider selling (price at its stop, or within the smaller of 1 ATR and 3% of it, below its 200-day
   average, negative medium or high confidence news in the last 2 days, results or a board meeting due within 7 days,
   a fall of more than 5% in the last session), and new deals by the investors you follow.
 - **Evening, after 15:45 IST:** your Groww portfolio (value, today's profit or loss against the previous close, total
@@ -304,9 +304,9 @@ dashboard) to your email (Resend) and/or webhook. They never place an order.
 - Stops for your Groww holdings are estimated from your buy price (Groww does not tell us the highest price since you
   bought): the tighter of 3x ATR or 15% below it. Practice positions use their own stop. Prices come from Yahoo and
   may be delayed. If Groww refuses a login, the emails use your saved holdings (`state/groww_holdings.json`, written
-  after every successful read) and say so.
-- Each email is sent once per trading day (the day is remembered in `state/state.json`, so restarts do not repeat it).
-  A late start still sends the morning one before 12:00 and the evening one before 20:00 IST. Switch each on or off and
+  after every successful read) and say so (with how many trading days old they are when more than one).
+- Each email is sent once per trading day (remembered in `state/digest_state.json`, with a claim file so two processes cannot both send it).
+  The morning time must be 06:00-11:59 and the evening 15:30-19:59 IST. A late start still sends the morning one before 12:00 and the evening one before 20:00. Amounts use Indian grouping (₹5,00,000). Switch each on or off and
   set its time under Settings, where Preview shows the rendered email on the Live or Demo page.
 - `python -m trading_agent digest morning|evening [--send] [--writer auto|ollama|claude|none]` prints the email
   (and with `--send` mails it). Keys: `DIGEST_ENABLED`, `DIGEST_MORNING_ON`, `DIGEST_EVENING_ON`, `DIGEST_MORNING`,

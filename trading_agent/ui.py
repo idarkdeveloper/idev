@@ -28,7 +28,7 @@ from urllib.parse import urlparse
 
 from . import taxes
 from .broker import AlreadyCopied, Broker, LocalPaperBroker
-from .config import Settings, load_settings, parse_hhmm, parse_investors
+from .config import Settings, load_settings, parse_digest_time, parse_investors
 from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
@@ -84,6 +84,10 @@ def _inr(v: float, d: int = 0) -> str:
         parts.insert(0, head)
     out = ",".join(parts + [tail]) if parts else tail
     return ("−" if neg else "") + "₹" + out + ("." + frac if d else "")
+
+
+class Busy(Exception):
+    """Another request is already doing this (answered 409)."""
 
 
 class NeedsConfirmation(Exception):
@@ -148,6 +152,7 @@ class App:
         self._practice: LocalPaperBroker | None = practice  # the practice account the Demo page uses
         self._parent: "App | None" = None  # set on the Demo page's app: it shares this app's data sources
         self._stops: PracticeStopChecker | None = None  # the practice stop checker (see ensure_stop_checker)
+        self._preview_lock = threading.Lock()  # one email preview at a time
         self._lazy_lock = threading.RLock()  # one lock builds both the broker and the practice account
         self.clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)  # tests replace it (financial year)
 
@@ -659,7 +664,7 @@ class App:
                     broker_factory=lambda: self.broker,
                     notifier=notifier, prices=self.prices,
                     auto_exit=want_exit, holidays=self.holidays,
-                    digest=make_scheduler(self.settings, notifier, data=self.data, prices=self.prices,
+                    digest=make_scheduler(self.settings, lambda: make_notifier(self.settings), data=self.data, prices=self.prices,
                                           news=self.news, holidays=self.holidays,
                                           practice=wbroker if isinstance(wbroker, LocalPaperBroker) else None,
                                           groww=lambda: self.my_portfolio(), context=self.context),
@@ -1059,7 +1064,7 @@ class App:
                 for item in (value if isinstance(value, (list, tuple)) else [value]):
                     _check_env_value(env_key, item)
             if key in ("digest_morning", "digest_evening"):
-                value = parse_hhmm(value)   # ValueError (a 400) when it is not HH:MM
+                value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
             elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
                 value = "true" if value in (True, "true", "1", 1, "on") else "false"
@@ -1288,14 +1293,23 @@ class App:
         if kind not in ("morning", "evening"):
             raise ValueError("kind must be morning or evening")
         root = self._parent or self
-        if root.demo_trades is not None:   # the offline sample: no network, no real holdings
-            ctx = DigestContext(settings=root.settings, practice=root.broker,
-                                state_path=root.settings.state_dir / "state.json")
-        else:
-            ctx = make_context(root.settings, data=root.data, prices=root.prices, news=root.news,
-                               holidays=root.holidays, context=root.context, groww=lambda: root.my_portfolio(),
-                               practice=root._practice)
-        email = build_digest(kind, ctx, writer=None if with_summary else "none")
+        if not root._preview_lock.acquire(blocking=False):
+            raise Busy("A preview is already being built; try again when it finishes.")
+        try:
+            if root.demo_trades is not None:   # the offline sample: no network, no real holdings
+                ctx = DigestContext(settings=root.settings, practice=root.broker,
+                                    state_path=root.settings.state_dir / "state.json")
+            else:
+                try:
+                    practice = root.practice_broker
+                except Exception:  # noqa: BLE001 - e.g. Groww unreachable: the digest says the practice account is unavailable
+                    practice = None
+                ctx = make_context(root.settings, data=root.data, prices=root.prices, news=root.news,
+                                   holidays=root.holidays, context=root.context, groww=lambda: root.my_portfolio(),
+                                   practice=practice)
+            email = build_digest(kind, ctx, writer=None if with_summary else "none")
+        finally:
+            root._preview_lock.release()
         return {k: email[k] for k in ("subject", "text", "html", "writer")}
 
     def groww_test(self) -> dict[str, Any]:
@@ -1652,6 +1666,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             except PermissionError as e:
                 self._json({"error": str(e)}, HTTPStatus.FORBIDDEN)
+            except Busy as e:
+                self._json({"error": str(e)}, HTTPStatus.CONFLICT)
             except NeedsConfirmation as e:
                 self._json({"error": str(e), "needs_confirm": True, "copied_on": e.copied_on}, HTTPStatus.CONFLICT)
             except (KeyError, ValueError, LookupError, json.JSONDecodeError) as e:

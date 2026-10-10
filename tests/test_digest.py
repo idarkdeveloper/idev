@@ -1,6 +1,7 @@
 """Daily emails: the morning brief, the evening close, the summary writers, the schedule. Fakes only, no network."""
 import json
 import logging
+import os
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -58,8 +59,8 @@ class Prices:
 
 
 class Regime:
-    def __init__(self, regime="risk_on", above=True, score=3):
-        self.r = {"regime": regime, "score": score, "summary": f"{regime.replace('_', '-')} (score {score:+d})",
+    def __init__(self, regime="risk_on", above=True, score=3, trend=None):
+        self.r = {"regime": regime, "score": score, "trend": trend, "summary": f"{regime.replace('_', '-')} (score {score:+d})",
                   "guidance": "g", "markets": {"nifty50": {"above_200dma": above}}, "errors": {}}
 
     def fetch(self, force=False):
@@ -114,6 +115,10 @@ def s(settings):
     settings.digest_universe, settings.digest_top = "TESTIDX", 3
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     return settings
+
+
+def sent_marks(s):
+    return digest.read_digest_state(s.state_dir).get("sent") or {}
 
 
 def ctx_for(s, **kw):
@@ -171,10 +176,11 @@ def test_each_watch_reason_triggers_its_line_and_healthy_holdings_are_counted(s)
     P = 100.0
     level = position_stop({"stop_type": "trailing", "avg_entry_price": 100.0, "current_price": 1, "high_water": 100.0},
                           bars(100, step=0.002))["level"]
-    table = {"STOPPED": bars(80, step=0.002), "NEAR": bars(level * 1.01, step=0.002), "BELOW": bars(100, step=-0.002),
+    near_price = level + 0.5 * atr(bars(level + 0.5, step=0.002))
+    table = {"STOPPED": bars(80, step=0.002), "NEAR": bars(near_price, step=0.002), "BELOW": bars(100, step=-0.002),
              "NEWS": bars(110, step=0.002), "RESULTS": bars(110, step=0.002), "DROP": bars(110, step=0.002, last_drop=0.06),
              "HEALTHY": bars(110, step=0.002), "PRAC": bars(100, step=0.002)}
-    rows = [holding("STOPPED", 10, 100.0, 80.0), holding("NEAR", 10, 100.0, level * 1.01), holding("BELOW", 10, 100.0, 100.0),
+    rows = [holding("STOPPED", 10, 100.0, 80.0), holding("NEAR", 10, 100.0, near_price), holding("BELOW", 10, 100.0, 100.0),
             holding("NEWS", 10, 100.0, 110.0), holding("RESULTS", 10, 100.0, 110.0),
             holding("DROP", 10, 100.0, table["DROP"][-1]["close"] * 1.0), holding("HEALTHY", 10, 100.0, 110.0),
             holding("BOND", 1, 1000.0, None, kind="bond")]
@@ -523,7 +529,7 @@ class Cal:
         return d not in self.closed
 
 
-def email(kind):
+def email(kind, cancel=None):
     return {"subject": f"{kind} subject", "text": f"{kind} text", "html": f"<p>{kind}</p>", "writer": "none"}
 
 
@@ -551,10 +557,10 @@ def test_once_per_day_per_kind_across_restarts(s):
     assert run(sc, at(9, 6)).get("started") is None                 # ticks again: nothing
     sc2, n2 = sched(s)                                               # a restart reads state.json
     assert run(sc2, at(9, 7)).get("started") is None and n2.sent == []
-    assert State(s.state_dir / "state.json").data["digest_sent"] == {"morning": "2026-10-12"}
+    assert sent_marks(s) == {"morning": "2026-10-12"}
     assert run(sc2, at(15, 50))["started"] == "evening"
     assert run(sc2, at(15, 51)).get("started") is None
-    assert State(s.state_dir / "state.json").data["digest_sent"]["evening"] == "2026-10-12"
+    assert sent_marks(s)["evening"] == "2026-10-12"
     assert run(sc2, at(9, 5, day=13))["started"] == "morning"       # next day, again
 
 
@@ -582,11 +588,11 @@ def test_late_start_window(s):
     sc, n = sched(s)
     assert run(sc, at(11, 30))["started"] == "morning"               # late but before 12:00
     sc, n = sched(s)
-    s.state_dir.joinpath("state.json").unlink()
+    s.state_dir.joinpath("digest_state.json").unlink(missing_ok=True)
     info = run(sc, at(12, 5))
     assert info["due"] == [] and n.sent == []                         # too late for the morning one
     assert run(sc, at(19, 59))["started"] == "evening"
-    s.state_dir.joinpath("state.json").unlink()
+    s.state_dir.joinpath("digest_state.json").unlink(missing_ok=True)
     assert run(sc, at(20, 1))["due"] == []
 
 
@@ -599,7 +605,7 @@ def test_custom_times(s):
 def test_a_slow_build_times_out_without_blocking_the_tick(s):
     release = threading.Event()
 
-    def slow(kind):
+    def slow(kind, cancel=None):
         release.wait(5)
         return email(kind)
     sc, n = sched(s, build_fn=slow, timeout=0.2)
@@ -609,33 +615,37 @@ def test_a_slow_build_times_out_without_blocking_the_tick(s):
     assert sc.tick(at(9, 5))["busy"] is True                          # one at a time
     sc.wait(3)
     assert sc.last["outcome"] == "timeout" and n.sent == []
-    assert "digest_sent" not in State(s.state_dir / "state.json").data
+    assert not sent_marks(s)
+    assert sc.tick(at(9, 6))["busy"] is True                          # the timed-out build is still alive: no second one
     release.set()
+    sc._inner.join(2)
     assert run(sc, at(9, 10)).get("started") == "morning"            # the slot is free again; a retry is allowed
 
 
 def test_failures_retry_a_limited_number_of_times(s):
-    def broken(kind):
+    def broken(kind, cancel=None):
         raise RuntimeError("yahoo down")
     sc, n = sched(s, build_fn=broken, max_tries=2)
     assert run(sc, at(9, 5))["started"] == "morning" and sc.last["outcome"] == "failed" and "yahoo down" in sc.last["detail"]
     assert run(sc, at(9, 6))["started"] == "morning"
     assert run(sc, at(9, 7)).get("started") is None                   # gave up for today
-    assert "digest_sent" not in State(s.state_dir / "state.json").data
+    assert not sent_marks(s)
 
 
 def test_delivery_that_only_reached_the_console_is_not_marked_sent(s):
     sc, n = sched(s, notifier=Fake(delivered=("console",)))
     run(sc, at(9, 5))
-    assert sc.last["outcome"] == "failed" and "digest_sent" not in State(s.state_dir / "state.json").data
+    assert sc.last["outcome"] == "failed" and not sent_marks(s)
 
 
 def test_a_fresh_claim_by_another_process_blocks_a_second_send(s):
-    st = State(s.state_dir / "state.json")
-    st.data["digest_claim"] = {"morning": {"date": "2026-10-12", "at": at(9, 4).isoformat()}}
-    st.save()
+    claim = s.state_dir / "digest_morning_2026-10-12.claim"
+    claim.write_text("999")
     sc, n = sched(s)
     assert run(sc, at(9, 5)).get("started") is None and n.sent == []
+    old = time.time() - 4000                                          # a claim left by a crashed run expires
+    os.utime(claim, (old, old))
+    assert run(sc, at(9, 6))["started"] == "morning" and len(n.sent) == 1 and not claim.exists()
 
 
 def test_watcher_runs_the_scheduler_every_tick_without_waiting_for_it(s):
@@ -709,12 +719,12 @@ def app(s):
 
 
 def test_settings_keys_are_validated_and_written(app, s):
-    out = app.update_settings({"digest_morning_on": False, "digest_evening": "8:05", "digest_morning": "09:30"})
-    assert out == {"DIGEST_MORNING_ON": "false", "DIGEST_EVENING": "08:05", "DIGEST_MORNING": "09:30"}
+    out = app.update_settings({"digest_morning_on": False, "digest_evening": "16:05", "digest_morning": "09:30"})
+    assert out == {"DIGEST_MORNING_ON": "false", "DIGEST_EVENING": "16:05", "DIGEST_MORNING": "09:30"}
     env = (s.state_dir / ".env").read_text()
-    assert "DIGEST_EVENING=08:05" in env and "DIGEST_MORNING_ON=false" in env
-    assert s.digest_morning_on is False and s.digest_evening == "08:05" and s.digest_morning == "09:30"
-    for bad in ("25:00", "9", "abc", "09:60", ""):
+    assert "DIGEST_EVENING=16:05" in env and "DIGEST_MORNING_ON=false" in env
+    assert s.digest_morning_on is False and s.digest_evening == "16:05" and s.digest_morning == "09:30"
+    for bad in ("25:00", "9", "abc", "09:60", "", "05:59", "12:00"):
         with pytest.raises(ValueError):
             app.update_settings({"digest_morning": bad})
     for key, bad in (("digest_morning", 900), ("digest_evening_on", ["x"]), ("digest_morning", ["09:00"])):
@@ -791,3 +801,282 @@ def test_page_has_the_switches_times_and_preview_dialog():
     for needle in ('id="f-dg-am"', 'id="f-dg-pm"', 'name="digest_morning"', 'name="digest_evening"', 'id="btn-dg-morning"',
                    'id="btn-dg-evening"', 'id="dg-frame"', 'sandbox=""', "/api/digest/preview", "body.digest_morning_on"):
         assert needle in html, needle
+
+
+# ===================== fix round 1 =====================
+SIGNED = {"kind": "evening", "date": "2026-10-12",
+          "groww": {"day_pl": -120.0, "day_pct": -1.5, "pl": 50.0, "pl_pct": 2.0, "holdings": []},
+          "practice": {"equity": 500000.0, "total_pl": 10.0}}
+KNOWN = {"ZOMATO", "TCS", "ABC", "XYZW"}
+
+
+@pytest.mark.parametrize("text", [
+    "The market is risk-on. Buy ZOMATO NOW.",                       # a ticker taken from a headline
+    "The market is risk-on. Sell everything now and buy Zomato.",
+    "The market is risk-on. Exit tcs.",
+    "ABC passes the screen and could gain ₹1.2 lakh.",
+    "ABC passes the screen, a gain of ₹18 crore.",
+    "ABC passes the screen and may go up 10x.",
+    "ABC passes the screen and may gain twenty percent.",
+    "ABC passes the screen and costs Rs 8.",
+    "ABC passes the screen. Zomato also looks strong.",             # case-insensitive name of a stock not in the data
+    "ABC passes the screen with a target of ₹123.45.",
+    "ABC will double from here.",
+    "ABC passes the screen at ₹123.45, a sure shot.",
+    "ABC passes the screen at ₹123.45 with a stop 2026.",
+    "ABC passes the screen at ₹123.45 and you should buy it.",
+    "ABC passes the screen at ₹123 k.",
+])
+def test_validator_bypasses_from_the_review_are_rejected(text):
+    data = DATA | {"watch": {"items": [{"symbol": "XYZW", "reasons": ["negative news: Buy ZOMATO NOW (Tips)"]}]},
+                   "date": "2026-10-12"}
+    ok, why = digest_writer.validate_summary(text, data, KNOWN)
+    assert not ok, text
+
+
+def test_validator_direction_must_match_the_sign():
+    for text in ("Your portfolio is up ₹120 today.", "Your portfolio gained ₹120.", "Your portfolio fell ₹50 today."):
+        assert not digest_writer.validate_summary(text, SIGNED)[0], text
+    assert digest_writer.validate_summary("Your portfolio fell ₹120 today.", SIGNED)[0]
+    assert digest_writer.validate_summary("The total is up ₹50.", SIGNED)[0]
+
+
+def test_validator_still_accepts_honest_summaries_and_todays_date():
+    data = DATA | {"date": "2026-10-12"}
+    assert digest_writer.validate_summary(GOOD, data, KNOWN)[0]
+    ok, why = digest_writer.validate_summary("On 12 October 2026 the market is risk-on and ABC passes the screen.", data, KNOWN)
+    assert ok, why
+    assert not digest_writer.validate_summary("On 12 October 2025 ABC passes the screen.", data, KNOWN)[0]
+
+
+def test_tickers_come_only_from_symbol_fields_not_headlines_or_names():
+    data = {"kind": "morning", "date": "2026-10-12", "watch": {"items": [
+        {"symbol": "ABC", "name": "Abc Industries", "reasons": ["negative news: ZOMATO wins (Tips)"]}]}}
+    assert digest_writer.validate_summary("ABC is on the watch list.", data, {"ZOMATO"})[0]
+    assert not digest_writer.validate_summary("ZOMATO is on the watch list.", data, {"ZOMATO"})[0]
+    assert not digest_writer.validate_summary("Zomato is on the watch list.", data, {"ZOMATO"})[0]
+    assert digest_writer.validate_summary("Abc Industries is on the watch list.", data, {"ABC", "ABC"})[0]
+
+
+def test_claude_client_is_built_with_one_retry(s):
+    calls = []
+
+    class C(Claude):
+        def with_options(self, **kw):
+            calls.append(kw)
+            return self
+    digest_writer.write_summary("morning", DATA, s, session=ollama(up=False), client=C())
+    assert calls == [{"max_retries": 1}]
+
+
+def test_no_summary_model_is_called_once_cancelled(s):
+    sess, claude = ollama(), Claude()
+    assert digest_writer.write_summary("morning", DATA, s, session=sess, client=claude, cancelled=lambda: True) == (None, "none")
+    assert sess.calls == [] and claude.calls == []
+
+
+# ---------- Indian number grouping ----------
+def test_indian_grouping_everywhere():
+    assert digest.inr(500000) == "₹5,00,000" and digest.inr(179143) == "₹1,79,143"
+    assert digest.inr(-1234567.5, 0, True) == "₹−12,34,568" and digest.inr(12345678, 0) == "₹1,23,45,678"
+    assert digest.inr(999) == "₹999" and digest.num(1234.5, 2) == "1,234.50" and digest.num(100000, 0) == "1,00,000"
+    d = {"kind": "evening", "date": "2026-10-12", "generated_at": "2026-10-12T15:45:00+05:30", "delayed": False,
+         "groww": digest.unavailable("x"), "news": digest.unavailable("x"), "deals": digest.unavailable("x"),
+         "practice": {"equity": 500000.0, "cash": 179143.0, "day_change": None, "day_change_pct": None, "since": None,
+                      "total_pl": 0.0, "total_pl_pct": 0.0, "positions": [], "stop_fills_today": []}}
+    mail = digest_render.render(d)
+    assert "₹5,00,000" in mail["text"] and "₹1,79,143" in mail["text"] and "₹5,00,000" in mail["html"]
+    assert "500,000" not in mail["text"]
+
+
+# ---------- near the stop: the smaller of 1 ATR and 3% ----------
+def test_near_stop_is_within_one_atr_not_a_fixed_three_percent(s):
+    b = bars(100, step=0.002)
+    a = atr(b)
+    level = position_stop({"stop_type": "trailing", "avg_entry_price": 100.0, "current_price": 1, "high_water": 100.0}, b)["level"]
+    for price, flagged in ((level + 0.5 * a, True), (level + 3 * a, False)):
+        rows = [holding("ONE", 10, 100.0, price)]
+        ctx = ctx_for(s, prices=Prices({"ONE": bars(price, step=0.002)}), groww=lambda r=rows: portfolio(r))
+        w = digest._watch(ctx, MON.date())
+        # the level moves with the bars' own ATR, so recompute from the same bars the digest saw
+        got = any("of its stop" in r for i in w["items"] for r in i["reasons"])
+        assert got is flagged, (price, level, a)
+
+
+# ---------- the no-buy rule says which rule fired ----------
+def test_downtrend_switches_buying_off_and_the_email_names_the_rule(s):
+    data = {**digest._header(ctx_for(s), "morning"),
+            "mood": digest._mood(ctx_for(s, context=Regime("neutral", above=True, score=0, trend="down"))),
+            "buy_ideas": digest.unavailable("x"), "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}
+    assert data["mood"]["no_new_buys"] and "downtrend" in data["mood"]["why"][0]
+    text = digest_render.render(data)["text"]
+    assert "No new buys today: Nifty is in a downtrend" in text and "Rule: no new buys when the regime is risk-off" in text
+
+
+# ---------- memoised Groww read, T+1 line, previous trading day ----------
+def test_groww_is_read_once_per_build_and_the_evening_says_t_plus_1(s):
+    calls = []
+
+    def reader():
+        calls.append(1)
+        return portfolio([holding("X", 1, 1.0, 2.0)])
+    ctx = ctx_for(s, groww=reader, prices=Prices({"X": bars(2, n=30)}), news=News(), now=lambda: datetime(2026, 10, 12, 15, 50, tzinfo=IST))
+    e = evening_report(ctx)
+    assert len(calls) == 1
+    assert "T+1" in digest_render.render(e)["text"]
+
+
+def test_practice_day_change_needs_a_point_from_the_previous_trading_day(s):
+    practice = LocalPaperBroker(s.state_dir / "pb.json", starting_cash=100_000, price_fn=lambda x: 100.0)
+    eq = practice.account().equity
+    st = State(s.state_dir / "state.json")
+    st.data["practice_equity"] = [{"at": "2026-10-08T10:00:00+00:00", "equity": eq - 500, "cash": 0, "positions": 0}]
+    st.save()
+    p = digest._practice_close(ctx_for(s, practice=practice), MON.date())     # Monday; the last point is Thursday
+    assert p["day_change"] is None and p["since"] == "2026-10-08" and p["since_change"] == 500.0
+    assert "since 2026-10-08" in digest_render.render({**digest._header(ctx_for(s), "evening"), "groww": digest.unavailable("x"),
+                                                        "practice": p, "news": digest.unavailable("x"),
+                                                        "deals": digest.unavailable("x")})["text"]
+    st.data["practice_equity"].append({"at": "2026-10-09T10:00:00+00:00", "equity": eq - 100, "cash": 0, "positions": 0})
+    st.save()
+    p2 = digest._practice_close(ctx_for(s, practice=practice), MON.date())
+    assert p2["day_change"] == 100.0 and p2["since"] is None
+    p3 = digest._practice_close(ctx_for(s, practice=practice, calendar=Cal(closed={date(2026, 10, 9)})), MON.date())
+    assert p3["day_change"] is None and p3["since"] == "2026-10-09"           # Friday was a holiday: Thursday was the last session
+
+
+# ---------- times ----------
+def test_digest_times_are_limited_to_sensible_hours(app, s):
+    from trading_agent.config import parse_digest_time
+    assert parse_digest_time("morning", "6:00") == "06:00" and parse_digest_time("evening", "19:59") == "19:59"
+    for kind, bad in (("morning", "05:59"), ("morning", "12:00"), ("evening", "15:29"), ("evening", "20:00")):
+        with pytest.raises(ValueError, match="can be sent between"):
+            parse_digest_time(kind, bad)
+        with pytest.raises(ValueError, match="can be sent between"):
+            app.update_settings({f"digest_{kind}": bad})
+
+
+# ---------- scheduler: own file, claims, notifier re-read ----------
+def test_check_saving_state_json_cannot_lose_the_sent_mark(s):
+    def build(kind, cancel=None):
+        st = State(s.state_dir / "state.json")      # check() rewrites the whole file while the digest is being built
+        st.save()
+        return email(kind)
+    sc, n = sched(s, build_fn=build)
+    run(sc, at(9, 5))
+    State(s.state_dir / "state.json").save()
+    (s.state_dir / "state.json").write_text("{}")
+    sc2, n2 = sched(s)
+    assert run(sc2, at(9, 6)).get("started") is None and n2.sent == []
+    assert sent_marks(s) == {"morning": "2026-10-12"}
+    assert not list(s.state_dir.glob("*.claim"))
+
+
+def test_two_schedulers_on_one_directory_send_one_email(s):
+    gate = threading.Event()
+
+    def slow(kind, cancel=None):
+        gate.wait(5)
+        return email(kind)
+    shared = Fake()
+    a, _ = sched(s, notifier=shared, build_fn=slow)
+    b, _ = sched(s, notifier=shared, build_fn=slow)
+    assert a.tick(at(9, 5))["started"] == "morning"
+    assert b.tick(at(9, 5)).get("started") is None                    # the claim file is taken
+    gate.set()
+    a.wait()
+    assert b.tick(at(9, 6)).get("started") is None                    # and now it is marked sent
+    assert len(shared.sent) == 1
+
+
+def test_notifier_channels_are_read_again_at_each_check(s):
+    state = {"n": Fake()}
+    state["n"].channels = ["console"]
+    sc = DigestScheduler(s, lambda: None, lambda: state["n"], holidays=Cal(), retry_after=0, build_fn=email)
+    assert sc.tick(at(9, 5))["due"] == []
+    state["n"] = Fake()
+    assert run(sc, at(9, 6))["started"] == "morning" and len(state["n"].sent) == 1
+
+
+def test_a_timed_out_build_keeps_the_slot_and_calls_no_model_after_the_deadline(s, monkeypatch):
+    gate = threading.Event()
+    model_calls = []
+
+    class SlowNews(News):
+        def for_symbol(self, symbol, name=None, background=False):
+            gate.wait(5)
+            return {"items": []}
+    monkeypatch.setattr(digest_writer, "_ollama", lambda *a, **k: model_calls.append("ollama") or GOOD)
+    monkeypatch.setattr(digest_writer, "_claude", lambda *a, **k: model_calls.append("claude") or GOOD)
+    rows = [holding("AAA", 1, 1.0, 2.0), holding("BBB", 1, 1.0, 2.0)]
+    px = Prices({"AAA": bars(2, n=30), "BBB": bars(2, n=30)})
+    ctx = ctx_for(s, prices=px, news=SlowNews(), groww=lambda: portfolio(rows), context=Regime(), universe=lambda n: [])
+    sc = DigestScheduler(s, lambda: ctx, Fake(), holidays=Cal(), retry_after=0, timeout=0.3)
+    assert sc.tick(at(9, 5))["started"] == "morning"
+    sc.wait(3)
+    assert sc.last["outcome"] == "timeout" and sc._inner.is_alive()
+    assert sc.tick(at(9, 6))["busy"] is True                          # the first build is still running: no second one
+    gate.set()
+    sc._inner.join(3)
+    assert not sc._inner.is_alive() and model_calls == []             # past the deadline: no Ollama, no Claude
+    assert not list(s.state_dir.glob("*.claim")) and not sent_marks(s)
+
+
+def test_preview_is_one_at_a_time_and_answers_409_when_busy(s):
+    import urllib.error
+    import urllib.request
+    from trading_agent.ui import App, make_server
+    app = App(s, broker=LocalPaperBroker(s.state_dir / "pb.json", starting_cash=1000, price_fn=lambda x: 1.0),
+              dotenv=None, demo_trades=[])
+    srv = make_server(app, "127.0.0.1", 0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    req = urllib.request.Request(f"http://127.0.0.1:{srv.server_address[1]}/api/digest/preview",
+                                 data=json.dumps({"kind": "morning"}).encode(), headers={"Content-Type": "application/json"})
+    try:
+        assert app._preview_lock.acquire(blocking=False)
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        assert e.value.code == 409
+        app._preview_lock.release()
+        assert urllib.request.urlopen(req).status == 200
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+# ---------- saved snapshot: age, note, permissions ----------
+def test_saved_label_shows_age_and_note_and_snapshot_loader_accepts_a_note(s, monkeypatch):
+    info = {"source": "saved", "saved_at": "2026-10-09T15:40:00+05:30", "reason": "Groww down", "age": 3, "note": "from your CAS"}
+    label = digest._saved_label(info)
+    assert "09 Oct 15:40 IST" in label and "3 trading days old; buys or sells since then are missing" in label and "(from your CAS)" in label
+    assert "trading days old" not in digest._saved_label({**info, "age": 1})
+    s.state_dir.joinpath("groww_holdings.json").write_text(json.dumps({
+        "saved_at": "2026-10-09T15:40:00+05:30", "source_note": "from  your statement",
+        "holdings": [{"symbol": "X", "name": "X", "exchange": "NSE", "kind": "equity", "maturity": None, "qty": 2, "sellable_qty": 2, "avg_price": 10.0}]}))
+    snap = runner.load_groww_snapshot(s)
+    assert snap["source_note"] == "from your statement" and snap["holdings"][0]["symbol"] == "X"
+    s.groww_api_key, s.groww_api_secret = "k", "x"
+    monkeypatch.setattr(runner, "resolve_groww_token", lambda st, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    out = runner.read_groww_portfolio(s, SimpleNamespace(latest_price=lambda sym: 12.0), "now")
+    assert out["source"] == "saved" and out["source_note"] == "from your statement" and out["value"] == 24.0
+    assert isinstance(out["age_trading_days"], int)
+
+
+def test_trading_days_old_counts_weekdays():
+    now = datetime(2026, 10, 13, 10, 0, tzinfo=IST)     # Tuesday
+    assert runner.trading_days_old("2026-10-09T15:40:00+05:30", now) == 2     # Mon, Tue
+    assert runner.trading_days_old("2026-10-12T15:40:00+05:30", now) == 1
+    assert runner.trading_days_old("garbage", now) is None
+
+
+def test_snapshot_is_created_owner_only(s, monkeypatch):
+    seen = []
+    real = os.open
+
+    def spy(path, flags, mode=0o777, *a, **k):
+        seen.append((str(path), mode))
+        return real(path, flags, mode, *a, **k)
+    monkeypatch.setattr(os, "open", spy)
+    runner.save_groww_snapshot(s, [{"symbol": "X", "qty": 1, "avg_price": 1.0}])
+    assert any(p.endswith(".tmp") and "groww_holdings" in p and m == 0o600 for p, m in seen)
+    assert (s.state_dir / "groww_holdings.json").exists() and not list(s.state_dir.glob("*.tmp"))

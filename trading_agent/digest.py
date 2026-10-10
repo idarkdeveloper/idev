@@ -10,10 +10,12 @@ Percentages inside the data are plain percent numbers (3.12 means +3.12%), keys 
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -28,7 +30,8 @@ from .timezones import IST
 log = logging.getLogger(__name__)
 
 KINDS = ("morning", "evening")
-NEAR_STOP = 0.03  # within 3% of the stop counts as "close to it"
+DIGEST_STATE_FILE = "digest_state.json"  # once-a-day marks live apart from state.json, which check() rewrites whole
+NEAR_STOP = 0.03  # near the stop: within the smaller of 1 ATR and 3% of it
 BIG_DROP = -5.0  # percent in the last session
 RESULTS_DAYS = 7
 NEWS_DAYS = 2
@@ -57,6 +60,27 @@ class DigestContext:
     now: Callable[[], datetime] = lambda: datetime.now(IST)  # noqa: E731
     delayed: bool = True  # prices come from Yahoo
     screen_budget_s: float = 240.0
+    calendar: Any = None  # NSEHolidays-like (is_trading_day): finds the previous trading day
+    known: set = field(default_factory=set)  # every symbol / company word seen, so a summary cannot name others
+    cancel: threading.Event | None = None  # set when the build has timed out
+    deadline: float | None = None  # time.monotonic() after which the build stops asking for more
+    _groww_memo: list = field(default_factory=list, repr=False)
+
+    def expired(self) -> bool:
+        return bool((self.cancel is not None and self.cancel.is_set())
+                    or (self.deadline is not None and time.monotonic() > self.deadline))
+
+    def read_groww(self) -> dict[str, Any]:
+        """The Groww holdings, read once per build (one Groww call, one snapshot write)."""
+        if not self._groww_memo:
+            try:
+                self._groww_memo.append((True, self.groww()))
+            except Exception as e:  # noqa: BLE001
+                self._groww_memo.append((False, e))
+        ok, val = self._groww_memo[0]
+        if not ok:
+            raise val
+        return val
 
 
 def unavailable(reason: object) -> dict[str, Any]:
@@ -82,12 +106,13 @@ def _state(ctx: DigestContext) -> State | None:
 class _Budget:
     """History source that stops asking after a time budget, so a cold cache cannot make the screen run for ever."""
 
-    def __init__(self, source: Any, seconds: float):
+    def __init__(self, source: Any, seconds: float, ctx: "DigestContext | None" = None):
         self.source = source
         self.deadline = time.monotonic() + seconds
+        self.ctx = ctx
 
     def history(self, symbol: str, range_: str = "2y") -> list[dict[str, Any]]:
-        if time.monotonic() > self.deadline:
+        if time.monotonic() > self.deadline or (self.ctx is not None and self.ctx.expired()):
             raise TimeoutError("time budget for the screen used up")
         return self.source.history(symbol, range_)
 
@@ -166,13 +191,27 @@ def results_due(announcements: list[dict[str, Any]], today: date, days: int = RE
 
 
 # -- money formatting for the data (used by the renderers too) --------------------
+def num(v: float, d: int = 0) -> str:
+    """12345678.5 as 1,23,45,678 (Indian grouping) with ``d`` decimals; the sign is dropped."""
+    ip, _, fp = f"{abs(v):.{d}f}".partition(".")
+    if len(ip) > 3:
+        head, tail = ip[:-3], ip[-3:]
+        parts = []
+        while len(head) > 2:
+            parts.insert(0, head[-2:])
+            head = head[:-2]
+        ip = ",".join(([head] if head else []) + parts + [tail])
+    return ip + ("." + fp if fp else "")
+
+
 def inr(v: float | None, d: int = 0, sign: bool = False) -> str:
     if v is None:
         return "n/a"
-    s = f"{abs(v):,.{d}f}"
-    if v < 0 and float(s.replace(",", "")) != 0:
+    s = num(v, d)
+    zero = float(s.replace(",", "")) == 0
+    if v < 0 and not zero:
         return f"₹−{s}"
-    return f"₹+{s}" if sign and float(s.replace(",", "")) != 0 else f"₹{s}"
+    return f"₹+{s}" if sign and not zero else f"₹{s}"
 
 
 def pct_text(v: float | None, d: int = 1, sign: bool = True) -> str:
@@ -194,15 +233,20 @@ def _mood(ctx: DigestContext) -> dict[str, Any]:
     nifty = (r.get("markets") or {}).get("nifty50") or {}
     below = nifty.get("above_200dma") is False
     risk_off = r.get("regime") == "risk_off"
-    why = []
+    down = r.get("trend") == "down"
+    why = []   # which of the rules switched buying off
     if risk_off:
         why.append(f"the market regime is risk-off (score {r.get('score'):+d})" if isinstance(r.get("score"), int)
                    else "the market regime is risk-off")
     if below:
         why.append("Nifty is below its 200-day average")
+    if down:
+        why.append("Nifty is in a downtrend (50-day average below the 200-day, price below both)")
+    risk_off = risk_off or down
     out = {"regime": r.get("regime"), "score": r.get("score"), "summary": clean_text(r.get("summary") or "", 500),
            "guidance": r.get("guidance"), "nifty_above_200dma": nifty.get("above_200dma"),
-           "no_new_buys": bool(risk_off or below), "why": why}
+           "no_new_buys": bool(risk_off or below), "why": why,
+           "rules": "no new buys when the regime is risk-off, Nifty is below its 200-day average, or Nifty is in a downtrend"}
     if r.get("errors"):
         out["notes"] = [clean_text(f"{k}: {v}", 160) for k, v in r["errors"].items()]
     return out
@@ -217,7 +261,9 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
     members = (ctx.universe or load_universe)(name)
     if not members:
         return unavailable(f"universe {name} is empty")
-    res = run_screen(members, _Budget(ctx.prices, ctx.screen_budget_s), top=int(s.digest_top))
+    for m in members:
+        _remember(ctx, m["symbol"], m.get("name"))
+    res = run_screen(members, _Budget(ctx.prices, ctx.screen_budget_s, ctx), top=int(s.digest_top))
     equity, basis = float(s.paper_starting_cash), "starting cash"
     if ctx.practice is not None:
         try:
@@ -248,6 +294,21 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
             "sizing": "1% of equity at risk on a 2x ATR move, at most 10% of equity per stock"}
 
 
+_COMMON = {"IDEA", "BANK", "POWER", "STEEL", "GOLD", "LIFE", "OIL", "GAS", "ENERGY", "FINANCE", "CAPITAL", "GLOBAL",
+           "INDIA", "INDIAN", "NATIONAL", "STATE", "UNION", "INDUSTRIES", "LIMITED", "FIRST", "GENERAL", "NEXT",
+           "SOUTH", "NORTH", "EAST", "WEST", "MARKET", "TRADE", "GROUP", "SERVICES", "TECH", "PHARMA"}
+
+
+def _remember(ctx: DigestContext, symbol: Any, name: Any) -> None:
+    """Note a symbol and the distinctive words of a company name; the summary writer rejects any of them that the
+    data does not carry."""
+    if symbol:
+        ctx.known.add(str(symbol).upper())
+    for w in re.findall(r"[A-Za-z&]{4,}", str(name or "")):
+        if w.upper() not in _COMMON:
+            ctx.known.add(w.upper())
+
+
 def _groww_rows(ctx: DigestContext) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """(Groww holdings, info) where info has notes / source / saved_at / unavailable."""
     info: dict[str, Any] = {}
@@ -255,7 +316,7 @@ def _groww_rows(ctx: DigestContext) -> tuple[list[dict[str, Any]], dict[str, Any
         info["unavailable"] = "Groww holdings are not configured"
         return [], info
     try:
-        g = ctx.groww()
+        g = ctx.read_groww()
     except Exception as e:  # noqa: BLE001
         info["unavailable"] = f"Groww holdings: {type(e).__name__}: {e}"
         return [], info
@@ -265,9 +326,12 @@ def _groww_rows(ctx: DigestContext) -> tuple[list[dict[str, Any]], dict[str, Any
     if g.get("holdings") is None:
         info["unavailable"] = _groww_down_text(g)
         return [], info
+    for h in g["holdings"]:
+        _remember(ctx, h.get("symbol"), h.get("name"))
     if g.get("source") == "saved":
         info["source"], info["saved_at"] = "saved", g.get("saved_at")
         info["reason"] = _groww_down_text(g)
+        info["age"], info["note"] = g.get("age_trading_days"), g.get("source_note")
     return list(g["holdings"]), {**info, "portfolio": g}
 
 
@@ -288,7 +352,10 @@ def _saved_label(info: dict[str, Any]) -> str | None:
         when = datetime.fromisoformat(info["saved_at"]).astimezone(IST).strftime("%d %b %H:%M")
     except (ValueError, TypeError, KeyError):
         when = str(info.get("saved_at"))
-    return f"saved holdings from {when} IST ({info.get('reason')})"
+    age = info.get("age")
+    old = f" — {age} trading days old; buys or sells since then are missing" if isinstance(age, int) and age > 1 else ""
+    note = f" ({info['note']})" if info.get("note") else ""
+    return f"saved holdings from {when} IST{old} ({info.get('reason')}){note}"
 
 
 def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
@@ -336,8 +403,12 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
     now = ctx.now()
     items, healthy = [], 0
     for h in holdings:
+        if ctx.expired():
+            notes.append("Stopped early: the build ran out of time, so some holdings were not checked")
+            break
         reasons: list[str] = []
         sym, price = h["symbol"], h["price"]
+        _remember(ctx, sym, h.get("name"))
         bars: list[dict[str, Any]] = []
         try:
             bars = _bars(ctx, sym, "1y", bse=h.get("exchange") == "BSE")
@@ -348,20 +419,23 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
             level = st["level"]
             if level is not None and price is not None:
                 est = " (estimated from your buy price)" if h["estimated"] else ""
+                a = atr(bars) if bars else None
+                near = min(a, NEAR_STOP * level) if a else NEAR_STOP * level   # 1 ATR, but never more than 3%
                 if price <= level:
-                    reasons.append(f"price {price:,.2f} is at or below its stop {level:,.2f}{est}")
-                elif price / level - 1 <= NEAR_STOP:
-                    reasons.append(f"price {price:,.2f} is within {(price / level - 1) * 100:.1f}% of its stop {level:,.2f}{est}")
+                    reasons.append(f"price {num(price, 2)} is at or below its stop {num(level, 2)}{est}")
+                elif price - level <= near:
+                    reasons.append(f"price {num(price, 2)} is within {num(price - level, 2)} "
+                                   f"({(price / level - 1) * 100:.1f}%) of its stop {num(level, 2)}{est}")
         except Exception as e:  # noqa: BLE001
             notes.append(f"{sym}: stop level unavailable ({type(e).__name__})")
         if bars:
             ms = momentum_stats(bars)
             if ms.get("above_200dma") is False:
-                reasons.append(f"below its 200-day average ({ms['ma200']:,.2f})")
+                reasons.append(f"below its 200-day average ({num(ms['ma200'], 2)})")
             drop = last_session_move(bars, today)
             if drop is not None and drop < BIG_DROP:
                 reasons.append(f"fell {abs(drop):.1f}% in the last session")
-        if ctx.news is not None:
+        if ctx.news is not None and not ctx.expired():
             try:
                 for it in ctx.news.for_symbol(sym, h.get("name"), background=True).get("items", []):
                     if is_alert(it) and _within_days(it.get("published"), now, NEWS_DAYS):
@@ -370,7 +444,7 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
                 if not news_err:
                     news_err.append(f"{type(e).__name__}: {e}")
                     notes.append(f"News: unavailable ({news_err[0]})")
-        if ctx.data is not None and hasattr(ctx.data, "announcements"):
+        if ctx.data is not None and hasattr(ctx.data, "announcements") and not ctx.expired():
             try:
                 due = results_due(ctx.data.announcements(sym, limit=20), today)
                 if due:
@@ -397,9 +471,16 @@ def _within_days(published: Any, now: datetime, days: float) -> bool:
     return dt >= now - timedelta(days=days)
 
 
+def read_digest_state(state_dir: Any) -> dict[str, Any]:
+    try:
+        data = json.loads((Path(state_dir) / DIGEST_STATE_FILE).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def _last_digest_date(ctx: DigestContext) -> date | None:
-    st = _state(ctx)
-    sent = (st.data.get("digest_sent") if st else None) or {}
+    sent = read_digest_state(ctx.settings.state_dir).get("sent") or {}
     days = []
     for v in sent.values():
         try:
@@ -496,6 +577,15 @@ def _groww_close(ctx: DigestContext, today: date) -> dict[str, Any]:
     return out
 
 
+def _previous_trading_day(ctx: DigestContext, today: date) -> date:
+    d = today - timedelta(days=1)
+    for _ in range(14):
+        if d.weekday() < 5 and (ctx.calendar is None or ctx.calendar.is_trading_day(d)):
+            return d
+        d -= timedelta(days=1)
+    return d
+
+
 def _practice_close(ctx: DigestContext, today: date) -> dict[str, Any]:
     if ctx.practice is None:
         return unavailable("no practice account yet")
@@ -509,10 +599,10 @@ def _practice_close(ctx: DigestContext, today: date) -> dict[str, Any]:
                           "pl_pct": round((p.current_price / p.avg_entry_price - 1) * 100, 2)
                           if p.current_price is not None and p.avg_entry_price else None})
     st = _state(ctx)
-    change = change_pct = None
+    change = change_pct = since = since_change = since_pct = None
     fills: list[dict[str, Any]] = []
     if st is not None:
-        before = None
+        before, before_day = None, None
         for pt in st.data.get("practice_equity", []):
             try:
                 d = datetime.fromisoformat(pt["at"])
@@ -520,10 +610,14 @@ def _practice_close(ctx: DigestContext, today: date) -> dict[str, Any]:
             except (KeyError, ValueError):
                 continue
             if d < today:
-                before = pt["equity"]
+                before, before_day = pt["equity"], d
         if before:
-            change = round(acct.equity - before, 2)
-            change_pct = round(change / before * 100, 2)
+            diff = round(acct.equity - before, 2)
+            pct = round(diff / before * 100, 2)
+            if before_day == _previous_trading_day(ctx, today):
+                change, change_pct = diff, pct
+            else:   # no point from the previous trading day: say what the change is measured from
+                since, since_change, since_pct = before_day.isoformat(), diff, pct
         for f in st.data.get(FILLS_KEY, []):
             try:
                 d = datetime.fromisoformat(str(f.get("at")))
@@ -534,6 +628,7 @@ def _practice_close(ctx: DigestContext, today: date) -> dict[str, Any]:
                 fills.append({"symbol": f["symbol"], "qty": f["qty"], "price": f["price"], "stop": f.get("stop"),
                               "label": f.get("label")})
     return {"equity": round(acct.equity, 2), "cash": round(acct.cash, 2), "day_change": change, "day_change_pct": change_pct,
+            "since": since, "since_change": since_change, "since_change_pct": since_pct,
             "total_pl": perf.get("pnl"), "total_pl_pct": perf.get("pnl_pct"), "positions": positions,
             "stop_fills_today": fills}
 
@@ -557,6 +652,9 @@ def _news_today(ctx: DigestContext, today: date) -> dict[str, Any]:
     order = {"negative": 0, "neutral": 1, "positive": 2}
     items, errors = [], []
     for sym, name in held.items():
+        if ctx.expired():
+            errors.append("stopped early: out of time")
+            break
         try:
             for it in ctx.news.for_symbol(sym, name, background=True).get("items", []):
                 if not it.get("sentiment") or not _is_on(it.get("published"), today):
@@ -634,6 +732,6 @@ def make_context(settings: Any, *, data: Any = None, prices: Any = None, news: A
                 log.warning("digest practice account unavailable: %s", e)
     return DigestContext(
         settings=settings, prices=prices, prices_bse=YahooPrices(suffix=".BO", cache_dir=cache), context=context,
-        data=data, news=news, practice=practice,
+        data=data, news=news, practice=practice, calendar=holidays,
         groww=groww or (lambda: read_groww_portfolio(settings, prices, datetime.now(IST).isoformat(timespec="seconds"))),
         universe=load_universe, state_path=Path(settings.state_dir) / "state.json")

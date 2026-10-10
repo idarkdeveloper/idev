@@ -116,7 +116,7 @@ def test_any_error_and_not_linked_use_the_snapshot(linked, tmp_path, monkeypatch
     assert out["source"] == "saved" and "boom" in out["reason"]
     linked.groww_api_key = linked.groww_api_secret = None
     out = _app(linked, tmp_path, FreePrices({"TCS": 1.0, "INFY": 1.0})).my_portfolio(refresh=True)
-    assert out["source"] == "saved" and out["reason"] == "Groww is not linked"
+    assert out == {"linked": False}                                  # no credentials: a leftover snapshot is ignored
 
 
 def test_empty_successful_read_is_saved_but_never_a_failed_one(linked, tmp_path, monkeypatch):
@@ -148,6 +148,7 @@ def test_page_shows_saved_subtitle_and_the_message_once():
     sub = out["mp_sub"]
     assert sub.startswith("Saved holdings from 09 Oct") and "15:40 IST" in sub
     assert "Groww unavailable until 14:30 IST" in sub and "prices from Yahoo (delayed)" in sub
+    assert "3 trading days old; buys or sells since then are missing" in sub and "from your CAS statement" in sub
     tiles = out["tiles"]
     assert "Holdings value (saved)" in tiles and "Profit / loss (saved)" in tiles and "Holdings (saved)" in tiles
     assert "429" not in tiles and "refused" not in tiles

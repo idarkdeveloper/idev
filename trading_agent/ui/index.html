@@ -688,7 +688,7 @@
     const tone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
     if(m.source === "saved"){
       const until = m.blocked_until ? new Date(m.blocked_until).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false}) : null;
-      $("mp-sub").textContent = `Saved holdings from ${new Date(m.saved_at).toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false})} IST · ${until ? "Groww unavailable until " + until + " IST" : m.reason} · prices from Yahoo (delayed)`;
+      $("mp-sub").textContent = `Saved holdings from ${new Date(m.saved_at).toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false})} IST${m.age_trading_days > 1 ? ` — ${m.age_trading_days} trading days old; buys or sells since then are missing` : ""} · ${until ? "Groww unavailable until " + until + " IST" : m.reason} · prices from Yahoo (delayed)${m.source_note ? " · " + m.source_note : ""}`;
     } else $("mp-sub").textContent = `${m.holdings.length} holdings · read-only from Groww · ${when(m.at)}`;
     const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
     stats.innerHTML = stat("Invested", inr(m.invested), "what you paid, all holdings")
