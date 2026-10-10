@@ -252,6 +252,7 @@ def run_forward_due(settings: Any, prices: Any, holidays: Any, notifier: Any = N
         return prefix + "Forward test: nothing due."
 
     def screen() -> dict[str, Any]:
-        return run_screen(load_universe(ft.universe), prices, top=ft.data["top"])
+        from .bands import book_for   # registered change: 2% / 5% band stocks are not picked (date kept in the forward state)
+        return run_screen(load_universe(ft.universe), prices, top=ft.data["top"], bands=book_for(settings))
 
     return prefix + format_forward(ft.run(screen))
