@@ -440,8 +440,13 @@ account** (`state/forward/`), never touching the investor-following account or G
   up over months the backtest never saw. `forward --status` shows it without trading. The
   dashboard has a *Factor screen, forward* card with both curves.
 
-The scheduled routine runs `forward --if-due`, which does nothing except on weekdays after
-15:40 IST, once a day. Give it several months before reading anything into the gap.
+The server's watch service runs `forward --if-due` once per trading day after the close
+(16:10 IST, holiday-aware, guarded by a claim file so a restart cannot run it twice); it
+does nothing unless a rebalance is due or today's point is missing. If the account has to be
+recreated (it used to live in the GitHub Actions cache), `forward --rebuild-from 2026-10-09
+--universe NIFTYMIDCAP150` rebuilds it as the first run made it on that date (top 20 of the
+screen as of that day, same charges, fills at that day's close) and refuses if one already
+exists unless `--force`. Give it several months before reading anything into the gap.
 
 ## Can algo trading predict a share? The signal lab
 
@@ -582,36 +587,26 @@ treated as missing (no filtering).
 | `PAPER_STARTING_CASH` | Cash for the simulator when no brokerage is linked (default ₹5,00,000). |
 | `RESEND_API_KEY` + `NOTIFY_EMAIL_TO` | Email each recommendation via Resend. |
 | `NOTIFY_WEBHOOK_URL` | POST `{"text": ...}` to Slack/Discord/n8n/etc. |
+| `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Mirror every alert and daily email to Telegram (`TELEGRAM_ALERTS=false` = off). Runbook section 13. |
+| `HEARTBEAT_URL` | https ping URL called every 5 minutes by the watch service (healthchecks.io style dead-man's switch). Runbook section 12. |
 | `QUIVER_API_KEY`, `ALPACA_*` | US mode only. |
 | `NEWS_TAGGER`, `OLLAMA_URL`, `OLLAMA_MODEL`, `NEWS_CLAUDE_MODEL` | Headline tagging: `auto` (default, local Ollama `qwen2.5:3b` if running) / `ollama` / `claude` / `none`. See *News headlines*. |
 
-## The routine (runs by itself)
+## One engine: the server (runs by itself)
 
-`.github/workflows/routine.yml` runs the check every 30 minutes on weekdays from NSE open
-through the evening bulk/block-deal publication, keeping `state/` between runs with the
-Actions cache. A run with nothing new exits before calling Claude; a run without the
-Claude secret degrades to a dry run instead of failing.
+The Oracle server's `trading-agent-watch` service is the only engine: it checks deals,
+stops, announcements and news every minute in market hours, sends the daily emails, runs
+the paper forward test after the close, and (optionally) pings a dead-man's-switch URL
+every 5 minutes (`HEARTBEAT_URL`) and mirrors every alert to Telegram
+(`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`). See `docs/runbook.md` sections 11 to 14.
 
-Setup, in the repository's **Settings → Secrets and variables → Actions**:
-
-| Kind | Name | Required? | Notes |
-|---|---|---|---|
-| Secret | `ANTHROPIC_API_KEY` | **yes** | Without it the routine only lists new deals. |
-| Secret | `GROWW_API_KEY` + `GROWW_TOTP_SECRET` | no | Shows your real Groww holdings and gives live prices. TOTP flow needs no daily approval; `GROWW_API_SECRET` works too but needs a daily tap in the app. |
-| Secret | `RESEND_API_KEY`, `NOTIFY_WEBHOOK_URL` | no | Email / chat delivery. |
-| Variable | `INVESTORS` (or `WATCH_INVESTOR`) | no | Comma-separated names; defaults to `ASHISH KACHOLIA`. |
-| Variable | `NOTIFY_EMAIL_TO`, `NOTIFY_EMAIL_FROM` | no | With `RESEND_API_KEY`. |
-| Variable | `AUTO_TRADE`, `GROWW_LIVE_ORDERS`, `GROWW_GTT_STOPS` | no | All default to `false`. |
-| Variable | `MAX_SLIPPAGE_PCT` | no | Default `0.5`. |
-| Variable | `MARKET`, `WATCH_SOURCE`, `PAPER_STARTING_CASH` | no | Defaults: `in`, `deals`, `500000`. |
-
-Then open **Actions → trading-agent routine → Run workflow** (tick *dry_run* for a first
-look) and check the job log.
-
-If a scheduled run starts without saved state (first run, or the Actions cache was
-evicted after 7 days unused), it runs `check --baseline`: current deals are recorded as
-seen without calling Claude, so a month of old deals isn't re-sent as new. A manual run
-always analyses everything.
+`.github/workflows/routine.yml` used to run a second engine every 30 minutes. It no longer
+has a schedule: it is a **manual dry run** (Actions, *trading-agent manual dry run*, Run
+workflow) that fetches deals and prints what a check would do, with no Groww login, no
+Claude call, no email and no order. It needs none of the Groww, Anthropic or Resend
+secrets, so all of them can be deleted from GitHub (list in the runbook, section 11). Its
+optional variables `INVESTORS` (or `WATCH_INVESTOR`), `MARKET`, `WATCH_SOURCE` and
+`PAPER_STARTING_CASH` only steer the dry run.
 
 ## How a check works
 

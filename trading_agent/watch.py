@@ -7,6 +7,7 @@ machine with a fixed IP (the April 2026 SEBI rules) rather than a cron runner.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -21,6 +22,7 @@ from .state import STATE_LOCK, State
 from .timezones import IST
 
 log = logging.getLogger(__name__)
+ALIVE_EVERY_S = 30.0   # state/watch_alive.json is rewritten at most this often
 
 
 def keep_awake(on: bool) -> bool:
@@ -53,7 +55,7 @@ class Watcher:
                  weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False,
                  holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
                  news: Any | None = None, broker_factory: Callable[[], Any] | None = None,
-                 digest: Any | None = None):
+                 digest: Any | None = None, forward: Any | None = None, heartbeat: Any | None = None):
         self.settings = settings
         self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
         self._blocked_until: datetime | None = None
@@ -72,11 +74,18 @@ class Watcher:
         self._warned_no_tagger = False
         self._news = news  # NewsService: negative headlines for held stocks
         self._digest = digest  # DigestScheduler: the morning and evening emails (own worker thread)
+        self._forward = forward  # ForwardScheduler: the paper forward test, once a trading day after the close
+        self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every 5 minutes, whatever the market window
         self._broker = broker
         self._notifier = notifier
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.ticks = 0
+        self._alive_at = -1e9
+        self._tick_started: str | None = None
+        self._tick_finished: str | None = None
+        self._last_error: str | None = None
+        self._progress = time.monotonic()   # stamped at the start and end of every loop iteration (the heartbeat reads it)
         self.last_tick: dict[str, Any] | None = None
         self.started_at: str | None = None
 
@@ -333,6 +342,11 @@ class Watcher:
             except Exception:  # noqa: BLE001 - the emails never stop the watch
                 log.exception("daily email check failed")
         info["market_data"] = self.poll_market_data(now)
+        if self._forward is not None:  # once a trading day after the close; returns at once (its own worker thread)
+            try:
+                info["forward"] = self._forward.tick(now)
+            except Exception:  # noqa: BLE001 - the paper forward test never stops the watch
+                log.exception("forward test check failed")
         if self._awake is not None and info["in_window"] != self._awake_on:
             self._awake(info["in_window"])
             self._awake_on = info["in_window"]
@@ -362,13 +376,58 @@ class Watcher:
         return info
 
     # -- loop / thread ----------------------------------------------------------
+    def _write_alive(self, error: str | None = None, *, force: bool = False) -> None:
+        """state/watch_alive.json: {"at", "tick_started", "tick_finished", "last_error", "every", "market_window"},
+        times as ISO in IST. Written atomically, at most once per 30 s; a failure to write never touches the loop."""
+        try:
+            mono = time.monotonic()
+            if not force and mono - self._alive_at < ALIVE_EVERY_S:
+                return
+            self._alive_at = mono
+            from .state import atomic_write
+            now = datetime.now(self.tz)
+            atomic_write(self.settings.state_dir / "watch_alive.json", json.dumps({
+                "at": now.isoformat(timespec="seconds"), "tick_started": self._tick_started,
+                "tick_finished": self._tick_finished, "last_error": (error or "")[:300] or None,
+                "every": self.every, "market_window": self.market_window_open(now)}))
+        except Exception:  # noqa: BLE001
+            pass
+
     def run_forever(self) -> None:
         self.started_at = datetime.now(self.tz).isoformat(timespec="seconds")
-        while not self._stop.is_set():
+        self._progress = time.monotonic()
+        if self._heartbeat is not None:   # its own thread: a long tick cannot silence it, a stalled loop is reported
             try:
-                self.tick()
-            except Exception:  # noqa: BLE001
+                from .heartbeat import stall_after
+                self._heartbeat.start(lambda: self._progress, stall_s=stall_after(self.every), stop=self._stop)
+            except Exception:  # noqa: BLE001 - the dead-man ping never stops the watch
+                log.warning("heartbeat thread did not start")
+        while not self._stop.is_set():
+            self._progress = time.monotonic()
+            self._tick_started = datetime.now(self.tz).isoformat(timespec="seconds")
+            error: str | None = None
+            raised: str | None = None
+            self._write_alive(self._last_error)
+            try:
+                result = self.tick()
+                if isinstance(result, dict) and result.get("check_error"):
+                    error = str(result["check_error"])
+            except Exception as e:  # noqa: BLE001
                 log.exception("watch tick failed")
+                error = raised = f"{type(e).__name__}: {e}"
+            self._progress = time.monotonic()
+            self._tick_finished = datetime.now(self.tz).isoformat(timespec="seconds")
+            self._last_error = error
+            self._write_alive(error, force=True)
+            if self._heartbeat is not None:
+                try:
+                    if raised is not None:   # only an unexpected exception is a heartbeat fail
+                        from .notify import redact
+                        self._heartbeat.report_error(redact(raised, getattr(self.settings, "telegram_bot_token", None)))
+                    else:   # a routine check_error (Groww or NSE down) is an alerted condition, the loop is alive
+                        self._heartbeat.report_clean()
+                except Exception:  # noqa: BLE001
+                    pass
             self._stop.wait(self.every)
 
     def start(self) -> None:
@@ -380,6 +439,11 @@ class Watcher:
 
     def stop(self) -> None:
         self._stop.set()
+        if self._heartbeat is not None:
+            try:
+                self._heartbeat.stop()
+            except Exception:  # noqa: BLE001
+                pass
         if self._awake is not None and self._awake_on:
             self._awake(False)
             self._awake_on = False

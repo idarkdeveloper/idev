@@ -351,6 +351,8 @@ def cmd_forward(args: argparse.Namespace) -> int:
 
     settings = _settings(args)
     prices = free_prices(settings)
+    if args.rebuild_from:
+        return _forward_rebuild(args, settings, prices)
     from .holidays import NSEHolidays
     ft = ForwardTest(settings.state_dir, universe=args.universe, top=args.top,
                      capital=args.capital or settings.paper_starting_cash, price_fn=prices.latest_price,
@@ -369,6 +371,22 @@ def cmd_forward(args: argparse.Namespace) -> int:
         return run_screen(members, prices, top=ft.data["top"], bands=book_for(settings))
 
     print(format_forward(ft.run(screen, force_rebalance=args.rebalance)))
+    return 0
+
+
+def _forward_rebuild(args: argparse.Namespace, settings: Any, prices: Any) -> int:
+    """forward --rebuild-from DATE: recreate the paper forward account as the first routine run made it on DATE."""
+    from .forward import format_rebuild
+    from .forward_schedule import rebuild_for_settings
+
+    try:
+        summary = rebuild_for_settings(settings, prices, _market_holidays(settings), args.rebuild_from,
+                                       universe=args.universe, top=args.top, capital=args.capital, force=args.force,
+                                       progress=print)
+    except (FileExistsError, ValueError, LookupError) as e:
+        print(f"Not rebuilt: {e}", file=sys.stderr)
+        return 1
+    print(format_rebuild(summary))
     return 0
 
 
@@ -830,7 +848,16 @@ def cmd_watch(args: argparse.Namespace) -> int:
     holidays = _market_holidays(settings)
     digest = make_scheduler(settings, notifier, data=data, prices=free_prices(settings), news=news, holidays=holidays,
                             practice=broker if isinstance(broker, LocalPaperBroker) else None)
-    w = Watcher(settings, every=args.every, news=news, digest=digest, window=(args.window_start, args.window_end),
+    from .forward_schedule import ForwardScheduler, run_forward_due
+    from .heartbeat import Heartbeat
+    from .notify import install_log_redaction
+    install_log_redaction()   # bot tokens and the heartbeat path never reach a log, even at -v
+    forward_prices = free_prices(settings)
+    forward = ForwardScheduler(settings.state_dir, lambda: print(run_forward_due(settings, forward_prices, holidays, notifier)),
+                               holidays=holidays)
+    w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
+                heartbeat=Heartbeat(settings.heartbeat_url, fail_enabled=True if settings.heartbeat_fail else None),
+                window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
                 auto_exit=settings.auto_trade,
                 holidays=holidays, broker_factory=lambda: make_broker(settings),
@@ -867,7 +894,7 @@ def cmd_digest(args: argparse.Namespace) -> int:
             return 1
         delivered = send_digest(notifier, email)
         print(f"Sent via: {', '.join(d for d in delivered if d != 'console') or 'nothing (delivery failed)'}")
-        return 0 if set(delivered) - {"console"} else 1
+        return 0 if set(delivered) - {"console", "telegram"} else 1
     return 0
 
 
@@ -931,6 +958,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--rebalance", action="store_true", help="rebalance now even if this month is done")
     sp.add_argument("--status", action="store_true", help="show the current standing without trading")
     sp.add_argument("--if-due", action="store_true", help="for schedules: skip unless a weekday after the close")
+    sp.add_argument("--rebuild-from", metavar="YYYY-MM-DD",
+                    help="recreate the forward account as the first run made it on that date (refuses if one exists)")
+    sp.add_argument("--force", action="store_true", help="with --rebuild-from: delete an existing forward account first")
     sp.set_defaults(func=cmd_forward)
     sp = sub.add_parser("groww-check", help="verify live-trading assumptions on your Groww account")
     sp.add_argument("--live-test", metavar="SYMBOL",
@@ -1061,6 +1091,8 @@ def _utf8_output() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     _utf8_output()
+    from .notify import install_log_redaction
+    install_log_redaction()   # bot tokens and the heartbeat path never reach a log, even at -v (guarded: once)
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")

@@ -28,7 +28,8 @@ from urllib.parse import urlparse
 
 from . import taxes
 from .broker import AlreadyCopied, Broker, LocalPaperBroker
-from .config import DIGEST_WRITERS, Settings, load_settings, parse_digest_time, parse_investors
+from .config import (DIGEST_WRITERS, Settings, load_settings, parse_digest_time, parse_heartbeat_url, parse_investors,
+                     parse_forward_start, parse_telegram_chat, parse_telegram_token)
 from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
@@ -58,6 +59,11 @@ EDITABLE_ENV_KEYS = {
     "auto_trade": "AUTO_TRADE",
     "notify_email_to": "NOTIFY_EMAIL_TO",
     "notify_webhook_url": "NOTIFY_WEBHOOK_URL",
+    "telegram_bot_token": "TELEGRAM_BOT_TOKEN",
+    "telegram_chat_id": "TELEGRAM_CHAT_ID",
+    "telegram_alerts": "TELEGRAM_ALERTS",
+    "heartbeat_url": "HEARTBEAT_URL",
+    "forward_start": "FORWARD_START",
     "market": "MARKET",
     "paper_starting_cash": "PAPER_STARTING_CASH",
     # The daily emails (digest.py), sent by the watch service
@@ -172,7 +178,8 @@ class App:
         with self._lazy_lock:
             if self._demo is None or self._demo_ver != self._settings_version:
                 settings = dataclasses.replace(self.settings, groww_live_orders=False, resend_api_key=None,
-                                               notify_email_to=None, notify_webhook_url=None)
+                                               notify_email_to=None, notify_webhook_url=None,
+                                               telegram_bot_token=None, telegram_chat_id=None, heartbeat_url=None)
                 child = App(settings, dotenv=None, context=self.context, prices=self.prices)
                 child.momentum, child._parent = self.momentum, self
                 self._demo, self._demo_ver = child, self._settings_version
@@ -407,6 +414,9 @@ class App:
                 "auto_trade": s.auto_trade, "claude_model": s.claude_model,
                 "notify_email_to": s.notify_email_to or "",
                 "notify_webhook_url": s.notify_webhook_url or "",
+                # secrets are never sent back to the page: only whether they are set
+                "telegram_token_set": bool(s.telegram_bot_token), "telegram_chat_id": s.telegram_chat_id or "",
+                "telegram_alerts": s.telegram_alerts, "heartbeat_set": bool(s.heartbeat_url),
                 "paper_starting_cash": s.paper_starting_cash,
                 "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,
                 "flows_breadth": s.flows_breadth, "price_band_filter": s.price_band_filter,
@@ -1085,7 +1095,7 @@ class App:
         for key, env_key in EDITABLE_ENV_KEYS.items():
             if key not in changes:
                 continue
-            if is_demo and key.startswith("notify"):
+            if is_demo and (key.startswith("notify") or key.startswith("telegram") or key == "heartbeat_url"):
                 continue  # the Demo page never sends notifications
             value = changes[key]
             _check_type(key, value)
@@ -1100,7 +1110,17 @@ class App:
             elif key in ("digest_morning", "digest_evening"):
                 value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
-            elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
+            elif key == "forward_start":
+                value = parse_forward_start(value) or ""
+                ops.append(lambda v=value: setattr(st, "forward_start", v or None))
+            elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url"):
+                # validated here; the error never repeats the value (a token or ping URL is a secret)
+                parse = {"telegram_bot_token": parse_telegram_token, "telegram_chat_id": parse_telegram_chat,
+                         "heartbeat_url": parse_heartbeat_url}[key]
+                value = parse(value) or ""
+                ops.append(lambda k=key, v=value: setattr(st, k, v or None))
+            elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
+                         "telegram_alerts"):
                 value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
@@ -1455,8 +1475,12 @@ def _check_type(key: str, value: Any) -> None:
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
+    elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
+                 "telegram_alerts"):
         _bool_setting(key, value)
+    elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url", "forward_start"):
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{key} must be text (or empty to clear it)")
     elif key in ("digest_morning", "digest_evening", "digest_writer"):
         if not isinstance(value, str):
             raise ValueError(f"{key} must be a time as text, HH:MM")
@@ -1763,7 +1787,8 @@ def sample_app(settings: Settings, context: Any | None) -> App:
     s = dataclasses.replace(settings, state_dir=settings.state_dir / "demo-sample", broker="local",
                             groww_access_token=None, groww_api_key=None, groww_api_secret=None,
                             groww_totp_secret=None, groww_live_orders=False,
-                            resend_api_key=None, notify_email_to=None, notify_webhook_url=None)
+                            resend_api_key=None, notify_email_to=None, notify_webhook_url=None,
+                            telegram_bot_token=None, telegram_chat_id=None, heartbeat_url=None)
     trades, broker = _demo_inputs(s)
     return App(s, broker=broker, demo_trades=trades, dotenv=None, context=context)
 
@@ -1771,6 +1796,8 @@ def sample_app(settings: Settings, context: Any | None) -> App:
 def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: int = 8787,
           open_browser: bool = True, demo: bool = False) -> None:
     settings = settings or load_settings()
+    from .notify import install_log_redaction
+    install_log_redaction()
     from .regime import GlobalContext
     from .prices import YahooPrices
 

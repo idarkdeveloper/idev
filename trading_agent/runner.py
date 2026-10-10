@@ -340,7 +340,10 @@ def read_groww_portfolio(settings: Settings, prices: Any, stamp: str = "") -> di
 
 def make_notifier(settings: Settings) -> Notifier:
     return Notifier(resend_api_key=settings.resend_api_key, email_to=settings.notify_email_to,
-                    email_from=settings.notify_email_from, webhook_url=settings.notify_webhook_url)
+                    email_from=settings.notify_email_from, webhook_url=settings.notify_webhook_url,
+                    telegram_token=settings.telegram_bot_token if settings.telegram_on else None,
+                    telegram_chat_id=settings.telegram_chat_id if settings.telegram_on else None,
+                    telegram_state_dir=settings.state_dir / "telegram_sent")
 
 
 def cached_notifier(settings: Settings) -> Any:
@@ -349,7 +352,8 @@ def cached_notifier(settings: Settings) -> Any:
     holder: dict[str, Any] = {}
 
     def get() -> Notifier:
-        key = (settings.resend_api_key, settings.notify_email_to, settings.notify_email_from, settings.notify_webhook_url)
+        key = (settings.resend_api_key, settings.notify_email_to, settings.notify_email_from, settings.notify_webhook_url,
+               settings.telegram_bot_token, settings.telegram_chat_id, settings.telegram_alerts)
         if holder.get("key") != key:
             holder["key"], holder["n"] = key, make_notifier(settings)
         return holder["n"]
