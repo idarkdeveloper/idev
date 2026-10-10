@@ -61,6 +61,7 @@ class DigestContext:
     now: Callable[[], datetime] = lambda: datetime.now(IST)  # noqa: E731
     delayed: bool = True  # prices come from Yahoo
     screen_budget_s: float = 240.0
+    world_prices: Any = None  # history(symbol, range) with no exchange suffix (Yahoo), for the world indices
     names: Any = None  # CompanyNames: the full NSE equity list (cached), for the summary's known-name check
     calendar: Any = None  # NSEHolidays-like (is_trading_day): finds the previous trading day
     name_of: dict = field(default_factory=dict)  # symbol -> company name (from the NSE list), for the summary check
@@ -556,6 +557,197 @@ def _section(fn: Callable[..., Any], label: str, *a: Any) -> dict[str, Any]:
         return _err(label, e)
 
 
+# =============================================================================
+# World markets (morning)
+# =============================================================================
+# (yahoo symbol, short name, region, country). Futures are the overnight read; VIX is shown on its own.
+WORLD_INDICES = [
+    ("^GSPC", "S&P 500", "us", "US"), ("^IXIC", "Nasdaq", "us", "US"), ("^DJI", "Dow", "us", "US"),
+    ("^N225", "Nikkei", "asia", "Japan"), ("^HSI", "Hang Seng", "asia", "Hong Kong"), ("000001.SS", "Shanghai", "asia", "China"),
+    ("^KS11", "KOSPI", "asia", "South Korea"), ("^TWII", "Taiwan", "asia", "Taiwan"), ("^STI", "Straits Times", "asia", "Singapore"),
+    ("^AXJO", "ASX 200", "asia", "Australia")]
+WORLD_FUTURES = [("ES=F", "S&P 500 fut"), ("NQ=F", "Nasdaq 100 fut")]
+WORLD_VIX = ("^VIX", "VIX")
+INDIA_CONTEXT = [("nifty50", "Nifty"), ("india_vix", "India VIX"), ("usdinr", "USD/INR"), ("brent", "Brent")]
+
+
+def _chg(closes: list[float], n: int) -> float | None:
+    if len(closes) <= n or not closes[-1 - n]:
+        return None
+    return round((closes[-1] / closes[-1 - n] - 1) * 100, 2)
+
+
+def _avg(closes: list[float], n: int) -> float | None:
+    return sum(closes[-n:]) / n if len(closes) >= n else None
+
+
+def trend_label(closes: list[float]) -> str:
+    """UP when close > 50-day average > 200-day average, DOWN when close < 50-day < 200-day, else mixed ("n/a" with
+    fewer than 200 closes). A description of the current trend, not a forecast."""
+    ma50, ma200 = _avg(closes, 50), _avg(closes, 200)
+    if ma50 is None or ma200 is None:
+        return "n/a"
+    if closes[-1] > ma50 > ma200:
+        return "UP"
+    if closes[-1] < ma50 < ma200:
+        return "DOWN"
+    return "mixed"
+
+
+def _world_row(src: Any, symbol: str, name: str) -> dict[str, Any] | None:
+    try:
+        closes = [float(b["close"]) for b in src.history(symbol, "1y") if b.get("close") is not None]
+    except Exception:  # noqa: BLE001 - an index that cannot be read is skipped (and counted)
+        return None
+    if len(closes) < 2:
+        return None
+    return {"index": name, "close": round(closes[-1], 2), "d1_pct": _chg(closes, 1), "d5_pct": _chg(closes, 5),
+            "d20_pct": _chg(closes, 20), "trend": trend_label(closes), "vs_50d": (
+                None if _avg(closes, 50) is None else ("above" if closes[-1] > _avg(closes, 50) else "below"))}
+
+
+def _region_line(region: str, rows: list[dict[str, Any]], countries: dict[str, str]) -> str | None:
+    if not rows:
+        return None
+    ups = sum(r["trend"] == "UP" for r in rows)
+    downs = sum(r["trend"] == "DOWN" for r in rows)
+    label = "uptrend" if ups * 2 > len(rows) else "downtrend" if downs * 2 > len(rows) else "mixed"
+    moved_up = [r for r in rows if (r["d1_pct"] or 0) >= 0]
+    if region == "US":
+        return f"US: {label} ({len(moved_up)} of {len(rows)} up)"
+    up = [countries[r["index"]] for r in rows if (r["d1_pct"] or 0) >= 0]
+    down = [countries[r["index"]] for r in rows if (r["d1_pct"] or 0) < 0]
+    detail = "; ".join(x for x in (", ".join(up) + " up" if up else "", ", ".join(down) + " down" if down else "") if x)
+    return f"Asia: {label} ({detail})"
+
+
+def _world(ctx: DigestContext) -> dict[str, Any]:
+    src = ctx.world_prices or getattr(ctx.context, "source", None)
+    if src is None:
+        return unavailable("no price source for world markets")
+    countries = {name: country for _s, name, _r, country in WORLD_INDICES}
+    rows: dict[str, list[dict[str, Any]]] = {"us": [], "asia": []}
+    skipped = 0
+    for sym, name, region, _c in WORLD_INDICES:
+        if ctx.expired():
+            skipped += 1
+            continue
+        row = _world_row(src, sym, name)
+        if row is None:
+            skipped += 1
+        else:
+            rows[region].append(row)
+    futures = []
+    for sym, name in WORLD_FUTURES:
+        row = _world_row(src, sym, name)
+        if row is None:
+            skipped += 1
+        else:
+            futures.append(row)
+    vix = _world_row(src, *WORLD_VIX)
+    if vix is None:
+        skipped += 1
+    else:
+        vix["direction"] = "rising" if vix["vs_50d"] == "above" else "falling" if vix["vs_50d"] == "below" else None
+    india = []
+    try:
+        mk = ctx.context.fetch().get("markets", {}) if ctx.context is not None else {}
+        for key, name in INDIA_CONTEXT:
+            m = mk.get(key) or {}
+            if m.get("last") is not None:
+                india.append({"index": name, "close": round(m["last"], 2), "d1_pct": _pct(m.get("ret_1d")),
+                              "d5_pct": _pct(m.get("ret_5d")), "d20_pct": _pct(m.get("ret_20d")), "trend": None})
+    except Exception:  # noqa: BLE001
+        pass
+    if not (rows["us"] or rows["asia"] or futures or vix or india):
+        return unavailable("none of the world indices could be read")
+    lines = [x for x in (_region_line("US", rows["us"], countries), _region_line("Asia", rows["asia"], countries)) if x]
+    out: dict[str, Any] = {
+        "us": rows["us"], "asia": rows["asia"], "futures": futures, "vix": vix, "india": india, "skipped": skipped,
+        "region_lines": lines,
+        "futures_line": ("Overnight futures: " + ", ".join(f"{r['index'].replace(' fut', '')} {pct_text(r['d1_pct'])}" for r in futures)
+                         if futures else None),
+        "vix_line": (f"VIX {num(vix['close'], 2)}, {vix['direction']} against its 50-day average" if vix and vix.get("direction") else None),
+        "note": "Current trends from daily closes (UP: close above the 50-day average above the 200-day; DOWN: the reverse), not a forecast."}
+    return out
+
+
+# =============================================================================
+# Risk gauges (morning)
+# =============================================================================
+# (yahoo symbol, name, kind). Readings come from fixed rules over daily closes; they describe, they do not forecast.
+GAUGES = [("^VIX", "US VIX", "vix_us"), ("^INDIAVIX", "India VIX", "vix_in"), ("^TNX", "US 10-year yield %", "high"),
+          ("DX-Y.NYB", "Dollar index", "high"), ("INR=X", "USD/INR", "inr"), ("BZ=F", "Brent $", "brent"),
+          ("GC=F", "Gold $", "plain"), ("^NSEBANK", "Nifty Bank", "sector"), ("^CNXIT", "Nifty IT", "sector")]
+
+
+WARN_TEXT = {"India VIX": "India VIX is above 20", "US VIX": "US VIX is above 25",
+             "USD/INR": "the rupee is at a new 1-year low", "Brent $": "Brent is above $110"}
+
+
+def _range_text(close: float, lo: float, hi: float) -> str:
+    if hi <= lo:
+        return "flat over the year"
+    pos = (close - lo) / (hi - lo)
+    if close >= hi * 0.98 and pos >= 0.9:
+        return "near 1-year high"
+    if pos <= 0.1:
+        return "near 1-year low"
+    return f"{pos * 100:.0f}% of the way up its 1-year range"
+
+
+def gauge_reading(kind: str, closes: list[float]) -> tuple[str, bool]:
+    """(plain-language reading, warning) for one gauge from its daily closes, by fixed rules."""
+    c, hi = closes[-1], max(closes)
+    ma50 = _avg(closes, 50)
+    d20 = _chg(closes, 20)
+    if kind in ("vix_us", "vix_in"):
+        word = "calm" if c < 15 else "normal" if c < 20 else "elevated" if c < 25 else "stress"
+        if kind == "vix_in" and d20 is not None and d20 >= 15:
+            word += ", rising fast"
+        warn = c > 20 if kind == "vix_in" else c > 25
+        return word, warn
+    if kind == "high":
+        return ("near 1-year high: pressure on emerging markets" if c >= hi * 0.98 else "not near its 1-year high"), False
+    if kind == "inr":
+        near = c >= hi * 0.995
+        return ("rupee near its weakest of the year" if near else "rupee not near its weakest of the year"), c >= hi
+    if kind == "brent":
+        elevated = ma50 is not None and c > ma50 * 1.05
+        return ("oil elevated (costly for India)" if elevated else "oil not elevated"), c > 110
+    if kind == "sector":
+        return ("weak (below its 50-day average)" if ma50 is not None and c < ma50 else "holding above its 50-day average"), False
+    return ("below its 50-day average" if ma50 is not None and c < ma50 else "above its 50-day average"), False
+
+
+def _gauges(ctx: DigestContext) -> dict[str, Any]:
+    src = ctx.world_prices or getattr(ctx.context, "source", None)
+    if src is None:
+        return unavailable("no price source for the risk gauges")
+    rows, skipped = [], 0
+    for sym, name, kind in GAUGES:
+        if ctx.expired():
+            skipped += 1
+            continue
+        try:
+            closes = [float(b["close"]) for b in src.history(sym, "1y") if b.get("close") is not None]
+        except Exception:  # noqa: BLE001
+            closes = []
+        if len(closes) < 21:
+            skipped += 1
+            continue
+        reading, warn = gauge_reading(kind, closes)
+        ma50 = _avg(closes, 50)
+        rows.append({"gauge": name, "value": round(closes[-1], 2), "d20_pct": _chg(closes, 20),
+                     "vs_50d_pct": None if ma50 is None else round((closes[-1] / ma50 - 1) * 100, 2),
+                     "range": _range_text(closes[-1], min(closes), max(closes)), "reading": reading, "warning": warn})
+    if not rows:
+        return unavailable("none of the risk gauges could be read")
+    return {"gauges": rows, "warnings": [r["gauge"] for r in rows if r["warning"]],
+            "warning_texts": [WARN_TEXT[r["gauge"]] for r in rows if r["warning"] and r["gauge"] in WARN_TEXT], "skipped": skipped,
+            "note": "Readings from fixed rules over daily closes, not a forecast."}
+
+
 def _header(ctx: DigestContext, kind: str) -> dict[str, Any]:
     now = ctx.now()
     return {"kind": kind, "date": now.date().isoformat(), "generated_at": now.isoformat(timespec="seconds"),
@@ -581,6 +773,8 @@ def morning_brief(ctx: DigestContext) -> dict[str, Any]:
     data = _header(ctx, "morning")
     data["mood"] = _section(_mood, "market mood", ctx)
     no_buys = data["mood"].get("no_new_buys") if "unavailable" not in data["mood"] else None
+    data["world"] = _section(_world, "world markets", ctx)
+    data["gauges"] = _section(_gauges, "risk gauges", ctx)
     data["buy_ideas"] = _section(_buy_ideas, "buy ideas", ctx, no_buys)
     data["watch"] = _section(_watch, "holdings", ctx, today)
     data["deals"] = _section(_deals, "deals", ctx, "morning", today)
@@ -791,7 +985,7 @@ def make_context(settings: Any, *, data: Any = None, prices: Any = None, news: A
     except Exception:  # noqa: BLE001
         pass
     return DigestContext(
-        names=names, settings=settings, prices=prices, prices_bse=YahooPrices(suffix=".BO", cache_dir=cache), context=context,
+        names=names, world_prices=YahooPrices(suffix="", cache_dir=cache, cache_ttl=6 * 3600), settings=settings, prices=prices, prices_bse=YahooPrices(suffix=".BO", cache_dir=cache), context=context,
         data=data, news=news, practice=practice, calendar=holidays,
         groww=groww or (lambda: read_groww_portfolio(settings, prices, datetime.now(IST).isoformat(timespec="seconds"))),
         universe=load_universe, state_path=Path(settings.state_dir) / "state.json")

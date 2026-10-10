@@ -1399,3 +1399,117 @@ def test_phone_layout_puts_the_name_under_the_symbol_and_keeps_numbers_on_one_li
     assert re.search(r"nowrap;\">TCS · Groww \(also in practice\)</td>", html)
     assert ">Where</th>" not in html and ">Why</th>" in html
     assert "below its 200-day average (₹2,456); negative news: x" in html
+
+
+# ===================== world markets and risk gauges =====================
+def line(start, end, n=260):
+    return [start + (end - start) * i / (n - 1) for i in range(n)]
+
+
+def cbars(closes):
+    return [{"date": f"2025-{1 + i // 28:02d}-{1 + i % 28:02d}", "close": float(c), "adj_close": float(c), "volume": 1.0} for i, c in enumerate(closes)]
+
+
+class Src:
+    def __init__(self, table):
+        self.table = {k: cbars(v) for k, v in table.items()}
+
+    def history(self, symbol, range_="1y"):
+        if symbol not in self.table:
+            raise LookupError(symbol)
+        return self.table[symbol]
+
+
+def test_trend_labels_up_down_mixed_and_not_enough_data():
+    assert digest.trend_label(line(100, 200)) == "UP" and digest.trend_label(line(200, 100)) == "DOWN"
+    dip = line(100, 200, 240) + line(120, 90, 20)            # rose for most of the year, then fell below the 50-day average
+    assert digest.trend_label(dip) == "mixed" and digest.trend_label(line(1, 2, 100)) == "n/a"
+
+
+def test_world_markets_region_lines_futures_vix_and_missing_indices(s):
+    src = Src({"^GSPC": line(100, 200), "^IXIC": line(100, 220), "^DJI": line(200, 100),
+               "^N225": line(100, 200), "^TWII": line(100, 150), "^HSI": line(200, 100), "000001.SS": line(200, 120),
+               "ES=F": flat(100)[:-1] + [100.3], "NQ=F": flat(100)[:-1] + [100.5], "^VIX": line(10, 20)})
+    ctx = ctx_for(s, world_prices=src, context=SimpleNamespace(fetch=lambda force=False: {"markets": {
+        "nifty50": {"last": 25000.0, "ret_1d": 0.004, "ret_5d": 0.01, "ret_20d": -0.02}, "brent": {"last": 80.0}}}))
+    w = digest._world(ctx)
+    assert w["region_lines"][0] == "US: uptrend (2 of 3 up)"
+    assert w["region_lines"][1] == "Asia: mixed (Japan, Taiwan up; Hong Kong, China down)"
+    assert w["futures_line"] == "Overnight futures: S&P 500 +0.3%, Nasdaq 100 +0.5%"
+    assert w["vix_line"].startswith("VIX 20.00, rising against its 50-day average")
+    assert w["skipped"] == 3 and "not a forecast" in w["note"]            # KOSPI, Straits, ASX left out, counted
+    by = {r["index"]: r for r in w["us"] + w["asia"]}
+    assert by["S&P 500"]["trend"] == "UP" and by["Dow"]["trend"] == "DOWN" and by["S&P 500"]["d1_pct"] > 0 > by["Dow"]["d1_pct"]
+    assert {r["index"] for r in w["india"]} == {"Nifty", "Brent"}
+    data = {**digest._header(ctx, "morning"), "mood": digest.unavailable("x"), "world": w, "buy_ideas": digest.unavailable("x"),
+            "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}
+    mail = digest_render.render(data)
+    assert "WORLD MARKETS" in mail["text"] and "US: uptrend (2 of 3 up)" in mail["text"] and "3 index(es) could not be read" in mail["text"]
+    assert mail["text"].index("WORLD MARKETS") > 0 and ">Close</th>" not in mail["html"] and ">Index</th>" in mail["html"]
+    assert 'max-width:640px;width:100%' in mail["html"] and "white-space:nowrap" in mail["html"]
+    # the summary may speak about it, and only in terms of the data
+    assert digest_writer.validate_summary("The US is in an uptrend and Asia is mixed.", data)[0]
+    assert not digest_writer.validate_summary("US markets will open higher.", data)[0]
+    assert not digest_writer.validate_summary("Our forecast is for a rally.", data)[0]
+
+
+def test_world_markets_unavailable_without_a_source_or_any_data(s):
+    assert "unavailable" in digest._world(ctx_for(s))
+    assert "unavailable" in digest._world(ctx_for(s, world_prices=Src({})))
+
+
+def flat(v, n=260):
+    return [v] * n
+
+
+@pytest.mark.parametrize("kind,closes,reading,warn", [
+    ("vix_us", flat(12), "calm", False), ("vix_us", flat(17), "normal", False), ("vix_us", flat(22), "elevated", False),
+    ("vix_us", flat(25.5), "stress", True), ("vix_us", flat(24.9), "elevated", False),
+    ("vix_in", flat(21), "elevated", True), ("vix_in", flat(20), "elevated", False), ("vix_in", flat(14), "calm", False),
+    ("vix_in", flat(16, 240) + flat(16, 19) + [19.0], "normal, rising fast", False),
+    ("high", line(4.0, 5.0), "near 1-year high: pressure on emerging markets", False),
+    ("high", line(4.0, 5.0)[:100] + line(4.5, 4.0, 160), "not near its 1-year high", False),
+    ("inr", line(80, 90), "rupee near its weakest of the year", True),
+    ("inr", line(80, 90)[:-1] + [89.7], "rupee near its weakest of the year", False),
+    ("inr", line(80, 90)[:-1] + [89.0], "rupee not near its weakest of the year", False),
+    ("brent", flat(80, 230) + flat(92, 30), "oil elevated (costly for India)", False),
+    ("brent", flat(80), "oil not elevated", False), ("brent", flat(80, 259) + [111.0], "oil elevated (costly for India)", True),
+    ("sector", line(100, 200)[:-1] + [100.0], "weak (below its 50-day average)", False),
+    ("sector", line(100, 200), "holding above its 50-day average", False),
+])
+def test_gauge_reading_rules(kind, closes, reading, warn):
+    got, w = digest.gauge_reading(kind, closes)
+    assert got == reading and w is warn, (kind, got, w)
+
+
+def test_gauges_values_warnings_and_the_phone_table(s):
+    table = {"^VIX": flat(26), "^INDIAVIX": flat(21), "^TNX": line(4, 4.5), "DX-Y.NYB": flat(104), "INR=X": line(80, 90),
+             "BZ=F": line(70, 115), "GC=F": line(1800, 2400), "^NSEBANK": line(100, 200)[:-1] + [90.0]}      # ^CNXIT missing
+    g = digest._gauges(ctx_for(s, world_prices=Src(table)))
+    assert g["skipped"] == 1 and len(g["gauges"]) == 8
+    assert g["warnings"] == ["US VIX", "India VIX", "USD/INR", "Brent $"]
+    assert g["warning_texts"] == ["US VIX is above 25", "India VIX is above 20", "the rupee is at a new 1-year low", "Brent is above $110"]
+    row = {r["gauge"]: r for r in g["gauges"]}
+    assert row["US VIX"]["value"] == 26.0 and row["US VIX"]["range"] == "flat over the year" and row["US VIX"]["reading"] == "stress"
+    assert row["USD/INR"]["range"] == "near 1-year high" and row["USD/INR"]["d20_pct"] > 0 and row["USD/INR"]["vs_50d_pct"] > 0
+    assert row["Nifty Bank"]["reading"].startswith("weak") and row["Nifty Bank"]["vs_50d_pct"] < 0
+    data = {**digest._header(ctx_for(s), "morning"), "mood": digest.unavailable("x"), "gauges": g, "buy_ideas": digest.unavailable("x"),
+            "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}
+    mail = digest_render.render(data)
+    assert "RISK GAUGES" in mail["text"] and "⚠ Warning: US VIX is above 25; India VIX is above 20" in mail["text"]
+    assert "⚠ warning: stress" in mail["text"] and "not a forecast" in mail["text"] and "1 gauge(s) could not be read" in mail["text"]
+    assert "⚠ warning: stress; flat over the year" in mail["html"]          # the word, not only a colour or symbol
+    assert ">Reading</th>" not in mail["html"] and ">Gauge</th>" in mail["html"] and 'max-width:640px;width:100%' in mail["html"]
+    assert digest_writer.validate_summary("India VIX is above 20 and the rupee is at a new 1-year low.", data)[0]
+    assert "unavailable" in digest._gauges(ctx_for(s, world_prices=Src({})))
+    quiet = digest._gauges(ctx_for(s, world_prices=Src({"^VIX": flat(12)})))
+    assert quiet["warnings"] == [] and "⚠" not in digest_render.render({**data, "gauges": quiet})["text"]
+
+
+def test_morning_brief_builds_world_and_gauges_after_the_mood(s):
+    src = Src({"^GSPC": line(100, 200), "^VIX": flat(12)})
+    m = morning_brief(ctx_for(s, world_prices=src, context=Regime()))
+    assert "us" in m["world"] and "gauges" in m["gauges"]
+    text = digest_render.render(m)["text"]
+    assert text.index("MARKET MOOD") < text.index("WORLD MARKETS") < text.index("RISK GAUGES") < text.index("HOLDINGS TO WATCH")
+    assert list(m).index("world") < list(m).index("gauges") < list(m).index("buy_ideas")
