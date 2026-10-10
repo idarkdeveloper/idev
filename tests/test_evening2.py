@@ -271,3 +271,12 @@ def test_quiet_deals_line_names_few_investors_and_counts_many():
     many = _deals_block({"deals": [], "following": [f"I{i}" for i in range(10)], "since": "2026-10-11"}, "Deals")
     few = _deals_block({"deals": [], "following": ["A", "B"], "since": "2026-10-11"}, "Deals")
     assert "the 10 tracked investors" in str(many) and "I3" not in str(many) and "No disclosures by A, B since" in str(few)
+
+
+def test_total_and_today_pl_are_coloured_in_the_email():
+    from trading_agent.digest_render import to_html
+    doc = {"title": "t", "footer": [], "blocks": [{"title": "P", "lines": [], "table": None, "tone": None, "cards": None,
+            "kv": [("Value now", "₹1,000"), ("Total P&L", "−₹21,722 (−11.4%)"), ("Today", "+₹500 (+0.3%)")]}]}
+    h = to_html(doc)
+    assert "color:#b91c1c;font-weight:bold;padding:2px 0\">−₹21,722" in h and "color:#15803d;font-weight:bold;padding:2px 0\">+₹500" in h
+    assert "color:#111827;padding:2px 0\">₹1,000" in h
