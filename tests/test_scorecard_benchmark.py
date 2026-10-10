@@ -35,8 +35,9 @@ class FundPrices:
         return self._path(totals[sym])
 
 
-def _mem(current, changes=()):
-    return Membership(frozenset(current), list(changes))
+def _mem(current, changes=(), **kw):
+    # a recorded (empty) change on an early date: the history is known for the days these tests use
+    return Membership(frozenset(current), list(changes) or [("2000-01-01", (), ())], **kw)
 
 
 def _rec(p, ticker, action="buy"):

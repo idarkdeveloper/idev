@@ -1189,7 +1189,7 @@ class App:
         memberships = None
         if self.settings.market == "in" and recs:   # nothing to score: no index lists to download
             from .scorecard import build_memberships
-            memberships = build_memberships(self.settings.state_dir)
+            memberships = build_memberships(self.settings.state_dir, use_cache=True)
         return score_recommendations(recs, self.prices, benchmark=bench,
                                      cost_model=cm if hasattr(cm, "round_trip") else None,
                                      memberships=memberships)

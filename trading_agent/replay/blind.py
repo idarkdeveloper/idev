@@ -4,7 +4,7 @@ Claude's weights may know what happened after a replay date (parametric hindsigh
 past data. For each case (replay date + ticker) the exact Ask-Claude input is built twice and sent through the same
 forced ``record_view`` call:
 
-* unmasked: the real ticker, company name, sector and announcement texts;
+* unmasked: the real ticker, company name and sector, announcements as category and date (no text);
 * masked: ticker and company become COMPANY_A, the sector stays as a generic label, dates become relative trading
   days (D-250 ... D0), prices are indexed to 100 at the start of the window (returns, ATR % and volume ratios are
   unchanged), announcements keep only their category and relative day (the text names the company), and the
@@ -17,9 +17,11 @@ per case, and the hindsight signature, computed AFTER both answers from prices a
 answer is more confident, in signed terms, in the direction the stock then actually went. That last number uses the
 future on purpose and is only for judging the test.
 
-Verdict: "possible hindsight" when the stance class changes in at least 40% of cases (2 of 5) or the mean absolute
-confidence gap is at least 15 points; otherwise "no sign of hindsight". With few cases this is a smoke test, not proof.
-It costs real API money (about two calls per case), so the CLI needs --yes and an API key, and it never runs by itself.
+Noise baseline: each input is asked twice (U1, U2 unmasked; M1, M2 masked). Identity effect = U1 vs M1; noise = U1 vs
+U2 and M1 vs M2 (mean of the two pairs per case). Verdict: "possible hindsight" only when (identity stance changes -
+noise stance changes) is at least 40% of the cases (2 of 5) or (mean identity confidence gap - mean noise gap) is at
+least 15 points; otherwise "no sign of hindsight". With few cases this is a smoke test, not proof.
+It costs real API money (four calls per case), so the CLI needs --yes and an API key, and it never runs by itself.
 """
 
 from __future__ import annotations
@@ -43,7 +45,8 @@ ALIAS = "COMPANY_A"
 DEFAULT_CASES = 5
 HORIZON_BARS = 60          # outcome window after the replay date, in trading days
 MIN_OUTCOME_BARS = 20      # fewer bars than this after the date: the case is not scored
-FLIP_FRACTION = 0.4        # stance changes in at least 2 of 5 cases
+FLIP_FRACTION = 0.4        # net stance changes in at least 2 of 5 cases
+CALLS_PER_CASE = 4        # unmasked twice, masked twice (the repeats measure sampling noise)
 CONF_GAP_POINTS = 15.0     # or a mean absolute confidence gap of this many points
 CONF_POINTS = {"low": 25.0, "medium": 50.0, "high": 75.0}
 OUTPUT_TOKENS_GUESS = 700  # per call, for the cost estimate
@@ -153,11 +156,26 @@ def _scrub(obj: Any, terms: list[str]) -> Any:
     return obj
 
 
-def leaks(prompt: str, ticker: str, company: str) -> list[str]:
-    """Identifiers and ISO dates still present in a masked prompt (empty when it is clean)."""
+def _values(obj: Any) -> list[str]:
+    """Every string and number VALUE in a context (keys are our own field names, not data)."""
+    if isinstance(obj, dict):
+        return [v for x in obj.values() for v in _values(x)]
+    if isinstance(obj, (list, tuple)):
+        return [v for x in obj for v in _values(x)]
+    return [] if obj is None else [str(obj)]
+
+
+def leaks(masked_ctx: Any, ticker: str, company: str, sector: str = "") -> list[str]:
+    """Identifiers and ISO dates still present in a masked input (empty when it is clean).
+
+    Only the VALUES of the masked context itself are checked (not its field names), never the system prompt (whose plain words, like "Indian" or "Data",
+    are also parts of real company names), and the generic sector label is allowed to keep its own words."""
+    text = masked_ctx if isinstance(masked_ctx, str) else " | ".join(_values(masked_ctx))
+    if sector:
+        text = text.replace(sector, " ")
     found = [t for t in _terms(ticker, company)
-             if re.search(r"(?<![A-Za-z0-9_])" + re.escape(t) + r"(?![A-Za-z0-9_])", prompt, re.I)]
-    return found + _ISO.findall(prompt)
+             if re.search(r"(?<![A-Za-z0-9_])" + re.escape(t) + r"(?![A-Za-z0-9_])", text, re.I)]
+    return found + _ISO.findall(text)
 
 
 # -- building the paired inputs --------------------------------------------------------------
@@ -177,12 +195,25 @@ def _shim(day_label: str, prices: Any, cash: float) -> Any:
                            data={"picks": None})
 
 
+class PlainNews:
+    """The unmasked run's announcements: category and date only, no text, so the runs differ only in identity."""
+
+    def __init__(self, news: ClockedNews):
+        self.news = news
+
+    def for_symbol(self, symbol: str, days: int = 60, until: str | None = None) -> dict[str, Any]:
+        r = self.news.for_symbol(symbol, days=days)
+        return {"items": [{"at": a["at"], "category": a.get("category", ""), "text": ""} for a in r["items"]],
+                "error": r["error"]}
+
+
 def build_pair(case: Case, *, source: Any, news_client: Any, members: list[dict[str, str]], field: str = "adj_close",
                cash: float = 100_000.0) -> dict[str, Any]:
     """The exact Ask-Claude input twice: {"unmasked": ctx, "masked": ctx, "labels": {...}}.
 
-    Both contexts are build_context's output for a lookup of the ticker with an empty practice book; both carry
-    the company name and sector in the lookup block (the unmasked run is otherwise identified only by ticker)."""
+    Both contexts are build_context's output for a lookup of the ticker with an empty practice book. Both carry
+    the company name and sector in the lookup block (the unmasked run is otherwise identified only by ticker) and
+    both drop announcement texts (category and date stay; the date is relative in the masked run)."""
     ticker = case.ticker.upper()
     member = next((m for m in members if m["symbol"].upper() == ticker), {})
     company = member.get("name") or ticker
@@ -191,13 +222,13 @@ def build_pair(case: Case, *, source: Any, news_client: Any, members: list[dict[
     prices = ClockedPrices(source, clock, field=field)
     real_news = ClockedNews(news_client, clock)
 
-    unmasked = build_context(_shim(case.date, prices, cash), real_news, lookup=ticker)
+    unmasked = build_context(_shim(case.date, prices, cash), PlainNews(real_news), lookup=ticker)
     unmasked["lookup"].update(company=company, sector=sector)
 
     mprices = MaskedPrices(prices, ticker)
     masked = build_context(_shim("D0", mprices, cash), MaskedNews(real_news, mprices), lookup=ALIAS)
-    masked["lookup"].update(company=ALIAS, sector=sector)
-    masked = _scrub(masked, _terms(ticker, company))
+    masked = _scrub(masked, _terms(ticker, company))      # company words first ...
+    masked["lookup"].update(company=ALIAS, sector=sector)  # ... then the sector label, which must stay as it is
     return {"unmasked": unmasked, "masked": masked,
             "labels": {"ticker": ticker, "company": company, "sector": sector}}
 
@@ -255,33 +286,52 @@ def outcome_after(source: Any, ticker: str, day: str, field: str = "adj_close") 
             "until": bars[j]["date"]}
 
 
-def compare_case(case: Case, un: dict[str, Any], ma: dict[str, Any], outcome: dict[str, Any] | None) -> dict[str, Any]:
-    flip = un["stance"] != ma["stance"]
-    gap = abs(un["points"] - ma["points"])
+def _pair_effect(a: dict[str, Any], b: dict[str, Any]) -> tuple[bool, float]:
+    return a["stance"] != b["stance"], abs(a["points"] - b["points"])
+
+
+def compare_case(case: Case, u1: dict[str, Any], m1: dict[str, Any], outcome: dict[str, Any] | None,
+                 u2: dict[str, Any] | None = None, m2: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Identity effect = U1 vs M1. Noise = U1 vs U2 and M1 vs M2 (the same input asked twice). Without the
+    repeats the noise is zero."""
+    flip, gap = _pair_effect(u1, m1)
+    noise = [_pair_effect(a, b) for a, b in ((u1, u2), (m1, m2)) if a is not None and b is not None]
+    noise_flips = sum(1 for f, _ in noise if f) / len(noise) if noise else 0.0   # mean of the two pairs: 0, 0.5 or 1
+    noise_gap = sum(g for _, g in noise) / len(noise) if noise else 0.0
     sig: bool | None = None
     if outcome and outcome["direction"]:
-        sig = outcome["direction"] * (un["signed"] - ma["signed"]) > 0
-    return {"case": case.to_dict(), "unmasked": un, "masked": ma, "stance_flip": flip, "confidence_gap": gap,
-            "reason_overlap": reason_overlap(un["rationale"], ma["rationale"]),
+        sig = outcome["direction"] * (u1["signed"] - m1["signed"]) > 0
+    return {"case": case.to_dict(), "unmasked": u1, "masked": m1, "unmasked_repeat": u2, "masked_repeat": m2,
+            "stance_flip": flip, "confidence_gap": gap, "noise_flips": noise_flips, "noise_gap": noise_gap,
+            "reason_overlap": reason_overlap(u1["rationale"], m1["rationale"]),
             "outcome": outcome, "hindsight_signature": sig}
 
 
 def verdict(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Possible hindsight only when the identity effect beats the noise: (identity flips - noise flips) at least
+    40% of the cases (2 of 5), or (mean identity gap - mean noise gap) at least 15 points."""
     m = len(results)
     if not m:
         return {"cases": 0, "verdict": "no cases were run", "possible_hindsight": False}
     flips = sum(1 for r in results if r["stance_flip"])
+    noise_flips = sum(r.get("noise_flips", 0.0) for r in results)
     mean_gap = sum(r["confidence_gap"] for r in results) / m
+    noise_gap = sum(r.get("noise_gap", 0.0) for r in results) / m
+    net_flips, net_gap = flips - noise_flips, mean_gap - noise_gap
     scored = [r for r in results if r["hindsight_signature"] is not None]
     sig = sum(1 for r in scored if r["hindsight_signature"])
     affected = sum(1 for r in results if r["stance_flip"] or r["confidence_gap"] >= CONF_GAP_POINTS)
-    flagged = flips / m >= FLIP_FRACTION or mean_gap >= CONF_GAP_POINTS
-    thresholds = (f"thresholds: stance changes in at least {math.ceil(FLIP_FRACTION * m)} of {m} cases "
-                  f"({FLIP_FRACTION:.0%}), or a mean confidence gap of at least {CONF_GAP_POINTS:g} points")
+    need = math.ceil(FLIP_FRACTION * m)
+    flagged = net_flips >= need or net_gap >= CONF_GAP_POINTS
+    thresholds = (f"thresholds: (identity stance changes - noise stance changes) at least {need} of {m} cases "
+                  f"({FLIP_FRACTION:.0%}), or (mean identity confidence gap - mean noise gap) at least "
+                  f"{CONF_GAP_POINTS:g} points")
     text = (f"possible hindsight: {affected} of {m} cases" if flagged else "no sign of hindsight")
     return {"cases": m, "verdict": text, "possible_hindsight": flagged, "thresholds": thresholds,
-            "stance_agreement": round(1 - flips / m, 3), "stance_flips": flips,
-            "mean_abs_confidence_gap": round(mean_gap, 2), "affected_cases": affected,
+            "stance_agreement": round(1 - flips / m, 3), "stance_flips": flips, "identity_flips": flips,
+            "noise_flips": round(noise_flips, 2), "net_flips": round(net_flips, 2),
+            "mean_abs_confidence_gap": round(mean_gap, 2), "mean_identity_gap": round(mean_gap, 2),
+            "mean_noise_gap": round(noise_gap, 2), "net_gap": round(net_gap, 2), "affected_cases": affected,
             "hindsight_signature_cases": sig, "scored_cases": len(scored),
             "note": ("Hindsight signature (graded afterwards with prices after the replay date): the unmasked answer "
                      f"was more confident than the masked one in the direction the stock went, in {sig} of "
@@ -290,11 +340,12 @@ def verdict(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 # -- cost ------------------------------------------------------------------------------------
 def estimate_cost(model: str, pairs: list[dict[str, Any]], days: list[str]) -> dict[str, Any]:
-    """Approximate USD for two calls per case: input from the prompt size (about 3.5 characters a token)."""
+    """Approximate USD for four calls per case (unmasked twice, masked twice): input from the prompt size
+    (about 3.5 characters a token)."""
     from ..agent import PRICES_PER_MTOK
-    tokens_in = sum(math.ceil(len(prompt_text(p[k], d if k == "unmasked" else "D0")) / 3.5)
-                    for p, d in zip(pairs, days) for k in ("unmasked", "masked"))
-    calls = 2 * len(pairs)
+    tokens_in = 2 * sum(math.ceil(len(prompt_text(p[k], d if k == "unmasked" else "D0")) / 3.5)
+                        for p, d in zip(pairs, days) for k in ("unmasked", "masked"))
+    calls = CALLS_PER_CASE * len(pairs)
     price = PRICES_PER_MTOK.get(model)
     usd = None if price is None else (tokens_in * price[0] + calls * OUTPUT_TOKENS_GUESS * price[1]) / 1e6
     return {"calls": calls, "input_tokens": tokens_in, "output_tokens": calls * OUTPUT_TOKENS_GUESS, "usd": usd,
@@ -303,24 +354,32 @@ def estimate_cost(model: str, pairs: list[dict[str, Any]], days: list[str]) -> d
 
 # -- running ---------------------------------------------------------------------------------
 def run_blind_test(cases: list[Case], pairs: list[dict[str, Any]], *, client: Any, model: str, source: Any,
-                   field: str = "adj_close", progress: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """Send both inputs of every case through record_view, then grade with the prices that came after."""
-    results = []
+                   field: str = "adj_close", progress: Callable[[str], None] | None = None,
+                   checkpoint: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+    """Per case: unmasked twice and masked twice through record_view, then grade with the prices that came after.
+    `checkpoint(report_so_far)` runs after every case, so a crash keeps what was already paid for."""
+    results: list[dict[str, Any]] = []
+
+    def report(done: bool) -> dict[str, Any]:
+        return {"run_at": datetime.now().isoformat(timespec="seconds"), "model": model, "complete": done,
+                "summary": verdict(results), "results": list(results),
+                "labels": {"outcome": "HINDSIGHT: returns after the replay date, used only to grade the test, "
+                                      "never shown to Claude"}}
+
     for case, pair in zip(cases, pairs):
-        ticker = pair["labels"]["ticker"]
-        bad = leaks(prompt_text(pair["masked"], "D0"), ticker, pair["labels"]["company"])
+        ticker, lab = pair["labels"]["ticker"], pair["labels"]
+        bad = leaks(pair["masked"], ticker, lab["company"], lab.get("sector", ""))
         if bad:   # never pay for a masked run that is not masked
             raise ValueError(f"masked input for {case.ticker} on {case.date} still contains {bad}")
         if progress:
-            progress(f"{case.slug} {case.date} {case.ticker}: asking unmasked, then masked")
-        _, uv = request_view(client, model, case.date, pair["unmasked"])
-        _, mv = request_view(client, model, "D0", pair["masked"])
-        un, ma = stance_of(uv, ticker), stance_of(mv, ticker)
-        results.append(compare_case(case, un, ma, outcome_after(source, ticker, case.date, field)))
-    return {"run_at": datetime.now().isoformat(timespec="seconds"), "model": model,
-            "summary": verdict(results), "results": results,
-            "labels": {"outcome": "HINDSIGHT: returns after the replay date, used only to grade the test, "
-                                  "never shown to Claude"}}
+            progress(f"{case.slug} {case.date} {case.ticker}: unmasked x2, masked x2")
+        views = [request_view(client, model, label, pair[kind])[1]
+                 for kind, label in (("unmasked", case.date), ("unmasked", case.date), ("masked", "D0"), ("masked", "D0"))]
+        u1, u2, m1, m2 = (stance_of(v, ticker) for v in views)
+        results.append(compare_case(case, u1, m1, outcome_after(source, ticker, case.date, field), u2, m2))
+        if checkpoint:
+            checkpoint(report(len(results) == len(cases)))
+    return report(True)
 
 
 # -- saving and showing ----------------------------------------------------------------------
@@ -328,7 +387,7 @@ def research_dir(state_dir: Any) -> Path:
     return Path(state_dir) / "research"
 
 
-def save_report(state_dir: Any, report: dict[str, Any], today: str | None = None) -> Path:
+def new_report_path(state_dir: Any, today: str | None = None) -> Path:
     d = research_dir(state_dir)
     d.mkdir(parents=True, exist_ok=True)
     day = today or date.today().isoformat()
@@ -336,7 +395,18 @@ def save_report(state_dir: Any, report: dict[str, Any], today: str | None = None
     while path.exists():
         n += 1
         path = d / f"blind_test_{day}_{n}.json"
-    path.write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
+    return path
+
+
+def write_report(path: Path, report: dict[str, Any]) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(report, indent=1, default=str), encoding="utf-8")
+    tmp.replace(path)
+
+
+def save_report(state_dir: Any, report: dict[str, Any], today: str | None = None) -> Path:
+    path = new_report_path(state_dir, today)
+    write_report(path, report)
     return path
 
 
@@ -350,6 +420,8 @@ def latest_verdict(state_dir: Any) -> dict[str, Any] | None:
             return {"file": p.name, "run_at": r.get("run_at"), "model": r.get("model"), "verdict": s["verdict"],
                     "cases": s.get("cases"), "stance_flips": s.get("stance_flips"),
                     "mean_abs_confidence_gap": s.get("mean_abs_confidence_gap"),
+                    "net_flips": s.get("net_flips"), "net_gap": s.get("net_gap"),
+                    "noise_flips": s.get("noise_flips"), "mean_noise_gap": s.get("mean_noise_gap"),
                     "possible_hindsight": s.get("possible_hindsight"),
                     "hindsight_signature_cases": s.get("hindsight_signature_cases"),
                     "scored_cases": s.get("scored_cases")}
@@ -363,8 +435,10 @@ def format_report(report: dict[str, Any]) -> str:
     lines = [f"Blind-ticker test: {s['cases']} cases, model {report.get('model')}", f"  Verdict: {s['verdict']}"]
     if s["cases"]:
         lines += [f"  {s['thresholds']}",
-                  f"  Stance agreement {s['stance_agreement']:.0%}; mean absolute confidence gap "
-                  f"{s['mean_abs_confidence_gap']:g} points",
+                  f"  Identity effect: {s['identity_flips']} stance changes, mean confidence gap "
+                  f"{s['mean_identity_gap']:g} points. Noise (same input asked twice): {s['noise_flips']:g} stance "
+                  f"changes, mean gap {s['mean_noise_gap']:g} points. Net: {s['net_flips']:g} changes, "
+                  f"{s['net_gap']:g} points.",
                   f"  {s['note']}"]
     for r in report["results"]:
         c, o = r["case"], r["outcome"]
@@ -421,6 +495,17 @@ def run_cli(args: Any, settings: Any, *, source: Any | None = None, news_client:
     model = getattr(args, "model", None) or settings.claude_model
     pairs = [build_pair(c, source=source, news_client=news_client, members=universe.members_on(c.date),
                         field=field, cash=float(data.get("cash") or 100_000)) for c in cases]
+    kept = []
+    for c, pr in zip(cases, pairs):
+        bad = leaks(pr["masked"], pr["labels"]["ticker"], pr["labels"]["company"], pr["labels"]["sector"])
+        if bad:
+            out(f"Skipping {c.date} {c.ticker}: the masked input still contains {', '.join(sorted(set(bad)))}.")
+        else:
+            kept.append((c, pr))
+    if not kept:
+        out("No case could be masked cleanly, so nothing can be tested.")
+        return 2
+    cases, pairs = [c for c, _ in kept], [pr for _, pr in kept]
     est = estimate_cost(model, pairs, [c.date for c in cases])
     cost = "cost unknown for this model" if est["usd"] is None else f"about ${est['usd']:.2f}"
     out(f"Blind-ticker test on {data['name']}: {len(cases)} cases, {est['calls']} Claude calls with {model}, "
@@ -433,9 +518,15 @@ def run_cli(args: Any, settings: Any, *, source: Any | None = None, news_client:
     if client is None:
         from ..agent import make_client
         client = make_client(settings)
-    report = run_blind_test(cases, pairs, client=client, model=model, source=source, field=field, progress=out)
-    report["slug"], report["estimate"] = data["slug"], est
-    path = save_report(settings.state_dir, report, today)
+    path = new_report_path(settings.state_dir, today)
+
+    def keep(partial: dict[str, Any]) -> None:   # after every case: a crash loses nothing already paid for
+        partial["slug"], partial["estimate"] = data["slug"], est
+        write_report(path, partial)
+
+    report = run_blind_test(cases, pairs, client=client, model=model, source=source, field=field, progress=out,
+                            checkpoint=keep)
+    keep(report)
     out(format_report(report))
     out(f"Saved {path}")
     return 0

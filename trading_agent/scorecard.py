@@ -16,6 +16,8 @@ HDFCSML250, anything else -> NIFTYBEES. All of these are funds, so dividends are
 from __future__ import annotations
 
 import statistics
+import threading
+import time
 from typing import Any, Iterable
 
 from .backtest import _forward
@@ -29,44 +31,81 @@ SMALL_FUND = INDEX_FUNDS["NIFTYSMALLCAP250"]
 # membership universes consulted, in priority order: (universe key, fund)
 BENCHMARK_UNIVERSES = (("NIFTY50", NIFTY_FUND), ("NIFTY100", NIFTY_FUND),
                        ("NIFTYMIDCAP150", MID_FUND), ("NIFTYSMALLCAP250", SMALL_FUND))
+ASSUMED_NOTE = "membership assumed (before recorded history)"
 GROUP_LABEL = {NIFTY_FUND: "large caps and others", MID_FUND: "mid caps", SMALL_FUND: "small caps"}
 
 
-def build_memberships(state_dir: Any, *, progress: Any = None) -> dict[str, Any]:
+_CACHE: dict[tuple[str, str, str], tuple[Any, float]] = {}
+_CACHE_LOCK = threading.Lock()
+RETRY_FAILED_AFTER = 600.0   # seconds before a universe that failed to load is tried again
+
+
+def _ist_today() -> str:
+    from datetime import datetime
+    from .timezones import IST
+    return datetime.now(IST).date().isoformat()
+
+
+def clear_membership_cache() -> None:
+    with _CACHE_LOCK:
+        _CACHE.clear()
+
+
+def build_memberships(state_dir: Any, *, progress: Any = None, use_cache: bool = False,
+                      now_fn: Any = time.time, today_fn: Any = _ist_today) -> dict[str, Any]:
     """Point-in-time membership per benchmark universe. A universe that cannot be loaded
-    (no network, no history yet) maps to None, which the scorer reports as 'membership unknown'."""
+    (no network, no history yet) maps to None, which the scorer reports as 'membership unknown'.
+
+    With use_cache (the web app) each universe is kept per (state_dir, IST date): a loaded one for the day, a failed
+    one (None) only for RETRY_FAILED_AFTER seconds, so an outage is retried soon and never pinned for the day.
+    The CLI builds fresh each time."""
     from .index_history import point_in_time
     from .screen import load_universe
     out: dict[str, Any] = {}
+    day = today_fn()
     for key, _fund in BENCHMARK_UNIVERSES:
+        ck = (str(state_dir), day, key)
+        if use_cache:
+            with _CACHE_LOCK:
+                hit = _CACHE.get(ck)
+            if hit is not None and (hit[0] is not None or now_fn() - hit[1] < RETRY_FAILED_AFTER):
+                out[key] = hit[0]
+                continue
         try:
             current = [m["symbol"] for m in load_universe(key)]
-            out[key] = point_in_time(key, current, state_dir, progress=progress)
+            value = point_in_time(key, current, state_dir, progress=progress)
         except Exception as e:  # noqa: BLE001
             if progress:
                 progress(f"membership for {key} unavailable: {type(e).__name__}: {e}")
-            out[key] = None
+            value = None
+        out[key] = value
+        if use_cache:
+            with _CACHE_LOCK:
+                _CACHE[ck] = (value, now_fn())
     return out
 
 
 def pick_benchmark(ticker: str, day: str, memberships: dict[str, Any] | None) -> tuple[str, str | None]:
-    """(benchmark symbol, note). The note is set when membership could not be determined."""
+    """(benchmark symbol, note). The note says when membership could not be determined, or only assumed
+    because the day is before the recorded history of the universe that decided it."""
     from .membership import _norm
     sym = _norm(ticker.replace("NSE_", "").replace("BSE_", ""))
-    unknown = False
+    unknown = assumed = False
     for key, fund in BENCHMARK_UNIVERSES:
         m = (memberships or {}).get(key)
         if m is None:
             unknown = True
             continue
         try:
+            before = day < m.known_since
             if sym in m.members_on(day):
-                return fund, None
+                return fund, ASSUMED_NOTE if before else None
+            assumed = assumed or before
         except Exception:  # noqa: BLE001
             unknown = True
     if unknown:
         return NIFTY_FUND, "membership unknown"
-    return NIFTY_FUND, None
+    return NIFTY_FUND, ASSUMED_NOTE if assumed else None
 
 
 def _aggregate(rows: list[dict[str, Any]], horizons: tuple[int, ...]) -> dict[str, Any]:
@@ -133,14 +172,19 @@ def score_recommendations(recs: Iterable[dict[str, Any]], prices: Any, *, horizo
             entry_date, entry_price, rets = _forward(bars, [b["date"] for b in bars], day, horizons)
             try:
                 bench, bench_dates = hist(bench_sym)
-            except Exception:  # noqa: BLE001 - e.g. a fund with no history: fall back, say so
+                if bench_sym != nifty_symbol and bench and bench[0]["date"] > day:
+                    raise LookupError(f"{bench_sym} history starts {bench[0]['date']}, after the recommendation")
+            except Exception as e:  # noqa: BLE001 - e.g. a fund with no history yet: fall back, say so
                 if bench_sym == nifty_symbol:
                     raise
-                row["benchmark_note"] = f"{bench_sym} history unavailable; scored against {nifty_symbol}"
+                why = str(e) if isinstance(e, LookupError) else f"{bench_sym} history unavailable"
+                row["benchmark_note"] = f"{why}; scored against {nifty_symbol}"
                 bench_sym = row["benchmark"] = nifty_symbol
                 bench, bench_dates = hist(bench_sym)
             _, _, b_rets = _forward(bench, bench_dates, day, horizons)
-            if bench_sym == nifty_symbol:
+            if not per_universe:
+                n_rets = {}      # a single-benchmark run has no NIFTYBEES reference
+            elif bench_sym == nifty_symbol:
                 n_rets = b_rets
             else:
                 try:
@@ -181,6 +225,13 @@ def score_recommendations(recs: Iterable[dict[str, Any]], prices: Any, *, horizo
             by_bench[b] = agg
     summary["by_benchmark"] = by_bench
     summary["pending"] = sum(1 for r in rows if all(v is None for v in r["excess"].values()))
+    warns: list[str] = []
+    for m in (memberships or {}).values():
+        for w in getattr(m, "warnings", None) or []:
+            if w not in warns:
+                warns.append(w)
+    summary["membership_warnings"] = warns
+    summary["assumed_membership"] = sum(1 for r in rows if r.get("benchmark_note") == ASSUMED_NOTE)
     summary["unknown_membership"] = sum(1 for r in rows if r.get("benchmark_note") == "membership unknown")
     return {"summary": summary, "rows": rows}
 
@@ -211,4 +262,8 @@ def format_scorecard(result: dict[str, Any]) -> str:
             block(by_action, "    ")
     if s.get("unknown_membership"):
         lines.append(f"  {s['unknown_membership']} call(s) scored against {NIFTY_FUND}: index membership unknown.")
+    if s.get("assumed_membership"):
+        lines.append(f"  {s['assumed_membership']} call(s): {ASSUMED_NOTE}.")
+    for w in s.get("membership_warnings") or []:
+        lines.append(f"  Note: {w}")
     return "\n".join(lines)
