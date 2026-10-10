@@ -130,6 +130,8 @@ class YahooPrices:
             dt = datetime.fromtimestamp(t, tz=timezone.utc).astimezone(IST)
             bars.append({"ts": dt.isoformat(timespec="seconds"), "date": dt.date().isoformat(), "open": float(o[i]),
                          "high": float(h[i]), "low": float(lo[i]), "close": float(c[i]), "volume": float(v[i] or 0)})
+        if interval == "1d":   # Yahoo can repeat the last day (a live bar and the settled one): keep the last of each date
+            bars = list({b["date"]: b for b in bars}.values())
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(bars))

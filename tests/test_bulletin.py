@@ -191,7 +191,7 @@ def test_four_hour_candles_split_at_13_15_and_survive_a_holiday_gap():
            h1("2026-10-05", 11, 15, 105, 107, 104, 104), h1("2026-10-05", 12, 15, 104, 105, 102, 103),
            h1("2026-10-05", 13, 15, 103, 104, 100, 101), h1("2026-10-05", 14, 15, 101, 102, 98, 99),
            h1("2026-10-05", 15, 15, 99, 101, 97, 100),
-           h1("2026-10-05", 16, 15, 1, 999, 0, 5), h1("2026-10-05", 9, 0, 1, 999, 0, 5)]       # outside the session
+           h1("2026-10-05", 16, 15, 1, 999, 0, 5), h1("2026-10-05", 8, 0, 1, 999, 0, 5)]       # outside the session
     wed = [h1("2026-10-07", 9, 15, 100, 101, 99, 100.5), h1("2026-10-07", 10, 15, 100.5, 102, 100, 101)]   # Tuesday is a holiday
     c = bulletin.resample_4h(wed + mon)                                                          # unsorted input
     assert [(x["date"], x["bucket"], x["bars"]) for x in c] == [("2026-10-05", "morning", 4), ("2026-10-05", "afternoon", 3),
@@ -206,11 +206,11 @@ def test_four_hour_candles_split_at_13_15_and_survive_a_holiday_gap():
 
 # ---------- wording ----------
 def test_adx_text_bands_and_direction():
-    assert bulletin.adx_text(35, 15, 30) == "ADX 35: the downtrend is strong (−DI above +DI)."
-    assert bulletin.adx_text(15, 20, 18) == "ADX 15: weak or no trend (+DI above −DI)."
-    assert bulletin.adx_text(22, 25, 15) == "ADX 22: an uptrend is developing (+DI above −DI)."
-    assert bulletin.adx_text(45, 30, 10) == "ADX 45: the uptrend is very strong (+DI above −DI)."
-    assert [bulletin.adx_band(x) for x in (19.9, 20, 24.9, 25, 39.9, 40)] == ["weak", "developing", "developing", "strong", "strong", "very strong"]
+    assert bulletin.adx_text(35, 15, 30) == "Daily ADX 35: the downtrend is strong (−DI above +DI)."
+    assert bulletin.adx_text(15, 20, 18) == "Daily ADX 15: weak or no trend (+DI above −DI)."
+    assert bulletin.adx_text(22, 25, 15) == "Daily ADX 22: an uptrend is developing (+DI above −DI)."
+    assert bulletin.adx_text(45, 30, 10) == "Daily ADX 45: the uptrend is very strong (+DI above −DI)."
+    assert [bulletin.adx_band(x) for x in (19.4, 19.5, 24.4, 24.5, 40.4, 40.5)] == ["weak", "developing", "developing", "strong", "strong", "very strong"]
     assert bulletin.adx_text(None, 1, 1) is None
 
 
@@ -355,7 +355,7 @@ def test_concept_rotation_is_deterministic_and_fridays_are_the_weekly_concept():
     assert [w["kind"] for w in week] == ["day"] * 4 + ["week"] and week[4]["label"] == "Concept of the week"
     assert len({w["title"] for w in week[:4]}) == 4                                    # one new concept per trading day
     n0 = concepts.trading_day_number(mon)
-    assert concepts.trading_day_number(mon + timedelta(days=1)) == n0 + 1 and concepts.trading_day_number(date(2026, 10, 16) + timedelta(days=3)) == n0 + 5
+    assert concepts.trading_day_number(mon + timedelta(days=1)) == n0 + 1 and concepts.trading_day_number(mon + timedelta(days=7)) == n0 + 4
     assert concepts.CONCEPTS[n0 % len(concepts.CONCEPTS)][0] == week[0]["title"]
     # a full cycle visits every entry
     seen = {concepts.concept_for(mon + timedelta(days=d))["title"] for d in range(0, 7 * len(concepts.CONCEPTS)) if (mon + timedelta(days=d)).weekday() < 4}
@@ -376,7 +376,7 @@ def test_charts_are_pngs_of_the_right_size_and_under_the_limit():
     a = charts.nifty_intraday_png(ci["bars15"], ci["ema21"], ci["levels"], ci["prev_close"])
     b = charts.nifty_4h_png(ci["bars4h"], ci["adx4h"])
     for img in (a, b):
-        assert png_size(img) == (640, 360) and len(img) <= 120 * 1024
+        assert png_size(img) == (1280, 720) and len(img) <= 120 * 1024
     assert charts.nifty_intraday_png(ci["bars15"], ci["ema21"], ci["levels"], ci["prev_close"]) == a        # deterministic
 
 
@@ -384,11 +384,11 @@ def test_charts_do_not_crash_on_missing_or_thin_data():
     assert charts.nifty_intraday_png(None, None, None, None) is None and charts.nifty_intraday_png([], [], [], 1) is None
     assert charts.nifty_4h_png(None, None) is None and charts.nifty_4h_png([], {}) is None
     one = [{"ts": "2026-10-12T09:15:00+05:30", "open": 100, "high": 101, "low": 99, "close": 100.5}]
-    assert png_size(charts.nifty_intraday_png(one, [None], [{"label": "Pivot", "value": 100.0}, {"label": "Far", "value": 5000.0}], 100.2)) == (640, 360)
-    assert png_size(charts.nifty_intraday_png(one, None, None, None)) == (640, 360)
-    assert png_size(charts.nifty_4h_png(one, None)) == (640, 360)
-    assert png_size(charts.nifty_4h_png(one, {"adx": [None], "plus_di": [None], "minus_di": [None]})) == (640, 360)
-    assert png_size(charts.nifty_4h_png(one, {"adx": [30.0], "plus_di": [20.0], "minus_di": [10.0]})) == (640, 360)
+    assert png_size(charts.nifty_intraday_png(one, [None], [{"label": "Pivot", "value": 100.0}, {"label": "Far", "value": 5000.0}], 100.2)) == (1280, 720)
+    assert png_size(charts.nifty_intraday_png(one, None, None, None)) == (1280, 720)
+    assert png_size(charts.nifty_4h_png(one, None)) == (1280, 720)
+    assert png_size(charts.nifty_4h_png(one, {"adx": [None], "plus_di": [None], "minus_di": [None]})) == (1280, 720)
+    assert png_size(charts.nifty_4h_png(one, {"adx": [30.0], "plus_di": [20.0], "minus_di": [10.0]})) == (1280, 720)
     assert charts.bulletin_images({}) == [] and charts.bulletin_images({"nifty": {"unavailable": "x"}}) == []
     assert charts.bulletin_images({"nifty": {"chart_input": {}}}) == []
 
@@ -411,7 +411,7 @@ def test_notifier_sends_inline_images_as_content_id_attachments():
 def test_resend_refusing_inline_images_falls_back_to_the_plain_email_once(caplog):
     import requests
     from .conftest import Seq
-    sess = FakeSession({("POST", "api.resend.com"): Seq(requests.HTTPError("422 inline not allowed"), {"id": "e2"})})
+    sess = FakeSession({("POST", "api.resend.com"): Seq(requests.HTTPError("422", response=SimpleNamespace(status_code=422)), {"id": "e2"})})
     n = Notifier(resend_api_key="re_fake", email_to="me@example.com", session=sess)
     imgs = [{"cid": "nifty15", "filename": "n.png", "content": b"x"}]
     import trading_agent.notify as notify_mod
@@ -619,6 +619,237 @@ def test_yahoo_prices_intraday_and_ohlc_parse_and_cache(tmp_path):
     assert params == {"range": "5d", "interval": "15m"}
     assert yp.history_intraday("^NSEI", "15m", "5d") == got and len(sess.calls) == 1            # served from the cache
     daily = yp.history_ohlc("^NSEI", "1y")
-    assert sess.calls[1][2]["params"] == {"range": "1y", "interval": "1d"} and len(daily) == 2
+    assert sess.calls[1][2]["params"] == {"range": "1y", "interval": "1d"} and len(daily) == 1   # both bars fall on one date: the last wins
     with pytest.raises(LookupError):
         YahooPrices(suffix="", session=FakeSession({("GET", "chart"): {"chart": {"result": None}}})).history_intraday("^NSEI")
+
+
+# ===================== fix round 1 =====================
+def _http_error(status):
+    import requests
+    return requests.HTTPError(f"HTTP {status}", response=SimpleNamespace(status_code=status))
+
+
+def _imgs():
+    return [{"cid": "nifty15", "filename": "n.png", "content": b"x"}]
+
+
+HTML_WITH_IMG = '<p>a</p><img src="cid:nifty15" alt="c"><p>b</p>'
+TEXT_WITH_CHART = "head\n[Chart: Nifty chart]\ntail\n"
+
+
+@pytest.mark.parametrize("status", [400, 422])
+def test_inline_image_refusal_400_422_resends_once_without_pictures_with_a_new_idempotency_key(status):
+    from .conftest import Seq
+    sess = FakeSession({("POST", "api.resend.com"): Seq(_http_error(status), {"id": "e"})})
+    out = Notifier(resend_api_key="re_fake", email_to="me@example.com", session=sess).send("s", TEXT_WITH_CHART, html=HTML_WITH_IMG, images=_imgs())
+    assert "email" in out and len(sess.calls) == 2
+    k1, k2 = (c[2]["headers"]["Idempotency-Key"] for c in sess.calls)
+    assert k1 and k2 and k1 != k2
+    second = sess.calls[1][2]["json"]
+    assert "attachments" not in second and "cid:" not in second["html"] and "[Chart:" not in second["text"] and second["text"] == "head\ntail\n"
+
+
+@pytest.mark.parametrize("exc", ["timeout", "connection", 401, 429, 500, 503])
+def test_other_failures_are_never_resent(exc):
+    import requests
+    err = {"timeout": requests.Timeout("slow"), "connection": requests.ConnectionError("down")}.get(exc) or _http_error(exc)
+    sess = FakeSession({("POST", "api.resend.com"): err})
+    out = Notifier(resend_api_key="re_fake", email_to="me@example.com", session=sess).send("s", "b", html=HTML_WITH_IMG, images=_imgs())
+    assert out == ["console"] and len(sess.calls) == 1                     # logged, not delivered, and no second attempt
+
+
+def test_each_plain_send_has_its_own_idempotency_key():
+    sess = FakeSession({("POST", "api.resend.com"): {"id": "e"}})
+    n = Notifier(resend_api_key="re_fake", email_to="me@example.com", session=sess)
+    n.send("s", "b")
+    n.send("s", "b")
+    assert sess.calls[0][2]["headers"]["Idempotency-Key"] != sess.calls[1][2]["headers"]["Idempotency-Key"]
+
+
+def test_send_digest_decides_by_signature_and_does_not_swallow_a_real_type_error():
+    class Old:
+        def __init__(self):
+            self.got = []
+
+        def send(self, subject, body, html=None):
+            self.got.append((body, html))
+            return ["console", "email"]
+
+    class Bad:
+        def send(self, subject, body, html=None, images=None):
+            raise TypeError("a bug inside send")
+    mail = {"subject": "s", "text": TEXT_WITH_CHART, "html": HTML_WITH_IMG, "images": _imgs()}
+    old = Old()
+    send_digest(old, mail)
+    assert old.got == [("head\ntail\n", "<p>a</p><p>b</p>")]                 # pictures and mentions of them dropped
+    with pytest.raises(TypeError):
+        send_digest(Bad(), mail)
+
+
+def test_unfinished_or_stale_session_is_never_called_closed(s):
+    s.digest_writer = "rules"
+    before = datetime(2026, 10, 12, 11, 0, tzinfo=IST)           # Monday, the market is open; the daily bar of today is partial
+    data = digest.evening_report(evening_ctx(s, now=lambda: before))
+    assert data["stale_close"]["date"] == "2026-10-09"
+    nf = data["bulletin"]["nifty"]
+    assert nf["session"] == "2026-10-09" and nf["pivots"]
+    mail = build_digest("evening", evening_ctx(s, now=lambda: before))
+    assert "Figures are for the session of 2026-10-09" in mail["text"] and "12 Oct session" not in mail["text"]
+    sat = datetime(2026, 10, 10, 18, 0, tzinfo=IST)               # a weekend: bars after the last close are dropped too
+    assert digest.evening_report(evening_ctx(s, now=lambda: sat))["bulletin"]["nifty"]["session"] <= "2026-10-09"
+    assert digest.evening_report(evening_ctx(s))["bulletin"]["nifty"]["session"] == "2026-10-12"   # after the close
+    bars = [{"date": "2026-10-09"}, {"date": "2026-10-12"}]
+    assert bulletin.completed_bars(bars, before, None) == bars[:1] and bulletin.completed_bars(bars, EVE, None) == bars
+
+
+def test_yahoo_daily_ohlc_keeps_the_last_row_of_a_duplicated_date(tmp_path):
+    from datetime import timezone
+    from trading_agent.prices import YahooPrices
+    t0 = int(datetime(2026, 10, 12, 3, 45, tzinfo=timezone.utc).timestamp())
+    payload = {"chart": {"result": [{"timestamp": [t0 - 86400, t0, t0 + 3600],
+                                     "indicators": {"quote": [{"open": [1, 2, 2.5], "high": [2, 3, 3.5], "low": [0.5, 1.5, 2], "close": [1.5, 2.5, 3.0],
+                                                               "volume": [1, 2, 3]}]}}]}}
+    yp = YahooPrices(suffix="", session=FakeSession({("GET", "chart"): payload}), cache_dir=tmp_path)
+    got = yp.history_ohlc("^NSEI")
+    assert [b["date"] for b in got] == ["2026-10-11", "2026-10-12"] and got[-1]["close"] == 3.0
+
+
+def test_bare_sp_does_not_match_sp_bse_sensex_headlines():
+    heads = [hl("S&P BSE Sensex ends 300 points higher"), hl("S&P Global PMI slips")]
+    assert bulletin.why_headline("S&P 500", heads, EVE) is None
+    assert bulletin.why_headline("S&P 500", heads + [hl("Wall Street closes lower")], EVE)["title"] == "Wall Street closes lower"
+    assert bulletin.why_headline("S&P 500", [hl("S&P 500 gains")], EVE)["title"] == "S&P 500 gains"
+
+
+def test_charts_are_phone_sized_with_big_text_and_do_not_touch_global_matplotlib_state():
+    import matplotlib
+    before = dict(matplotlib.rcParams)
+    r = bulletin.analyse_nifty(daily_bars(), sessions(), sessions(days=22, step=60))["chart_input"]
+    a = charts.nifty_intraday_png(r["bars15"], r["ema21"], r["levels"], r["prev_close"])
+    assert png_size(a) == (1280, 720) and len(a) <= 120 * 1024
+    assert charts.TICK_PT >= 11 and charts.TITLE_PT <= 13 and charts.DPI == 200
+    assert dict(matplotlib.rcParams) == before
+    from pathlib import Path
+    src = Path(charts.__file__).read_text(encoding="utf-8")
+    assert "import matplotlib.pyplot" not in src and "force=True" not in src and "rcParams" not in src.replace("global rcParams", "")
+
+
+def test_charts_over_the_size_limit_are_requantized_or_dropped(monkeypatch):
+    r = bulletin.analyse_nifty(daily_bars(), sessions(), sessions(days=22, step=60))["chart_input"]
+    monkeypatch.setattr(charts, "MAX_BYTES", 9000)
+    small = charts.nifty_intraday_png(r["bars15"], r["ema21"], r["levels"], r["prev_close"])
+    assert small is None or len(small) <= 9000
+    monkeypatch.setattr(charts, "MAX_BYTES", 10)
+    assert charts.nifty_intraday_png(r["bars15"], r["ema21"], r["levels"], r["prev_close"]) is None
+    assert charts.bulletin_images({"nifty": {"chart_input": r}}) == []
+
+
+def test_two_charts_can_be_drawn_at_the_same_time():
+    import threading
+    r = bulletin.analyse_nifty(daily_bars(), sessions(), sessions(days=22, step=60))["chart_input"]
+    out, errs = [], []
+
+    def work(kind):
+        try:
+            out.append(charts.nifty_intraday_png(r["bars15"], r["ema21"], r["levels"], r["prev_close"]) if kind == 0
+                       else charts.nifty_4h_png(r["bars4h"], r["adx4h"]))
+        except Exception as e:  # noqa: BLE001
+            errs.append(e)
+    ts = [threading.Thread(target=work, args=(k % 2,)) for k in range(4)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert not errs and len(out) == 4 and all(png_size(x) == (1280, 720) for x in out)
+
+
+def test_concept_rotation_skips_holidays_and_counts_only_monday_to_thursday():
+    mon, tue, wed = date(2026, 10, 12), date(2026, 10, 13), date(2026, 10, 14)
+    base = concepts.concept_for(wed)["title"]
+    assert concepts.concept_for(wed, [tue.isoformat()])["title"] != base                        # Tuesday off: Wednesday takes Tuesday's entry
+    assert concepts.concept_for(wed, [tue.isoformat()])["title"] == concepts.concept_for(tue)["title"]
+    friday_holiday = [date(2026, 10, 16).isoformat()]                                            # a Friday holiday changes no daily entry
+    assert concepts.concept_for(date(2026, 10, 19), friday_holiday)["title"] == concepts.concept_for(date(2026, 10, 19))["title"]
+    assert concepts.concept_for(date(2026, 10, 16))["kind"] == "week"
+    assert concepts.concept_for(mon, ["not a date", None])["title"] == concepts.concept_for(mon)["title"]   # junk is ignored
+
+
+@pytest.mark.parametrize("size", [28, 29, 30, 35, 40])
+def test_every_entry_is_reachable_for_any_library_size_even_with_holidays(size):
+    lib = [(f"T{i}", "x" * 80, "u") for i in range(size)]
+    weekly = [(f"W{i}", "y" * 80, "u") for i in range(8)]
+    start = date(2026, 1, 5)
+    holidays = [start + timedelta(days=k) for k in range(3, 400, 11)]
+    days = [start + timedelta(days=k) for k in range(0, 7 * size * 2)]
+    seen = {concepts.concept_for(d, holidays, lib, weekly)["title"] for d in days if d.weekday() < 4 and d not in holidays}
+    assert seen == {t for t, _x, _u in lib}
+    wk = {concepts.concept_for(d, holidays, lib, weekly)["title"] for d in days if d.weekday() == 4}
+    assert wk == {t for t, _x, _u in weekly}
+
+
+def test_bulletin_concept_uses_the_calendar_and_survives_a_broken_one(s):
+    class Cal:
+        def __init__(self, days=None, boom=False):
+            self._d, self.boom = days or {}, boom
+
+        def days(self):
+            if self.boom:
+                raise RuntimeError("NSE down")
+            return self._d
+
+        def is_trading_day(self, d):
+            return True
+    wed = datetime(2026, 10, 14, 15, 50, tzinfo=IST)
+    plain = bulletin._concept(ctx_for(s, now=lambda: wed))["title"]
+    held = bulletin._concept(ctx_for(s, now=lambda: wed, calendar=Cal({"2026-10-13": "x"})))["title"]
+    assert held != plain
+    assert bulletin._concept(ctx_for(s, now=lambda: wed, calendar=Cal(boom=True)))["title"] == plain
+
+
+def test_adx_band_uses_the_rounded_value_and_40_is_strong():
+    assert [bulletin.adx_band(x) for x in (19.49, 19.5, 24.49, 24.5, 40.0, 40.49, 40.5)] == \
+        ["weak", "developing", "developing", "strong", "strong", "strong", "very strong"]
+    assert bulletin.adx_text(40, 20, 10) == "Daily ADX 40: the uptrend is strong (+DI above −DI)."
+    assert bulletin.adx_text(40.6, 20, 10).startswith("Daily ADX 41: the uptrend is very strong")
+    assert bulletin.adx_text(30, 10, 20, "4-hour ADX").startswith("4-hour ADX 30: the downtrend is strong")
+
+
+def test_opposite_daily_and_four_hour_directions_get_one_fixed_sentence(monkeypatch):
+    def fake(bars, n=14):
+        up = len(bars) > 40                                       # the daily list is longer than the 4-hour list
+        m = len(bars)
+        return {"adx": [30.0] * m, "plus_di": [25.0 if up else 10.0] * m, "minus_di": [10.0 if up else 25.0] * m}
+    monkeypatch.setattr(bulletin, "wilder_adx", fake)
+    L = bulletin.analyse_nifty(daily_bars(), sessions(), sessions(days=10, step=60))["lines"]
+    assert L["adx"].startswith("Daily ADX 30: the uptrend") and L["four_hour_adx"].startswith("4-hour ADX 30: the downtrend")
+    assert L["four_hour_adx"].endswith("The 4-hour and daily trends point in different directions.")
+    monkeypatch.setattr(bulletin, "wilder_adx", lambda bars, n=14: {"adx": [30.0] * len(bars), "plus_di": [25.0] * len(bars), "minus_di": [10.0] * len(bars)})
+    L = bulletin.analyse_nifty(daily_bars(), sessions(), sessions(days=10, step=60))["lines"]
+    assert "different directions" not in L["four_hour_adx"]
+
+
+def test_four_hour_bars_aligned_to_nine_oclock_are_kept_in_the_morning_candle():
+    bars = [h1("2026-10-05", 9, 0, 100, 101, 99, 100.5), h1("2026-10-05", 10, 0, 100.5, 102, 100, 101),
+            h1("2026-10-05", 11, 0, 101, 103, 100, 102), h1("2026-10-05", 12, 0, 102, 103, 101, 102.5),
+            h1("2026-10-05", 13, 15, 102.5, 104, 102, 103), h1("2026-10-05", 14, 15, 103, 105, 102, 104),
+            h1("2026-10-05", 8, 0, 1, 500, 0, 5)]                  # 08:00-09:00 ends before the open: dropped
+    c = bulletin.resample_4h(bars)
+    assert [(x["bucket"], x["bars"]) for x in c] == [("morning", 4), ("afternoon", 2)]
+    assert c[0]["open"] == 100 and c[0]["high"] == 103
+
+
+def test_pivot_line_says_for_the_next_session():
+    r = bulletin.analyse_nifty(daily_bars(), None, None)
+    assert ", for the next session: P " in r["lines"]["pivots"]
+
+
+def test_non_boolean_strings_for_switches_are_rejected(s):
+    from trading_agent.ui import App
+    app = App(s, broker=LocalPaperBroker(s.state_dir / "pb5.json", starting_cash=1000, price_fn=lambda x: 1.0), dotenv=s.state_dir / ".env5")
+    for bad in ("maybe", "", "ture", "2", 2, None, 1.5):
+        with pytest.raises(ValueError):
+            app.update_settings({"digest_charts": bad})
+    assert s.digest_charts is True                                     # nothing changed
+    for word, expect in (("yes", "true"), ("No", "false"), ("on", "true"), ("OFF", "false"), ("1", "true"), ("0", "false"), (True, "true"), (0, "false")):
+        assert app.update_settings({"digest_bulletin": word}) == {"DIGEST_BULLETIN": expect}
+    with pytest.raises(ValueError):
+        app.update_settings({"auto_trade": "sure"})

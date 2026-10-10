@@ -1076,7 +1076,7 @@ class App:
                 value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
             elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
-                value = "true" if value in (True, "true", "1", 1, "on") else "false"
+                value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
                 value = str(value).strip().lower()
@@ -1402,6 +1402,24 @@ def _cost_table(market: str) -> dict[str, Any]:
 WATCH_SOURCES = {"in": {"deals", "bulk", "block", "insider"}, "us": {"congress", "insider"}}
 
 
+_TRUE_WORDS, _FALSE_WORDS = {"true", "1", "yes", "on"}, {"false", "0", "no", "off"}
+
+
+def _bool_setting(key: str, value: Any) -> bool:
+    """A switch from JSON: true/false, 1/0, or the words true, false, 1, 0, yes, no, on, off. Anything else is a 400
+    (a typo must not silently switch something off)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    word = value.strip().lower() if isinstance(value, str) else None
+    if word in _TRUE_WORDS:
+        return True
+    if word in _FALSE_WORDS:
+        return False
+    raise ValueError(f"{key} must be true or false")
+
+
 def _check_type(key: str, value: Any) -> None:
     """Settings arrive as JSON: refuse a list, dict, number or bool where text is expected, with a plain message."""
     if key in ("watch_investors", "watch_investor"):
@@ -1409,8 +1427,7 @@ def _check_type(key: str, value: Any) -> None:
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
     elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
-        if isinstance(value, (list, tuple, dict)):
-            raise ValueError(f"{key} must be true or false")
+        _bool_setting(key, value)
     elif key in ("digest_morning", "digest_evening", "digest_writer"):
         if not isinstance(value, str):
             raise ValueError(f"{key} must be a time as text, HH:MM")

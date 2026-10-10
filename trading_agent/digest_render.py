@@ -214,7 +214,7 @@ def _bulletin_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None) -> 
         blocks.append(_block("Market bulletin: Nifty 50", head, images=_picture(images, "nifty15")))
         mid = [L[k] for k in ("ema", "range") if L.get(k)]
         blocks.append(_block(None, mid, images=_picture(images, "nifty4h"), cont=True))
-        rest = [L[k] for k in ("four_hour", "four_hour_adx", "levels", "pivots", "adx", "rsi", "candle") if L.get(k)]
+        rest = [L[k] for k in ("four_hour", "levels", "pivots", "adx", "four_hour_adx", "rsi", "candle") if L.get(k)]
         rest += [f"Note: {n}" for n in nf.get("notes") or []]
         rest.append(b.get("note") or "")
         blocks.append(_block(None, [x for x in rest if x], cont=True))
@@ -463,6 +463,11 @@ def to_html(doc: dict[str, Any]) -> str:
     foot = "<br>".join(_e(x) for x in doc["footer"])
     parts.append(f'<tr><td style="padding:16px 20px;font-size:12px;color:#6b7280;{font}">{foot}</td></tr></table></td></tr></table>')
     return "".join(parts)
+
+
+def strip_chart_mentions(text: str) -> str:
+    """The text part without its "[Chart: ...]" lines (when the pictures are not sent)."""
+    return re.sub(r"(?m)^\[Chart: .*\]\n", "", text)
 
 
 def strip_cid_images(html: str) -> str:

@@ -62,17 +62,22 @@ def build_digest(kind: str, ctx: DigestContext, *, writer: str | None = None, se
 
 
 def send_digest(notifier: Any, email: dict[str, Any]) -> list[str]:
+    import inspect
+    from .digest_render import strip_cid_images, strip_chart_mentions
     images = email.get("images") or None
-    if images:
-        try:
-            return notifier.send(email["subject"], email["text"], html=email["html"], images=images)
-        except TypeError:  # a notifier without inline-image support: the pictures are left out
-            from .digest_render import strip_cid_images
-            email = {**email, "html": strip_cid_images(email["html"])}
     try:
-        return notifier.send(email["subject"], email["text"], html=email["html"])
-    except TypeError:  # a notifier that takes no HTML part
-        return notifier.send(email["subject"], email["text"])
+        params = inspect.signature(notifier.send).parameters
+    except (TypeError, ValueError):
+        params = {}
+    takes_var = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if images and ("images" in params or takes_var):
+        return notifier.send(email["subject"], email["text"], html=email["html"], images=images)
+    text, html = email["text"], email["html"]
+    if images:   # a notifier without inline-image support: the pictures and the mentions of them are left out
+        text, html = strip_chart_mentions(text), strip_cid_images(html)
+    if not params or "html" in params or takes_var:
+        return notifier.send(email["subject"], text, html=html)
+    return notifier.send(email["subject"], text)   # a notifier that takes no HTML part
 
 
 def _external(delivered: Any) -> bool:

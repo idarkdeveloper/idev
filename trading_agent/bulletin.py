@@ -190,13 +190,15 @@ def _parse_ts(ts: str) -> datetime:
 
 def resample_4h(bars_1h: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """1-hour bars to the two NSE-session "4-hour" candles of a day: 09:15-13:15 and 13:15-15:30 (IST). A bar belongs
-    to the bucket its start time falls in; bars outside 09:15-15:30 are dropped. A day with a holiday gap just has no
-    candles. Each candle: {ts (bucket start), date, bucket (morning / afternoon), open, high, low, close, volume, bars}."""
+    to the morning candle when it ends after 09:15 (so bars aligned to 09:00 are kept) and starts before 13:15, and to
+    the afternoon candle when it starts from 13:15 and before 15:30; anything else is dropped. A day with a holiday gap
+    just has no candles. Each candle: {ts (bucket start), date, bucket (morning / afternoon), open, high, low, close,
+    volume, bars}."""
     groups: dict[tuple[str, int], list[dict[str, Any]]] = {}
     for b in sorted(bars_1h, key=lambda x: x["ts"]):
         dt = _parse_ts(b["ts"])
         t = dt.time()
-        if t < SESSION_OPEN or t >= SESSION_CLOSE:
+        if dt + timedelta(hours=1) <= datetime.combine(dt.date(), SESSION_OPEN, tzinfo=IST) or t >= SESSION_CLOSE:
             continue
         groups.setdefault((dt.date().isoformat(), 0 if t < SESSION_SPLIT else 1), []).append(b)
     out = []
@@ -221,18 +223,22 @@ def sgn(v: float, d: int = 2) -> str:
 
 
 def adx_band(adx: float) -> str:
-    return "weak" if adx < 20 else "developing" if adx < 25 else "strong" if adx < 40 else "very strong"
+    """The band of the ADX as shown (rounded to a whole number): below 20 weak, 20 to below 25 developing, 25 to 40
+    strong (40 itself is strong), above 40 very strong."""
+    r = int(adx + 0.5)
+    return "weak" if r < 20 else "developing" if r < 25 else "strong" if r <= 40 else "very strong"
 
 
-def adx_text(adx: float | None, plus_di: float | None, minus_di: float | None, label: str = "ADX") -> str | None:
-    """ADX bands: <20 weak or no trend, 20-25 developing, 25-40 strong, >40 very strong; direction from +DI / -DI."""
+def adx_text(adx: float | None, plus_di: float | None, minus_di: float | None, label: str = "Daily ADX") -> str | None:
+    """ADX bands: <20 weak or no trend, 20-25 developing, 25-40 strong, >40 very strong; direction from +DI / -DI.
+    The timeframe is always in the label ("Daily ADX", "4-hour ADX")."""
     if adx is None or plus_di is None or minus_di is None:
         return None
     up = plus_di >= minus_di
     word = "uptrend" if up else "downtrend"
     lead = "+DI above −DI" if up else "−DI above +DI"
     band = adx_band(adx)
-    a = f"{label} {adx:.0f}"
+    a = f"{label} {int(adx + 0.5)}"
     if band == "weak":
         return f"{a}: weak or no trend ({lead})."
     if band == "developing":
@@ -295,7 +301,7 @@ def levels_text(levels: dict[str, Any], pivot: float | None) -> str:
 
 
 def pivots_text(piv: dict[str, float], day: str) -> str:
-    return (f"Pivot points from the {_day_month(day)} session: P {num(piv['P'])}, R1 {num(piv['R1'])}, R2 {num(piv['R2'])}, "
+    return (f"Pivot points from the {_day_month(day)} session, for the next session: P {num(piv['P'])}, R1 {num(piv['R1'])}, R2 {num(piv['R2'])}, "
             f"S1 {num(piv['S1'])}, S2 {num(piv['S2'])}.")
 
 
@@ -411,6 +417,8 @@ def analyse_nifty(daily: list[dict[str, Any]], bars15: list[dict[str, Any]] | No
             lines["four_hour"] = four_hour_text(last_day, c4)
             if a4["adx"][-1] is not None:
                 lines["four_hour_adx"] = adx_text(a4["adx"][-1], a4["plus_di"][-1], a4["minus_di"][-1], "4-hour ADX")
+                if adx["adx"][-1] is not None and (a4["plus_di"][-1] >= a4["minus_di"][-1]) != (adx["plus_di"][-1] >= adx["minus_di"][-1]):
+                    lines["four_hour_adx"] += " The 4-hour and daily trends point in different directions."
             out["four_hour"] = {"candles": [{"bucket": c["bucket"], "patterns": classify_candle(c, c4[c4.index(c) - 1] if c4.index(c) else None)}
                                             for c in last_day],
                                 "adx": None if a4["adx"][-1] is None else round(a4["adx"][-1], 1)}
@@ -433,7 +441,7 @@ def analyse_nifty(daily: list[dict[str, Any]], bars15: list[dict[str, Any]] | No
 # =============================================================================
 # market name -> words a headline must contain (whole words, any case)
 MARKET_WORDS: dict[str, tuple[str, ...]] = {
-    "S&P 500": ("S&P 500", "S&P", "Wall Street"), "Nasdaq": ("Nasdaq",), "Dow": ("Dow", "Dow Jones"),
+    "S&P 500": ("S&P 500", "Wall Street"), "Nasdaq": ("Nasdaq",), "Dow": ("Dow", "Dow Jones"),
     "Nikkei": ("Nikkei", "Tokyo stocks"), "Hang Seng": ("Hang Seng", "Hong Kong stocks"),
     "Shanghai": ("Shanghai Composite", "Shanghai stocks", "China stocks"), "KOSPI": ("KOSPI", "Seoul stocks"),
     "Taiwan": ("Taiex", "Taiwan stocks"), "Straits Times": ("Straits Times", "Singapore stocks"),
@@ -553,13 +561,24 @@ def _intraday(src: Any, symbol: str, interval: str, range_: str) -> list[dict[st
         return None
 
 
-def _nifty(ctx: DigestContext) -> dict[str, Any]:
+def completed_bars(daily: list[dict[str, Any]], now: datetime, stale: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The daily bars of finished sessions only. With ``stale`` (the email's stale_close: no trading today, or before the
+    close) every bar after that last close is dropped; otherwise today's bar is dropped while it is before 15:30 IST,
+    because it is still a partial session. The bulletin never calls an unfinished session closed."""
+    if stale and stale.get("date"):
+        return [b for b in daily if str(b.get("date")) <= str(stale["date"])]
+    if now.time() < SESSION_CLOSE:
+        return [b for b in daily if str(b.get("date")) < now.date().isoformat()]
+    return daily
+
+
+def _nifty(ctx: DigestContext, stale: dict[str, Any] | None = None) -> dict[str, Any]:
     src = ctx.world_prices or getattr(ctx.context, "source", None)
     if src is None:
         return unavailable("no price source for the Nifty bulletin")
     if not hasattr(src, "history_ohlc"):
         return unavailable("the price source has no daily open/high/low bars")
-    daily = src.history_ohlc("^NSEI", "1y")
+    daily = completed_bars(src.history_ohlc("^NSEI", "1y"), ctx.now(), stale)
     if ctx.expired():
         return unavailable("out of time")
     bars15 = _intraday(src, "^NSEI", "15m", "5d")
@@ -567,14 +586,23 @@ def _nifty(ctx: DigestContext) -> dict[str, Any]:
     return analyse_nifty(daily, bars15, bars1h)
 
 
+def _holiday_dates(ctx: DigestContext) -> list[str]:
+    """NSE holidays from the calendar, or none when it cannot say."""
+    try:
+        return list(ctx.calendar.days()) if ctx.calendar is not None and hasattr(ctx.calendar, "days") else []
+    except Exception:  # noqa: BLE001 - no calendar: every weekday counts
+        return []
+
+
 def _concept(ctx: DigestContext) -> dict[str, Any]:
-    return concept_for(ctx.now().date())
+    return concept_for(ctx.now().date(), _holiday_dates(ctx))
 
 
-def build_bulletin(ctx: DigestContext) -> dict[str, Any]:
-    """The bulletin data: {"note", "nifty", "global", "commodities", "concept"}; each part may be {"unavailable"}."""
+def build_bulletin(ctx: DigestContext, stale: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The bulletin data: {"note", "nifty", "global", "commodities", "concept"}; each part may be {"unavailable"}.
+    ``stale`` is the email's stale_close (figures are those of an earlier close)."""
     return {"note": NOTE,
-            "nifty": _section(_nifty, "Nifty 50", ctx),
+            "nifty": _section(_nifty, "Nifty 50", ctx, stale),
             "global": _section(_global, "global markets", ctx),
             "commodities": _section(_commodities, "commodities", ctx),
             "concept": _section(_concept, "concept of the day", ctx)}

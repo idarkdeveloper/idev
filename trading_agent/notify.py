@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
+import uuid
 from typing import Any
 
 import requests
@@ -58,7 +59,9 @@ class Notifier:
                 {"filename": i["filename"], "content": base64.b64encode(i["content"]).decode("ascii"),
                  "content_type": i.get("content_type", "image/png"), "content_id": i["cid"]} for i in images]
         r = self.session.post("https://api.resend.com/emails",
-                              headers={"Authorization": f"Bearer {self.resend_api_key}"}, json=payload, timeout=30)
+                              headers={"Authorization": f"Bearer {self.resend_api_key}",
+                                       "Idempotency-Key": uuid.uuid4().hex},   # a new key for each attempt
+                              json=payload, timeout=30)
         r.raise_for_status()
 
     def send(self, subject: str, body: str, html: str | None = None,
@@ -73,14 +76,16 @@ class Notifier:
                 try:
                     self._post_email(subject, body, html, images)
                 except requests.RequestException as e:
-                    if not images:
-                        raise
+                    status = getattr(getattr(e, "response", None), "status_code", None)
+                    if not images or status not in (400, 422):
+                        raise   # a timeout or connection error may have been delivered: never resend; 401/429/5xx as before
                     global _WARNED_INLINE
                     if not _WARNED_INLINE:
                         _WARNED_INLINE = True
-                        log.warning("email with inline images failed (%s); sending without the images", e)
+                        log.warning("email with inline images was refused (HTTP %s); sending without the images", status)
                     plain = re.sub(r"<img\b[^>]*\bsrc=\"cid:[^\"]*\"[^>]*>", "", html) if html else html
-                    self._post_email(subject, body, plain, None)
+                    plain_text = re.sub(r"(?m)^\[Chart: .*\]\n", "", body)   # no mention of pictures that are not there
+                    self._post_email(subject, plain_text, plain, None)
                 delivered.append("email")
             except requests.RequestException as e:
                 log.warning("email delivery failed: %s", e)

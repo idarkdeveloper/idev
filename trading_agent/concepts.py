@@ -98,9 +98,11 @@ CONCEPTS: list[tuple[str, str, str]] = [
      "available now; a limit order only trades at your price or better, and may not trade at all.",
      "The agent refuses an order whose price moved more than the slippage limit in the settings."),
     ("Circuit limits",
-     "Exchanges set a daily band, such as 5%, 10% or 20%, beyond which a stock cannot trade that day. When it is hit, "
-     "trading in that stock stops for the day or for a pause, so an exit is not always possible at the moment you want.",
-     "Small and thin stocks hit circuits more often, which is one reason the screen asks for liquidity."),
+     "Most stocks have a daily price band, such as 5%, 10% or 20% of the previous close. Orders outside the band are "
+     "rejected, and trading can continue at the band price, so a stock stuck at its limit may have buyers or sellers "
+     "but not enough on the other side. Many F&O stocks have no fixed band and use dynamic bands instead. Separately, "
+     "index-wide circuit breakers halt the whole market for a time when the index moves 10%, 15% or 20%.",
+     "Small and thin stocks hit their bands more often, which is one reason the screen asks for liquidity."),
     ("Pivot points",
      "Classic pivot points are computed from one session's high, low and close: P = (H + L + C) / 3, R1 = 2P - L, "
      "S1 = 2P - H, R2 = P + (H - L), S2 = P - (H - L). They are widely watched reference levels for the next session.",
@@ -200,22 +202,35 @@ WEEKLY: list[tuple[str, str, str]] = [
 ]
 
 
-def trading_day_number(day: date) -> int:
-    """Weekdays (Mon-Fri) counted from Monday 2000-01-03, so the number goes up by one on each working day and
-    is the same wherever and whenever it is asked. Exchange holidays are not known here and count as days."""
-    start = date(2000, 1, 3)
-    days = (day - start).days
-    weeks, extra = divmod(days, 7)
-    return weeks * 5 + min(extra, 5)
+_EPOCH = date(2000, 1, 3)   # a Monday
 
 
-def concept_for(day: date) -> dict[str, Any]:
-    """The concept for ``day``. Friday: the longer concept of the week (rotating by week); other days: one of the
-    short entries, advancing one per trading day."""
+def _as_dates(holidays: Any) -> list[date]:
+    out = []
+    for h in holidays or ():
+        try:
+            out.append(h if isinstance(h, date) else date.fromisoformat(str(h)[:10]))
+        except ValueError:
+            continue
+    return out
+
+
+def trading_day_number(day: date, holidays: Any = ()) -> int:
+    """How many Monday-to-Thursday trading days came before ``day`` (counted from 2000-01-03), leaving out the given
+    exchange holidays. It goes up by one on each such day, so a library of any size is walked entry by entry (Fridays
+    are not counted: they have their own rotation)."""
+    weeks, extra = divmod((day - _EPOCH).days, 7)
+    n = weeks * 4 + min(extra, 4)
+    return n - sum(1 for h in _as_dates(holidays) if _EPOCH <= h < day and h.weekday() < 4)
+
+
+def concept_for(day: date, holidays: Any = (), library: list | None = None, weekly: list | None = None) -> dict[str, Any]:
+    """The concept for ``day``. Friday: the longer concept of the week, rotating by calendar week; Monday to Thursday:
+    one of the short entries, advancing one per trading day (``holidays``: dates or ISO strings that do not count)."""
+    library = CONCEPTS if library is None else library
+    weekly = WEEKLY if weekly is None else weekly
     if day.weekday() == 4:
-        week = trading_day_number(day) // 5
-        title, text, uses = WEEKLY[week % len(WEEKLY)]
+        title, text, uses = weekly[((day - _EPOCH).days // 7) % len(weekly)]
         return {"kind": "week", "label": "Concept of the week", "title": title, "text": text, "uses": uses}
-    n = trading_day_number(day)
-    title, text, uses = CONCEPTS[n % len(CONCEPTS)]
+    title, text, uses = library[trading_day_number(day, holidays) % len(library)]
     return {"kind": "day", "label": "Concept of the day", "title": title, "text": text, "uses": uses}
