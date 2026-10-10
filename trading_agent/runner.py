@@ -86,7 +86,7 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
         def make() -> LocalPaperBroker:
             return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
                                     price_fn=groww.latest_price, currency="INR", whole_shares=True,
-                                    cost_model=cost_model_for("in"))
+                                    cost_model=cost_model_for("in"), shared=True)
         sim = make()
         if sim.is_untouched_mirror:
             # Older versions copied the Groww holdings in on the first run. A copy nobody has
@@ -98,7 +98,7 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
         return sim
     return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash, price_fn=price_fn,
                             currency=settings.currency, whole_shares=settings.market == "in",
-                            cost_model=cost_model_for(settings.market))
+                            cost_model=cost_model_for(settings.market), shared=True)
 
 
 def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:

@@ -405,13 +405,6 @@
   }
 
   let btCostSet = false;
-  function gttCell(p, c){
-    if(!c.groww_gtt_active) return '<span class="sub">off</span>';
-    const g = p.gtt;
-    if(!g) return '<span class="pill warn">none yet</span>';
-    const cls = g.last_error ? "bad" : (g.status === "ACTIVE" ? "ok" : "warn");
-    return `<span class="pill ${cls}" title="${esc(g.last_error || g.smart_order_id || "")}">${esc(g.status || "?")} · ${money(g.trigger,2)}</span>`;
-  }
   function orderStatus(x){
     if(!x.live) return x.stop_hit ? `<span class="pill warn" title="${esc((x.stop_type || "") + " stop at " + (x.stop_level != null ? x.stop_level : ""))}">paper · stop hit</span>` : '<span class="pill">paper · filled</span>';
     const cls = x.status === "filled" ? "ok" : x.status === "failed" ? "bad" : "warn";

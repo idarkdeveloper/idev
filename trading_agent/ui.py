@@ -633,6 +633,8 @@ class App:
         if eff_type != "percent" or not eff_value:
             return
         price = self.broker.latest_price(symbol)
+        if not price or price <= 0:
+            raise ValueError(f"no usable price for {symbol} right now, so the stop cannot be checked; try again shortly")
         try:
             add = float(qty) if qty not in (None, "", 0, "0") else float(notional) / price
         except (TypeError, ValueError):
@@ -719,8 +721,6 @@ class App:
             return self._parent.reset_practice()
         removed = []
         paths = [self.settings.state_dir / "state.json"]
-        if self.demo_trades is not None:
-            paths.append(self.practice_broker.path)
         with STATE_LOCK:
             keep = None
             if self.demo_trades is None and paths[0].exists():  # Live: the practice account's curve and fills are not Live's to forget
@@ -734,8 +734,10 @@ class App:
                 fresh = State(paths[0])
                 fresh.data.update(keep)
                 fresh.save()
-        if self.demo_trades is not None:
-            self.practice_broker.reset(self.settings.paper_starting_cash)
+        if self.demo_trades is not None:  # the broker is the only thing that deletes its file (under its own locks)
+            pb = self.practice_broker
+            if pb.reset(self.settings.paper_starting_cash) and pb.path.name not in removed:
+                removed.append(pb.path.name)
         return removed
 
     def reset_practice(self) -> list[str]:

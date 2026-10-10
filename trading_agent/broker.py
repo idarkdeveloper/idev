@@ -176,8 +176,13 @@ class LocalPaperBroker:
     def __init__(self, path: Path, starting_cash: float = 80_000.0,
                  price_fn: Any | None = None, currency: str = "USD",
                  whole_shares: bool = False, cost_model: Any | None = None,
-                 now_fn: Any | None = None):
+                 now_fn: Any | None = None, shared: bool = False):
         self.path = Path(path)
+        # shared=True: another process (a separate ``watch``) may use this same file, so every change is made under a
+        # lock file after re-reading the file. Only the practice account is shared; others skip the cost.
+        self.shared = shared
+        self._starting_cash = float(starting_cash)
+        self._persisted = False  # True once this object has read the file or written it
         self._lock = threading.RLock()  # the watch thread and the dashboard share this object
         self.price_fn = price_fn
         self.currency = currency
@@ -206,6 +211,13 @@ class LocalPaperBroker:
             if self._depth:  # nested call from inside a transaction
                 yield
                 return
+            if not self.shared:
+                self._depth = 1
+                try:
+                    yield
+                finally:
+                    self._depth = 0
+                return
             from .news import _file_lock
             with _file_lock(self.path.with_name(self.path.name + ".lock"), what="paper account"):
                 self._depth = 1
@@ -213,12 +225,23 @@ class LocalPaperBroker:
                     if self.path.exists():
                         self._state = json.loads(self.path.read_text())
                         self._normalise()
+                        self._persisted = True
+                    elif self._persisted:  # another process reset the account: start over from the starting cash
+                        self._state = self._fresh_state(self._state.get("starting_cash", self._starting_cash))
+                        self._normalise()
+                        self._persisted = False
                     yield
                 finally:
                     self._depth = 0
 
+    @staticmethod
+    def _fresh_state(starting_cash: float) -> dict[str, Any]:
+        return {"cash": float(starting_cash), "starting_cash": float(starting_cash), "positions": {}, "orders": [],
+                "prices": {}, "created_at": _utc_now(), "fees_paid": 0.0}
+
     def _load(self, starting_cash: float) -> dict[str, Any]:
         if self.path.exists():
+            self._persisted = True
             return json.loads(self.path.read_text())
         return {"cash": float(starting_cash), "starting_cash": float(starting_cash),
                 "positions": {}, "orders": [], "prices": {}, "created_at": _utc_now()}
@@ -227,6 +250,7 @@ class LocalPaperBroker:
         from .state import atomic_write
         with self._lock:
             atomic_write(self.path, json.dumps(self._state, indent=2))
+            self._persisted = True
 
     @property
     def created_at(self) -> str:
@@ -245,8 +269,8 @@ class LocalPaperBroker:
             existed = self.path.exists()
             if existed:
                 self.path.unlink()
-            self._state = {"cash": float(starting_cash), "starting_cash": float(starting_cash), "positions": {},
-                           "orders": [], "prices": {}, "created_at": _utc_now(), "fees_paid": 0.0}
+            self._state = self._fresh_state(starting_cash)
+            self._persisted = False
             self.__dict__.pop("name", None)
             return existed
 
@@ -296,15 +320,31 @@ class LocalPaperBroker:
             return float(self._state["prices"][symbol])
         raise LookupError(f"No price known for {symbol}; set one with set_price() or a price_fn")
 
+    def _held_symbols(self) -> list[str]:
+        """The held symbols, without any lock: from the file when shared (it is swapped in whole, never half
+        written), else from memory."""
+        if self.shared:
+            try:
+                return list(json.loads(self.path.read_text()).get("positions", {}))
+            except (OSError, ValueError):
+                pass
+        with self._lock:
+            return list(self._state["positions"])
+
     def positions(self) -> list[Position]:
+        # Prices come first, with no lock held (they can be network calls); the lock is only for the short
+        # re-read, high-water update and save.
+        prices: dict[str, float | None] = {}
+        for sym in self._held_symbols():
+            try:
+                prices[sym] = self.latest_price(sym)
+            except LookupError:
+                prices[sym] = None
         with self._txn():  # the watch thread's auto-exit orders change the same dict
             out = []
             dirty = False
             for sym, p in self._state["positions"].items():
-                try:
-                    px: float | None = self.latest_price(sym)
-                except LookupError:
-                    px = None
+                px = prices.get(sym)
                 if px is not None and px > (p.get("high_water") or 0):
                     p["high_water"] = px
                     dirty = True
@@ -323,20 +363,27 @@ class LocalPaperBroker:
         return Account(cash=round(self._state["cash"], 2), equity=round(equity, 2),
                        currency=self.currency)
 
-    def submit_order(self, *args: Any, **kw: Any) -> dict[str, Any]:
+    def submit_order(self, symbol: str, side: str, notional: float | None = None, qty: float | None = None,
+                     stop: dict[str, Any] | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be 'buy' or 'sell'")
+        if (notional is None) == (qty is None):
+            raise ValueError("pass exactly one of notional or qty")
+        price = self.latest_price(symbol)  # may be a network call: no lock held
         with self._txn():
-            return self._submit_order(*args, **kw)
+            return self._submit_order(symbol, side, notional, qty, stop, extra, price=price)
 
     def _submit_order(self, symbol: str, side: str, notional: float | None = None,
                       qty: float | None = None, stop: dict[str, Any] | None = None,
-                      extra: dict[str, Any] | None = None) -> dict[str, Any]:
+                      extra: dict[str, Any] | None = None, price: float | None = None) -> dict[str, Any]:
         """``stop`` ({"type", "value"}) is stored with the position on a buy; ``extra`` is merged into the order."""
         symbol = symbol.upper()
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
         if (notional is None) == (qty is None):
             raise ValueError("pass exactly one of notional or qty")
-        price = self.latest_price(symbol)
+        if price is None:
+            price = self.latest_price(symbol)
         if qty is None:
             qty = round(float(notional) / price, 6)
         if self.whole_shares:
@@ -396,17 +443,25 @@ class LocalPaperBroker:
         checker and the watch thread both come through here, so a position is sold once. None = nothing sold.
         The check runs on the account file re-read under the cross-process lock, so a sale made by another process
         (a separate ``watch``) on the same file is seen too."""
+        sym = symbol.upper()
+        price: float | None = None
+        price_error: Exception | None = None
+        try:
+            price = self.latest_price(sym)  # may be a network call: no lock held
+        except Exception as e:  # noqa: BLE001 - only matters if the position is still there and unchanged
+            price_error = e
         with self._txn():
-            sym = symbol.upper()
             pos = self._state["positions"].get(sym)
             if pos is None or abs(pos["qty"] - qty) > 1e-9:
                 return None
             now = pos.get("stop") or {}
             if (now.get("type") or "trailing", now.get("value")) != (stop.get("type") or "trailing", stop.get("value")):
                 return None
-            if self.latest_price(sym) > level:
+            if price is None:
+                raise price_error  # type: ignore[misc]
+            if price > level:
                 return None
-            return self._submit_order(sym, "sell", qty=pos["qty"], extra={"stop_hit": True, **(extra or {})})
+            return self._submit_order(sym, "sell", qty=pos["qty"], extra={"stop_hit": True, **(extra or {})}, price=price)
 
     def orders(self) -> list[dict[str, Any]]:
         return list(self._state["orders"])

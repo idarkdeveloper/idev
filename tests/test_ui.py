@@ -1091,3 +1091,11 @@ def test_a_topup_buy_that_would_put_a_percent_stop_above_the_price_is_refused(tw
     pb.price_fn = lambda s: 100.0         # a top-up at the buy price keeps the level below the price: allowed
     assert _post(base + "/demo/api/order", {"symbol": "LAURUSLABS", "side": "buy", "qty": 1})[0] == 200
     assert fake.writes == []
+
+
+def test_topup_check_refuses_when_there_is_no_usable_price(two_pages):
+    base, app, fake, settings = two_pages
+    assert _post(base + "/demo/api/stop", {"symbol": "LAURUSLABS", "type": "percent", "value": 8})[0] == 200
+    with pytest.raises(ValueError, match="no usable price"):
+        app.demo.practice_broker.price_fn = lambda s: 0.0
+        app.demo._check_topup_percent_stop("LAURUSLABS", None, 1, None)

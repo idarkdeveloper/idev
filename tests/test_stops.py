@@ -201,7 +201,7 @@ def test_two_brokers_on_one_file_sell_a_stopped_position_once(tmp_path):
     """A separate ``watch`` process opens its own LocalPaperBroker on the same file: only one of them sells."""
     prices = {"X": 100.0}
     mk = lambda: LocalPaperBroker(tmp_path / "shared.json", starting_cash=100_000, price_fn=lambda s: prices[s],
-                                  currency="INR", whole_shares=True)
+                                  currency="INR", whole_shares=True, shared=True)
     a = mk()
     a.submit_order("X", "buy", qty=10, stop={"type": "fixed", "value": 90.0})
     b = mk()                                   # loaded now: it still sees the 10 shares after `a` sells them
@@ -294,3 +294,67 @@ def test_watch_auto_exit_honours_none_and_fixed(tmp_path, settings):
     b.prices["X"] = 95.0
     w = Watcher(settings, every=60, broker=b, notifier=Notifier(), prices=Prices(), auto_exit=True)
     assert w.check_trailing_stops() == [] and b.positions()
+
+
+def _shared(tmp_path, price_fn, name="sh.json", **kw):
+    return LocalPaperBroker(tmp_path / name, starting_cash=100_000, price_fn=price_fn, currency="INR",
+                            whole_shares=True, shared=True, **kw)
+
+
+def test_no_lock_is_held_while_a_price_is_fetched(tmp_path):
+    holder = {}
+    seen = []
+
+    def price_fn(sym):
+        b = holder["b"]
+        seen.append((b._lock._is_owned(), b._depth, (tmp_path / "sh.json.lock").exists()))
+        return 100.0 if len(seen) < 100 else 80.0
+    b = holder["b"] = _shared(tmp_path, price_fn)
+    b.submit_order("X", "buy", qty=10, stop={"type": "fixed", "value": 90.0})
+    b.positions()
+    b.account()
+    n = len(seen)
+    assert n >= 3
+    state = {"price": 80.0}
+    b.price_fn = lambda sym: (seen.append((b._lock._is_owned(), b._depth, (tmp_path / "sh.json.lock").exists())), state["price"])[1]
+    assert b.sell_if_stopped("X", qty=10, level=90.0, stop={"type": "fixed", "value": 90.0}) is not None
+    assert all(owned is False and depth == 0 and not lockfile for owned, depth, lockfile in seen)
+
+
+def test_file_lock_release_does_not_delete_a_lock_taken_after_a_stale_break(tmp_path):
+    from trading_agent.news import _file_lock
+    lock = tmp_path / "x.lock"
+    a = _file_lock(lock)
+    a.__enter__()
+    b = _file_lock(lock, stale=-1)       # everything counts as stale: B breaks A's lock and takes its own
+    b.__enter__()
+    a.__exit__(None, None, None)         # A releases late: B's lock must survive
+    assert lock.exists()
+    b.__exit__(None, None, None)
+    assert not lock.exists()
+
+
+def test_a_reset_by_one_broker_is_seen_by_the_other(tmp_path):
+    a = _shared(tmp_path, lambda s: 100.0)
+    a.submit_order("X", "buy", qty=10)
+    b = _shared(tmp_path, lambda s: 100.0)
+    assert b.positions()
+    assert a.reset(100_000) is True
+    assert b.positions() == []
+    assert b.account().cash == 100_000
+    o = b.submit_order("X", "buy", qty=1)
+    assert o["status"] == "filled" and [p.qty for p in a.positions()] == [1]
+
+
+def test_unshared_brokers_make_no_lock_file(tmp_path):
+    b = LocalPaperBroker(tmp_path / "plain.json", starting_cash=1000, price_fn=lambda s: 10.0)
+    b.submit_order("X", "buy", qty=1)
+    b.positions()
+    assert not list(tmp_path.glob("*.lock"))
+
+
+def test_a_replay_step_makes_no_lock_file(tmp_path):
+    from tests.test_replay_trial import make
+    t = make(tmp_path)
+    t.save()
+    assert not list(tmp_path.rglob("*.lock"))

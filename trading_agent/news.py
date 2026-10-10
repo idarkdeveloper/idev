@@ -430,10 +430,14 @@ def _file_lock(path: Path, wait: float = 5.0, stale: float = 30.0, what: str = "
     """Exclusive-create lock file so the dashboard and watch (two processes) cannot interleave writes."""
     path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.time() + wait
+    token = uuid.uuid4().hex  # who holds the lock: a release never deletes a lock somebody else has since taken
     while True:
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.close(fd)
+            try:
+                os.write(fd, token.encode())
+            finally:
+                os.close(fd)
             break
         except (FileExistsError, PermissionError):  # Windows answers PermissionError while the lock is being removed
             with contextlib.suppress(OSError):
@@ -448,7 +452,8 @@ def _file_lock(path: Path, wait: float = 5.0, stale: float = 30.0, what: str = "
         yield
     finally:
         with contextlib.suppress(OSError):
-            path.unlink()
+            if path.read_text() == token:  # ours still (it may have been broken as stale and re-taken)
+                path.unlink()
 
 
 class NewsLog:

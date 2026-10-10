@@ -207,7 +207,7 @@ class Watcher:
                         record_stop_fill(state_path, h["order"],
                                          {"level": h["level"], "type": h["type"], "label": h["label"]})
         if fresh and self._notifier is not None:
-            body ="\n".join(f"{h['symbol']}: {h['price']:.2f} at/below {h['label']} stop {h['stop']:.2f} "
+            body = "\n".join(f"{h['symbol']}: {h['price']:.2f} at/below {h['label']} stop {h['stop']:.2f} "
                              f"({h['drawdown_from_high']*100:+.1f}% from high)"
                              + (" - paper SOLD" if h.get("order") else "") for h in fresh)
             self._notifier.send(f"[STOP] {len(fresh)} position(s) hit their stop", body)
