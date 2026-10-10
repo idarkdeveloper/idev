@@ -461,27 +461,53 @@ def test_evening_digest_deals_row_shows_bse():
     assert [r[0] for r in rows] == ["ITC (BSE)", "ITC"]
 
 
-# -- BSE-only tickers are information, never orders ----------------------------------------------
-def test_bo_ticker_is_refused_by_paper_broker_and_practice_buy(settings, tmp_path):
-    from trading_agent.broker import BSE_ONLY_MESSAGE, LocalPaperBroker
+# -- BSE-only tickers: never bought, but an existing position can still be sold ------------------------
+def _bo_broker(tmp_path):
+    from trading_agent.broker import LocalPaperBroker
     b = LocalPaperBroker(tmp_path / "pb.json", starting_cash=100_000, price_fn=lambda s: 100.0)
-    for side in ("buy", "sell"):
-        with pytest.raises(ValueError, match="BSE-only stock, no NSE listing"):
-            b.submit_order("544954.BO", side, notional=1000)
+    b._state["positions"]["544954.BO"] = {"qty": 10.0, "avg_entry_price": 120.0, "high_water": 120.0,
+                                           "opened_at": "2026-09-01T00:00:00+00:00"}
+    return b
+
+
+def test_paper_and_practice_buy_of_a_bo_ticker_is_refused_but_a_sell_works(settings, tmp_path):
+    from trading_agent.broker import BSE_ONLY_MESSAGE
+    b = _bo_broker(tmp_path)
+    with pytest.raises(ValueError, match="BSE-only stock, no NSE listing"):
+        b.submit_order("544954.BO", "buy", notional=1000)
     assert BSE_ONLY_MESSAGE.endswith("not tradable here") and b.account().cash == 100_000
     from trading_agent.ui import App
     settings.market = "in"
     app = App(settings, broker=b, demo_trades=[], dotenv=settings.state_dir / ".env")
     with pytest.raises(ValueError, match="BSE-only"):
         app.paper_order("544954.BO", "buy", notional=1000)   # the practice (dashboard) buy
+    order = b.submit_order("544954.BO", "sell", qty=4)
+    assert order["side"] == "sell" and b.account().cash > 100_000
 
 
-def test_bo_ticker_is_refused_by_groww_order_and_gtt():
+def test_stop_exit_of_a_bo_position_still_sells(tmp_path):
+    b = _bo_broker(tmp_path)
+    stop = {"type": "trailing", "value": 5}
+    b._state["positions"]["544954.BO"]["stop"] = stop
+    order = b.sell_if_stopped("544954.BO", qty=10.0, level=110.0, stop=stop)   # price 100 <= level 110
+    assert order is not None and order["side"] == "sell" and order["stop_hit"] is True
+    assert "544954.BO" not in b._state["positions"]
+
+
+def test_alpaca_refuses_a_bo_buy_only():
+    from trading_agent.broker import AlpacaPaperBroker
+    a = AlpacaPaperBroker.__new__(AlpacaPaperBroker)
+    with pytest.raises(ValueError, match="BSE-only"):
+        a.submit_order("544954.BO", "buy", qty=1)
+
+
+def test_groww_refuses_a_bo_symbol_both_sides_and_for_gtt_saying_why():
     from trading_agent.groww import GrowwBroker
     g = GrowwBroker.__new__(GrowwBroker)    # refused before any state or network is touched
-    with pytest.raises(ValueError, match="BSE-only"):
-        g.submit_order("544954.BO", "buy", qty=1)
-    with pytest.raises(ValueError, match="BSE-only"):
+    for side in ("buy", "sell"):
+        with pytest.raises(ValueError, match="not a valid Groww trading symbol"):
+            g.submit_order("544954.BO", side, qty=1)
+    with pytest.raises(ValueError, match="not a valid Groww trading symbol"):
         g.create_gtt_stop("544954.BO", 1, 10.0, 9.9)
 
 

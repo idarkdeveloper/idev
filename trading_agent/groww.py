@@ -783,7 +783,7 @@ class GrowwBroker:
                      qty: float | None = None, *, order_type: str = "LIMIT",
                      reference_id: str | None = None, confirm: bool = True) -> dict[str, Any]:
         side = side.lower()
-        refuse_bse_only(symbol)
+        refuse_bse_only(symbol, side, groww=True)  # both sides: Groww has no such trading symbol
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
         if (notional is None) == (qty is None):
@@ -861,9 +861,9 @@ class GrowwBroker:
 
     def create_gtt_stop(self, symbol: str, qty: int, trigger: float, limit: float,
                         reference_id: str | None = None) -> dict[str, Any]:
-        refuse_bse_only(symbol)
+        refuse_bse_only(symbol, "sell", groww=True)
         self._require_live("create a GTT order")
-        ref =reference_id or make_reference_id("SL")
+        ref = reference_id or make_reference_id("SL")
         body = {
             "reference_id": ref, "smart_order_type": "GTT", "segment": SEGMENT,
             "trading_symbol": symbol.upper(), "quantity": int(qty),
