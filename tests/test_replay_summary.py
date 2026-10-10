@@ -272,7 +272,7 @@ def test_size_falls_back_without_history_resolves_names_and_warns(rapp):
     slug = create(app, r)
     app.resolve = lambda text: ("A", "A Limited")
     st, a = r.route("GET", f"/replay/api/trial/{slug}/size", {"ticker": "a limited"}, None)
-    assert st == 200 and a["ticker"] == "A" and a["name"] == "A Limited" and "warning" not in a
+    assert st == 200 and a["ticker"] == "A" and a["name_today"] == "A Limited" and "warning" not in a
     t = r.trial(slug)
     real = t.prices.history
 
@@ -287,6 +287,43 @@ def test_size_falls_back_without_history_resolves_names_and_warns(rapp):
     t.prices.last_trade_date = lambda sym: "2021-01-01"
     st, c = r.route("GET", f"/replay/api/trial/{slug}/size", {"ticker": "A"}, None)
     assert st == 200 and "suspended or delisted" in c["warning"]
+
+
+def test_old_save_stepping_stays_at_least_and_new_replays_are_exact(rapp):
+    app, r, _ = rapp
+    slug = create(app, r, top=2)
+    t = r.trial(slug)
+    assert t.data["counts_exact"] is True
+    order(r, slug, "A", "buy", 5)
+    step(app, r, slug, "week")
+    assert "at least" not in text(build_summary(t))
+    for k in ("rebalance_count", "agent_stop_count", "counts_exact"):  # make it an old save
+        t.data.pop(k)
+    t.data["rebalances"] = [{}, {}]
+    t.data["stops"] = [{"who": "agent", "symbol": "A"}]
+    step(app, r, slug, "month")
+    t = r.trial(slug)
+    assert t.data["counts_exact"] is False and t.data["rebalance_count"] >= 2 and t.data["agent_stop_count"] >= 1
+    assert "at least" in text(build_summary(t))
+
+
+def test_size_unlisted_on_the_date_is_400_and_name_is_labelled_today(rapp):
+    app, r, _ = rapp
+    slug = create(app, r)
+    app.resolve = lambda text: ("NEWCO", "Newco Ltd")  # listed only from 2022-06
+    st, body = r.route("GET", f"/replay/api/trial/{slug}/size", {"ticker": "newco"}, None)
+    assert st == 400 and "not listed on the replay date" in body["error"]
+    app.resolve = lambda text: ("A", "A Limited")
+    st, a = r.route("GET", f"/replay/api/trial/{slug}/size", {"ticker": "A"}, None)
+    assert st == 200 and a["name_today"] == "A Limited" and "name" not in a
+
+
+def test_size_malformed_last_trade_date_warns_not_500(rapp):
+    app, r, _ = rapp
+    slug = create(app, r)
+    r.trial(slug).prices.last_trade_date = lambda sym: "not-a-date"
+    st, a = r.route("GET", f"/replay/api/trial/{slug}/size", {"ticker": "A"}, None)
+    assert st == 200 and "could not be read" in a["warning"]
 
 
 def test_cost_route_is_busy_guarded(rapp):

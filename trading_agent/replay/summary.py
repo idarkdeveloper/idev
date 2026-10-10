@@ -175,13 +175,13 @@ def build_summary(trial: Any) -> dict[str, Any] | None:
     # -- why they differ (facts only) ------------------------------------------------------
     why = []
     d = trial.data
-    exact = "rebalance_count" in d
-    n_reb = d["rebalance_count"] if exact else max(len(d["rebalances"]) - 1, 0)
+    exact = d.get("counts_exact") is True and "rebalance_count" in d
+    n_reb = d["rebalance_count"] if "rebalance_count" in d else max(len(d["rebalances"]) - 1, 0)
     if n_reb:
         why.append(f"the agent rebalanced {'' if exact else 'at least '}{_plural(n_reb, 'time')} since the start "
                    f"({_plural(len(orders['agent']), 'trade')} in all)")
     if "agent_stop_count" in d:
-        n_stop, stop_exact = d["agent_stop_count"], True
+        n_stop, stop_exact = d["agent_stop_count"], exact
     else:
         n_stop, stop_exact = sum(1 for x in d.get("stops", []) if x.get("who") == "agent" and "error" not in x), False
     if n_stop:

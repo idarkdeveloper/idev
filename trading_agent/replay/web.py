@@ -311,20 +311,27 @@ class ReplayApp:
             risk, cap = _num(query.get("risk_pct"), "risk %", 1.0), _num(query.get("max_pct"), "max position %", 10.0)
             if not 0 < risk <= 100 or not 0 < cap <= 100:
                 raise ValueError("risk % and max position % must be between 0 and 100")
-            price = t.prices.latest_price(sym)
+            try:
+                price = t.prices.latest_price(sym)
+            except LookupError:
+                raise ValueError(f"{sym} is not listed on the replay date ({t.clock.today})") from None
             try:
                 a = atr(t.prices.history(sym, "1y"))
             except Exception:  # noqa: BLE001 - no volatility data: sized at half the cap, like Live
                 a = None
             equity = t.you.account().equity
             r = position_size(equity, price, a, risk_pct=risk / 100, max_pct=cap / 100, whole_shares=True)
-            r.update(ticker=sym, name=company, equity=equity, today=t.clock.today)
+            r.update(ticker=sym, name_today=company, equity=equity, today=t.clock.today)
             try:
                 last = t.prices.last_trade_date(sym)
             except Exception:  # noqa: BLE001
                 last = None
-            if last and (date.fromisoformat(t.clock.today) - date.fromisoformat(last)).days > 7:
-                r["warning"] = f"{sym} last traded {last}: it is suspended or delisted on the replay date, so this size cannot be bought."
+            if last:
+                try:
+                    if (date.fromisoformat(t.clock.today) - date.fromisoformat(last)).days > 7:
+                        r["warning"] = f"{sym} last traded {last}: it is suspended or delisted on the replay date, so this size cannot be bought."
+                except (TypeError, ValueError):  # a malformed date is a warning, not a failure
+                    r["warning"] = f"{sym}'s last trade date could not be read, so check it was trading on the replay date."
             if r["notional"]:
                 r["round_trip_cost"] = cost_quote_for("in", r["notional"])
             return r

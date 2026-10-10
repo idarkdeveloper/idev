@@ -68,6 +68,11 @@ def step(trial: Any, until: str, *, today: str | None = None,
     report: dict[str, Any] = {"from": start, "to": until, "days": len(days), "rebalances": [],
                               "stops": [], "dividends": []}
     with trial.transaction():
+        d = trial.data
+        if "rebalance_count" not in d or "agent_stop_count" not in d:  # an older save: seed from the (trimmed) lists
+            d.setdefault("rebalance_count", max(len(d["rebalances"]) - 1, 0))
+            d.setdefault("agent_stop_count", sum(1 for x in d.get("stops", []) if x.get("who") == "agent" and "error" not in x))
+            d["counts_exact"] = False
         prev = start
         for i, day in enumerate(days):
             trial.clock.advance_to(day)
