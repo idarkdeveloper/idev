@@ -217,7 +217,7 @@ def test_one_run_covers_both_investors_and_the_recommendation_names_its_investor
     assert [r["investor"] for r in recorded][0] == "VIJAY KEDIA"
     # the history tool: all followed by default, one when asked
     log = holder["r"].tool_log
-    assert log[0][1]["investors"] == NAMES and {t["followed_investor"] for t in log[0][1]["trades"]} <= set(NAMES)
+    assert log[0][1]["investors"] == NAMES and {t["followed_investor"] for t in __import__("trading_agent.untrusted", fromlist=["x"]).unwrap_json(log[0][1]["trades"])} <= set(NAMES)
     assert log[1][1]["investors"] == ["ASHISH KACHOLIA"]
     assert ("history", "ASHISH KACHOLIA", "TCS") in data.asked and ("history", "VIJAY KEDIA", "TCS") in data.asked
     assert ("history", "VIJAY KEDIA", "SENCO") not in data.asked

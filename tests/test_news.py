@@ -327,7 +327,9 @@ def test_get_news_tool_returns_last_two_days(settings):
     ctx = AgentContext(settings=settings, broker=None, data=None, notifier=Notifier(),
                        state=State(settings.state_dir / "state.json"), result=RunResult("x", []), news=svc)
     tool = {t.name: t for t in build_tools(ctx)}["get_news"]
+    from trading_agent.untrusted import unwrap_json
     out = json.loads(tool.call({"ticker": "senco"}))
+    out["headlines"] = unwrap_json(out["headlines"])
     assert [h["title"] for h in out["headlines"]] == ["Headline new"]
     assert set(out["headlines"][0]) == {"title", "source", "published", "sentiment", "event", "confidence", "link"}
     ctx.news = None
