@@ -86,6 +86,33 @@ def _in_view(values: list[Any], lo: float, hi: float, span: float) -> list[float
     return [v for v in values if v is not None and lo - 0.6 * span <= v <= hi + 0.6 * span]
 
 
+def _spread(values: list[float], gap: float) -> list[float]:
+    """Label heights for lines at ``values`` (same order back), pushed apart so neighbours are at least ``gap``
+    apart (two levels a few points apart would otherwise print on top of each other); the group stays centred."""
+    if len(values) < 2:
+        return list(values)
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    groups: list[list[float]] = []   # each group: the original values of labels that touch
+    for i in order:
+        v = values[i]
+        if groups:
+            g = groups[-1]
+            mid = sum(g) / len(g)
+            top = mid + gap * (len(g) - 1) / 2   # the highest label of the group, laid out centred
+            if v - top < gap:
+                g.append(v)
+                continue
+        groups.append([v])
+    ys: list[float] = []
+    for g in groups:
+        mid = sum(g) / len(g)
+        ys += [mid + gap * (k - (len(g) - 1) / 2) for k in range(len(g))]
+    out = [0.0] * len(values)
+    for k, i in enumerate(order):
+        out[i] = ys[k]
+    return out
+
+
 # Fixed margins (fractions of the picture): the right-hand labels ("prev 22,565") get a full fifth of the width and
 # never depend on tight-layout guessing, so nothing is clipped at the frame.
 AX_LEFT, AX_RIGHT = 0.11, 0.80
@@ -105,20 +132,23 @@ def _draw_intraday(bars15: list[dict[str, Any]], ema21: list[float | None] | Non
             ax.plot([p[0] for p in pts], [p[1] for p in pts], color=EMA, linewidth=2.2, zorder=4)
     lo_y, hi_y = min(b["low"] for b in bars15), max(b["high"] for b in bars15)
     span = hi_y - lo_y or 1.0
+    labels: list[tuple[float, str, str]] = []
     if prev_close and _in_view([prev_close], lo_y, hi_y, span):
         ax.axhline(prev_close, color=PREV, linestyle=":", linewidth=1.8, zorder=1)
-        ax.annotate(f"prev {prev_close:,.0f}", (n - 0.5, prev_close), xytext=(5, 0), textcoords="offset points",
-                    color=PREV, fontsize=LABEL_PT, va="center", annotation_clip=False)
+        labels.append((prev_close, f"prev {prev_close:,.0f}", PREV))
     for lv in levels or []:
         v = lv.get("value")
         if not _in_view([v], lo_y, hi_y, span):
             continue
         ax.axhline(v, color=LEVEL, linestyle=(0, (1, 3)), linewidth=1.8, zorder=1)
-        ax.annotate(f"{SHORT.get(lv.get('label', ''), lv.get('label', ''))} {v:,.0f}", (n - 0.5, v), xytext=(5, 0),
-                    textcoords="offset points", color=LEVEL, fontsize=LABEL_PT, va="center", annotation_clip=False)
+        labels.append((float(v), f"{SHORT.get(lv.get('label', ''), lv.get('label', ''))} {v:,.0f}", LEVEL))
     pad = span * 0.08
     ticks = _in_view([prev_close] + [lv.get("value") for lv in levels or []], lo_y, hi_y, span)
-    ax.set_ylim(min([lo_y] + ticks) - pad, max([hi_y] + ticks) + pad)
+    y0, y1 = min([lo_y] + ticks) - pad, max([hi_y] + ticks) + pad
+    ax.set_ylim(y0, y1)
+    for y, text, colour in zip(_spread([v for v, _, _ in labels], (y1 - y0) * 0.075), (t for _, t, _ in labels), (c for _, _, c in labels)):
+        ax.annotate(text, (n - 0.5, y), xytext=(5, 0), textcoords="offset points",
+                    color=colour, fontsize=LABEL_PT, va="center", annotation_clip=False)
     ax.set_xlim(-1, n)
     step = max(1, n // 5)
     ax.set_xticks(range(0, n, step))

@@ -251,7 +251,7 @@ def _cheat_lines(nf: dict[str, Any]) -> list[str]:
         out.append(f"📊 Session: range {num(nf['low'], 0)} – {num(nf['high'], 0)}" + (f" · gap {_signed(nf['gap'])}" if n(nf.get("gap")) else ""))
     piv: dict[str, Any] = nf["pivots"] if isinstance(nf.get("pivots"), dict) else {}
     if all(n(piv.get(k)) for k in ("S1", "P", "R1")):
-        out.append(f"📐 Next pivots: S1 {num(piv['S1'], 0)} · P {num(piv['P'], 0)} · R1 {num(piv['R1'], 0)}")
+        out.append(f"📐 Pivots: S1 {num(piv['S1'], 0)} · P {num(piv['P'], 0)} · R1 {num(piv['R1'], 0)}")
     four: dict[str, Any] = nf["four_hour"] if isinstance(nf.get("four_hour"), dict) else {}
     bits = ([f"Daily ADX {nf['adx']:.0f}"] if n(nf.get("adx")) else []) + ([f"4h ADX {four['adx']:.0f}"] if n(four.get("adx")) else []) \
         + ([f"RSI {nf['rsi']:.0f}"] if n(nf.get("rsi")) else [])

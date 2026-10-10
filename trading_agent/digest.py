@@ -220,9 +220,9 @@ def inr(v: float | None, d: int = 0, sign: bool = False) -> str:
         return "n/a"
     s = num(v, d)
     zero = float(s.replace(",", "")) == 0
-    if v < 0 and not zero:
-        return f"₹−{s}"
-    return f"₹+{s}" if sign and not zero else f"₹{s}"
+    if v < 0 and not zero:   # the sign sits before the symbol: −₹21,722, +₹100
+        return f"−₹{s}"
+    return f"+₹{s}" if sign and not zero else f"₹{s}"
 
 
 def pct_text(v: float | None, d: int = 1, sign: bool = True) -> str:

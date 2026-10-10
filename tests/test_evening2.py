@@ -174,7 +174,7 @@ def test_telegram_money_line_always_shows_today_and_the_cheat_sheet(s):  # noqa:
     money = next(x for x in h.split("\n") if x.startswith("💼"))
     assert re.fullmatch(r"💼 <b>₹[\d,]+</b> · Today [+−]₹[\d,]+ \([+−][\d.]+%\) · Total [+−]₹[\d,]+ \([+−][\d.]+%\)", money), money
     assert re.search(r"^📊 Session: range [\d,]+ – [\d,]+ · gap [+−]?\d+$", h, re.M)
-    assert re.search(r"^📐 Next pivots: S1 [\d,]+ · P [\d,]+ · R1 [\d,]+$", h, re.M)
+    assert re.search(r"^📐 Pivots: S1 [\d,]+ · P [\d,]+ · R1 [\d,]+$", h, re.M)
     assert re.search(r"^⚡ Daily ADX \d+ · 4h ADX \d+ · RSI \d+$", h, re.M)
     stale = next(x for x in brief_for(s, now=lambda: SAT)["html"].split("\n") if x.startswith("💼"))
     assert re.fullmatch(r"💼 <b>₹[\d,]+</b> · Today: no trading · Total [+−]₹[\d,]+ \([+−][\d.]+%\)", stale), stale
@@ -187,7 +187,7 @@ def test_telegram_cheat_sheet_lines_appear_only_when_their_data_exists():
     full = {"close": 22500.0, "change_pct": 0.3, "low": 22295.0, "high": 22581.0, "gap": 83.0, "pivots": {"S1": 22350.0, "P": 22465.0, "R1": 22636.0},
             "adx": 44.2, "rsi": 37.4, "four_hour": {"adx": 30.1}}
     h = telegram_brief(ev(full))["html"]
-    assert "📊 Session: range 22,295 – 22,581 · gap +83" in h and "📐 Next pivots: S1 22,350 · P 22,465 · R1 22,636" in h
+    assert "📊 Session: range 22,295 – 22,581 · gap +83" in h and "📐 Pivots: S1 22,350 · P 22,465 · R1 22,636" in h
     assert "⚡ Daily ADX 44 · 4h ADX 30 · RSI 37" in h
     h = telegram_brief(ev({"close": 22500.0, "change_pct": 0.3, "adx": 20.0}))["html"]
     assert "📊" not in h and "📐" not in h and "⚡ Daily ADX 20" in h and "4h ADX" not in h and "RSI" not in h
@@ -253,3 +253,21 @@ def test_no_images_is_the_plain_text_message_as_before():
     sess = Session()
     tg(sess).send("Close", "body", telegram_html="hello", telegram_button={"inline_keyboard": []})
     assert [c[0] for c in sess.calls] == ["sendMessage"] and sess.calls[0][1]["json"]["reply_markup"] == {"inline_keyboard": []}
+
+
+def test_level_labels_are_spread_apart_but_stay_by_their_lines():
+    from trading_agent.charts import _spread
+    assert _spread([22232.0, 22217.0, 22465.0], 30.0) == [22239.5, 22209.5, 22465.0]
+    assert _spread([100.0], 5.0) == [100.0] and _spread([], 5.0) == []
+
+
+def test_money_sign_sits_before_the_rupee_symbol():
+    from trading_agent.digest import inr
+    assert inr(-21722) == "−₹21,722" and inr(100, 0, True) == "+₹100" and inr(0, 0, True) == "₹0"
+
+
+def test_quiet_deals_line_names_few_investors_and_counts_many():
+    from trading_agent.digest_render import _deals_block
+    many = _deals_block({"deals": [], "following": [f"I{i}" for i in range(10)], "since": "2026-10-11"}, "Deals")
+    few = _deals_block({"deals": [], "following": ["A", "B"], "since": "2026-10-11"}, "Deals")
+    assert "the 10 tracked investors" in str(many) and "I3" not in str(many) and "No disclosures by A, B since" in str(few)

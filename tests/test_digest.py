@@ -275,7 +275,7 @@ def test_evening_day_and_total_pl_with_best_to_worst_and_no_price_holding(s):
     assert [h["symbol"] for h in g["holdings"]] == ["X", "Y", "Z"]          # +10%, -5%, then no previous close
     assert g["no_price"] == ["BND"] and g["no_prev_close"] == ["Z"]
     sub = digest_render.subject({"kind": "evening", "groww": g, "practice": digest.unavailable("x")})
-    assert sub == "Close: ₹+50 / +2.5% today · total ₹+70 (+3.2%)"
+    assert sub == "Close: +₹50 / +2.5% today · total +₹70 (+3.2%)"
 
 
 def test_evening_practice_change_total_and_stop_fills(s):
@@ -878,7 +878,7 @@ def test_no_summary_model_is_called_once_cancelled(s):
 # ---------- Indian number grouping ----------
 def test_indian_grouping_everywhere():
     assert digest.inr(500000) == "₹5,00,000" and digest.inr(179143) == "₹1,79,143"
-    assert digest.inr(-1234567.5, 0, True) == "₹−12,34,568" and digest.inr(12345678, 0) == "₹1,23,45,678"
+    assert digest.inr(-1234567.5, 0, True) == "−₹12,34,568" and digest.inr(12345678, 0) == "₹1,23,45,678"
     assert digest.inr(999) == "₹999" and digest.num(1234.5, 2) == "1,234.50" and digest.num(100000, 0) == "1,00,000"
     d = {"kind": "evening", "date": "2026-10-12", "generated_at": "2026-10-12T15:45:00+05:30", "delayed": False,
          "groww": digest.unavailable("x"), "news": digest.unavailable("x"), "deals": digest.unavailable("x"),
@@ -1772,7 +1772,7 @@ def test_a_day_without_a_fresh_close_says_so_and_drops_the_today_figures(s):
     e = evening_report(ctx_for(s, groww=lambda: portfolio(rows), prices=px, now=sat))
     assert e["stale_close"]["label"] == "Fri 9 Oct" and e["groww"]["day_pl"] is None
     mail = digest_render.render(e)
-    assert mail["subject"].startswith("Close (Fri 9 Oct): total ₹") and "today" not in mail["subject"]
+    assert mail["subject"].startswith("Close (Fri 9 Oct): total +₹") and "today" not in mail["subject"]
     assert "Snapshot: Fri 9 Oct close (no trading today)" in mail["text"] and mail["text"].lower().count("no trading today") == 1
     assert "Today" not in mail["text"].replace("Today's", "") and "Today ₹" not in mail["text"] and "Today ₹" not in mail["html"]
     holiday = ctx_for(s, groww=lambda: portfolio(rows), prices=px, calendar=Cal(closed={date(2026, 10, 12)}),
