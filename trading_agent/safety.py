@@ -156,7 +156,7 @@ def protection(gtt: dict[str, Any] | None, stop_level: float | None, *, live_ord
     warning = None
     if gtt and gtt.get("last_error"):
         warning = f"GTT problem: {gtt['last_error']}"
-    status = str((gtt or {}).get("status") or "ACTIVE").upper()
+    status = str((gtt or {}).get("status") or "UNKNOWN").upper()
     if gtt and gtt.get("smart_order_id") and gtt.get("trigger") is not None and status not in _DEAD_GTT:
         text, tone = f"GTT at Groww {_inr(gtt['trigger'])} (#{gtt['smart_order_id']})", "solid"
         if status not in _LIVE_GTT:
@@ -206,6 +206,6 @@ def protection_map(positions: list[dict[str, Any]], gtt_stops: dict[str, Any], *
                                     live_orders=live_orders, watch=watch, qty=qtys.get(sym))
     default = protection(None, None, live_orders=live_orders, watch=watch)
     if live_orders:
-        default = {"kind": "none", "tone": "neutral", "warning": None,
-                   "text": "No stop recorded (not tradable here, or no price)"}
+        default = {"kind": "none", "tone": "bad", "warning": None,
+                   "text": "No stop set: nothing sells this holding"}
     return {"live_orders": bool(live_orders), "default": default, "by_symbol": by_symbol}

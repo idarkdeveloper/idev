@@ -1215,11 +1215,11 @@
     $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on; $("f-dg-bul").checked = s.digest_bulletin !== false; $("f-dg-chart").checked = s.digest_charts !== false;
     $("f-dg-am-t").value = s.digest_morning || "09:00"; $("f-dg-pm-t").value = s.digest_evening || "15:45";
     $("f-dg-note").textContent = s.digest_channel ? "Sent by the watch service on NSE trading days to your email or webhook. They never place an order." : "Add RESEND_API_KEY with an email address (or a webhook) above, or nothing is sent. Preview still works.";
-    $("f-gtt-note").textContent = c.groww_live_orders ? "A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Uses REAL orders on Groww." : "Saved, but inactive: GROWW_LIVE_ORDERS is not true in .env, so no GTT orders are placed.";
+    $("f-gtt-note").textContent = S.live_orders ? "A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Uses REAL orders on Groww." : "Saved, but inactive: GROWW_LIVE_ORDERS is not true in .env, so no GTT orders are placed.";
     $("groww-test-result").textContent = c.groww_credentials ? "" : "No Groww keys in .env";
     $("conns").innerHTML = [
       conn(c.claude, "Claude", c.claude ? s.claude_model + " · key set" : "ANTHROPIC_API_KEY missing in .env"),
-      conn(c.groww, "Groww", c.groww ? (c.groww_live_orders ? "linked · LIVE orders enabled" : "linked · holdings mirrored, paper fills") : "not linked · local paper account"),
+      conn(c.groww, "Groww", c.groww ? (S.live_orders ? "linked · LIVE orders enabled" : "linked · holdings mirrored, paper fills") : "not linked · local paper account"),
       conn(true, s.data_source === "nse" ? "NSE deals + announcements" : "QuiverQuant", s.data_source === "nse" ? "public, no key" : "API key"),
       conn(c.prices === "groww", "Prices", c.prices === "groww" ? "Groww live data" : "Yahoo Finance fallback, delayed"),
       conn(!!S.regime && !S.regime.error, "Global context", S.regime && !S.regime.error ? "Nifty, S&P 500, Nasdaq, Nikkei, VIX, USD/INR, Brent via Yahoo" : "unavailable"),

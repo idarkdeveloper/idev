@@ -52,7 +52,7 @@ const state = {
      stop_type: "none", stop_label: "none", stop_value: null, gtt: null}],
   live_orders: mode === "demo" ? false : liveOrders,
   protection: mode === "demo" ? null : liveOrders
-    ? {live_orders: true, default: {kind: "none", tone: "neutral", text: "No stop recorded (not tradable here, or no price)", warning: null}, by_symbol: {
+    ? {live_orders: true, default: {kind: "none", tone: "bad", text: "No stop set: nothing sells this holding", warning: null}, by_symbol: {
         TCS: {kind: "gtt", tone: "solid", text: "GTT at Groww ₹99.00 (#gtt_1)", warning: "GTT problem: modify refused"},
         LAURUSLABS: {kind: "server", tone: "warn", text: "Server stop ₹90.00: alert only, nothing sells automatically (needs the watch service running) · server not seen for 7 min", warning: null}}}
     : {live_orders: false, default: {kind: "none", tone: "neutral", text: "Not protected (live orders off — stop is advisory)", warning: null}, by_symbol: {}},

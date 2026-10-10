@@ -210,6 +210,22 @@ def test_protection_partial_gtt_unknown_status_and_updated_at():
     assert "covers 2 of 10 shares" in m["by_symbol"]["INFY"]["text"]
 
 
+def test_fallback_with_live_orders_on_is_bad_and_a_gtt_without_status_is_unknown():
+    on = safety.protection_map([], {}, live_orders=True, watch={"level": "ok", "age_s": 1})
+    assert on["default"] == {"kind": "none", "tone": "bad", "warning": None, "text": "No stop set: nothing sells this holding"}
+    assert safety.protection_map([], {}, live_orders=False, watch={})["default"]["tone"] == "neutral"
+    no_status = {k: v for k, v in GTT.items() if k != "status"}
+    p = safety.protection(no_status, None, live_orders=True, qty=2)
+    assert p["kind"] == "gtt" and p["tone"] == "warn" and "status UNKNOWN is unconfirmed" in p["text"]
+    assert safety.protection({**GTT, "status": None}, None, live_orders=True, qty=2)["tone"] == "warn"
+
+
+def test_settings_text_uses_the_effective_live_orders_flag():
+    html = (UI / "index.html").read_text(encoding="utf-8")
+    assert 'textContent = S.live_orders ?' in html and "(S.live_orders ? \"linked" in html
+    assert "c.groww_live_orders ?" not in html and "(c.groww_live_orders ?" not in html
+
+
 def test_watch_thresholds_scale_with_the_interval(tmp_path):
     assert safety.thresholds(60) == (300, 900) and safety.thresholds(None) == (300, 900) and safety.thresholds(-5) == (300, 900)
     assert safety.thresholds(300) == (660, 1320)
