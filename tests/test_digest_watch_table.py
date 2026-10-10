@@ -111,3 +111,16 @@ def test_stops_breached_and_trend_caution_are_separate_and_worst_first():
     assert ("Total P&L", "−₹21,722 (−11.4%)") in blocks[0]["kv"] and ("Invested", "₹1,90,715") in blocks[0]["kv"]
     meta = blocks[0]["lines"][1]
     assert "15 stocks checked; 2 with nothing to flag" in meta and "1 unpriced" in meta and "Practice: none" in meta
+
+
+def test_evening_groww_block_has_the_tile_names_and_worst_first():
+    from trading_agent.digest_render import _evening_blocks
+    g = {"value": 168993.2, "invested": 190715.0, "pl": -21721.6, "pl_pct": -11.39, "day_pl": -500.0, "day_pct": -0.3,
+         "no_price": ["13PCL31"], "no_prev_close": [],
+         "holdings": [{"symbol": "INFY", "name": "Infosys Limited", "qty": 10, "price": 1023.4, "day_pct": 1.5, "day_pl": 150.0, "pl": -2600.0, "pl_pct": -20.4},
+                      {"symbol": "VEDL", "name": "Vedanta Limited", "qty": 20, "price": 264.0, "day_pct": -3.2, "day_pl": -170.0, "pl": -2100.0, "pl_pct": -28.7}]}
+    d = {"groww": g, "practice": {"unavailable": "x"}, "news": {"unavailable": "x"}, "deals": {"unavailable": "x"}}
+    b = _evening_blocks(d)[0]
+    assert b["title"] == "Your Groww portfolio" and ("Invested", "₹1,90,715") in b["kv"] and b["kv"][-1][0] == "Today"
+    assert [r[0] for r in b["table"]["rows"]] == ["Vedanta (VEDL)", "Infosys (INFY)"]   # biggest fall today first
+    assert b["lines"][1].startswith("1 unpriced") and "T+1" in b["lines"][1]

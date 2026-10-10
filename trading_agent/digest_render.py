@@ -146,6 +146,11 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
     return mood_blocks + ideas_blocks + blocks + deals
 
 
+def _tone(text: str) -> str | None:
+    t = str(text)
+    return "good" if t.startswith("+") else "bad" if t.startswith("−") else None
+
+
 def _breached(i: dict[str, Any]) -> bool:
     p, st = i.get("price"), i.get("stop")
     if isinstance(p, (int, float)) and isinstance(st, (int, float)):
@@ -383,32 +388,41 @@ def _evening_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None = Non
     if "unavailable" in g:
         blocks.append(_unavail("Your Groww portfolio", g))
     else:
-        lines = [f"Value {inr(g['value'])} on {inr(g['invested'])} invested (holdings with a price). "
-                 f"Total profit or loss {inr(g['pl'], 0, True)} ({pct_text(g['pl_pct'])})."]
+        from .digest_rules import label
+        kv = [("Invested", inr(g["invested"])), ("Value now", inr(g["value"])),
+              ("Total P&L", f"{inr(g['pl'], 0, True)} ({pct_text(g['pl_pct'])})")]
         if not stale:
-            if g.get("day_pl") is not None:
-                lines.insert(0, f"Today {inr(g['day_pl'], 0, True)} ({pct_text(g['day_pct'])}) against the previous close.")
-            else:
-                lines.insert(0, "Today's change is unavailable (no previous close).")
-        if not stale:
-            lines.append("Today's buys appear in your holdings from the next day (T+1 settlement).")
+            kv.append(("Today", f"{inr(g['day_pl'], 0, True)} ({pct_text(g['day_pct'])})" if g.get("day_pl") is not None
+                       else "n/a (no previous close)"))
+        notes: list[str] = []
         if g["no_price"]:
-            lines.append("Without a market price (bonds or unlisted), not counted: " + ", ".join(g["no_price"]) + ".")
+            notes.append(f"{len(g['no_price'])} unpriced (bonds or unlisted) not counted: " + ", ".join(g["no_price"]))
         if g["no_prev_close"] and not stale:
-            lines.append("No previous close, left out of today's change: " + ", ".join(g["no_prev_close"]) + ".")
+            notes.append("no previous close, left out of today: " + ", ".join(g["no_prev_close"]))
+        if not stale:
+            notes.append("today's buys show from tomorrow (T+1)")
+        lines = [" · ".join(n[0].upper() + n[1:] if i == 0 else n for i, n in enumerate(notes))] if notes else []
         if stale:
-            rows = [[h["symbol"], str(h["qty"]), inr(h["price"], 2), inr(h["pl"], 0, True) if h["pl"] is not None else "n/a",
-                     pct_text(h["pl_pct"])] for h in g["holdings"]]
-            table = {"head": ["Stock", "Qty", "Price", "Total ₹", "Total %"], "rows": rows, "num": [1, 2, 3, 4]} if rows else None
+            hold = sorted(g["holdings"], key=lambda h: h["pl_pct"] if isinstance(h.get("pl_pct"), (int, float)) else 0.0)
+            rows = [[label(h), str(h["qty"]), inr(h["price"], 2), inr(h["pl"], 0, True) if h["pl"] is not None else "n/a",
+                     pct_text(h["pl_pct"])] for h in hold]
+            table = {"head": ["Stock", "Qty", "Price", "Total ₹", "Total %"], "rows": rows, "num": [1, 2, 3, 4],
+                     "html": {"head": ["Stock", "Price", "Total ₹", "Total %"], "rows": [[r[0], r[2], r[3], r[4]] for r in rows],
+                              "num": [1, 2, 3], "tones": [[None, None, _tone(r[3]), _tone(r[4])] for r in rows], "compact": True}} if rows else None
             tone = None
+            lines.insert(0, "Worst total loss first.")
         else:
-            rows = [[h["symbol"], str(h["qty"]), inr(h["price"], 2), pct_text(h["day_pct"]),
+            hold = sorted(g["holdings"], key=lambda h: h["day_pct"] if isinstance(h.get("day_pct"), (int, float)) else 0.0)
+            rows = [[label(h), str(h["qty"]), inr(h["price"], 2), pct_text(h["day_pct"]),
                      inr(h["day_pl"], 0, True) if h["day_pl"] is not None else "n/a",
-                     inr(h["pl"], 0, True) if h["pl"] is not None else "n/a", pct_text(h["pl_pct"])] for h in g["holdings"]]
+                     inr(h["pl"], 0, True) if h["pl"] is not None else "n/a", pct_text(h["pl_pct"])] for h in hold]
             table = {"head": ["Stock", "Qty", "Price", "Today", "Today ₹", "Total ₹", "Total %"], "rows": rows,
-                     "num": [1, 2, 3, 4, 5, 6]} if rows else None
+                     "num": [1, 2, 3, 4, 5, 6],
+                     "html": {"head": ["Stock", "Price", "Today", "Total %"], "rows": [[r[0], r[2], r[3], r[6]] for r in rows],
+                              "num": [1, 2, 3], "tones": [[None, None, _tone(r[3]), _tone(r[6])] for r in rows], "compact": True}} if rows else None
             tone = "good" if (g.get("day_pl") or 0) > 0 else "bad" if (g.get("day_pl") or 0) < 0 else None
-        blocks.append(_block("Your Groww portfolio", lines, table, tone=tone))
+            lines.insert(0, "Biggest fall today first.")
+        blocks.append(_block("Your Groww portfolio", lines, table, tone=tone, kv=kv))
     p = d["practice"]
     if "unavailable" in p:
         blocks.append(_unavail("Practice account", p))
@@ -429,8 +443,10 @@ def _evening_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None = Non
             lines.append(f"Stop hit today: sold {f['qty']:g} {f['symbol']} at {inr(f['price'], 2)} (stop {inr(f['stop'], 2)}, {f['label']}).")
         if not p["stop_fills_today"] and not stale:
             lines.append("No stop-loss sells today.")
-        rows = [[x["symbol"], f"{x['qty']:g}", inr(x["avg"], 2), inr(x["price"], 2) if x["price"] is not None else "n/a",
-                 inr(x["pl"], 0, True) if x["pl"] is not None else "n/a", pct_text(x["pl_pct"])] for x in p["positions"]]
+        from .digest_rules import label
+        pos = sorted(p["positions"], key=lambda x: x["pl_pct"] if isinstance(x.get("pl_pct"), (int, float)) else 0.0)
+        rows = [[label(x), f"{x['qty']:g}", inr(x["avg"], 2), inr(x["price"], 2) if x["price"] is not None else "n/a",
+                 inr(x["pl"], 0, True) if x["pl"] is not None else "n/a", pct_text(x["pl_pct"])] for x in pos]
         blocks.append(_block("Practice account", lines, {"head": ["Stock", "Qty", "Avg", "Price", "P&L", "P&L %"], "rows": rows,
                                                          "num": [1, 2, 3, 4, 5]} if rows else None))
     blocks += _bulletin_blocks(d, images)

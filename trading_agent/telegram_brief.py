@@ -252,7 +252,32 @@ def _evening_lines(data: dict[str, Any]) -> list[str]:
         out.append(f"📈 Nifty {_e(num(nf['close'], 2))} ({_e(pct_text(nf.get('change_pct'), 2))})")
     if stale:
         out.append("<i>" + _e("No trading today" if stale.get("reason") == "no trading today" else "The market has not closed yet") + "</i>")
+    movers = _movers_table(g, stale)
+    if movers:
+        out.append(movers)
+    news = data.get("news")
+    if _ok(news):
+        neg = [i for i in news.get("items") or [] if i.get("sentiment") == "negative"]
+        if neg:
+            codes = ", ".join(dict.fromkeys(_e(i.get("symbol")) for i in neg))
+            out.append(f"📰 <b>News:</b> {len(neg)} negative for your stocks ({codes}); see the email")
     return out
+
+
+def _movers_table(g: Any, stale: Any) -> str | None:
+    """Today's 3 biggest falls and 3 biggest gains (or, with no trading today, the 5 worst total losses)."""
+    if not _ok(g):
+        return None
+    rows = [h for h in g.get("holdings") or [] if isinstance(h.get("price"), (int, float))]
+    field, title = ("pl_pct", "Worst total loss") if stale else ("day_pct", "Today's movers")
+    rows = [h for h in rows if isinstance(h.get(field), (int, float))]
+    if not rows:
+        return None
+    rows.sort(key=lambda h: h[field])
+    pick = rows[:5] if stale else (rows[:3] + [h for h in rows[-3:] if h[field] > 0 and h not in rows[:3]][::-1])
+    head = f"{'CODE':<10} {'%':>6} {'PRICE':>7}"
+    body = [f"{str(h.get('symbol') or '?')[:10]:<10} {h[field]:>+6.1f} {_price(h['price']):>7}" for h in pick]
+    return f"<b>{_e(title)}</b>\n<pre>" + "\n".join(_e(r) for r in [head, *body]) + "</pre>"
 
 
 def dashboard_url(allowed_hosts: Any) -> str | None:

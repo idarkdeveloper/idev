@@ -165,3 +165,16 @@ def test_cockpit_lines_portfolio_india_gauges_and_events():
     assert "📅 Events: TCS results 14 Oct" in h
     d["watch"]["events"] = []
     assert "📅 Events: none due in the next days" in telegram_brief(e)["html"]
+
+
+def test_evening_has_movers_table_and_negative_news_line():
+    ev = evening()
+    ev["data"]["groww"]["holdings"] = [
+        {"symbol": "VEDL", "price": 264.0, "day_pct": -3.2, "pl_pct": -28.7},
+        {"symbol": "INFY", "price": 1023.4, "day_pct": 1.5, "pl_pct": -20.4},
+        {"symbol": "TCS", "price": 2156.0, "day_pct": -0.4, "pl_pct": -15.3}]
+    ev["data"]["news"] = {"items": [{"symbol": "VEDL", "sentiment": "negative", "title": "x"}]}
+    h = telegram_brief(ev)["html"]
+    assert "<b>Today&#x27;s movers</b>" in h or "<b>Today's movers</b>" in h
+    assert "VEDL" in h and "-3.2" in h and "+1.5" in h and "1023.4" in h
+    assert "📰 <b>News:</b> 1 negative for your stocks (VEDL)" in h
