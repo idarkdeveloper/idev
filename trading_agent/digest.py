@@ -412,6 +412,7 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
     if label:
         notes.append("Using " + label)
     no_price = 0
+    events: list[dict[str, Any]] = []
     for h in g_rows:
         if h.get("kind") == "bond" or h.get("price") is None:
             no_price += 1
@@ -507,6 +508,7 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
                 due = results_due(ctx.data.announcements(sym, limit=20), today)
                 if due:
                     reasons.append(f"{due[1]} due {due[0].strftime('%d %b')}")
+                    events.append({"symbol": sym, "what": due[1], "date": due[0].isoformat()})
             except Exception as e:  # noqa: BLE001
                 if not ann_err:
                     ann_err.append(f"{type(e).__name__}: {e}")
@@ -534,8 +536,14 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
     kept.sort(key=lambda i: (-len(i["reasons"]), i["loss_pct"]))   # most reasons first, then the biggest loss
     stocks = {h["symbol"] for h in holdings}   # a stock held in both places counts once
     flagged = {i["symbol"] for i in items}
+    port_raw = g_info.get("portfolio")
+    port: dict[str, Any] = port_raw if isinstance(port_raw, dict) else {}
+    portfolio = ({"value": port.get("value"), "pl": port.get("pl"), "pl_pct": _pct(port.get("pl_pct")),
+                  "holdings": len(port.get("holdings") or g_rows)} if port.get("value") is not None else None)
     return {"items": kept[:MAX_WATCH], "total": len(kept), "more": max(0, len(kept) - MAX_WATCH),
-            "healthy": len(stocks - flagged), "checked": len(stocks), "places": sorted({h["source"] for h in holdings}), "notes": [clean_text(n, 300) for n in notes]}
+            "healthy": len(stocks - flagged), "checked": len(stocks), "places": sorted({h["source"] for h in holdings}),
+            "events": sorted(events, key=lambda e: e["date"]), "events_checked": bool(ctx.data is not None),
+            "portfolio": portfolio, "notes": [clean_text(n, 300) for n in notes]}
 
 
 def _within_days(published: Any, now: datetime, days: float) -> bool:

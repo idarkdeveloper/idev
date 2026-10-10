@@ -56,8 +56,15 @@ def _regime_line(mood: Any) -> str | None:
         return None
     regime = str(mood["regime"])
     line = f"{_ICON.get(regime, '⚪')} <code>{_e(regime.replace('_', '-').upper())}</code>"
+    if isinstance(mood.get("score"), int):
+        line += f" ({mood['score']:+d})"
     why = _short_why(mood.get("why"))
-    return line + (f" · {_e(why)}" if why else "")
+    nifty_raw = mood.get("nifty")
+    nifty: dict[str, Any] = nifty_raw if isinstance(nifty_raw, dict) else {}
+    last = nifty.get("last")
+    lvl = f"Nifty {num(last, 0)}" if isinstance(last, (int, float)) else ""
+    tail = " · ".join(x for x in (_e(why), lvl) if x)
+    return line + (f" · {tail}" if tail else "")
 
 
 def _action_line(mood: Any, ideas: Any) -> str | None:
@@ -79,12 +86,58 @@ def _macro_line(world: Any, gauges: Any) -> str | None:
             m = re.match(r"(US|Asia): (uptrend|downtrend|mixed)", str(ln))
             if m:
                 bits.append(f"{m.group(1)} {_TREND_ICON[m.group(2)]}")
+    line = "🌍 " + " · ".join(bits) if bits else None
+    home: list[str] = []
     if _ok(gauges):
-        for t in gauges.get("warning_texts") or []:
-            t = str(t).strip().rstrip(".")
-            if t:
-                bits.append(_e(t[0].upper() + t[1:]))
-    return "🌍 " + " · ".join(bits) if bits else None
+        for r in gauges.get("gauges") or []:
+            name = str(r.get("gauge") or "")
+            if name not in ("India VIX", "USD/INR") or not isinstance(r.get("value"), (int, float)):
+                continue
+            reading = str(r.get("reading") or "").lower()
+            icon = ("🔴" if r.get("warning") or "weakest" in reading or "near 1-year high" in reading
+                    else "🟡" if "rising" in reading else "🟢")
+            d20 = r.get("d20_pct")
+            extra = f" ({pct_text(d20, 0)} 20d)" if name == "India VIX" and isinstance(d20, (int, float)) else ""
+            home.append(f"{_e(name)} {num(r['value'], 1)}{extra} {icon}")
+        warn = [str(t).strip().rstrip(".") for t in gauges.get("warning_texts") or [] if str(t).strip()]
+        home += [_e(t[0].upper() + t[1:]) for t in warn]
+    if home:
+        line = (line + "\n" if line else "") + "🇮🇳 " + " · ".join(home)
+    return line
+
+
+def _portfolio_line(watch: Any) -> str | None:
+    p = watch.get("portfolio") if _ok(watch) else None
+    if not isinstance(p, dict) or not isinstance(p.get("value"), (int, float)):
+        return None
+    v = float(p["value"])
+    value = f"₹{v / 1e5:.2f}L" if v >= 1e5 else f"₹{num(v, 0)}"
+    parts = []
+    if isinstance(p.get("pl_pct"), (int, float)):
+        parts.append(pct_text(p["pl_pct"]))
+    if isinstance(p.get("pl"), (int, float)):
+        parts.append(srupee(p["pl"]))
+    n = p.get("holdings")
+    return (f"💼 <b>{value}</b>" + (f" ({' / '.join(parts)})" if parts else "")
+            + (f" · {n} holdings" if isinstance(n, int) and n else ""))
+
+
+def _events_line(watch: Any) -> str | None:
+    if not _ok(watch) or not watch.get("events_checked"):
+        return None
+    ev = watch.get("events") or []
+    if not ev:
+        return "📅 Events: none due in the next days"
+    parts = []
+    for e in ev[:4]:
+        try:
+            d = date.fromisoformat(str(e.get("date")))
+            when = d.strftime("%d %b")
+        except ValueError:
+            when = str(e.get("date"))
+        parts.append(f"{_e(e.get('symbol'))} {_e(e.get('what'))} {when}")
+    more = f" +{len(ev) - 4} more" if len(ev) > 4 else ""
+    return "📅 Events: " + " · ".join(parts) + more
 
 
 def _premarket_line(data: dict[str, Any]) -> str | None:
@@ -229,15 +282,18 @@ def telegram_brief(email: dict[str, Any], allowed_hosts: Any = None) -> dict[str
     data = email.get("data") or {}
     kind = "evening" if data.get("kind") == "evening" else "morning"
     if kind == "morning":
-        mid = [x for x in (_regime_line(data.get("mood")), _action_line(data.get("mood"), data.get("buy_ideas")),
+        mid = [x for x in (_portfolio_line(data.get("watch")), _regime_line(data.get("mood")),
+                           _action_line(data.get("mood"), data.get("buy_ideas")),
                            _macro_line(data.get("world"), data.get("gauges")), _premarket_line(data)) if x]
     else:
         mid = _evening_lines(data)
     # the rules summary only repeats the mood / action / world lines above it; keep a model-written one
     writer = str(email.get("writer") or "")
-    summary = None if writer in ("rules", "none") else _summary_line(email.get("summary"))
+    # morning: the lines above already say it all, so the paragraph is left to the email
+    summary = None if kind == "morning" or writer in ("rules", "none") else _summary_line(email.get("summary"))
     deals = _deals_line(data.get("deals"))
-    tail = [deals] if deals else []
+    events = _events_line(data.get("watch")) if kind == "morning" else None
+    tail = [x for x in (events, deals) if x]
     head = _header(data, kind)
     text = _assemble(head, mid, summary, _watch_block(data.get("watch")), tail)
     if len(text) > LIMIT:   # the written summary goes first, then the rollover shrinks to a count

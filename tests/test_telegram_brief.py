@@ -47,8 +47,8 @@ def test_morning_wait_day_shape():
     assert h.startswith("<b>🌅 Morning brief · Mon 12 Oct</b>")
     assert "🟡 <code>NEUTRAL</code> · Nifty below 200-day avg, downtrend" in h
     assert "⛔ No new buys (2 pass the screen, held back)" in h
-    assert "US 🟢 · Asia 🟡 · The rupee is near its weakest of the year" in h
-    assert "<i>Quiet start. Nothing odd.</i>" in h
+    assert "🌍 US 🟢 · Asia 🟡\n🇮🇳 The rupee is near its weakest of the year" in h
+    assert "Quiet start" not in h   # morning: the lines above say it; the paragraph stays in the email
     assert "⚠️ <b>Holdings to review (13 flagged)</b>" in h and "🤝 <b>Deals:</b> 0 new" in h
 
 
@@ -143,6 +143,25 @@ def test_payload_is_html_with_button_and_html_rejection_retries_plain_once():
 
 
 def test_the_rules_summary_is_left_out_of_telegram_but_a_model_one_stays():
-    base = {"summary": "UNIQUE SUMMARY TEXT.", "data": {"kind": "morning", "date": "2026-10-12"}}
-    assert "UNIQUE SUMMARY TEXT" not in telegram_brief({**base, "writer": "rules"})["html"]
-    assert "UNIQUE SUMMARY TEXT" in telegram_brief({**base, "writer": "claude:claude-haiku-5-5"})["html"]
+    ev = evening()
+    assert "Calm close" not in telegram_brief({**ev, "writer": "rules"})["html"]
+    assert "Calm close" in telegram_brief({**ev, "writer": "claude:claude-haiku-5-5"})["html"]
+    assert "Quiet start" not in telegram_brief({**morning(), "writer": "claude:claude-haiku-5-5"})["html"]
+
+
+def test_cockpit_lines_portfolio_india_gauges_and_events():
+    e = morning()
+    d = e["data"]
+    d["mood"]["score"], d["mood"]["nifty"] = 0, {"last": 22520.45}
+    d["gauges"] = {"gauges": [{"gauge": "India VIX", "value": 14.38, "d20_pct": 20.6, "reading": "calm, rising fast", "warning": False},
+                              {"gauge": "USD/INR", "value": 96.73, "d20_pct": 1.8, "reading": "rupee near its weakest of the year", "warning": False}],
+                   "warning_texts": []}
+    d["watch"]["portfolio"] = {"value": 168993.2, "pl": -21721.6, "pl_pct": -11.39, "holdings": 16}
+    d["watch"]["events_checked"], d["watch"]["events"] = True, [{"symbol": "TCS", "what": "results", "date": "2026-10-14"}]
+    h = telegram_brief(e)["html"]
+    assert "💼 <b>₹1.69L</b> (−11.4% / −₹21,722) · 16 holdings" in h
+    assert "(+0) · Nifty below 200-day avg, downtrend · Nifty 22,520" in h
+    assert "🇮🇳 India VIX 14.4 (+21% 20d) 🟡 · USD/INR 96.7 🔴" in h
+    assert "📅 Events: TCS results 14 Oct" in h
+    d["watch"]["events"] = []
+    assert "📅 Events: none due in the next days" in telegram_brief(e)["html"]
