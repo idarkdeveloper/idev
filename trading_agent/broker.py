@@ -20,7 +20,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
 import requests
 
@@ -238,7 +238,7 @@ class LocalPaperBroker:
             self._state["created_at"] = min(times) if times else _utc_now()
 
     @contextlib.contextmanager
-    def _txn(self):
+    def _txn(self) -> Iterator[None]:
         """Every read-modify-write of the account runs in here: the in-process lock, then a lock file shared with any
         other process using the same account file (a separate ``watch`` process), and the file is re-read from disk
         on the way in, so what is decided and written is based on what the other process last saved."""
@@ -368,7 +368,7 @@ class LocalPaperBroker:
                 price = float(self.price_fn(symbol))
                 self._state["prices"][symbol] = price
                 return price
-            except Exception:  # fall back to the last known price
+            except Exception:  # noqa: BLE001 - fall back to the last known price
                 pass
         if symbol in self._state["prices"]:
             return float(self._state["prices"][symbol])
@@ -490,6 +490,7 @@ class LocalPaperBroker:
         if price is None:
             price = self.latest_price(symbol)
         if qty is None:
+            assert notional is not None  # exactly one of the two was given (checked above)
             qty = round(float(notional) / price, 6)
         if self.whole_shares:
             qty = float(math.floor(qty))

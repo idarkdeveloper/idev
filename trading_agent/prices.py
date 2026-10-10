@@ -15,6 +15,8 @@ from typing import Any
 
 import requests
 
+from .circuit import CircuitBreaker, GuardedSession
+
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
@@ -33,7 +35,10 @@ class YahooPrices:
                  cache_ttl: float = 6 * 3600, archive: Any | None = None):
         self.archive = archive   # price_archive.PriceArchive: closed bars kept even if Yahoo drops or rewrites them
         self.suffix = suffix
-        self.session = session or requests.Session()
+        # Every fetch goes through a circuit breaker (3 refusals in a row: pause 30 s, 60 s, 300 s) that lives as long as
+        # this object, which the watch loop keeps for the whole run.
+        self.breaker = CircuitBreaker("Yahoo")
+        self.session = GuardedSession(session or requests.Session(), self.breaker)
         self.timeout = timeout
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.cache_ttl = cache_ttl
@@ -54,8 +59,10 @@ class YahooPrices:
         return self.latest_price(symbol)
 
     def latest_price(self, symbol: str) -> float:
+        # Not through the circuit breaker: paper fills and stops must never wait on, or run on, a stale price.
         ysym = self.yahoo_symbol(symbol)
-        resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
+        raw = self.session.inner if isinstance(self.session, GuardedSession) else self.session
+        resp = raw.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
                                 params={"range": "1d", "interval": "1d"}, timeout=self.timeout)
         resp.raise_for_status()
         data: Any = resp.json()
@@ -177,7 +184,7 @@ class YahooPrices:
         except (KeyError, IndexError, TypeError) as e:
             raise LookupError(f"Yahoo returned no dividend data for {ysym}") from e
         out = sorted(({"date": datetime.fromtimestamp(int(v["date"]), tz=timezone.utc).strftime("%Y-%m-%d"),
-                       "amount": float(v["amount"])} for v in events.values()), key=lambda d: d["date"])
+                       "amount": float(v["amount"])} for v in events.values()), key=lambda d: str(d["date"]))
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(out))

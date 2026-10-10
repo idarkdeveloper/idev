@@ -268,10 +268,10 @@ def changes_for(changes: Iterable[dict[str, Any]], index: str,
         for k in ("added", "removed", "unadd", "unremove"):
             d[k].update(fix(s, c["date"]) for s in c.get(k, []))
     out = []
-    for d in sorted(by_date):
-        a, r = by_date[d]["added"] - by_date[d]["unadd"], by_date[d]["removed"] - by_date[d]["unremove"]
+    for day in sorted(by_date):
+        a, r = by_date[day]["added"] - by_date[day]["unadd"], by_date[day]["removed"] - by_date[day]["unremove"]
         both = a & r
-        out.append((d, tuple(sorted(a - both)), tuple(sorted(r - both))))
+        out.append((day, tuple(sorted(a - both)), tuple(sorted(r - both))))
     return out
 
 
@@ -280,7 +280,7 @@ def validate(current: Iterable[str], log: list[tuple[str, tuple[str, ...], tuple
     """Walk back from today; report every date where the reconstructed index has the wrong size
     or a change does not fit (removing a stock that is not there)."""
     members = set(current)
-    problems = []
+    problems: list[dict[str, Any]] = []
     for d, added, removed in reversed(log):
         missing = [s for s in added if s not in members]
         present = [s for s in removed if s in members]

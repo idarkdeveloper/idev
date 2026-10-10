@@ -190,7 +190,7 @@ def _modify_step(broker: GrowwBroker, c: Check, oid: str, price: float, ltp: flo
     try:
         broker.modify_order(oid, new, 1)
         seen = None
-        for i, wait in enumerate(MODIFY_READ_BACKOFF):  # the status call has no price: only order detail does
+        for wait in MODIFY_READ_BACKOFF:  # the status call has no price: only order detail does
             broker.sleep(wait)
             try:
                 d = broker.order_detail(oid) or {}

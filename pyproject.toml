@@ -1,0 +1,51 @@
+[tool.ruff]
+target-version = "py311"
+# The code base is written to ~120 columns; E501 is not enabled and no formatter is run.
+line-length = 120
+extend-exclude = [".venv", "deploy"]
+
+[tool.ruff.lint]
+# E9 syntax/runtime errors, F pyflakes, B bugbear, BLE blind-except (so the existing
+# "# noqa: BLE001" comments on deliberate broad excepts stay meaningful).
+select = ["E9", "F", "B", "BLE"]
+ignore = [
+    "B904",  # raise-without-from inside except: stylistic, many deliberate re-wraps
+    "B905",  # zip() without strict=: lengths are equal by construction
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert on broad exceptions, use throwaway loop variables, and import pytest fixtures by name.
+"tests/**" = ["B011", "B017", "B018", "B007", "BLE001", "F811"]  # F811: pytest fixtures imported by name
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = false
+files = ["trading_agent"]
+
+# Allowlist: analytics / reporting modules whose remaining findings are Optional[float] arithmetic over
+# loosely-typed bar and result dicts (None is checked at run time, not in the types). None of them places or
+# guards an order. Everything that does (groww, broker, live, live_alerts, risk, stops, runner, config, ui,
+# safety) is type-clean with no override. Remove an entry once its module is clean.
+[[tool.mypy.overrides]]
+module = [
+    "trading_agent.bulletin",         # Optional OHLC fields in the 4h resampler
+    "trading_agent.signal_lab",       # Optional returns in research statistics
+    "trading_agent.factor_backtest",  # Optional prices in the historical backtest
+    "trading_agent.validation",       # Optional fields in the historical-signal validator
+]
+ignore_errors = true
+
+# The modules that place or guard orders must annotate every function.
+[[tool.mypy.overrides]]
+module = [
+    "trading_agent.groww",
+    "trading_agent.broker",
+    "trading_agent.live",
+    "trading_agent.live_alerts",
+    "trading_agent.risk",
+    "trading_agent.stops",
+    "trading_agent.safety",
+    "trading_agent.integration",
+]
+disallow_untyped_defs = true

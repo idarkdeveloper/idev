@@ -51,6 +51,22 @@ def _plain(text: str) -> str:
 MARKET_DATA_BUDGET_S = 30.0   # network time the once-a-day NSE reads may spend in one tick
 
 
+class _CachedCalendar:
+    """The holiday calendar as the heartbeat thread may use it: cached days only (``peek_trading_day``), no fetch."""
+
+    def __init__(self, holidays: Any | None):
+        self._h = holidays
+
+    def is_trading_day(self, day: Any) -> bool:
+        h = self._h
+        if h is None:
+            return bool(day.weekday() < 5)
+        peek = getattr(h, "peek_trading_day", None)
+        if peek is not None:
+            return bool(peek(day))
+        return bool(h.is_trading_day(day))
+
+
 class Watcher:
     def __init__(self, settings: Settings, *, every: int = 60, window: tuple[str, str] = ("08:45", "18:30"),
                  tz: tzinfo = IST, check_fn: Callable[[], Any] | None = None,
@@ -58,7 +74,8 @@ class Watcher:
                  weekdays_only: bool = True, prices: Any | None = None, auto_exit: bool = False,
                  holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
                  news: Any | None = None, broker_factory: Callable[[], Any] | None = None,
-                 digest: Any | None = None, forward: Any | None = None, heartbeat: Any | None = None):
+                 digest: Any | None = None, forward: Any | None = None, heartbeat: Any | None = None,
+                 integration: Any | None = None, backup: Any | None = None):
         self.settings = settings
         self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
         self._blocked_until: datetime | None = None
@@ -78,7 +95,9 @@ class Watcher:
         self._news = news  # NewsService: negative headlines for held stocks
         self._digest = digest  # DigestScheduler: the morning and evening emails (own worker thread)
         self._forward = forward  # ForwardScheduler: the paper forward test, once a trading day after the close
-        self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every 5 minutes, whatever the market window
+        self._backup = backup  # BackupScheduler: copies the state files once a trading day after the close
+        self._integration = integration  # IntegrationScheduler: the read-only live-services check at 08:35 IST
+        self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every 5 minutes (every minute in the market window)
         self._broker = broker
         self._notifier = notifier
         self._stop = threading.Event()
@@ -112,8 +131,7 @@ class Watcher:
                 log.warning("positions unavailable: %s", e)
         tickers += [r["ticker"] for r in st.data.get("recommendations", [])[-10:]
                     if r.get("ticker") and r["ticker"] != "PORTFOLIO"]
-        seen: set[str] = set()
-        return [t for t in tickers if not (t in seen or seen.add(t))]
+        return list(dict.fromkeys(tickers))  # de-duplicated, first-seen order
 
     def poll_announcements(self) -> list[dict[str, Any]]:
         if self._data is None or not hasattr(self._data, "announcements"):
@@ -190,7 +208,8 @@ class Watcher:
         except Exception as e:  # noqa: BLE001
             log.warning("positions unavailable for stop check: %s", e)
             return []
-        bars_fn = (lambda sym: self._prices.history(sym, "1y")) if self._prices is not None else (lambda sym: [])
+        prices = self._prices
+        bars_fn = (lambda sym: prices.history(sym, "1y")) if prices is not None else (lambda sym: [])
         hits = check_stops(positions, bars_fn)
         if not hits:
             return []
@@ -246,7 +265,8 @@ class Watcher:
             out["orders"] = refresh_open_orders(self._broker, st, self._notifier)
         except Exception as e:  # noqa: BLE001
             out["orders_error"] = str(e)
-        bars_fn = (lambda sym: self._prices.history(sym, "1y")) if self._prices is not None else None
+        prices = self._prices
+        bars_fn = (lambda sym: prices.history(sym, "1y")) if prices is not None else None
         out["gtt"] = sync_gtt_stops(self.settings, self._broker, st, bars_fn=bars_fn, notifier=self._notifier)
         st.save()
         return out
@@ -274,6 +294,7 @@ class Watcher:
         out: dict[str, Any] = {}
         if self._data is None or not hasattr(self._data, "session"):
             return out
+        data = self._data
         s = self.settings
         deadline = time.monotonic() + MARKET_DATA_BUDGET_S   # at most about this much network time per tick
         try:
@@ -290,7 +311,7 @@ class Watcher:
                     if row:
                         out["flows"] = row["date"]
                 if time.monotonic() < deadline:
-                    b = BreadthStore(s.state_dir).tick(self._data, now, lambda: nifty500_members(self._data.session),
+                    b = BreadthStore(s.state_dir).tick(self._data, now, lambda: nifty500_members(data.session),
                                                        archive_bars_fn(s.state_dir), self.holidays, deadline=deadline)
                     if b:
                         out["breadth"] = b["date"]
@@ -355,6 +376,16 @@ class Watcher:
                 info["forward"] = self._forward.tick(now)
             except Exception:  # noqa: BLE001 - the paper forward test never stops the watch
                 log.exception("forward test check failed")
+        if self._backup is not None:  # once a trading day after the close; its own worker thread
+            try:
+                info["backup"] = self._backup.tick(now)
+            except Exception:  # noqa: BLE001 - the backup never stops the watch
+                log.exception("backup scheduling failed")
+        if self._integration is not None:  # once a trading day from 08:35; returns at once (its own worker thread)
+            try:
+                info["integration"] = self._integration.tick(now)
+            except Exception:  # noqa: BLE001 - the integration check never stops the watch
+                log.exception("integration check scheduling failed")
         if self._awake is not None and info["in_window"] != self._awake_on:
             self._awake(info["in_window"])
             self._awake_on = info["in_window"]
@@ -373,10 +404,14 @@ class Watcher:
         except Exception as e:  # noqa: BLE001
             log.exception("watch check failed")
             info["check_error"] = f"{type(e).__name__}: {e}"
+        self._progress = time.monotonic()   # a long tick that keeps moving is not a stall: stamp between the sub-steps
         info["new_announcements"] = self.poll_announcements()
         info["negative_news"] = self.poll_news()
+        self._progress = time.monotonic()
         info["stop_hits"] = self.check_trailing_stops()
+        self._progress = time.monotonic()
         live = self.sync_live()
+        self._progress = time.monotonic()
         if live is not None:
             info["live"] = live
         self.ticks += 1
@@ -407,7 +442,10 @@ class Watcher:
         if self._heartbeat is not None:   # its own thread: a long tick cannot silence it, a stalled loop is reported
             try:
                 from .heartbeat import stall_after
-                self._heartbeat.start(lambda: self._progress, stall_s=stall_after(self.every), stop=self._stop)
+                from .safety import market_open
+                cached = _CachedCalendar(self.holidays)   # the heartbeat thread must never make a network call
+                self._heartbeat.start(lambda: self._progress, stall_s=stall_after(self.every), stop=self._stop,
+                                      window=lambda: market_open(datetime.now(IST), cached), loop_every=self.every)
             except Exception:  # noqa: BLE001 - the dead-man ping never stops the watch
                 log.warning("heartbeat thread did not start")
         while not self._stop.is_set():

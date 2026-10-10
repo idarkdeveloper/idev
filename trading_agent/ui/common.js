@@ -482,6 +482,7 @@ window.TA = (function(){
       else if(w.level === "warn"){ level = "warn"; text = `Watch not seen for ${ageText(w.age_s)}`; }
       else { level = "ok"; text = `Data live · watch ${ageText(w.age_s)} ago`; }
       if(w.seen && w.last_error && f.market_open) text += " · last tick had an error";
+      if(f.nse_degraded){ text += " · NSE degraded"; if(level === "ok" || level === "idle") level = "warn"; }
       const bits = [];
       bits.push(f.market_open ? "NSE open (09:15 to 15:30 IST)" : "NSE closed");
       bits.push(w.seen ? `watch service last seen ${ageText(w.age_s)} ago` + (w.every ? ` (ticks every ${w.every} s)` : "") : "watch service: not seen");

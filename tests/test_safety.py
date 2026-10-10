@@ -4,7 +4,6 @@ No network, no orders, no real keys."""
 import json
 import shutil
 import subprocess
-import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,9 +11,8 @@ import pytest
 
 from trading_agent import safety
 from trading_agent.broker import Account, Position
-from trading_agent.quiver import filter_by_investor
 from trading_agent.timezones import IST
-from trading_agent.ui import App, make_server
+from trading_agent.ui import App
 
 from tests.test_ui import _FakeData, _get, _post, server  # noqa: F401  (server: the offline Demo fixture)
 
@@ -75,7 +73,7 @@ def test_freshness_with_no_heartbeat_file(tmp_path):
     assert f["market_open"] is True
     assert f["watch"] == {"seen": False, "at": None, "age_s": None, "every": None, "last_error": None,
                           "tick_finished": None, "level": "unseen"}
-    assert set(f) == {"now", "market_open", "live_orders", "watch", "prices", "deals"}
+    assert set(f) == {"now", "market_open", "live_orders", "nse_degraded", "watch", "prices", "deals"}
     assert f["prices"]["last_close"].startswith("2026-10-09T15:30") and f["prices"]["bar_at"] is None
     assert f["deals"] == {"age_s": None, "fetched_at": None}
 

@@ -126,7 +126,6 @@ def test_parse_pit_xbrl_filing():
 
 def test_insider_feed_uses_xbrl_after_may_2026_and_caches(tmp_path):
     from datetime import date
-    from .conftest import Seq
     sess = FakeSession({
         ("GET", "api/corporates-pit-gg"): PIT_LIST,
         ("GET", "WebXMLFile_A.xml"): PIT_XBRL,

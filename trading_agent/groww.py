@@ -471,7 +471,7 @@ def _record_token_failure(cache: TokenCache, api_key: str, exc: BaseException, n
         until = now + timedelta(seconds=TOKEN_BLOCK_AUTH_S)
     else:
         until = now + timedelta(seconds=TOKEN_BLOCK_NETWORK_S)  # strikes / last_429 carried over unchanged
-    reason = _REASONS.get(status, f"HTTP {status}" if status else "network error")
+    reason = _REASONS.get(status or 0, f"HTTP {status}" if status else "network error")
     record = {"until": until.isoformat(timespec="seconds"), "status": status, "reason": reason,
               "at": now.isoformat(timespec="seconds"), "strikes": strikes, "last_429": last_429,
               "key": cache.fingerprint(api_key)}
@@ -613,8 +613,11 @@ class GrowwBroker:
                  allowed_ip: str | None = None, ip_fn: Callable[[], str] | None = None,
                  ip_cache_s: float = 600.0, clock: Callable[[], float] = time.time,
                  sell_t1: bool = False, ddpi_confirmed: bool = False,
-                 alert_fn: Callable[[str, str, str], Any] | None = None):
+                 alert_fn: Callable[[str, str, str], Any] | None = None,
+                 buy_gate: Callable[[], str | None] | None = None):
         self.token = access_token
+        # buy_gate() returns a reason while buys must be refused (the pre-market check failed); sells are never gated.
+        self.buy_gate = buy_gate
         # Live sells use demat_free_quantity only; T1 shares count only with sell_t1 (BTST risk).
         # Paper / read-only brokers (live_orders False) keep counting them, as before.
         self.sell_t1 = bool(sell_t1)
@@ -654,7 +657,7 @@ class GrowwBroker:
         try:
             resp.raise_for_status()
         except requests.HTTPError as e:
-            e.body = str(getattr(resp, "text", ""))[:500]  # kept so a sell's authorisation text can be recognised
+            e.body = str(getattr(resp, "text", ""))[:500]  # type: ignore[attr-defined]  # kept so a sell's authorisation text can be recognised
             raise
         return data.get("payload", data) if isinstance(data, dict) else data
 
@@ -760,6 +763,14 @@ class GrowwBroker:
             if str(h.get("trading_symbol", "")).upper() == symbol:
                 return self._sellable(h)
         return 0.0
+
+    def available_cash(self) -> float:
+        """Cash available to trade (read-only: the margin call only). Raises when none of the known fields is present."""
+        margin = self._req("GET", "margins/detail/user")
+        keys = ("clear_cash", "available_cash", "cash_balance")
+        if not any(k in margin for k in keys):
+            raise ValueError("the margin reply has none of " + ", ".join(keys))
+        return float(margin.get("clear_cash") or margin.get("available_cash") or margin.get("cash_balance") or 0)
 
     def account(self) -> Account:
         margin = self._req("GET", "margins/detail/user")
@@ -879,12 +890,17 @@ class GrowwBroker:
         if (notional is None) == (qty is None):
             raise ValueError("pass exactly one of notional or qty")
         self._require_live("place an order")  # before any network call
+        if side == "buy" and self.buy_gate is not None:
+            reason = self.buy_gate()
+            if reason:
+                raise PermissionError(reason)
         order_type = order_type.upper()
         if order_type not in {"LIMIT", "MARKET"}:
             raise ValueError("order_type must be LIMIT or MARKET")
         symbol = symbol.upper()
         ltp = self.latest_price(symbol)
         if qty is None:
+            assert notional is not None  # exactly one of the two was given (checked above)
             qty = math.floor(float(notional) / ltp)
         qty = int(qty)
         if qty < 1:

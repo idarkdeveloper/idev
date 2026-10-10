@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 from datetime import datetime, timezone
@@ -18,12 +19,27 @@ from .quiver import DisclosedTrade
 STATE_LOCK = threading.RLock()
 
 
+def _keep_backup(path: Path) -> None:
+    """Before state.json is replaced, keep the current file as state.json.bak (copied beside it, then swapped in)."""
+    if not path.exists():
+        return
+    bak = path.with_name(path.name + ".bak")
+    tmp = path.with_name(f"{path.name}.bak.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        shutil.copy2(path, tmp)
+        os.replace(tmp, bak)
+    except OSError:
+        tmp.unlink(missing_ok=True)   # a failed backup never stops the save
+
+
 def atomic_write(path: Path, text: str) -> None:
     """Write beside the file, then swap it in, so a reader never sees half a file."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(text, encoding="utf-8")
+    if path.name == "state.json":
+        _keep_backup(path)
     attempts = 20  # Windows: a reader (or antivirus) can hold the file open briefly; ~2 s in total, then give up
     for attempt in range(attempts):
         try:

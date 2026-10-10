@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -74,8 +75,13 @@ def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool =
                        max_slippage_pct=settings.max_slippage_pct, session=session,
                        allowed_ip=settings.groww_allowed_ip,
                        sell_t1=settings.groww_sell_t1, ddpi_confirmed=settings.groww_ddpi_confirmed,
-                       alert_fn=live_alert_fn(settings),
+                       alert_fn=live_alert_fn(settings), buy_gate=lambda: _buy_block(settings),
                        tick_size_fn=(lambda sym: ticks.tick_size(sym, settings.groww_exchange)) if ticks else None)
+
+
+def _buy_block(settings: Settings) -> str | None:
+    from .integration import buy_block
+    return buy_block(settings)
 
 
 def live_alert_fn(settings: Settings) -> Any:
@@ -92,8 +98,9 @@ def groww_session(settings: Settings) -> requests.Session:
     """A session for every Groww call; through GROWW_PROXY_URL when set, so a runner without a
     fixed IP (GitHub Actions) can still reach Groww from the registered address."""
     s = requests.Session()
-    if getattr(settings, "groww_proxy_url", None):
-        s.proxies = {"https": settings.groww_proxy_url, "http": settings.groww_proxy_url}
+    proxy = getattr(settings, "groww_proxy_url", None)
+    if proxy:
+        s.proxies = {"https": proxy, "http": proxy}
     return s
 
 
@@ -120,7 +127,7 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
             # (a file read, no network, while the cool-down lasts) so it is used again once it is lifted.
             warn_token_block_once(e, log)
             groww = None
-        holder = {"g": groww}
+        holder: dict[str, Any] = {"g": groww}
 
         def groww_or_free(symbol: str) -> float:
             if holder["g"] is None:
@@ -170,16 +177,18 @@ def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
         # are never copied in, so the two never look like duplicates.
         return make_practice_broker(settings, price_fn, groww)
     if settings.use_alpaca:
-        return AlpacaPaperBroker(settings.alpaca_key_id, settings.alpaca_secret,
+        return AlpacaPaperBroker(settings.alpaca_key_id or "", settings.alpaca_secret or "",
                                  settings.alpaca_base_url)
     return make_practice_broker(settings, price_fn)
 
 
-def make_data_source(settings: Settings) -> Any:
+def make_data_source(settings: Settings, *, breaker_file: Path | None = None) -> Any:
+    """``breaker_file``: where the NSE circuit breaker publishes its state. Only the watch service passes it, so a
+    dashboard process's client never overwrites the watch's state."""
     if settings.data_source == "nse":
         from .nse import NSEClient
 
-        client = NSEClient(cache_dir=settings.state_dir / "cache")
+        client = NSEClient(cache_dir=settings.state_dir / "cache", breaker_file=breaker_file)
         if settings.bse_deals:
             from .bse import make_bse_client
             client.bse = make_bse_client(settings)  # BSE_DEALS=false: no BSE calls at all
@@ -268,8 +277,8 @@ def trading_days_old(saved_at: str, now: Any = None) -> int | None:
     from datetime import datetime, timedelta
     from .timezones import IST
     try:
-        saved = datetime.fromisoformat(saved_at)
-        saved = (saved if saved.tzinfo else saved.replace(tzinfo=IST)).astimezone(IST).date()
+        parsed = datetime.fromisoformat(saved_at)
+        saved = (parsed if parsed.tzinfo else parsed.replace(tzinfo=IST)).astimezone(IST).date()
     except ValueError:
         return None
     today = (now or datetime.now(IST)).astimezone(IST).date()
@@ -422,6 +431,7 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     if live_run:
         data = data or make_data_source(settings)
         trades = fetch_followed(data, settings.investors, settings.watch_source)
+    assert trades is not None  # supplied by the caller, or fetched just above
 
     new = state.new_trades(trades)  # a deal is seen once for everyone who matches it
     names = settings.investors

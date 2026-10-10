@@ -11,7 +11,7 @@ from trading_agent.replay.web import ReplayApp
 from trading_agent.ui import App
 
 from .replay_fakes import FakeUniverse, market, top_by_6m
-from .test_replay_web import FakeNews, create, wait
+from .test_replay_web import FakeNews, create
 
 
 @pytest.fixture

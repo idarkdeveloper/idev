@@ -5,7 +5,7 @@ Missing sections are simply left out."""
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, TypeGuard
 
 from .digest import num, pct_text
 
@@ -22,7 +22,7 @@ def srupee(v: float | None, d: int = 0) -> str:
     return f"{'−' if v < 0 else '+'}₹{s}"
 
 
-def _ok(sec: Any) -> bool:
+def _ok(sec: Any) -> TypeGuard[dict[str, Any]]:
     return isinstance(sec, dict) and "unavailable" not in sec
 
 

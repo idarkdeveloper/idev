@@ -174,7 +174,6 @@ def test_buy_ideas_are_sized_by_risk_and_get_a_stop(s):
 
 
 def test_each_watch_reason_triggers_its_line_and_healthy_holdings_are_counted(s):
-    P = 100.0
     level = position_stop({"stop_type": "trailing", "avg_entry_price": 100.0, "current_price": 1, "high_water": 100.0},
                           bars(100, step=0.002))["level"]
     near_price = level + 0.5 * atr(bars(level + 0.5, step=0.002))
@@ -856,7 +855,7 @@ def test_tickers_come_only_from_symbol_fields_not_headlines_or_names():
     assert digest_writer.validate_summary("ABC is on the watch list.", data, {"ZOMATO"})[0]
     assert not digest_writer.validate_summary("ZOMATO is on the watch list.", data, {"ZOMATO"})[0]
     assert not digest_writer.validate_summary("Zomato is on the watch list.", data, {"ZOMATO"})[0]
-    assert digest_writer.validate_summary("Abc Industries is on the watch list.", data, {"ABC", "ABC"})[0]
+    assert digest_writer.validate_summary("Abc Industries is on the watch list.", data, {"ABC"})[0]
 
 
 def test_claude_client_is_built_with_one_retry(s):
@@ -1176,7 +1175,7 @@ def test_only_one_contender_takes_over_a_stale_claim(s):
         gate = threading.Barrier(2)
         got = []
 
-        def go(sc):
+        def go(sc, gate=gate, got=got):
             gate.wait()
             got.append(sc._claim("morning", "2026-10-12"))
         ts = [threading.Thread(target=go, args=(x,)) for x in (a, b)]
@@ -1966,7 +1965,7 @@ def test_the_rules_summary_for_a_non_trading_day_a_trading_day_and_missing_groww
 
 
 def test_claude_haiku_is_the_default_writer_and_the_model_id_is_passed(monkeypatch):
-    from trading_agent.config import Settings, load_settings
+    from trading_agent.config import load_settings
     for k in ("DIGEST_WRITER", "DIGEST_CLAUDE_MODEL"):
         monkeypatch.delenv(k, raising=False)
     st = load_settings(None)

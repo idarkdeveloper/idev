@@ -23,7 +23,7 @@ MAX_CHARS = 1200
 # the app's own vocabulary is never a company name, even when a stock has the same name (GROWW is an NSE symbol)
 APP_WORDS = {"GROWW", "NIFTY", "SENSEX", "PRACTICE", "PORTFOLIO", "HOLDINGS", "HOLDING"}
 ALLOWED_WORDS = {"GROWW", "NIFTY", "SENSEX", "DXY", "KOSPI", "ASX", "NASDAQ", "SPX", "NDX", "DJIA", "UP", "DOWN", "UK", "FUT", "NSE", "BSE", "IST", "INR", "ATR", "VIX", "USD", "GTT", "DMA", "ETF", "SEBI", "RBI", "US", "IT", "AI",
-                 "FII", "DII", "NIFTY", "PM", "AM", "ADX", "EMA", "RSI", "DI", "WTI"}
+                 "FII", "DII", "PM", "AM", "ADX", "EMA", "RSI", "DI", "WTI"}
 ALLOWED_INTS = {50, 100, 200}  # "200-day average" style terms
 
 SYSTEM = (
@@ -91,7 +91,7 @@ def summary_facts(kind: str, data: dict[str, Any]) -> dict[str, Any]:
     if "world" in data:
         out["world"] = _take(data["world"], ("region_lines", "trends", "futures_line", "vix_line", "note"))
     if "gauges" in data:
-        out["gauges"] = _take(data["gauges"], ("warnings", "warning_texts", "note", "flows_line", "breadth_line"))
+        out["gauges"] = _take(data["gauges"], ("warnings", "warning_texts", "note", "premarket_line", "flows_line", "breadth_line"))
     bi = data.get("buy_ideas")
     if isinstance(bi, dict):
         ideas = bi.get("ideas") or []
@@ -221,7 +221,7 @@ def _walk(obj: Any, nums: set[float], names: set[str], symbols: set[str]) -> Non
             _walk(v, nums, names, symbols)
 
 
-_TEXT_KEYS = {"region_lines", "futures_line", "vix_line", "flows_line", "breadth_line", "note", "reading", "range", "why", "guidance", "rules", "summary",
+_TEXT_KEYS = {"region_lines", "futures_line", "vix_line", "premarket_line", "flows_line", "breadth_line", "note", "reading", "range", "why", "guidance", "rules", "summary",
               "warning_texts", "sizing", "regime"}
 
 
@@ -365,8 +365,6 @@ def validate_summary(text: str | None, data: dict[str, Any], known: Any = None, 
     syms = known_symbols if known_symbols is not None else every   # no split given: everything counts as a symbol
     if every or syms:
         for sent in re.split(r"(?<=[.!?])\s+", text):
-            first = re.search(r"[A-Za-z]", sent)
-            first_at = first.start() if first else -1
             for m in _WORD.finditer(sent):
                 w = m.group(0)
                 up = w.upper()
@@ -413,12 +411,13 @@ def validate_summary(text: str | None, data: dict[str, Any], known: Any = None, 
             continue
         if not _matches(n, lit, cands):
             return False, f"the number {lit} is not in the data"
-    mood = data.get("mood") if isinstance(data.get("mood"), dict) else {}
+    raw_mood = data.get("mood")
+    mood: dict[str, Any] = raw_mood if isinstance(raw_mood, dict) else {}
     regime = mood.get("regime")
     for m in re.finditer(r"risk[\s-]?(on|off)", text, re.I):
         if regime != "risk_" + m.group(1).lower():
             return False, f"calls the regime risk-{m.group(1).lower()}, but it is {str(regime or 'not known').replace('_', '-')}"
-    mood0 = data.get("mood") if isinstance(data.get("mood"), dict) else {}
+    mood0: dict[str, Any] = raw_mood if isinstance(raw_mood, dict) else {}
     if mood0.get("no_new_buys"):   # a no-buy day: the summary must not say buying is allowed
         for m in re.finditer(r"\b(?:new\s+)?(?:buy|buys|buying|purchase|purchases|purchasing)\b", text, re.I):
             before, after = text[:m.start()].rstrip().lower(), text[m.end():].lstrip().lower()

@@ -23,7 +23,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from urllib.parse import urlparse
 
 from . import taxes
@@ -76,6 +76,8 @@ EDITABLE_ENV_KEYS = {
     "digest_writer": "DIGEST_WRITER",
     "digest_bulletin": "DIGEST_BULLETIN",
     "digest_charts": "DIGEST_CHARTS",
+    "integration_check": "INTEGRATION_CHECK",   # the daily read-only check of the live services (integration.py)
+    "integration_claude": "INTEGRATION_CLAUDE",   # ... and its one tiny Claude call
     # Only has an effect when GROWW_LIVE_ORDERS=true, which the dashboard can never set.
     "groww_gtt_stops": "GROWW_GTT_STOPS",
     "groww_ddpi_confirmed": "GROWW_DDPI_CONFIRMED",
@@ -92,7 +94,7 @@ def _inr(v: float, d: int = 0) -> str:
     neg, v = v < 0, abs(round(v, d))
     whole, _, frac = f"{v:.{d}f}".partition(".")
     head, tail = whole[:-3], whole[-3:]
-    parts = []
+    parts: list[str] = []
     while len(head) > 2:
         parts.insert(0, head[-2:])
         head = head[:-2]
@@ -168,6 +170,8 @@ class App:
         self._demo_ver = -1
         self._practice: LocalPaperBroker | None = practice  # the practice account the Demo page uses
         self._parent: "App | None" = None  # set on the Demo page's app: it shares this app's data sources
+        self._integration_busy = False  # a dashboard-started integration check is running
+        self._integration_lock = threading.Lock()
         self._stops: PracticeStopChecker | None = None  # the practice stop checker (see ensure_stop_checker)
         self._preview_lock = threading.Lock()  # one email preview at a time
         self._lazy_lock = threading.RLock()  # one lock builds both the broker and the practice account
@@ -343,10 +347,12 @@ class App:
             d["client_type"] = classify_client(t.investor, t.source)
             d["who"] = followed_names(t.investor, s.investors)  # which followed investor(s) this deal belongs to
             deals.append(d)
+        broker: Broker | None
         try:
-            broker = self.broker  # resolved once: in live mode this can fail (e.g. Groww refusing a token)
-            acct = broker.account().to_dict()
-            positions = [p.to_dict() for p in broker.positions()]
+            resolved = self.broker  # resolved once: in live mode this can fail (e.g. Groww refusing a token)
+            acct = resolved.account().to_dict()
+            positions = [p.to_dict() for p in resolved.positions()]
+            broker = resolved
             broker_error = None
         except Exception as e:  # noqa: BLE001
             broker = self._broker  # whatever exists already, else None
@@ -368,7 +374,7 @@ class App:
                           if g else None)
             try:
                 from .risk import position_stop
-                bars = []
+                bars: list[Any] = []
                 if pos.get("stop_type") == "trailing" and not self.demo_trades:
                     bars = self.prices.history(pos["symbol"], "1y")
                 st_ = position_stop(pos, bars)
@@ -430,6 +436,7 @@ class App:
                 "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
                 "digest_enabled": s.digest_enabled, "digest_writer": s.digest_writer,
                 "digest_bulletin": s.digest_bulletin, "digest_charts": s.digest_charts,
+                "integration_check": s.integration_check, "integration_claude": s.integration_claude,
                 "digest_channel": bool(s.resend_api_key and s.notify_email_to) or bool(s.notify_webhook_url),
                 "max_slippage_pct": s.max_slippage_pct,
                 "demo": self.demo_trades is not None,
@@ -485,6 +492,38 @@ class App:
         root = self._parent or self
         if not root._bar_seen or d > root._bar_seen:
             root._bar_seen = d
+
+    def integration(self) -> dict[str, Any]:
+        """The last integration-check result and the line shown near the freshness chip (a file read; the page polls)."""
+        from . import integration
+        root = self._parent or self
+        from .integration import buy_block
+        return {"enabled": root.settings.integration_check, "running": root._integration_busy,
+                "canary": buy_block(root.settings),
+                "line": integration.status_line(root.settings.state_dir, self._now_dt(), holidays=self._safe_holidays()),
+                "last": integration.load_result(root.settings.state_dir)}
+
+    def run_integration(self) -> dict[str, Any]:
+        """Start the integration check on a background thread (it makes real network requests and can take a minute).
+        Read-only: no orders, no new Groww token. One run at a time."""
+        from . import integration
+        root = self._parent or self
+        with root._integration_lock:
+            if root._integration_busy:
+                return {"started": False, "running": True}
+            root._integration_busy = True
+
+        def work() -> None:
+            try:
+                integration.run_and_record(root.settings, notifier=make_notifier(root.settings),
+                                           holidays=self._safe_holidays())
+            except Exception:  # noqa: BLE001 - the button must come back
+                log.exception("integration check failed to run")
+            finally:
+                root._integration_busy = False
+
+        threading.Thread(target=work, name="integration-check", daemon=True).start()
+        return {"started": True, "running": True}
 
     def freshness(self) -> dict[str, Any]:
         root = self._parent or self
@@ -784,19 +823,19 @@ class App:
             if blocked:
                 raise ValueError(blocked)
             self._check_topup_percent_stop(symbol, stop, qty, notional)
+        broker = cast(LocalPaperBroker, self.broker)  # paper_only (checked above): the simulator, which takes a stop
         if qty not in (None, "", 0, "0"):
-            order = self.broker.submit_order(symbol, side, qty=float(qty), stop=stop)
+            order = broker.submit_order(symbol, side, qty=float(qty), stop=stop)
         elif notional in (None, "", 0, "0"):
             raise ValueError("enter an amount or a quantity")
         else:
-            order = self.broker.submit_order(symbol, side, notional=float(notional), stop=stop)
+            order = broker.submit_order(symbol, side, notional=float(notional), stop=stop)
         self._record_equity()
         return order
 
     def _check_topup_percent_stop(self, symbol: str, stop: dict[str, Any] | None, qty: Any, notional: Any) -> None:
         """A buy that adds to a position with a percent stop moves its average buy price, and so the stop level. Refuse
         it when the new level would be at or above today's price, since the position would be sold at once."""
-        from .risk import AT_ONCE
         pos = next((p for p in self.broker.positions() if p.symbol == symbol), None)
         if pos is None:
             return
@@ -828,7 +867,7 @@ class App:
             raise PermissionError("stops from the dashboard are allowed only on the paper simulator")
         from .risk import normalize_stop, position_stop, AT_ONCE
         symbol = str(symbol).strip().upper()
-        broker = self.broker
+        broker = cast(LocalPaperBroker, self.broker)  # paper_only (checked above): the simulator
         pos = next((p for p in broker.positions() if p.symbol == symbol), None)
         if pos is None:
             raise LookupError(f"no open position in {symbol}")
@@ -1071,7 +1110,7 @@ class App:
         practice_note = None
         if basis == "groww" and pos is not None:
             practice_note = (f"Priced on your Groww holding. You hold {practice_qty:g} in practice"
-                             + (f", so Sell in practice sells at most {practice_qty:g}." if q > practice_qty
+                             + (f", so Sell in practice sells at most {practice_qty:g}." if q > (practice_qty or 0.0)
                                 else "; Sell in practice sells from that position at its own average price."))
         if long_term:
             left = est["exemption_left_before"]
@@ -1130,7 +1169,7 @@ class App:
     def update_settings(self, changes: dict[str, Any]) -> dict[str, Any]:
         self._on_live_page("Settings change the real agent")
         applied: dict[str, str] = {}
-        ops: list[Callable[[], None]] = []   # memory changes, run only after every value checked and .env written
+        ops: list[Callable[..., None]] = []   # memory changes, run only after every value checked and .env written
         is_demo = self.dotenv is None and self.demo_trades is not None
         st = self.settings
         new_market = st.market
@@ -1167,7 +1206,7 @@ class App:
                 value = parse(value) or ""
                 ops.append(lambda k=key, v=value: setattr(st, k, v or None))
             elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
-                         "telegram_alerts"):
+                         "telegram_alerts", "integration_check", "integration_claude"):
                 value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
@@ -1487,9 +1526,9 @@ class App:
 
 
 def _cost_table(market: str) -> dict[str, Any]:
-    from .costs import cost_model_for
+    from .costs import FlatCosts, cost_model_for
     m = cost_model_for(market)
-    if not hasattr(m, "round_trip"):
+    if isinstance(m, FlatCosts):
         return {"model": "flat", "round_trip_bps": m.round_trip_bps(0)}
     return {"model": "india_delivery", "examples": {str(n): round(m.round_trip_bps(n), 1) for n in (10_000, 25_000, 100_000)},
             "slippage_bps_one_way": m.slippage_bps}
@@ -1523,7 +1562,7 @@ def _check_type(key: str, value: Any) -> None:
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
     elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
-                 "telegram_alerts"):
+                 "telegram_alerts", "integration_check", "integration_claude"):
         _bool_setting(key, value)
     elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url", "forward_start", "allowed_hosts"):
         if value is not None and not isinstance(value, str):
@@ -1670,6 +1709,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.snapshot())
             elif path == "/api/freshness":
                 self._json(app.freshness())
+            elif path == "/api/integration":
+                self._json(app.integration())
             elif path == "/api/my-portfolio":
                 from urllib.parse import parse_qs
                 q = parse_qs(urlparse(self.path).query)
@@ -1682,8 +1723,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.context.fetch(force=force) if app.context else {"error": "not configured"})
             elif path == "/api/search":
                 from urllib.parse import parse_qs
-                q = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
-                self._json(app.search(q))
+                text = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
+                self._json(app.search(text))
             elif path == "/api/lookup":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()
@@ -1712,18 +1753,18 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.last_signal_lab or {})
             elif path in ("/api/costs", "/api/size", "/api/orders"):
                 from urllib.parse import parse_qs
-                q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                qd = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
                 try:
                     if path == "/api/costs":
-                        self._json(app.cost_quote(float(q.get("amount") or 0)))
+                        self._json(app.cost_quote(float(qd.get("amount") or 0)))
                     elif path == "/api/size":
-                        t = (q.get("ticker") or "").strip()
+                        t = (qd.get("ticker") or "").strip()
                         if not t:
                             raise ValueError("ticker required")
-                        self._json(app.size_quote(t, float(q["equity"]) if q.get("equity") else None,
-                                                  float(q.get("risk_pct") or 1.0), float(q.get("max_pct") or 10.0)))
+                        self._json(app.size_quote(t, float(qd["equity"]) if qd.get("equity") else None,
+                                                  float(qd.get("risk_pct") or 1.0), float(qd.get("max_pct") or 10.0)))
                     else:
-                        self._json(app.orders(int(q.get("limit") or 50)))
+                        self._json(app.orders(int(qd.get("limit") or 50)))
                 except (ValueError, LookupError) as e:
                     self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
             else:
@@ -1813,7 +1854,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         def _post(self, app: App, path: str) -> None:
             try:
                 body = self._body()
-                if path == "/api/check":
+                if path == "/api/integration/run":
+                    self._json(app.run_integration(), HTTPStatus.ACCEPTED)
+                elif path == "/api/check":
                     job = app.start_check(force=bool(body.get("force")), dry_run=bool(body.get("dry_run")))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/order":
@@ -1822,7 +1865,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                                             body.get("stop_type"), body.get("stop_value"))
                     self._json({"ok": True, "order": order})
                 elif path == "/api/stop":
-                    self._json({"ok": True, "stop": app.set_stop(str(body.get("symbol", "")), body.get("type"),
+                    self._json({"ok": True, "stop": app.set_stop(str(body.get("symbol", "")), body.get("type") or "",
                                                                   body.get("value"))})
                 elif path == "/api/practice/copy-groww":
                     self._json(app.copy_groww(bool(body.get("confirm_again")), body.get("held_over_year")))

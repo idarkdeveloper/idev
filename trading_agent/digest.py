@@ -80,7 +80,7 @@ class DigestContext:
         """The Groww holdings, read once per build (one Groww call, one snapshot write)."""
         if not self._groww_memo:
             try:
-                self._groww_memo.append((True, self.groww()))
+                self._groww_memo.append((True, self.groww()))  # type: ignore[misc]  # only called when a reader is set
             except Exception as e:  # noqa: BLE001
                 self._groww_memo.append((False, e))
         ok, val = self._groww_memo[0]
@@ -202,7 +202,7 @@ def num(v: float, d: int = 0) -> str:
     ip, _, fp = f"{abs(v):.{d}f}".partition(".")
     if len(ip) > 3:
         head, tail = ip[:-3], ip[-3:]
-        parts = []
+        parts: list[str] = []
         while len(head) > 2:
             parts.insert(0, head[-2:])
             head = head[:-2]
@@ -650,9 +650,10 @@ def _world_row(src: Any, symbol: str, name: str, drop_today: date | None = None)
         return None
     if len(closes) < 2:
         return None
+    avg50 = _avg(closes, 50)
     return {"index": name, "close": round(closes[-1], 2), "d1_pct": _chg(closes, 1), "d5_pct": _chg(closes, 5),
             "d20_pct": _chg(closes, 20), "trend": trend_label(closes), "vs_50d": (
-                None if _avg(closes, 50) is None else ("above" if closes[-1] > _avg(closes, 50) else "below"))}
+                None if avg50 is None else ("above" if closes[-1] > avg50 else "below"))}
 
 
 def _region_line(region: str, rows: list[dict[str, Any]], countries: dict[str, str]) -> str | None:
@@ -816,6 +817,13 @@ def _flow_breadth_lines(ctx: DigestContext) -> dict[str, Any]:
     out: dict[str, Any] = {}
     today = ctx.now().date()
     try:
+        from .integration import premarket_line
+        line = premarket_line(s, ctx.now())
+        if line:
+            out["premarket_line"] = line
+    except Exception:  # noqa: BLE001 - never stop the email
+        log.exception("pre-market line failed")
+    try:
         from .flows import FlowStore, flows_line
         line = flows_line(FlowStore(Path(s.state_dir)).rows(), today, calendar=ctx.calendar)
         if line:
@@ -948,8 +956,8 @@ def _practice_close(ctx: DigestContext, today: date, closed: bool = True,
         before, before_day = None, None
         for pt in st.data.get("practice_equity", []):
             try:
-                d = datetime.fromisoformat(pt["at"])
-                d = (d if d.tzinfo else d.replace(tzinfo=IST)).astimezone(IST).date()
+                stamp = datetime.fromisoformat(pt["at"])
+                d = (stamp if stamp.tzinfo else stamp.replace(tzinfo=IST)).astimezone(IST).date()
             except (KeyError, ValueError):
                 continue
             if d < today:
@@ -960,11 +968,12 @@ def _practice_close(ctx: DigestContext, today: date, closed: bool = True,
             if before_day == _previous_trading_day(ctx, today):
                 change, change_pct = diff, pct
             else:   # no point from the previous trading day: say what the change is measured from
+                assert before_day is not None  # set whenever `before` is
                 since, since_change, since_pct = before_day.isoformat(), diff, pct
         for f in st.data.get(FILLS_KEY, []):
             try:
-                d = datetime.fromisoformat(str(f.get("at")))
-                d = (d if d.tzinfo else d.replace(tzinfo=IST)).astimezone(IST).date()
+                stamp = datetime.fromisoformat(str(f.get("at")))
+                d = (stamp if stamp.tzinfo else stamp.replace(tzinfo=IST)).astimezone(IST).date()
             except ValueError:
                 continue
             if d == today:

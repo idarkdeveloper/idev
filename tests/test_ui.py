@@ -412,7 +412,6 @@ def test_search_endpoint_is_offline_in_demo(server):
 
 
 def test_server_ignores_browser_closing_connection_early(capsys):
-    import sys as _sys
     from trading_agent.ui import _Server
 
     srv = _Server.__new__(_Server)  # no socket needed to test the error hook

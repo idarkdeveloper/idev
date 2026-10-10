@@ -31,6 +31,10 @@ STALE_AFTER_S = 30 * 60.0   # a claim older than this whose process is gone is a
 
 
 class ForwardScheduler:
+    claim_prefix = "forward"       # claim files are <prefix>_<day>.claim; a subclass runs another daily job
+    label = "forward test"         # used in log lines
+    latest = LATEST
+
     def __init__(self, state_dir: Path, run_fn: Callable[[], Any], *, holidays: Any = None,
                  run_after: dtime = RUN_AFTER, threaded: bool = True, clock: Callable[[], float] = time.monotonic):
         self.state_dir = Path(state_dir)
@@ -46,7 +50,7 @@ class ForwardScheduler:
         self._done: set[str] = set()
 
     def _claim_path(self, day: str) -> Path:
-        return self.state_dir / f"forward_{day}.claim"
+        return self.state_dir / f"{self.claim_prefix}_{day}.claim"
 
     def _claim(self, day: str) -> bool:
         path = self._claim_path(day)
@@ -123,7 +127,7 @@ class ForwardScheduler:
             pass
 
     def due(self, now: datetime) -> bool:
-        if now.weekday() >= 5 or not (self.run_after <= now.time() <= LATEST):
+        if now.weekday() >= 5 or not (self.run_after <= now.time() <= self.latest):
             return False
         if self.holidays is not None and not self.holidays.is_trading_day(now.date()):
             return False
@@ -153,16 +157,16 @@ class ForwardScheduler:
             self._run(day)
             return {"due": True, "started": True}
         except Exception:  # noqa: BLE001 - never stops the watch
-            log.exception("forward test scheduling failed")
+            log.exception("%s scheduling failed", self.label)
             return {"due": False, "error": True}
 
     def _run(self, day: str) -> None:
         try:
             self.run_fn()
             self._done.add(day)   # the claim stays, so a restart cannot run it again
-            log.info("forward test finished for %s", day)
+            log.info("%s finished for %s", self.label, day)
         except BaseException as e:  # noqa: BLE001 - SystemExit from a broken settings read included
-            log.warning("forward test failed (%s), try %d of %d", type(e).__name__, self._tries.get(day, 1), MAX_TRIES)
+            log.warning("%s failed (%s), try %d of %d", self.label, type(e).__name__, self._tries.get(day, 1), MAX_TRIES)
             self._release(day)
             self._retry_at[day] = self._clock() + RETRY_AFTER_S
 
@@ -170,6 +174,28 @@ class ForwardScheduler:
         t = self._thread
         if t is not None:
             t.join(timeout)
+
+
+class DailyJobScheduler(ForwardScheduler):
+    """A once-per-trading-day job with the forward test's claim-file guard and retries, under its own file names
+    (``<claim_prefix>_<day>.claim``). Subclasses set ``claim_prefix``, ``label`` and the run window."""
+
+    def _clean_old_claims(self, today: str) -> None:
+        marker = self.state_dir / f"prune_{self.claim_prefix}_{today}.done"
+        if marker.exists():
+            return
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            cutoff = (date.fromisoformat(today) - timedelta(days=PRUNE_DAYS)).isoformat()
+            start, end = len(self.claim_prefix) + 1, -len(".claim")
+            for f in self.state_dir.glob(f"{self.claim_prefix}_*.claim"):
+                if f.name[start:end] < cutoff:
+                    f.unlink(missing_ok=True)
+            for old in self.state_dir.glob(f"prune_{self.claim_prefix}_*.done"):
+                old.unlink(missing_ok=True)
+            marker.write_text("done", encoding="utf-8")
+        except (OSError, ValueError):
+            pass
 
 
 def rebuild_for_settings(settings: Any, prices: Any, holidays: Any, asof: str, *, universe: str | None = None,

@@ -38,6 +38,7 @@ from typing import Any, Iterable
 
 import requests
 
+from .circuit import CircuitBreaker, GuardedSession
 from .quiver import DisclosedTrade, filter_by_investor, filter_by_investors
 from .timezones import IST
 
@@ -230,8 +231,13 @@ class NSEClient:
     def __init__(self, session: requests.Session | None = None, timeout: float = 30.0,
                  base_url: str = BASE_URL, cache_dir: Path | None = None,
                  max_insider_filings: int = 1500, max_new_downloads: int = 400,
-                 pause: float = 0.25, sleep: Any = time.sleep):
-        self.session = session or requests.Session()
+                 pause: float = 0.25, sleep: Any = time.sleep, breaker_file: Path | None = None,
+                 breaker: CircuitBreaker | None = None):
+        # Every GET goes through a circuit breaker that lives as long as this client (so across watch ticks): after 3
+        # refusals in a row NSE calls are skipped for 30 s, 60 s, then 300 s instead of retried.
+        self.breaker = breaker or CircuitBreaker("NSE", state_file=breaker_file)
+        self._raw_session = session or requests.Session()
+        self.session = GuardedSession(self._raw_session, self.breaker)
         self.timeout = timeout
         self.base_url = base_url.rstrip("/")
         self._warm = False
@@ -249,17 +255,20 @@ class NSEClient:
         headers = dict(HEADERS)
         if referer:
             headers["Referer"] = referer
-        if not self._warm:
-            # Best effort cookie bootstrap; NSE sometimes 403s the homepage, which is fine.
-            try:
-                self.session.get(self.base_url + "/", headers=headers, timeout=self.timeout)
-            except requests.RequestException:
-                pass
-            self._warm = True
+        self._ensure_warm(headers)
         resp = self.session.get(f"{self.base_url}/{path.lstrip('/')}", headers=headers,
                                 params=params, timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()
+
+    def _ensure_warm(self, headers: dict[str, str]) -> None:
+        if not self._warm:
+            # Best effort cookie bootstrap; NSE sometimes 403s the homepage, which is fine.
+            try:
+                self._raw_session.get(self.base_url + "/", headers=headers, timeout=self.timeout)   # a 403 here is normal
+            except requests.RequestException:
+                pass
+            self._warm = True
 
     def _get_text(self, path: str, params: dict[str, Any], referer: str) -> str:
         headers = {**HEADERS, "Accept": "*/*", "Referer": referer}
@@ -309,6 +318,21 @@ class NSEClient:
             data = self._get(path, params=params, referer=referer)
             rows = data.get("data", []) if isinstance(data, dict) else data
         return [t for t in (_norm_deal(r, kind) for r in rows) if t.investor]
+
+    def probe_deals(self, day: date) -> dict[str, int]:
+        """Integration check: the bulk and the block deals CSV for one day, read and parsed strictly (no JSON fallback).
+        Returns {kind: row count}. Raises when a download fails or the CSV lacks an expected column."""
+        referer = f"{self.base_url}/report-detail/display-bulk-and-block-deals"
+        self._ensure_warm({**HEADERS, "Referer": referer})
+        out: dict[str, int] = {}
+        for kind in ("bulk", "block"):
+            params = {"optionType": f"{kind}_deals", "from": _nse_date(day), "to": _nse_date(day), "csv": "true"}
+            text = self._get_text("api/historicalOR/bulk-block-short-deals", params, referer)
+            try:
+                out[kind] = len(_parse_deals_csv(text))
+            except KeyError as e:
+                raise ValueError(f"{kind} deals CSV has no {e.args[0]!r} column") from None
+        return out
 
     # -- insider (PIT) disclosures ------------------------------------------
     def insider_trades(self, days: int = 30, end: date | None = None,
@@ -479,11 +503,12 @@ class NSEClient:
     def _bse_rows(self, source: str, days: int, investors: Iterable[str] | None) -> list[DisclosedTrade]:
         """BSE's bulk/block deals for the followed names, or nothing: BSE problems never break the NSE read."""
         kinds = {"deals": ("bulk", "block"), "bulk": ("bulk",), "block": ("block",)}.get(source, ())
-        if getattr(self, "bse", None) is None or not kinds:  # off, or insider filings (BSE has no equivalent here)
+        bse = getattr(self, "bse", None)
+        if bse is None or not kinds:  # off, or insider filings (BSE has no equivalent here)
             return []
         try:
             end = datetime.now(IST).date()  # the exchange's calendar day, not the server's
-            return self.bse.deals(end - timedelta(days=days), end, kinds=kinds,
+            return bse.deals(end - timedelta(days=days), end, kinds=kinds,
                                   investors=None if investors is None else list(investors))
         except Exception as e:  # noqa: BLE001
             log_bse_failure_once(e)

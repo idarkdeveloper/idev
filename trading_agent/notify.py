@@ -205,7 +205,7 @@ class Notifier:
                 log.warning("email delivery failed: %s", e)
         if "webhook" in self.channels:
             try:
-                r = self.session.post(self.webhook_url, json={"text": _mentions(f"*{subject}*\n{body}")},
+                r = self.session.post(self.webhook_url or "", json={"text": _mentions(f"*{subject}*\n{body}")},
                                       timeout=30)
                 r.raise_for_status()
                 delivered.append("webhook")

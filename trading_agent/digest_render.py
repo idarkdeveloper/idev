@@ -81,7 +81,7 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
                if isinstance(mood.get("score"), int) else regime)]
         nf = mood.get("nifty") or {}
         if nf.get("last") is not None:
-            above = {True: "above its 200-day average", False: "below its 200-day average"}.get(nf.get("above_200dma"), "200-day average n/a")
+            above = {True: "above its 200-day average", False: "below its 200-day average"}.get(nf.get("above_200dma"), "200-day average n/a")  # type: ignore[arg-type]
             kv.append(("Nifty", f"{num(nf['last'])}, {pct_text(nf.get('ret_1d_pct'))} today, "
                                 f"{pct_text(nf.get('ret_20d_pct'))} in 20 days, {above}"))
         lines = [] if kv else [mood.get("summary") or regime]
@@ -216,7 +216,7 @@ def _gauge_block(g: dict[str, Any]) -> dict[str, Any]:
     if g["warnings"]:
         lines.append("⚠ Warning: " + "; ".join(WARN_TEXT.get(w, w) for w in g["warnings"]) + ".")
     lines.append(g["note"])
-    lines += [g[k] for k in ("flows_line", "breadth_line") if g.get(k)]
+    lines += [g[k] for k in ("premarket_line", "flows_line", "breadth_line") if g.get(k)]
     if g["skipped"]:
         lines.append(f"{g['skipped']} gauge(s) could not be read and are left out.")
     rows = [[r["gauge"], (num if r["gauge"].startswith("Nifty") else num_intl)(r["value"], 2), pct_text(r["d20_pct"]), pct_text(r["vs_50d_pct"]), r["range"],

@@ -8,7 +8,6 @@ stamped with the replay date. Nothing here can reach a real broker.
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 import shutil

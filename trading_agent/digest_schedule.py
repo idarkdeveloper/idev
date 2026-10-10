@@ -91,7 +91,7 @@ def send_digest(notifier: Any, email: dict[str, Any], kind: str | None = None, d
     try:
         params = inspect.signature(notifier.send).parameters
     except (TypeError, ValueError):
-        params = {}
+        params = {}  # type: ignore[assignment]
     takes_var = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
     extra = {"idempotency_key": f"{kind}:{day}"} if kind and day and ("idempotency_key" in params or takes_var) else {}
     if "telegram_text" in params or takes_var:

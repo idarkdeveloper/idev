@@ -344,9 +344,11 @@ If you ever see two engines (alerts arriving twice, Groww 429), check that nothi
 ## 12. Dead-man's switch (heartbeat)
 
 If the server or the watch service dies, nothing tells you. Set `HEARTBEAT_URL` and a monitoring site will email you
-when the pings stop. A separate heartbeat thread calls the URL every 5 minutes (any hour, weekends too), with a 10
-second timeout, but only while the watch loop is making progress: if the loop has not finished or started an
-iteration for max(3 x the check interval, 20 minutes) it sends `/fail` with "watch loop stalled N min" instead of an
+when the pings stop. A separate heartbeat thread calls the URL **every 60 seconds, at any hour** (weekends too), with a 10
+second timeout, and only while the watch loop is making progress (the loop stamps its progress between the steps of a
+tick, so a long tick that keeps moving is not a stall). If the loop has not moved for 3 minutes in the market window
+(09:15 to 15:30 IST on a trading day; 3 x the check interval if that is longer), or for max(3 x the check interval, 20
+minutes) outside it, the thread sends `/fail` with "watch loop stalled N min" instead of an
 ok ping, and a tick that raised sends `/fail` with the error text at once. The next healthy moment pings ok at once.
 `/fail` is sent only to hc-ping.com addresses (or when `HEARTBEAT_FAIL=true`); other providers just stop getting
 pings, which their own grace period turns into an alert. The URL and the bot token are never logged (redacted even
@@ -356,17 +358,18 @@ with `-v`), only "heartbeat ok" / "heartbeat failed". After changing `HEARTBEAT_
 **Free healthchecks.io check**
 
 1. Sign up at https://healthchecks.io, **Add Check**. Name: `trading-agent-watch`.
-2. **Period** 10 minutes, **Grace** 10 minutes. (Pings come every 5 minutes, so two missed pings plus grace = an email
-   after about 20 minutes.)
-3. **Integrations**: make sure *Email* has your address.
+2. **Period** 1 minute, **Grace** 2 minutes. (The service pings every minute around the clock, so a dead service is
+   reported about 3 minutes after the last ping, at any hour. No schedule or cron setting is needed.)
+3. **Integrations**: make sure *Email* has your address, and add the **Telegram** integration (healthchecks.io:
+   Integrations, *Telegram*, follow its bot link) so a missed ping reaches your phone at once.
 4. Copy the check's **ping URL** (`https://hc-ping.com/<uuid>`), then on the server:
    ```bash
    sudo -u agent nano /opt/trading-agent/.env     # add the line: HEARTBEAT_URL=https://hc-ping.com/xxxxxxxx-...
    sudo systemctl restart trading-agent-watch
    ```
    (The dashboard Settings dialog can set it too, but keep the URL out of screenshots.)
-5. Within 5 minutes the check turns green. Test it: `sudo systemctl stop trading-agent-watch`, wait about 20 minutes
-   for the email, then start it again.
+5. Within a minute the check turns green. Test it: `sudo systemctl stop trading-agent-watch`, wait about 3 minutes in
+   market hours for the Telegram message and email, then start it again.
 
 Better Stack and UptimeRobot heartbeat monitors work the same way: paste their heartbeat URL (it must be `https://`).
 
@@ -430,3 +433,47 @@ Several names are comma separated; wildcards are refused. Restart the dashboard 
 JSON and same-origin: a browser's `Origin` must match an allowed host, and `X-Forwarded-Host` / `X-Forwarded-Proto` are
 trusted only from a proxy on localhost and only for an allowed host. Page loads and API reads from another site are
 refused too (`Sec-Fetch-Site`).
+
+---
+
+## 16. Pre-market check, clock, circuit breaker and backups
+
+**Pre-market check (the canary).** At 08:30 IST on trading days the watch service reads NSE, BSE, Yahoo, NSE's archive
+files, the server clock, and (with an already cached token only) your Groww holdings, order list and available cash. It
+never places an order and never asks Groww for a new token. The result is `state/integration_check.json`; the dashboard
+shows `Integration: ok 08:30 · 9/9` beside the freshness chip, and the morning email carries `Pre-market check: ok 9/9`
+or `FAILED: ...`. If a step fails, or the check has not run by 09:10, `state/canary_failed.json` is written: **automated
+buys are refused** (the agent's paper and live buys and any live Groww buy) with the reason `pre-market check failed:
+<steps>`, an amber banner shows on the dashboard, and one alert goes out by email, webhook and Telegram. Sells and stop
+exits are never blocked. It clears on the next passing run. To clear it after fixing the cause:
+
+```bash
+sudo -u agent /opt/trading-agent/.venv/bin/python -m trading_agent integration-check
+```
+
+(or the *Run integration check* button in Settings). Turn the whole thing off with `INTEGRATION_CHECK=false`.
+
+**Server clock.** Groww TOTP logins need a correct clock. At start-up, and as a pre-market step, the service reads
+`timedatectl show -p NTPSynchronized` and the offset from `timedatectl timesync-status` or `chronyc tracking`; it fails
+when NTP is not synchronised or the offset is over 1 second (one alert a day). Fix: `sudo timedatectl set-ntp true`,
+then restart `trading-agent-watch`. On Windows nothing is checked.
+
+**NSE / Yahoo circuit breaker.** After 3 refusals in a row (403, 429, 5xx, a timeout) NSE calls are skipped for 30 s, then
+60 s, then 300 s instead of retried, and resume after the first success; the log says `NSE connection degraded` and
+`NSE connection recovered` once each, and the dashboard chip shows `NSE degraded`. Yahoo history fetches work the same way.
+
+**Backups.** Every save of `state/state.json` first keeps the old file as `state/state.json.bak`. Once a trading day after
+the close (16:00 IST) the watch service copies `state/*.json` and the price archive (`state/prices/archive.sqlite`, via
+SQLite's backup API) into `state/backups/YYYYMMDD/`, and keeps 30 days. `.env` and anything with "token" or "secret" in
+its name are never copied. **Restore:**
+
+```bash
+sudo systemctl stop trading-agent-watch trading-agent-dashboard
+cd /opt/trading-agent/state
+ls backups                                   # pick a day
+sudo -u agent cp backups/20261012/state.json state.json          # or any *.json from that folder
+sudo -u agent cp backups/20261012/archive.sqlite prices/archive.sqlite
+sudo systemctl start trading-agent-watch trading-agent-dashboard
+```
+
+If only the latest save went wrong, `cp state.json.bak state.json` is enough.

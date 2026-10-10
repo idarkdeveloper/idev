@@ -117,11 +117,14 @@ def freshness(state_dir: Path, now: datetime, *, holidays: Any | None = None, li
     """The pieces of the freshness chip: the watch heartbeat, whether the market is open, the last close the
     prices can be from, the newest price bar the page used, and when the deals were last fetched."""
     is_open = market_open(now, holidays)
+    from .circuit import read_degraded
+    nse_degraded = read_degraded(Path(state_dir) / "nse_breaker.json") is not None
     deals_age = None if not deals_at else max(0, int(now.timestamp() - deals_at))
     return {
         "now": now.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "market_open": is_open,
         "live_orders": bool(live_orders),
+        "nse_degraded": nse_degraded,
         "watch": watch_info(state_dir, now, is_open),
         "prices": {"last_close": last_close(now, holidays).isoformat(), "bar_at": bar_at},
         "deals": {"age_s": deals_age,

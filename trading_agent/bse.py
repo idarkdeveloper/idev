@@ -30,7 +30,7 @@ import logging
 import re
 import threading
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -251,7 +251,7 @@ def parse_deals_csv(text: str, kind: str = "bulk") -> list[dict[str, Any]]:
         raise BSELayoutError("BSE deals CSV: unexpected columns " + ", ".join(header)[:200])
     rows = []
     for r in reader:
-        if len(r) <= max(i_date, i_code, i_client, i_side, i_qty, i_px):  # type: ignore[type-var]
+        if len(r) <= max(i_date, i_code, i_client, i_side, i_qty, i_px):  # type: ignore[type-var,operator,misc]
             continue
         d = _date(r[i_date])  # type: ignore[index]
         if not d:

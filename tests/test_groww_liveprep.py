@@ -5,7 +5,6 @@ import json
 
 import pytest
 
-from trading_agent.broker import Position
 from trading_agent.groww import (AUTH_MESSAGE, GrowwAuthorisationError, GrowwBroker, LiveOrdersDisabled,
                                  is_authorisation_problem, sellable_quantity)
 from trading_agent.groww_check import DDPI_MANUAL_CHECK, format_rows, live_test, read_only_checks

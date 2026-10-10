@@ -235,6 +235,9 @@ class Settings:
     heartbeat_fail: bool = False  # also send /fail to a heartbeat provider other than hc-ping.com
     forward_start: str | None = None  # YYYY-MM-DD the forward test started; the server rebuilds from it when the account is missing
     forward_universe: str = "NIFTYMIDCAP150"  # the paper forward test the server runs once a day after the close
+    # Read-only check of the real services (integration.py), run by the watch service at 08:35 IST on trading days.
+    integration_check: bool = True
+    integration_claude: bool = False  # also make one tiny Claude call (spends a few tokens); off unless asked for
 
     def __post_init__(self) -> None:
         self.watch_investors = list(self.watch_investors)  # never shared between copies of the settings
@@ -393,4 +396,6 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         heartbeat_fail=_bool(env("HEARTBEAT_FAIL"), False),
         forward_start=forward_start,
         forward_universe=(env("FORWARD_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),
+        integration_check=_bool(env("INTEGRATION_CHECK"), True),
+        integration_claude=_bool(env("INTEGRATION_CLAUDE"), False),
     )
