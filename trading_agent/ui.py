@@ -420,7 +420,7 @@ class App:
                 "notify_email_to": s.notify_email_to or "",
                 "notify_webhook_url": s.notify_webhook_url or "",
                 # secrets are never sent back to the page: only whether they are set
-                "telegram_token_set": bool(s.telegram_bot_token), "telegram_chat_id": s.telegram_chat_id or "",
+                "telegram_token_set": bool(s.telegram_bot_token), "telegram_chat_set": bool(s.telegram_chat_id),
                 "telegram_alerts": s.telegram_alerts, "heartbeat_set": bool(s.heartbeat_url),
                 "paper_starting_cash": s.paper_starting_cash,
                 "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,

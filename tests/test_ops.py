@@ -109,8 +109,9 @@ def test_dashboard_settings_write_env_validate_and_never_echo_secrets(settings):
     assert f"TELEGRAM_BOT_TOKEN={TOKEN}" in text and "TELEGRAM_CHAT_ID=42" in text and f"HEARTBEAT_URL={HB_URL}" in text
     assert settings.telegram_on and settings.heartbeat_url == HB_URL
     snap = app.snapshot()["settings"]
-    assert snap["telegram_token_set"] is True and snap["heartbeat_set"] is True
+    assert snap["telegram_token_set"] is True and snap["heartbeat_set"] is True and snap["telegram_chat_set"] is True
     assert TOKEN not in repr(snap) and "secret-path" not in repr(snap)
+    assert "telegram_chat_id" not in snap        # the chat id is never sent back to the page either
     app.update_settings({"telegram_bot_token": "", "heartbeat_url": ""})
     assert settings.telegram_bot_token is None and settings.heartbeat_url is None and not settings.telegram_on
 
