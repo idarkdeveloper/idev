@@ -52,6 +52,7 @@ FONT_FILES = {"/fonts/inter-latin.woff2", "/fonts/inter-latin-ext.woff2"}
 STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-8"),
                 "/static/common.js": ("common.js", "text/javascript; charset=utf-8"),
                 "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8"),
+                "/static/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
                 # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
                                                   "text/javascript; charset=utf-8")}

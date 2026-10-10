@@ -19,6 +19,7 @@
     <nav class="tabs" aria-label="Pages"><a href="/" data-tab="live">Live</a><a href="/replay" data-tab="replay">Replay</a><a href="/demo" data-tab="demo">Demo</a></nav>
     <div class="row" id="pills" style="gap:6px;flex:1 1 0;min-width:240px"></div>
     <div class="row controls">
+      <button type="button" id="btn-palette" class="pal-btn" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title="Search stocks and commands (Ctrl+K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Search</span><kbd class="pal-kbd" aria-hidden="true">Ctrl K</kbd></button>
       <div class="theme-switch" role="group" aria-labelledby="theme-label"><span class="theme-label" id="theme-label">Theme</span><div class="seg"><button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button></div></div>
       <div class="sub" id="lastcheck"></div>
       <button type="button" id="btn-watch" title="Poll deals and announcements every minute during market hours"><span>Start watch</span></button>
@@ -296,6 +297,7 @@
 <div class="toast" id="toast"></div>
 
 <script src="/static/common.js"></script>
+<script src="/static/palette.js"></script>
 <script src="/static/lightweight-charts.js"></script>
 <script>
 (function(){
@@ -1304,6 +1306,43 @@
     if(!confirm("Forget seen deals? This clears the seen deals, the recommendations history and the Live account curve. The practice account and its curve are not touched.")) return;
     try { await api("/api/reset", {}); $("dlg").close(); toast("Seen deals forgotten"); await refresh(); } catch(e){ toast(e.message); }
   });
+
+  // ---- Ctrl+K command palette (palette.js). It only fills in forms and runs read-only look-ups: Practice buy opens the
+  // practice order form above pre-filled and you still press "Place paper order" and confirm. No order is sent from here. ----
+  const palSections = () => {
+    const seen = {}, out = [];
+    document.querySelectorAll("[data-anchor]").forEach(el => {
+      const id = el.dataset.anchor; if(el.hidden || seen[id]) return;
+      seen[id] = 1; const hd = el.querySelector("h2");
+      out.push({id, label: (hd && hd.textContent.trim()) || id});
+    });
+    return out;
+  };
+  const palCentre = (el) => { if(el && el.scrollIntoView) el.scrollIntoView({behavior: "smooth", block: "center"}); };
+  const palHost = {
+    mode: MODE,
+    sections: palSections,
+    goSection: (id) => { const e = document.querySelector(`[data-anchor="${id}"]`); if(e && e.scrollIntoView) e.scrollIntoView({behavior: "smooth", block: "start"}); },
+    lookup: (s) => { lookup(s); palCentre($("lk-form")); },
+    chart: (s) => { lookup(s).then(() => palCentre($("lk-chart") || $("lk-form"))); },
+    size: (s) => { $("sz-ticker").value = s; palCentre($("sz-form")); if($("sz-form").requestSubmit) $("sz-form").requestSubmit(); },
+    refresh: async () => { await Promise.all([refresh(), loadMyPortfolio(false), loadFreshness(), loadIntegration()]); },
+  };
+  if(MODE === "demo"){
+    palHost.buy = (s) => {   // fills the existing practice order form; nothing is placed until the user submits it
+      $("tk-symbol").value = s; $("tk-qty").value = ""; $("tk-amount").value = "";
+      const b = document.querySelector('#tk-form [data-side="buy"]'); if(b) b.click();
+      palCentre($("tk-form")); $("tk-amount").focus();
+      toast(`Practice buy form filled for ${s}. Enter an amount or shares, then press Place paper order.`);
+    };
+  }
+  TA.palette.install(palHost);
+  { const l = here(), want = l && TA.palette.landing(l.search);   // arrived from the palette on another page
+    if(want){
+      try { history.replaceState(null, "", l.pathname); } catch(e){}   // the address has done its job; a reload will not redo it
+      if(want.op === "buy"){ if(palHost.buy) palHost.buy(want.symbol); }
+      else palHost[want.op](want.symbol);
+    } }
 
   refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); });
   loadMyPortfolio(false);

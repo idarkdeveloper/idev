@@ -15,6 +15,7 @@ const intervals = [], stored = process.argv[3] === "multi-saved" ? {dealFilter: 
 const ui = path.join(__dirname, "..", "trading_agent", "ui");
 const html = fs.readFileSync(path.join(ui, "index.html"), "utf8");
 const common = fs.readFileSync(path.join(ui, "common.js"), "utf8");
+const palette = fs.readFileSync(path.join(ui, "palette.js"), "utf8");
 const page = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]).join("\n");
 const initiallyHidden = new Set([...html.matchAll(/<[^>]*\bid="([^"]+)"[^>]*\bhidden\b[^>]*>/g)].map(m => m[1]));
 
@@ -101,6 +102,7 @@ ctx.addEventListener = () => {};
 vm.createContext(ctx);
 try {
   vm.runInContext(common, ctx);
+  vm.runInContext(palette, ctx);
   vm.runInContext(page, ctx);
 } catch (e) { console.error(e.stack); process.exit(1); }
 

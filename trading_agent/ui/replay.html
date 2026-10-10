@@ -17,7 +17,7 @@
       <div><div class="brand-name">Trading Agent</div><div class="sub">Replay: practise on a past date</div></div>
     </div>
     <nav class="tabs" aria-label="Pages"><a href="/" data-tab="live">Live</a><a href="/replay" data-tab="replay" aria-current="page">Replay</a><a href="/demo" data-tab="demo">Demo</a></nav>
-    <div class="row controls"><div class="theme-switch" role="group" aria-labelledby="theme-label"><span class="theme-label" id="theme-label">Theme</span><div class="seg"><button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button></div></div></div>
+    <div class="row controls"><button type="button" id="btn-palette" class="pal-btn" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title="Search stocks and commands (Ctrl+K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Search</span><kbd class="pal-kbd" aria-hidden="true">Ctrl K</kbd></button><div class="theme-switch" role="group" aria-labelledby="theme-label"><span class="theme-label" id="theme-label">Theme</span><div class="seg"><button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button></div></div></div>
   </div>
 </header>
 <div class="modestrip replay" id="modestrip" role="status" aria-live="polite"><span id="modestrip-icon"></span><span id="modestrip-text">REPLAY · past data only · practice money</span></div>
@@ -138,6 +138,8 @@
 <div class="suggest" id="suggest" role="listbox" aria-label="Matching companies"></div>
 <div class="toast" id="toast" role="status"></div>
 <script src="/static/common.js"></script>
+<script src="/static/palette.js"></script>
+<script>TA.palette.install({mode: "replay"});</script>
 <script src="/static/replay.js"></script>
 </body>
 </html>

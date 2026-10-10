@@ -407,3 +407,24 @@ td.prot-cell > * + * { margin-top: 4px; }
 .ck-legend b { color: var(--color-text); font-weight: 600; }
 .ck-up { color: var(--color-profit); font-weight: 600; } .ck-down { color: var(--color-loss); font-weight: 600; }
 .ck-box { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; touch-action: pan-y; }
+
+/* Ctrl+K command palette (palette.js). Tokens only; the dialog is centred high on the screen and fits a 360 px phone. */
+.pal-btn { gap: 8px; }
+.pal-kbd { font: inherit; font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--color-input-border); color: var(--color-muted); }
+@media (max-width: 700px) { .pal-kbd { display: none; } }
+dialog.pal { margin: 12vh auto 0; max-width: 620px; width: calc(100vw - 24px); max-height: 76vh; overflow: hidden; flex-direction: column; }
+dialog.pal[open] { display: flex; }
+.pal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px 0 18px; }
+.pal-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 14px; color: var(--color-muted); margin: 0; }
+.pal-field { padding: 8px 14px 10px; border-bottom: 1px solid var(--color-divider); }
+.pal-field input { width: 100%; min-height: 44px; font-size: 16px; }
+.pal-list { overflow-y: auto; overscroll-behavior: contain; padding: 6px; min-height: 0; flex: 1 1 auto; }
+.pal-group { padding: 8px 10px 2px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--color-muted); }
+.pal-opt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 9px 10px; min-height: 40px; border-radius: 6px; cursor: pointer; }
+.pal-opt[aria-selected="true"] { background: color-mix(in srgb, var(--color-accent) 16%, transparent); }
+.pal-label { font-weight: 600; font-size: 14px; }
+.pal-detail { font-size: 13px; color: var(--color-muted); min-width: 0; overflow-wrap: anywhere; }
+.pal-opt[aria-selected="true"] .pal-detail { color: var(--color-text); }
+.pal-note { padding: 10px; font-size: 13px; color: var(--color-muted); }
+.pal-foot { padding: 8px 18px 10px; border-top: 1px solid var(--color-divider); font-size: 12px; }
+@media (pointer: coarse) { .pal-opt { min-height: 44px; } .pal-head button { min-width: 44px; } }

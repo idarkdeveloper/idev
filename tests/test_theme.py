@@ -177,7 +177,7 @@ LITERAL = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
 LITERAL_ALLOWLIST: dict[str, set[str]] = {"common.js": {"rgb(", "rgba("}}
 
 
-@pytest.mark.parametrize("name", ["index.html", "replay.html", "common.js", "replay.js"])
+@pytest.mark.parametrize("name", ["index.html", "replay.html", "common.js", "replay.js", "palette.js"])
 def test_no_colour_literals_in_page_code(name):
     text = (UI / name).read_text(encoding="utf-8")
     found = [m.group(0) for m in LITERAL.finditer(text) if m.group(0) not in LITERAL_ALLOWLIST.get(name, set())]
