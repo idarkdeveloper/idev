@@ -118,6 +118,8 @@
   function renderClaude(){
     $("ask-note").textContent = T.claude_ready ? `${T.claude_presses} ask${T.claude_presses === 1 ? "" : "s"} in this replay` : "Needs ANTHROPIC_API_KEY in .env";
     $("ask-btn").disabled = !T.claude_ready || !!T.trial.ended;
+    const bt = T.blind_test;
+    $("blind-verdict").innerHTML = bt ? `Blind-ticker test (${esc(String(bt.run_at || "").slice(0, 10))}, ${bt.cases} cases): <b>${esc(bt.verdict)}</b>. Claude was asked the same question with the company hidden; ${bt.stance_flips} stance change${bt.stance_flips === 1 ? "" : "s"}, mean confidence gap ${esc(String(bt.mean_abs_confidence_gap))} points.` : "";
     $("ask-result").innerHTML = T.claude.slice().reverse().map(c => `<div class="ann"><div class="meta">${esc(fmtDay(c.date))} · may include hindsight</div><div>${esc(c.summary)}</div>
       ${(c.recommendations || []).map(r => `<div class="row" style="gap:6px;margin-top:4px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><b>${esc(r.ticker)}</b><span class="pill">${esc(r.confidence)}</span></div><div class="sub">${esc(r.headline)}. ${esc(r.rationale)}</div>`).join("")}</div>`).join("");
   }

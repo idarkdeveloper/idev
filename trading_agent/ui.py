@@ -1187,7 +1187,7 @@ class App:
         bench = "^NSEI" if self.settings.market == "in" else "^GSPC"
         cm = cost_model_for(self.settings.market)
         memberships = None
-        if self.settings.market == "in":
+        if self.settings.market == "in" and recs:   # nothing to score: no index lists to download
             from .scorecard import build_memberships
             memberships = build_memberships(self.settings.state_dir)
         return score_recommendations(recs, self.prices, benchmark=bench,

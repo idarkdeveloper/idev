@@ -70,16 +70,22 @@ def build_context(trial: Any, news: Any, lookup: str | None = None) -> dict[str,
     return ctx
 
 
-def ask(trial: Any, client: Any, model: str, news: Any, lookup: str | None = None) -> dict[str, Any]:
-    ctx = build_context(trial, news, lookup)
-    resp = client.messages.create(model=model, max_tokens=4000, system=SYSTEM.format(date=trial.clock.today),
+def request_view(client: Any, model: str, date_label: str, ctx: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    """The one record_view call (forced tool, no order tool): (response, the recorded view)."""
+    resp = client.messages.create(model=model, max_tokens=4000, system=SYSTEM.format(date=date_label),
                                   tools=[TOOL], tool_choice={"type": "tool", "name": TOOL["name"]},
                                   messages=[{"role": "user", "content": json.dumps(ctx, default=str)}])
     block = next((b for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
     if block is None or not isinstance(block.input, dict):
         raise ValueError(f"Claude returned no recorded view (stop reason: {getattr(resp, 'stop_reason', None)})")
-    entry = {"date": trial.clock.today, "summary": block.input.get("summary", ""),
-             "recommendations": block.input.get("recommendations", []),
+    return resp, block.input
+
+
+def ask(trial: Any, client: Any, model: str, news: Any, lookup: str | None = None) -> dict[str, Any]:
+    ctx = build_context(trial, news, lookup)
+    resp, view = request_view(client, model, trial.clock.today, ctx)
+    entry = {"date": trial.clock.today, "summary": view.get("summary", ""),
+             "recommendations": view.get("recommendations", []),
              "model": getattr(resp, "model", model), "hindsight": True}
     trial.data["claude"].append(entry)
     trial.data["claude_presses"] = trial.data.get("claude_presses", 0) + 1

@@ -336,6 +336,7 @@ class ReplayApp:
                       "next_rebalance": f"{y + (m == 12):04d}-{m % 12 + 1:02d}"},
             "picks": picks, "stops": d["stops"][-20:], "claude": d["claude"],
             "claude_presses": d.get("claude_presses", 0), "claude_ready": bool(self.settings.anthropic_api_key),
+            "blind_test": _blind_verdict(self.settings.state_dir),
             "scorecard": d.get("scorecard") if ended else None,
             "next": self._next(t) if ended else None,
             "universes": list(BENCHMARKS),
@@ -406,6 +407,14 @@ class ReplayApp:
         except Exception as e:  # noqa: BLE001
             log.exception("replay route %s %s failed", method, path)
             return 500, {"error": f"{type(e).__name__}: {e}"}
+
+
+def _blind_verdict(state_dir: Any) -> Any:
+    from .blind import latest_verdict
+    try:
+        return latest_verdict(state_dir)
+    except Exception:  # noqa: BLE001 - an unreadable research file never breaks the page
+        return None
 
 
 class _LazyUniverse:
