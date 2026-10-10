@@ -71,6 +71,9 @@ def _unavail(title: str, sec: dict[str, Any]) -> dict[str, Any]:
 
 def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
+    pm = (d.get("gauges") or {}).get("premarket_line") if isinstance(d.get("gauges"), dict) else None
+    if pm:   # the pre-market canary result, first thing in the email
+        blocks.append(_block(None, [str(pm)], tone="bad" if "FAILED" in str(pm) else None))
     mood = d["mood"]
     if "unavailable" in mood:
         blocks.append(_unavail("Market mood", mood))
@@ -93,10 +96,14 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
     if "world" in d:
         blocks.append(_world_block(d["world"]))
     if "gauges" in d:
-        blocks.append(_gauge_block(d["gauges"]))
+        gb = _gauge_block(d["gauges"])
+        if pm:   # shown at the top of the email instead
+            gb["lines"] = [x for x in gb["lines"] if x != pm]
+        blocks.append(gb)
     ideas = d["buy_ideas"]
     wait = (not ("unavailable" in mood)) and mood.get("no_new_buys")
-    mood_blocks, blocks = blocks, []   # on a no-buy day the holdings come right after the mood, the candidates last
+    mood_blocks, blocks = blocks, []
+    lead = 1 if pm else 0   # on a no-buy day the holdings come right after the mood, the candidates last
     title = "Would pass, but the market filter says wait" if wait else "Buy ideas"
     if wait and "unavailable" not in ideas:
         n = ideas.get("eligible") if isinstance(ideas.get("eligible"), int) else len(ideas.get("ideas") or [])
@@ -143,7 +150,7 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
                              tone="warn" if watch["items"] else None))
     deals = [_deals_block(d["deals"], "New deals by followed investors")]
     if wait:
-        return mood_blocks[:1] + blocks + mood_blocks[1:] + deals + ideas_blocks
+        return mood_blocks[:lead + 1] + blocks + mood_blocks[lead + 1:] + deals + ideas_blocks
     return mood_blocks + ideas_blocks + blocks + deals
 
 
@@ -170,7 +177,7 @@ def _watch_table(items: list[dict[str, Any]]) -> dict[str, Any] | None:
     from .digest_rules import label
     if not items:
         return None
-    rows, tones, sub, hrows = [], [], [], []
+    rows, tones, sub, hrows, titles = [], [], [], [], []
     for i in items:
         priced = isinstance(i.get("price"), (int, float))
         loss = i.get("loss_pct")
@@ -183,9 +190,10 @@ def _watch_table(items: list[dict[str, Any]]) -> dict[str, Any] | None:
         rows.append([name, price, pl, stop, avg, flags])
         hrows.append([name, price, pl, stop, avg])
         sub.append(flags)
+        titles.append("; ".join(r if len(r) <= 90 else r[:87].rstrip() + "..." for r in map(str, i.get("reasons") or [])))
         tones.append([None, None, "good" if pl.startswith("+") else "bad" if pl.startswith("−") else None, None, None])
     return {"head": ["Stock", "Price", "P&L %", "Stop", "200-day avg", "Flags"], "rows": rows, "num": [1, 2, 3, 4],
-            "html": {"head": ["Stock", "Price", "P&L %", "Stop", "200d avg"], "rows": hrows, "num": [1, 2, 3, 4], "sub": sub,
+            "html": {"head": ["Stock", "Price", "P&L %", "Stop", "200d avg"], "rows": hrows, "num": [1, 2, 3, 4], "sub": sub, "sub_title": titles,
                      "tones": tones, "compact": True}}
 
 
@@ -232,7 +240,7 @@ def _deals_block(sec: dict[str, Any], title: str) -> dict[str, Any]:
         return _unavail(title, sec)
     if not sec["deals"]:
         return _block(title, [f"No deals by {', '.join(sec['following'])} since {sec['since']}."])
-    rows = [[x["ticker"] + (" (BSE)" if x.get("exchange") == "BSE" else ""), x["transaction"], x["size"], ", ".join(x["who"]) or x["investor"], x["reported"]] for x in sec["deals"]]
+    rows = [[x["ticker"] + (f" ({x['exchange']})" if "BSE" in str(x.get("exchange") or "") else ""), x["transaction"], x["size"], ", ".join(x["who"]) or x["investor"], x["reported"]] for x in sec["deals"]]
     lines = [f"{sec['total']} deal(s) since {sec['since']}" + (f"; the first {len(rows)} are shown." if sec["total"] > len(rows) else ".")]
     return _block(title, lines, {"head": ["Stock", "Deal", "Size", "Who", "Reported"], "rows": rows, "num": []})
 
@@ -507,7 +515,8 @@ def to_html(doc: dict[str, Any]) -> str:
                         style += "white-space:nowrap;"
                     extra = ""
                     if i == 0 and sub and sub[n]:
-                        extra = f'<div style="font-size:11px;color:#6b7280;white-space:normal">{_e(sub[n])}</div>'
+                        tip = f' title="{_e(t["sub_title"][n])}"' if t.get("sub_title") and t["sub_title"][n] else ""
+                        extra = f'<div{tip} style="font-size:11px;color:#6b7280;white-space:normal">{_e(sub[n])}</div>'
                     cls = f' class="pl-{"profit" if tone == "good" else "loss"}"' if tone else ""
                     cells.append(f'<td{cls} align="{"right" if i in num else "left"}" style="{style}">{_e(c)}{extra}</td>')
                 parts.append("<tr>" + "".join(cells) + "</tr>")

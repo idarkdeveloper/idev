@@ -35,8 +35,9 @@ def titles(text):
 
 def test_every_flagged_holding_has_a_row_and_the_formula_is_stated_once():
     out = digest_render.render(data())
-    for key in ("text", "html"):
-        assert out[key].count("3×ATR") == 1 and out[key].count("buy price − 3×ATR") == 1
+    visible_html = re.sub(r' title="[^"]*"', "", out["html"])   # the hover text keeps the full reasons
+    for body in (out["text"], visible_html):
+        assert body.count("3×ATR") == 1 and body.count("buy price − 3×ATR") == 1
     text = out["text"]
     for i in range(13):
         assert f"(S{i:02d})" in text or f"S{i:02d}" in text
@@ -69,3 +70,22 @@ def test_buy_day_keeps_todays_order():
     d["mood"]["no_new_buys"] = False
     t = digest_render.render(d)["text"]
     assert t.index("BUY IDEAS") < t.index("HOLDINGS TO WATCH") and "CANDIDATE SCREEN" not in t
+
+
+def test_premarket_line_leads_the_email_and_both_venues_show_and_flags_keep_the_full_reason():
+    d = data()
+    d["gauges"] = {"gauges": [], "warnings": [], "warning_texts": [], "skipped": 0, "note": "n",
+                   "premarket_line": "Pre-market check: FAILED: NSE deals. New buys are paused."}
+    d["deals"] = {"since": "2026-10-09", "total": 1, "following": ["X"], "deals": [
+        {"investor": "X", "who": ["X"], "ticker": "INFY", "exchange": "NSE + BSE", "transaction": "BUY", "size": "5 sh", "reported": "2026-10-12"}]}
+    out = digest_render.render(d)
+    assert out["text"].index("Pre-market check: FAILED") < out["text"].index("MARKET MOOD")
+    assert out["text"].count("Pre-market check") == 1 and "INFY (NSE + BSE)" in out["text"]
+    assert 'title="below the stop level 90.00 (buy price minus 3×ATR); below its 200-day average (120.50)"' in out["html"]
+    from tests.test_telegram_brief import evening
+    from trading_agent.telegram_brief import telegram_brief
+    b = telegram_brief({"summary": "", "data": d})["html"]
+    assert "⏰ Pre-market check: FAILED: NSE deals. New buys are paused." in b and "(NSE + BSE)" in b
+    e = evening()
+    e["data"]["deals"]["deals"][0]["exchange"] = "NSE + BSE"
+    assert "(NSE + BSE)" in telegram_brief(e)["html"]

@@ -8,7 +8,7 @@ import html as _html
 import ipaddress
 import re
 from datetime import date
-from typing import Any
+from typing import Any, TypeGuard
 
 from .digest import num, pct_text
 from .digest_rules import label, srupee
@@ -27,7 +27,7 @@ def _e(v: Any) -> str:
     return _html.escape(str(v if v is not None else ""), quote=False)
 
 
-def _ok(sec: Any) -> bool:
+def _ok(sec: Any) -> TypeGuard[dict[str, Any]]:
     return isinstance(sec, dict) and "unavailable" not in sec
 
 
@@ -88,9 +88,8 @@ def _macro_line(world: Any, gauges: Any) -> str | None:
 
 
 def _premarket_line(data: dict[str, Any]) -> str | None:
-    pm = data.get("premarket_line") or data.get("premarket")
-    if isinstance(pm, dict):
-        pm = pm.get("line") or pm.get("summary")
+    g = data.get("gauges")
+    pm = (g.get("premarket_line") if isinstance(g, dict) else None) or data.get("premarket_line")
     return f"⏰ {_e(pm)}" if isinstance(pm, str) and pm.strip() else None
 
 
@@ -187,7 +186,7 @@ def _evening_lines(data: dict[str, Any]) -> list[str]:
         if not stale and g.get("day_pl") is not None:
             s += f" · today {_e(srupee(g['day_pl']))} ({_e(pct_text(g.get('day_pct')))})"
         out.append(s)
-    bulletin = data.get("bulletin") if isinstance(data.get("bulletin"), dict) else {}
+    bulletin: dict[str, Any] = data["bulletin"] if isinstance(data.get("bulletin"), dict) else {}
     nf = bulletin.get("nifty")
     if _ok(nf) and nf.get("close") is not None:
         out.append(f"📈 Nifty {_e(num(nf['close'], 2))} ({_e(pct_text(nf.get('change_pct'), 2))})")

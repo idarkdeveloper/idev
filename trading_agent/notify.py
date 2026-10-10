@@ -252,7 +252,7 @@ class Notifier:
         ok = False
         try:
             if html is not None:
-                msg = {"chat_id": self.telegram_chat_id, "text": html, "parse_mode": "HTML", "disable_web_page_preview": True}
+                msg: dict[str, Any] = {"chat_id": self.telegram_chat_id, "text": html, "parse_mode": "HTML", "disable_web_page_preview": True}
                 if button:
                     msg["reply_markup"] = button
                 try:
