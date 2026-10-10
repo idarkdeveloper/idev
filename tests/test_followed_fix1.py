@@ -111,7 +111,7 @@ def test_history_tool_fetches_once_for_all_names(settings):
 
     check(settings, data=Many(), broker=broker, notifier=Notifier(), runner_factory=factory)
     assert calls == [NAMES]
-    assert len(holder["r"].tool_log[0][1]["trades"]) == 2
+    assert len(__import__("trading_agent.untrusted", fromlist=["x"]).unwrap_json(holder["r"].tool_log[0][1]["trades"])) == 2
 
 
 def test_nse_history_many_is_one_fetch():

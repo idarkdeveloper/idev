@@ -625,13 +625,23 @@ def cmd_scorecard(args: argparse.Namespace) -> int:
     settings = _settings(args)
     st = State(settings.state_dir / "state.json")
     cm = cost_model_for(settings.market)
+    from .scorecard import build_memberships
     r = score_recommendations(st.data.get("recommendations", []), free_prices(settings),
                               benchmark="^NSEI" if settings.market == "in" else "^GSPC",
-                              cost_model=cm if hasattr(cm, "round_trip") else None)
+                              cost_model=cm if hasattr(cm, "round_trip") else None,
+                              memberships=build_memberships(settings.state_dir, progress=print)
+                              if settings.market == "in" and st.data.get("recommendations") else None)
     print(format_scorecard(r))
     if args.json:
         print(json.dumps(r, indent=2, default=str))
     return 0
+
+
+def cmd_replay_blind_test(args: argparse.Namespace) -> int:
+    """Does Ask Claude answer differently when it cannot tell which company it is? (costs API money)"""
+    from .replay.blind import run_cli
+
+    return run_cli(args, _settings(args))
 
 
 def cmd_signal_lab(args: argparse.Namespace) -> int:
@@ -1000,6 +1010,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--writer", choices=["rules", "auto", "ollama", "claude", "none"],
                     help="who writes the summary on top (default DIGEST_WRITER); none = rules only")
     sp.set_defaults(func=cmd_digest)
+    sp = sub.add_parser("replay", help="Replay tools")
+    rsub = sp.add_subparsers(dest="replay_cmd", required=True)
+    sp = rsub.add_parser("blind-test", help="paired masked/unmasked Ask Claude test for hindsight (costs API money)")
+    sp.add_argument("slug", help="the replay's name (its folder under state/replay)")
+    sp.add_argument("--cases", type=int, default=5, help="how many cases to pick from the replay's history")
+    sp.add_argument("--case", action="append", metavar="DATE:TICKER", help="a specific case (repeatable)")
+    sp.add_argument("--model", help="Claude model (default: CLAUDE_MODEL)")
+    sp.add_argument("--yes", action="store_true", help="really send the calls (without it, only the estimate)")
+    sp.add_argument("--fresh", action="store_true", help="start a new run instead of resuming today's unfinished one")
+    sp.set_defaults(func=cmd_replay_blind_test)
     sp = sub.add_parser("ui", help="open the local web dashboard")
     sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--port", type=int, default=8787)
