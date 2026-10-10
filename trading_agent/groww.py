@@ -70,7 +70,13 @@ _AUTH_RE = re.compile(
 
 def is_authorisation_problem(text: Any) -> bool:
     """True when a Groww response or error text says the sell lacks DDPI / e-DIS / TPIN authorisation."""
-    return bool(text) and bool(_AUTH_RE.search(str(text)))
+    if not text:
+        return False
+    t = str(text)
+    if re.search(r"\bsegment\b|\bnot enabled for\b", t, re.I) and \
+            not re.search(r"\b(TPIN|e-?DIS|DDPI|CDSL|demat)\b", t, re.I):
+        return False  # a segment / permission rejection, not a missing demat authorisation
+    return bool(_AUTH_RE.search(t))
 
 
 class WrongIP(LiveOrdersDisabled):

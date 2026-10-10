@@ -101,6 +101,7 @@ def read_only_checks(broker: GrowwBroker, *, token_source: str, cache: TokenCach
     return c
 
 
+FILLED_TEXT = "TEST ORDER FILLED: 1 share bought \u2014 sell it in the Groww app if unwanted"
 STILL_OPEN = "TEST ORDER MAY STILL BE OPEN: CANCEL IT IN THE GROWW APP NOW"
 
 
@@ -232,6 +233,7 @@ def live_test(broker: GrowwBroker, symbol: str = DEFAULT_LIVE_TEST_SYMBOL, *, of
     c.add("live: place limit order", bool(oid), f"id {oid}, status {placed.get('order_status')}, "
           f"reference echoed: {placed.get('order_reference_id') == ref}")
     if not oid:
+        _cancel_if_placed(broker, c, ref)  # no id in the answer: it may still be resting
         return c
     try:
         st = broker.confirm_order(oid, tries=2)
@@ -259,11 +261,10 @@ def live_test(broker: GrowwBroker, symbol: str = DEFAULT_LIVE_TEST_SYMBOL, *, of
                 gone = after["order_status"] in ("CANCELLED", "CANCELLATION_REQUESTED")
                 c.add("live: cancel order", gone,
                       f"now {after['order_status']}" if gone else
+                      FILLED_TEXT if after["status"] == "filled" else
                       f"now {after['order_status']}. {STILL_OPEN} (id {oid})")
             except Exception as e:  # noqa: BLE001
                 c.add("live: cancel order", False, f"{type(e).__name__}: {e}. {STILL_OPEN} (id {oid})")
-        elif now is None:
-            c.add("live: cancel order", False, f"could not read the order status. {STILL_OPEN} (id {oid})")
         else:
             c.add("live: cancel order", False,
                   f"the test buy is {now}, not open: it was not left resting. If it FILLED you now own 1 share "

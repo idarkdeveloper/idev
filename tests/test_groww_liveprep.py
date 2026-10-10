@@ -346,7 +346,7 @@ def test_alert_failure_is_not_marked_and_retries(tmp_path):
         calls.append(s)
         if len(calls) == 1:
             raise RuntimeError("smtp down")
-    assert alert_once(p, "k", flaky, "s", "b") is False and not p.exists()
+    assert alert_once(p, "k", flaky, "s", "b") is False and "k" not in json.loads(p.read_text())
     assert alert_once(p, "k", flaky, "s", "b") is True and alert_once(p, "k", flaky, "s", "b") is False
     assert len(calls) == 2
     assert not p.with_name("a.json.lock").exists()
