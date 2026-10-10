@@ -61,6 +61,25 @@ def build_digest(kind: str, ctx: DigestContext, *, writer: str | None = None, se
     return {**render(data, summary, name, images), "writer": name, "summary": summary, "data": data, "images": images}
 
 
+def telegram_summary(email: dict[str, Any]) -> str:
+    """The short Telegram version of a built email (plain text; the notifier escapes it): the written summary and the
+    key lines, buy ideas and holdings to watch. The subject (portfolio total, counts) is the message's heading."""
+    lines: list[str] = []
+    if email.get("summary"):
+        lines += [str(email["summary"]), ""]
+    data = email.get("data") or {}
+    ideas = data.get("buy_ideas") or {}
+    if isinstance(ideas, dict) and not ideas.get("wait") and "unavailable" not in ideas and ideas.get("ideas"):
+        lines.append("Buy ideas:")
+        lines += [f"- {i.get('symbol')} at {i.get('price')} ({i.get('qty')} shares, stop {i.get('stop')})"
+                  for i in ideas["ideas"][:5]]
+    watch = data.get("watch") or {}
+    if isinstance(watch, dict) and "unavailable" not in watch and watch.get("items"):
+        lines.append("To watch / consider selling:")
+        lines += [f"- {i.get('symbol')}: {'; '.join(str(r) for r in (i.get('reasons') or [])[:2])}" for i in watch["items"][:5]]
+    return "\n".join(lines).strip()
+
+
 def send_digest(notifier: Any, email: dict[str, Any], kind: str | None = None, day: str | None = None) -> list[str]:
     """Send one built email. ``kind`` and ``day`` name the logical send (the scheduler's retry of the same kind and day
     must not make a second email), and go to a notifier that takes an ``idempotency_key``."""
@@ -73,6 +92,11 @@ def send_digest(notifier: Any, email: dict[str, Any], kind: str | None = None, d
         params = {}
     takes_var = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
     extra = {"idempotency_key": f"{kind}:{day}"} if kind and day and ("idempotency_key" in params or takes_var) else {}
+    if "telegram_text" in params or takes_var:
+        try:
+            extra["telegram_text"] = telegram_summary(email)
+        except Exception:  # noqa: BLE001 - Telegram gets the full text instead
+            pass
     if images and ("images" in params or takes_var):
         return notifier.send(email["subject"], email["text"], html=email["html"], images=images, **extra)
     text, html = email["text"], email["html"]
@@ -83,8 +107,14 @@ def send_digest(notifier: Any, email: dict[str, Any], kind: str | None = None, d
     return notifier.send(email["subject"], text)   # a notifier that takes no HTML part
 
 
-def _external(delivered: Any) -> bool:
-    return bool(set(delivered or []) - {"console"})
+def _external(delivered: Any, notifier: Any = None) -> bool:
+    """The digest counts as sent when email (if email is configured) or the webhook got it. Telegram alone never
+    counts: a Telegram success must not hide a failed email, or the retry would never happen."""
+    got = set(delivered or [])
+    channels = set(getattr(notifier, "channels", None) or [])
+    if "email" in channels:
+        return "email" in got
+    return bool(got - {"console", "telegram"})
 
 
 _FILE_LOCK = threading.Lock()  # digest_state.json read-modify-write inside this process
@@ -303,7 +333,7 @@ class DigestScheduler:
         else:
             try:
                 delivered = send_digest(self._notifier(), result["email"], kind, day)
-                if _external(delivered):
+                if _external(delivered, self._notifier()):
                     outcome = "sent"
                 else:
                     detail = "no email or webhook delivery succeeded"

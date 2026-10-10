@@ -228,6 +228,10 @@
       <div class="field"><label for="f-source">Disclosures</label><select id="f-source" name="watch_source"></select></div>
       <div class="field"><label for="f-email">Email recommendations to</label><input id="f-email" name="notify_email_to" type="email" placeholder="you@example.com"><div class="sub">Needs RESEND_API_KEY in .env</div></div>
       <div class="field"><label for="f-webhook">Webhook (Slack, Discord, n8n)</label><input id="f-webhook" name="notify_webhook_url" type="url" placeholder="https://hooks.slack.com/…"></div>
+      <div class="field"><label for="f-tg-token">Telegram bot token</label><input id="f-tg-token" type="password" autocomplete="off" placeholder="saved: leave blank to keep, type clear to remove"><div class="sub">From @BotFather. Never shown again once saved.</div></div>
+      <div class="field"><label for="f-tg-chat">Telegram chat id</label><input id="f-tg-chat" name="telegram_chat_id" type="text" placeholder="123456789 or @channel"></div>
+      <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-tg-on" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-tg-on" style="color:var(--ink)">Telegram alerts</label></div><div class="sub">Every alert and daily email also goes to Telegram when the token and chat id are set</div></div>
+      <div class="field"><label for="f-hb">Heartbeat URL</label><input id="f-hb" type="password" autocomplete="off" placeholder="saved: leave blank to keep, type clear to remove"><div class="sub">healthchecks.io style ping URL, called every 5 minutes while the watch runs. Telegram and heartbeat changes need a restart of the watch service (sudo systemctl restart trading-agent-watch).</div></div>
       <div class="field"><label for="f-market">Market</label><select id="f-market" name="market"><option value="in">India · NSE · Groww</option><option value="us">United States · paper</option></select><div class="sub">Switching rebuilds data, prices and broker</div></div>
       <div class="field"><label for="f-cash">Practice starting cash</label><input id="f-cash" name="paper_starting_cash" type="number" min="1000" step="any"><div class="sub">Applies after Reset practice account on the Demo page</div></div>
     </div>
@@ -1148,7 +1152,7 @@
     const s = S.settings, c = S.connections;
     $("f-investors").value = investorsOf(s).join("\n");
     $("f-source").innerHTML = SOURCES[s.market].map(([v,l]) => `<option value="${v}" ${v===s.watch_source?"selected":""}>${l}</option>`).join("");
-    $("f-email").value = s.notify_email_to; $("f-webhook").value = s.notify_webhook_url;
+    $("f-email").value = s.notify_email_to; $("f-webhook").value = s.notify_webhook_url; $("f-tg-chat").value = s.telegram_chat_id || ""; $("f-tg-on").checked = s.telegram_alerts !== false; $("f-tg-token").value = ""; $("f-hb").value = ""; $("f-tg-token").placeholder = s.telegram_token_set ? "saved: leave blank to keep, type clear to remove" : "123456:ABC… from @BotFather"; $("f-hb").placeholder = s.heartbeat_set ? "saved: leave blank to keep, type clear to remove" : "https://hc-ping.com/…";
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
@@ -1183,7 +1187,7 @@
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.groww_ddpi_confirmed = $("f-ddpi").checked; body.groww_sell_t1 = $("f-t1").checked; body.bse_deals = $("f-bse").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked;
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.groww_ddpi_confirmed = $("f-ddpi").checked; body.groww_sell_t1 = $("f-t1").checked; body.bse_deals = $("f-bse").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked; body.telegram_alerts = $("f-tg-on").checked; if($("f-tg-token").value.trim()) body.telegram_bot_token = $("f-tg-token").value.trim().toLowerCase() === "clear" ? "" : $("f-tg-token").value.trim(); if($("f-hb").value.trim()) body.heartbeat_url = $("f-hb").value.trim().toLowerCase() === "clear" ? "" : $("f-hb").value.trim();
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);
