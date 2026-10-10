@@ -426,7 +426,7 @@ class App:
                 "notify_email_to": s.notify_email_to or "",
                 "notify_webhook_url": s.notify_webhook_url or "",
                 # secrets are never sent back to the page: only whether they are set
-                "telegram_token_set": bool(s.telegram_bot_token), "telegram_chat_id": s.telegram_chat_id or "",
+                "telegram_token_set": bool(s.telegram_bot_token), "telegram_chat_set": bool(s.telegram_chat_id),
                 "telegram_alerts": s.telegram_alerts, "heartbeat_set": bool(s.heartbeat_url),
                 "paper_starting_cash": s.paper_starting_cash,
                 "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,
@@ -1781,12 +1781,15 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             return name, port or None
 
         def _host_allowed(self, host: str, *, forwarded: bool = False) -> bool:
-            """localhost / 127.0.0.1 / [::1] (with the server's port or none) and the TA_ALLOWED_HOSTS names."""
+            """localhost / 127.0.0.1 / [::1] on any port, and the TA_ALLOWED_HOSTS names.
+
+            Any port for the local names: an SSH tunnel (laptop 8788 -> server 8787) keeps the laptop's port in
+            Host. DNS rebinding needs a foreign name in Host, so a local name on another port is not a risk."""
             name, port = self._split_host(host)
             if not name:
                 return False
             if name in self._LOCAL_NAMES and not forwarded:
-                return port is None or port == str(self.server.server_address[1])  # type: ignore[index]
+                return port is None or (port.isdigit() and 0 < int(port) < 65536)
             for a in app.settings.allowed_hosts:
                 an, ap = self._split_host(a)
                 if name == an and (ap is None or ap == port):
