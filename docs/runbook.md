@@ -1,0 +1,293 @@
+# Trading Agent runbook
+
+How to run the dashboard (GUI) on your laptop, how the `.env` settings work, how to run things through
+Claude Code, and how to operate the Oracle Cloud server. Commands are copy-paste ready.
+
+> Safety first: nothing sends a real order unless **both** `GROWW_LIVE_ORDERS=true` and `AUTO_TRADE=true` are set
+> (or you press a live-order button with `GROWW_LIVE_ORDERS=true`). Keep both `false` until the live test is done.
+> Never paste keys, secrets or `.env` contents into chats, screenshots or GitHub.
+
+---
+
+## 1. Where things are
+
+| What | Laptop | Server |
+|---|---|---|
+| Code | `C:\projects\Share Trade` (your working copy) and `C:\projects\Share Trade\idev` (a clean clone) | `/opt/trading-agent` (owned by user `agent`) |
+| Python | `.venv` inside the project | `/opt/trading-agent/.venv` |
+| Settings | `.env` in the project folder | `/opt/trading-agent/.env` (mode 600, only `agent` can read it) |
+| State (accounts, caches, logs) | `state\` in the project folder | `/opt/trading-agent/state/` |
+| Dashboard | http://127.0.0.1:8787/ | http://127.0.0.1:8788/ on the laptop, through the SSH tunnel (section 4) |
+| Repo | https://github.com/idarkdeveloper/idev (public) | same, pulled over HTTPS |
+
+Server: Oracle Cloud, region India West (Mumbai), Ubuntu 24.04 on Ampere A1 (2 cores, 12 GB), reserved public
+IP **130.210.18.7** (registered with Groww as the static IP). Login user `ubuntu`, SSH key `C:\Users\affaf\.ssh\oracle_agent`.
+
+---
+
+## 2. Run the dashboard on the laptop
+
+Open **PowerShell** (prompt starts with `PS C:\`):
+
+```powershell
+cd "C:\projects\Share Trade"
+.\.venv\Scripts\Activate.ps1          # prompt now starts with (.venv)
+python -m trading_agent ui            # opens http://127.0.0.1:8787/ in your browser
+```
+
+Useful variants:
+
+```powershell
+python -m trading_agent ui --no-open         # don't open a browser tab
+python -m trading_agent ui --port 8790       # another port (e.g. if 8787 is busy)
+python -m trading_agent ui --demo            # offline sample data, never touches Groww or your .env
+```
+
+Pages: **Live** `/` (your real account, real orders only), **Demo** `/demo` (same real data, practice money),
+**Replay** `/replay` (practise on a past date). Theme switch (Dark / Light / Auto) is top right.
+
+Stop it with **Ctrl+C** in that PowerShell window.
+
+First time on a new laptop (or after `git pull` brought new packages):
+
+```powershell
+cd "C:\projects\Share Trade"
+py -3.12 -m venv .venv                       # only if .venv does not exist yet
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env                       # then fill it in (section 3)
+python -m pytest -q                          # optional: all tests should pass, offline
+```
+
+If PowerShell refuses to run `Activate.ps1`: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, once.
+
+> Run **one** watch at a time. If the server runs `trading-agent-watch`, don't also run `watch` on the laptop,
+> or every alert and daily email arrives twice. The laptop dashboard alone (`ui`) is fine.
+
+---
+
+## 3. The `.env` settings
+
+The `.env` file holds your keys and switches. It is in `.gitignore` and must never be committed. Each machine has
+its own (laptop: project folder; server: `/opt/trading-agent/.env`). Edit on the laptop:
+
+```powershell
+notepad "C:\projects\Share Trade\.env"
+```
+
+Edit on the server (after `ssh`, section 4):
+
+```bash
+sudo -u agent nano /opt/trading-agent/.env      # Ctrl+W find · Ctrl+O then Enter save · Ctrl+X exit
+sudo systemctl restart trading-agent-watch trading-agent-dashboard   # apply
+```
+
+### Keys (secrets — never share)
+
+| Setting | What |
+|---|---|
+| `ANTHROPIC_API_KEY` | Claude, for the daily check and (fallback) email summaries |
+| `GROWW_API_KEY` + `GROWW_TOTP_SECRET` | Groww login without daily approval (recommended, used on the server). The TOTP secret is 32 characters, A–Z and 2–7 only. |
+| `GROWW_API_SECRET` | Older login: needs **Approve** on Groww's API page every day. Leave empty when using TOTP. |
+| `GROWW_ACCESS_TOKEN` | Optional: a token you generated yourself (expires 06:00 IST) |
+| `RESEND_API_KEY` | Email delivery |
+| `NOTIFY_WEBHOOK_URL` | Optional Slack / Discord / n8n webhook |
+
+### Safety switches (keep as shown until the live test)
+
+| Setting | Value | Meaning |
+|---|---|---|
+| `GROWW_LIVE_ORDERS` | `false` | `true` = orders go to Groww with real money |
+| `AUTO_TRADE` | `false` | `true` = the agent may place orders by itself |
+| `GROWW_GTT_STOPS` | `false` | `true` = keep a stop-loss (GTT) at Groww for each live holding |
+| `GROWW_ALLOWED_IP` | `130.210.18.7` | live orders are refused from any other IP |
+| `MAX_SLIPPAGE_PCT` | `0.5` | live limit orders are placed within this % of the last price |
+
+### Strategy, alerts and daily emails
+
+| Setting | Example | Meaning |
+|---|---|---|
+| `MARKET` | `in` | India (NSE + Groww) |
+| `INVESTORS` | `ASHISH KACHOLIA, VIJAY KEDIA` | up to 10 names, comma separated |
+| `WATCH_SOURCE` | `deals` | `deals` (bulk + block), `bulk`, `block`, `insider` |
+| `PAPER_STARTING_CASH` | `100000` | practice account size |
+| `NOTIFY_EMAIL_TO` / `NOTIFY_EMAIL_FROM` | `affafhashmi02@gmail.com` / `Trading Agent <onboarding@resend.dev>` | with Resend's test sender, mail only reaches your Resend account address; verify a domain at resend.com/domains to use any address |
+| `NEWS_TAGGER` | `auto` | Ollama if running, else none (Claude only if set to `claude`) |
+| `OLLAMA_URL` / `OLLAMA_MODEL` | `http://127.0.0.1:11434` / `qwen2.5:3b` | local language model for news tags and email summaries |
+| `DIGEST_ENABLED`, `DIGEST_MORNING_ON`, `DIGEST_EVENING_ON` | `true` | daily emails on/off |
+| `DIGEST_MORNING` / `DIGEST_EVENING` | `09:00` / `15:45` | IST send times (before the open / after the close) |
+| `DIGEST_UNIVERSE` / `DIGEST_TOP` | `NIFTYMIDCAP150` / `10` | where the morning buy ideas come from |
+| `DIGEST_WRITER` | `auto` | summary by Ollama, else Claude (`DIGEST_CLAUDE_MODEL`), else none |
+
+The dashboard's **Settings** (Live page only) can change the non-secret settings safely; keys are edited in `.env`.
+
+---
+
+## 4. Use the server's dashboard from the laptop (GUI from the cloud)
+
+The server's dashboard listens only on the server itself. Reach it through an SSH tunnel.
+
+**One click** (recommended):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\projects\Share Trade\deploy\windows\open-server-dashboard.ps1"
+```
+
+It opens a window titled *Trading Agent tunnel* and then your browser at http://127.0.0.1:8788/. Close that window
+when you're done. To make a desktop icon: right-click the desktop → New → Shortcut → paste
+`powershell -ExecutionPolicy Bypass -File "C:\projects\Share Trade\deploy\windows\open-server-dashboard.ps1"`.
+
+**By hand** — on the **laptop**, not inside the server:
+
+```powershell
+ssh -i $HOME\.ssh\oracle_agent -N -L 8788:127.0.0.1:8787 ubuntu@130.210.18.7
+```
+
+The window stays silent; that is the tunnel. Browse to http://127.0.0.1:8788/, Ctrl+C to stop.
+
+Which prompt am I at? `PS C:\...>` = laptop. `ubuntu@trading-agent:~$` = server (type `exit` to go back).
+
+---
+
+## 5. Operate the server
+
+Log in (from the laptop):
+
+```powershell
+ssh -i $HOME\.ssh\oracle_agent ubuntu@130.210.18.7
+```
+
+Everyday commands (on the server):
+
+```bash
+# are the services running?
+systemctl status trading-agent-watch trading-agent-dashboard --no-pager
+
+# live logs (Ctrl+C to stop); last 100 lines
+sudo journalctl -u trading-agent-watch -f
+sudo journalctl -u trading-agent-watch -n 100 --no-pager
+sudo journalctl -u trading-agent-dashboard -n 100 --no-pager
+
+# restart after editing .env
+sudo systemctl restart trading-agent-watch trading-agent-dashboard
+
+# run any agent command as the agent user (same CLI as on the laptop)
+cd /opt/trading-agent
+sudo -u agent .venv/bin/python -m trading_agent groww-check --ip   # which IP Groww sees (no login)
+sudo -u agent .venv/bin/python -m trading_agent groww-check        # read-only Groww check (one login)
+sudo -u agent .venv/bin/python -m trading_agent holdings           # your Groww holdings
+sudo -u agent .venv/bin/python -m trading_agent news --check-tagger
+sudo -u agent .venv/bin/python -m trading_agent digest morning     # preview the morning email (prints)
+sudo -u agent .venv/bin/python -m trading_agent digest evening --send   # build and email it now
+
+# disk, memory, Ollama
+df -h / && free -h
+systemctl status ollama --no-pager && ollama list
+```
+
+**Update the server to the latest code** (from the laptop, one line):
+
+```powershell
+ssh -i $HOME\.ssh\oracle_agent ubuntu@130.210.18.7 "cd /opt/trading-agent && sudo -u agent git pull && sudo -u agent .venv/bin/pip install -q -r requirements.txt && sudo systemctl restart trading-agent-watch trading-agent-dashboard"
+```
+
+**Copy a file to the server** (example: a holdings snapshot):
+
+```powershell
+scp -i $HOME\.ssh\oracle_agent $HOME\Downloads\groww_holdings.json ubuntu@130.210.18.7:/tmp/
+ssh -i $HOME\.ssh\oracle_agent ubuntu@130.210.18.7 "sudo install -o agent -g agent -m 600 /tmp/groww_holdings.json /opt/trading-agent/state/groww_holdings.json && rm /tmp/groww_holdings.json"
+```
+
+**Back up the server's state** to the laptop (accounts, saved holdings, logs; not `.env`):
+
+```powershell
+ssh -i $HOME\.ssh\oracle_agent ubuntu@130.210.18.7 "sudo tar czf /tmp/agent-state.tgz -C /opt/trading-agent state && sudo chown ubuntu /tmp/agent-state.tgz"
+scp -i $HOME\.ssh\oracle_agent ubuntu@130.210.18.7:/tmp/agent-state.tgz $HOME\Downloads\
+```
+
+### What runs on the server
+
+| Service | Does | Starts |
+|---|---|---|
+| `trading-agent-watch` | deals, announcements, news, stops every minute in market hours; daily emails | at boot, restarts on failure |
+| `trading-agent-dashboard` | the web page on 127.0.0.1:8787 (tunnel only) | at boot |
+| `ollama` | local language model (news tags, email summaries) on 127.0.0.1:11434 | at boot |
+
+Only port 22 (SSH) is open to the internet. Unit files: `deploy/systemd/*.service`.
+
+### Oracle Cloud console notes
+
+- Region **India West (Mumbai)**; instance **trading-agent**; reserved IP **trading-agent-ip = 130.210.18.7**.
+- Always Free: Ampere A1 up to 4 cores / 24 GB, 200 GB disk. Check Billing after changes.
+- Don't release the reserved IP: Groww allows changing the registered static IP only once every 7 days.
+- Rebooting the instance is safe; the services come back by themselves.
+
+---
+
+## 6. Groww login: what to know
+
+- A Groww login token expires every day at **06:00 IST**. The agent creates one per day and reuses it.
+- Groww allows **150 token requests per 24 hours** and **30 per minute** (account-wide, any key, any machine).
+  Too many → `429 Too Many Requests`. The agent then **waits** (15 min, doubling, up to 6 h; until 06:00 IST for
+  the daily cap) instead of retrying, and keeps working on Yahoo prices.
+- Never loop `groww-token` / `groww-check`. `--force` skips the wait and can lengthen Groww's block.
+- When Groww is unavailable the dashboard and emails use the **saved holdings** (`state/groww_holdings.json`),
+  priced from Yahoo and marked "saved".
+- TOTP login (`GROWW_API_KEY` + `GROWW_TOTP_SECRET`) needs no daily Approve; keep the server clock synced (it is).
+
+---
+
+## 7. Running things through Claude Code
+
+Open Claude Code in `C:\projects\Share Trade` and ask in plain words, for example:
+
+| Ask Claude | What happens |
+|---|---|
+| "start the dashboard" | runs `python -m trading_agent ui` from the project's venv |
+| "open the server dashboard" | runs `deploy\windows\open-server-dashboard.ps1` |
+| "check the server" / "show the watch log" | `ssh` + `systemctl status` / `journalctl`, read-only |
+| "update the server" | the one-line update from section 5 |
+| "preview tomorrow's morning email" | `digest morning` on the server |
+| "update coverage" | refreshes the coverage page |
+
+Claude never sees your `.env` values: checks report only "filled / empty". Claude does not place real orders or
+call Groww with your keys unless you explicitly ask for a specific live action.
+
+---
+
+## 8. Times (India vs Germany)
+
+| Event | IST | Germany until 25 Oct 2026 (CEST) | Germany from 25 Oct (CET) |
+|---|---|---|---|
+| Groww token reset | 06:00 | 02:30 | 01:30 |
+| Morning email | 09:00 | 05:30 | 04:30 |
+| Market open | 09:15 | 05:45 | 04:45 |
+| Market close | 15:30 | 12:00 | 11:00 |
+| Evening email | 15:45 | 12:15 | 11:15 |
+
+Markets are closed on weekends and NSE holidays; the agent knows the holiday list and sends nothing then.
+
+---
+
+## 9. Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `Identity file ... not accessible` | you ran a laptop command inside the server: type `exit`, run it in `PS C:\` |
+| Dashboard tunnel: `bind ... address already in use` | a tunnel is already open: just browse to http://127.0.0.1:8788/ |
+| "Groww refused a new login token (429)" | wait until the time shown; don't retry; see section 6 |
+| Email not arriving | check Spam; with `onboarding@resend.dev` only your Resend account address gets mail |
+| Holdings card says "saved" | Groww is unavailable right now; numbers use Yahoo prices |
+| `.env` changes ignored | restart the services (section 5) |
+| News tags missing | `news --check-tagger`; on the server `systemctl status ollama` |
+| Alerts arrive twice | a watch runs on both laptop and server: stop one |
+
+## 10. Before the first live trade
+
+1. `groww-check` works on the server (holdings read, IP 130.210.18.7).
+2. During NSE hours, run once on the server:
+   `sudo -u agent .venv/bin/python -m trading_agent groww-check --live-test TATASTEEL --i-understand-real-orders`
+   (places and cancels a 1-share limit order below the market and a 1-share GTT).
+3. Only then consider `GROWW_LIVE_ORDERS=true`; `AUTO_TRADE=true` is a separate, later decision.
+4. If you live in Germany long-term you may count as NRI: check with Groww or a tax adviser whether your account
+   type is right before trading live.
