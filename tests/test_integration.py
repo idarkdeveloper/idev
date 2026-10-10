@@ -200,7 +200,7 @@ def test_claude_only_when_asked_and_with_the_configured_key(s):
     assert not calls and "ANTHROPIC_API_KEY" in by_name(r)["Claude"]["detail"] and not by_name(r)["Claude"]["ok"]
     s.anthropic_api_key = "sk-fake"
     r = good(s, claude=lambda st: calls.append(st.digest_claude_model) or {"model": "claude-haiku-x", "ms": 420})
-    assert calls == ["claude-haiku-4-5"] and by_name(r)["Claude"]["detail"] == "claude-haiku-x answered in 420 ms"
+    assert calls == [s.digest_claude_model] and by_name(r)["Claude"]["detail"] == "claude-haiku-x answered in 420 ms"
     s.integration_claude = False
     assert by_name(good(s))["Claude"]["skipped"]
 

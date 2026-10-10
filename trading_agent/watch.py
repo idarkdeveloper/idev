@@ -51,6 +51,22 @@ def _plain(text: str) -> str:
 MARKET_DATA_BUDGET_S = 30.0   # network time the once-a-day NSE reads may spend in one tick
 
 
+class _CachedCalendar:
+    """The holiday calendar as the heartbeat thread may use it: cached days only (``peek_trading_day``), no fetch."""
+
+    def __init__(self, holidays: Any | None):
+        self._h = holidays
+
+    def is_trading_day(self, day: Any) -> bool:
+        h = self._h
+        if h is None:
+            return bool(day.weekday() < 5)
+        peek = getattr(h, "peek_trading_day", None)
+        if peek is not None:
+            return bool(peek(day))
+        return bool(h.is_trading_day(day))
+
+
 class Watcher:
     def __init__(self, settings: Settings, *, every: int = 60, window: tuple[str, str] = ("08:45", "18:30"),
                  tz: tzinfo = IST, check_fn: Callable[[], Any] | None = None,
@@ -388,10 +404,14 @@ class Watcher:
         except Exception as e:  # noqa: BLE001
             log.exception("watch check failed")
             info["check_error"] = f"{type(e).__name__}: {e}"
+        self._progress = time.monotonic()   # a long tick that keeps moving is not a stall: stamp between the sub-steps
         info["new_announcements"] = self.poll_announcements()
         info["negative_news"] = self.poll_news()
+        self._progress = time.monotonic()
         info["stop_hits"] = self.check_trailing_stops()
+        self._progress = time.monotonic()
         live = self.sync_live()
+        self._progress = time.monotonic()
         if live is not None:
             info["live"] = live
         self.ticks += 1
@@ -423,8 +443,9 @@ class Watcher:
             try:
                 from .heartbeat import stall_after
                 from .safety import market_open
+                cached = _CachedCalendar(self.holidays)   # the heartbeat thread must never make a network call
                 self._heartbeat.start(lambda: self._progress, stall_s=stall_after(self.every), stop=self._stop,
-                                      window=lambda: market_open(datetime.now(IST), self.holidays), loop_every=self.every)
+                                      window=lambda: market_open(datetime.now(IST), cached), loop_every=self.every)
             except Exception:  # noqa: BLE001 - the dead-man ping never stops the watch
                 log.warning("heartbeat thread did not start")
         while not self._stop.is_set():

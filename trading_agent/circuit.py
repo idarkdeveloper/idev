@@ -3,7 +3,8 @@
 After ``threshold`` (3) consecutive refusals (HTTP 403, 429, 5xx, a timeout or a connection error) the breaker opens and
 the next calls are skipped, not retried: they raise ``CircuitOpen`` at once, which is a ``requests.ConnectionError``, so
 every caller that already handles a failed request handles this too. The pause grows 30 s, 60 s, then 300 s (the cap);
-after it one call is let through, and a success closes the breaker and resets the count. A 404 or another client error is
+after it calls are allowed again (there is no single probe: the first one that fails re-opens the breaker for the
+next, longer pause) and a success closes it and resets the count. A 404 or another client error is
 not a refusal (a file that is not published yet is normal).
 
 It logs once per state change ("NSE connection degraded" / "NSE connection recovered") and, when given a state file,

@@ -1,6 +1,6 @@
 """Daily backup of the state files, kept 30 days in ``state/backups/YYYYMMDD/``.
 
-Copies ``state/*.json`` and the price archive's SQLite file (through SQLite's own backup API, so a writer in the middle of
+Copies ``state/*.json``, ``state/forward/*.json`` (30 days) and the price archive (7 days)'s SQLite file (through SQLite's own backup API, so a writer in the middle of
 a transaction cannot leave a torn copy). Anything that looks like a secret (a name with "token" or "secret", ``.env``)
 is never copied. ``state.json`` itself also gets a ``state.json.bak`` on every save (see ``state.atomic_write``).
 
@@ -26,6 +26,7 @@ from .timezones import IST
 log = logging.getLogger(__name__)
 
 KEEP_DAYS = 30
+ARCHIVE_KEEP_DAYS = 7   # the price archive is large: its copies go after a week, the JSON copies after 30 days
 RUN_AFTER = dtime(16, 0)   # IST, after the close and the forward test
 SECRET_WORDS = ("token", "secret", "password", "credential")
 _DAY_DIR = re.compile(r"\d{8}")
@@ -38,8 +39,12 @@ def _is_secret(name: str) -> bool:
 
 def _copy_atomic(src: Path, dest: Path) -> None:
     tmp = dest.with_name(dest.name + ".tmp")
-    shutil.copy2(src, tmp)
-    os.replace(tmp, dest)
+    try:
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dest)
+    except OSError:
+        tmp.unlink(missing_ok=True)   # no half-copied leftovers
+        raise
 
 
 def backup_now(state_dir: Path, today: date, *, keep_days: int = KEEP_DAYS) -> dict[str, Any]:
@@ -56,6 +61,15 @@ def backup_now(state_dir: Path, today: date, *, keep_days: int = KEEP_DAYS) -> d
             copied.append(f.name)
         except OSError as e:
             log.warning("backup of %s failed: %s", f.name, e)
+    forward = state_dir / "forward"
+    if forward.is_dir():
+        (dest / "forward").mkdir(exist_ok=True)
+        for f in sorted(forward.glob("*.json")):
+            try:
+                _copy_atomic(f, dest / "forward" / f.name)
+                copied.append("forward/" + f.name)
+            except OSError as e:
+                log.warning("backup of forward/%s failed: %s", f.name, e)
     archived = False
     archive = state_dir / "prices" / "archive.sqlite"
     if archive.exists():
@@ -80,13 +94,18 @@ def backup_now(state_dir: Path, today: date, *, keep_days: int = KEEP_DAYS) -> d
     return {"day": today.isoformat(), "files": copied, "archive": archived, "pruned": pruned}
 
 
-def prune(state_dir: Path, today: date, keep_days: int = KEEP_DAYS) -> list[str]:
+def prune(state_dir: Path, today: date, keep_days: int = KEEP_DAYS, archive_keep_days: int = ARCHIVE_KEEP_DAYS) -> list[str]:
     cutoff = (today - timedelta(days=keep_days)).strftime("%Y%m%d")
+    archive_cutoff = (today - timedelta(days=archive_keep_days)).strftime("%Y%m%d")
     gone = []
     for d in sorted((Path(state_dir) / "backups").glob("*")):
-        if d.is_dir() and _DAY_DIR.fullmatch(d.name) and d.name < cutoff:
+        if not (d.is_dir() and _DAY_DIR.fullmatch(d.name)):
+            continue
+        if d.name < cutoff:
             shutil.rmtree(d, ignore_errors=True)
             gone.append(d.name)
+        elif d.name < archive_cutoff:
+            (d / "archive.sqlite").unlink(missing_ok=True)
     return gone
 
 

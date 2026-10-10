@@ -1,11 +1,12 @@
-"""Dead-man's switch: a heartbeat thread pings an https URL every 5 minutes (every 60 seconds in the market window)
-while the watch loop is making progress.
+"""Dead-man's switch: a heartbeat thread pings an https URL every 60 seconds, at every hour, while the watch loop is
+making progress.
 
 Works with healthchecks.io, Better Stack and UptimeRobot heartbeat URLs. The pings come from their own daemon thread
 (so one long tick cannot silence them) but are tied to the loop's progress: the watch loop stamps a monotonic time at
 the start and end of every iteration, and the thread pings "ok" only while that stamp is recent (3 loop intervals, at
-least 20 minutes). In the market window (09:15 to 15:30 IST on a trading day; the watch loop supplies the test) the ping goes every
-60 seconds and the loop counts as stalled after 3 minutes; outside it the 5 minute / 20 minute rules apply. A stalled loop pings ``/fail`` with "watch loop stalled N min"; a tick that raised pings ``/fail``
+least 20 minutes). Only the stall threshold depends on the hour: in the market window (09:15 to 15:30 IST on a trading day; the watch
+loop supplies the test, from cached holiday data, never the network) the loop counts as stalled after
+max(3 minutes, 3 loop intervals); outside it after max(3 loop intervals, 20 minutes). A stalled loop pings ``/fail`` with "watch loop stalled N min"; a tick that raised pings ``/fail``
 with the error text at once. After a failure the next healthy moment pings "ok" at once.
 
 ``/fail`` (a POST with the error as body, the healthchecks.io convention) is only sent to hc-ping.com hosts, or when
@@ -26,11 +27,10 @@ import requests
 
 log = logging.getLogger(__name__)
 
-PING_EVERY_S = 300.0
+PING_EVERY_S = 60.0
 TIMEOUT_S = 10.0
 RECOVER_POLL_S = 15.0   # while failing, look this often for the loop to be healthy again
 MIN_STALL_S = 1200.0
-WINDOW_PING_EVERY_S = 60.0   # in the market window
 WINDOW_STALL_S = 180.0
 
 
@@ -73,9 +73,6 @@ class Heartbeat:
             return bool(self._window and self._window())
         except Exception:  # noqa: BLE001
             return False
-
-    def _every_now(self) -> float:
-        return min(self.every, WINDOW_PING_EVERY_S) if self._in_window() else self.every
 
     def _stall_now(self) -> float:
         """3 minutes in the market window (or 3 loop intervals when the loop is slower than a minute), else the
@@ -126,14 +123,14 @@ class Heartbeat:
         if not self.url:
             return "skip"
         err, self._error = self._error, None
-        if err is not None and self._last_fail is not None and self._clock() - self._last_fail < self._every_now():
+        if err is not None and self._last_fail is not None and self._clock() - self._last_fail < 5 * self.every:   # one fail per five ping periods (5 minutes by default)
             self._failing = True
             return "skip"   # rate limit: one reported fail per interval
         if err is None:
             stamp = self._progress()
             age = None if stamp is None else self._clock() - stamp
             if age is not None and age >= self._stall_now():
-                if self._last_fail is not None and self._clock() - self._last_fail < self._every_now():
+                if self._last_fail is not None and self._clock() - self._last_fail < 5 * self.every:   # one fail per five ping periods (5 minutes by default)
                     return "skip"   # still stalled, and a fail went out within the last interval
                 err = f"watch loop stalled {int(age // 60)} min"
         if err is not None:
@@ -159,8 +156,8 @@ class Heartbeat:
         def run() -> None:
             self.beat()   # the first one at once: the check turns green right after the start
             while not stop.is_set():
-                timeout = RECOVER_POLL_S if self._failing else self._every_now()
-                if self._wake.wait(min(timeout, self._every_now())):
+                timeout = RECOVER_POLL_S if self._failing else self.every
+                if self._wake.wait(min(timeout, self.every)):
                     self._wake.clear()
                     if stop.is_set():
                         break

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -181,11 +182,13 @@ def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
     return make_practice_broker(settings, price_fn)
 
 
-def make_data_source(settings: Settings) -> Any:
+def make_data_source(settings: Settings, *, breaker_file: Path | None = None) -> Any:
+    """``breaker_file``: where the NSE circuit breaker publishes its state. Only the watch service passes it, so a
+    dashboard process's client never overwrites the watch's state."""
     if settings.data_source == "nse":
         from .nse import NSEClient
 
-        client = NSEClient(cache_dir=settings.state_dir / "cache", breaker_file=settings.state_dir / "nse_breaker.json")
+        client = NSEClient(cache_dir=settings.state_dir / "cache", breaker_file=breaker_file)
         if settings.bse_deals:
             from .bse import make_bse_client
             client.bse = make_bse_client(settings)  # BSE_DEALS=false: no BSE calls at all

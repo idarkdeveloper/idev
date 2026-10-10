@@ -28,22 +28,35 @@ def _run(cmd: list[str]) -> tuple[int, str] | None:
     """(return code, stdout) or None when the command does not exist or hangs."""
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, UnicodeDecodeError, subprocess.SubprocessError):
         return None
     return p.returncode, p.stdout
 
 
-_UNIT = {"us": 1e-6, "µs": 1e-6, "ms": 1e-3, "s": 1.0}
+_UNIT = {"us": 1e-6, "µs": 1e-6, "ms": 1e-3, "s": 1.0, "min": 60.0}
 
 
 def _offset_timesyncd(text: str) -> float | None:
-    m = re.search(r"Offset:\s*([+-]?[\d.]+)\s*(us|µs|ms|s)\b", text)
-    return float(m.group(1)) * _UNIT[m.group(2)] if m else None
+    """Seconds from "Offset: +1min 2.345s" / "-12us"; None when there is no Offset line; ValueError when there is one
+    that cannot be read."""
+    m = re.search(r"Offset:[ \t]*(.+)", text)
+    if not m:
+        return None
+    line = m.group(1).strip()
+    parts = re.findall(r"([\d.]+)\s*(min|µs|us|ms|s)\b", line)
+    if not parts:
+        raise ValueError("offset unreadable")
+    total = sum(float(n) * _UNIT[u] for n, u in parts)
+    return -total if line.startswith("-") else total
 
 
 def _offset_chrony(text: str) -> float | None:
+    if "System time" not in text:
+        return None
     m = re.search(r"System time\s*:\s*([\d.]+)\s+seconds\s+(fast|slow)", text)
-    return float(m.group(1)) * (1 if m.group(2) == "fast" else -1) if m else None
+    if not m:
+        raise ValueError("offset unreadable")
+    return float(m.group(1)) * (1 if m.group(2) == "fast" else -1)
 
 
 def check_clock(run: Runner | None = None, platform: str | None = None) -> dict[str, Any]:
@@ -56,14 +69,21 @@ def check_clock(run: Runner | None = None, platform: str | None = None) -> dict[
         return {"checked": False, "ok": None, "offset_s": None, "detail": "not checked (timedatectl unavailable)"}
     synced = got[1].strip().split("=", 1)[1].strip().lower() == "yes"
     offset = None
+    unreadable = False
     for cmd, parse in ((["timedatectl", "timesync-status"], _offset_timesyncd), (["chronyc", "tracking"], _offset_chrony)):
         r = run(cmd)
         if r is not None and r[0] == 0:
-            offset = parse(r[1])
+            try:
+                offset = parse(r[1])
+            except ValueError:
+                unreadable = True
+                break
             if offset is not None:
                 break
     if not synced:
         return {"checked": True, "ok": False, "offset_s": offset, "detail": "NTP is not synchronised"}
+    if unreadable:
+        return {"checked": True, "ok": False, "offset_s": None, "detail": "offset unreadable"}
     if offset is not None and abs(offset) > MAX_OFFSET_S:
         return {"checked": True, "ok": False, "offset_s": offset,
                 "detail": f"clock is {abs(offset):.2f} s {'fast' if offset > 0 else 'slow'} (limit {MAX_OFFSET_S:g} s)"}

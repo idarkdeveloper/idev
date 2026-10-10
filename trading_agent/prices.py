@@ -59,8 +59,10 @@ class YahooPrices:
         return self.latest_price(symbol)
 
     def latest_price(self, symbol: str) -> float:
+        # Not through the circuit breaker: paper fills and stops must never wait on, or run on, a stale price.
         ysym = self.yahoo_symbol(symbol)
-        resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
+        raw = self.session.inner if isinstance(self.session, GuardedSession) else self.session
+        resp = raw.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
                                 params={"range": "1d", "interval": "1d"}, timeout=self.timeout)
         resp.raise_for_status()
         data: Any = resp.json()

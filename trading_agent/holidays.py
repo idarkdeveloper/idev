@@ -82,6 +82,18 @@ class NSEHolidays:
             self._days = stale or {}
         return self._days
 
+    def peek_trading_day(self, day: date) -> bool:
+        """Like ``is_trading_day`` but from what is already loaded or cached on disk (any age): never fetches, never
+        blocks. For threads that must not touch the network; weekdays count when nothing is known."""
+        days = self._days
+        if days is None:
+            path = self.cache_dir / "nse_holidays.json" if self.cache_dir else None
+            try:
+                days = json.loads(path.read_text(encoding="utf-8")) if path and path.exists() else {}
+            except (OSError, ValueError):
+                days = {}
+        return day.weekday() < 5 and day.isoformat() not in days
+
     def holiday(self, day: date) -> str | None:
         """The holiday's name if NSE is closed for one on ``day`` (weekends aside)."""
         return self.days().get(day.isoformat())

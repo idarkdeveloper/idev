@@ -831,7 +831,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     settings = _settings(args)
     if args.auto_trade:
         settings.auto_trade = True
-    data = make_data_source(settings)
+    data = make_data_source(settings, breaker_file=settings.state_dir / "nse_breaker.json")
     try:
         broker = make_broker(settings)
     except GrowwTokenUnavailable as e:
@@ -871,7 +871,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 holidays=holidays, broker_factory=lambda: make_broker(settings),
                 check_fn=lambda: check(settings, broker=w._broker, data=data, notifier=notifier,
                                        dry_run=not settings.anthropic_api_key))
-    startup_check(settings, notifier)   # TOTP logins need a correct clock: log it, alert once a day if it is wrong
+    try:
+        startup_check(settings, notifier)   # TOTP logins need a correct clock: log it, alert once a day if it is wrong
+    except Exception:  # noqa: BLE001 - the watch must always start
+        logging.getLogger(__name__).exception("the start-up clock check failed; carrying on")
     print(f"Watching {', '.join(settings.investors)} every {w.every}s, {args.window_start}-{args.window_end} IST, "
           f"NSE trading days. Ctrl+C to stop.")
     try:

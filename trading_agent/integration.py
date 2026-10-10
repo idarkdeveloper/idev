@@ -372,18 +372,20 @@ def format_result(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def alert_once_a_day(state_dir: Path, notifier: Any, result: dict[str, Any], today: str) -> bool:
-    """One alert a day listing the failed steps. A clean run sends nothing. True if an alert was sent."""
+def alert_once_a_day(state_dir: Path, notifier: Any, result: dict[str, Any], today: str, *,
+                     prefix: str = "integration_alert") -> bool:
+    """One alert a day listing the failed steps. A clean run sends nothing. True if an alert was sent. ``prefix``
+    names the marker file, so the "did not run" alert and the "a step failed" alert each get their own."""
     failed = [s for s in result.get("steps", []) if not s.get("ok")]
     if not failed or notifier is None:
         return False
-    marker = Path(state_dir) / f"integration_alert_{today}.sent"
+    marker = Path(state_dir) / f"{prefix}_{today}.sent"
     if marker.exists():
         return False
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("sent", encoding="utf-8")
-        for old in marker.parent.glob("integration_alert_*.sent"):
+        for old in marker.parent.glob(f"{prefix}_*.sent"):
             if old != marker:
                 old.unlink(missing_ok=True)
     except OSError:
@@ -424,14 +426,24 @@ def clear_flag(state_dir: Path) -> None:
         pass
 
 
-def buy_block(settings: Any) -> str | None:
-    """The reason automated BUYS are refused right now, or None. Sells and stop exits never call this."""
+def buy_block(settings: Any, now: datetime | None = None) -> str | None:
+    """The reason automated BUYS are refused right now, or None. Sells and stop exits never call this. Read-only.
+
+    A stored failure refuses buys. Besides that, with live orders on, a trading day after 09:10 IST with no PASSING
+    result for today refuses them too, so the failsafe holds without the watch service. Paper and practice buys are
+    only affected by the stored failure."""
     if not getattr(settings, "integration_check", True) or getattr(settings, "market", "in") != "in":
         return None
     flag = load_flag(settings.state_dir)
-    if not flag:
-        return None
-    return "pre-market check failed: " + (", ".join(str(x) for x in flag.get("steps") or []) or "unknown")
+    if flag:
+        return "pre-market check failed: " + (", ".join(str(x) for x in flag.get("steps") or []) or "unknown")
+    if getattr(settings, "groww_live_orders", False):
+        n = (now or datetime.now(IST)).astimezone(IST)
+        if n.weekday() < 5 and n.time() >= OVERDUE_AFTER:
+            res = load_result(settings.state_dir)
+            if not (res and res.get("ok") and str(res.get("at", ""))[:10] == n.date().isoformat()):
+                return "pre-market check has not passed today"
+    return None
 
 
 def premarket_line(settings: Any, now: datetime) -> str | None:
@@ -464,7 +476,8 @@ def mark_overdue(settings: Any, notifier: Any, now: datetime, holidays: Any | No
     if callable(notifier) and not hasattr(notifier, "send"):
         notifier = notifier()
     alert_once_a_day(settings.state_dir, notifier,
-                     {"steps": [{"name": "Pre-market check", "ok": False, "detail": reason}]}, now.date().isoformat())
+                     {"steps": [{"name": "Pre-market check", "ok": False, "detail": reason}]}, now.date().isoformat(),
+                     prefix="integration_overdue")
     return True
 
 
@@ -535,10 +548,18 @@ class IntegrationScheduler(DailyJobScheduler):
         super().__init__(state_dir, run_fn, holidays=holidays, run_after=run_after, threaded=threaded, clock=clock)
         self.overdue_fn = overdue_fn   # called on every tick: sets the canary flag when no run happened by 09:10
 
+    def _in_flight(self, day: str) -> bool:
+        """A run is going on right now (its thread is alive, or today's claim is held and the day is not done): it
+        has not had its chance to write a result yet, so "did not run" would be a false alarm."""
+        t = self._thread
+        if t is not None and t.is_alive():
+            return True
+        return self._claim_path(day).exists() and day not in self._done
+
     def tick(self, now: datetime | None = None) -> dict[str, Any]:
         now = now or datetime.now(IST)
         out = super().tick(now)
-        if self.overdue_fn is not None:
+        if self.overdue_fn is not None and not self._in_flight(now.date().isoformat()):
             try:
                 if self.overdue_fn(now):
                     out["overdue"] = True
@@ -546,7 +567,11 @@ class IntegrationScheduler(DailyJobScheduler):
                 log.exception("integration overdue check failed")
         return out
 
-def make_scheduler(settings: Any, notifier: Any = None, holidays: Any = None) -> IntegrationScheduler | None:
+RETRY_UNTIL = dtime(9, 0)   # a failed run before this raises, so the scheduler retries it; after it the failure stands
+
+
+def make_scheduler(settings: Any, notifier: Any = None, holidays: Any = None, *,
+                   now_fn: Callable[[], datetime] | None = None) -> IntegrationScheduler | None:
     """The scheduler for the watch service, or None when INTEGRATION_CHECK is off (or the market is not India)."""
     if not getattr(settings, "integration_check", True) or getattr(settings, "market", "in") != "in":
         return None
@@ -554,6 +579,8 @@ def make_scheduler(settings: Any, notifier: Any = None, holidays: Any = None) ->
     def job() -> None:
         result = run_and_record(settings, notifier=notifier, holidays=holidays)
         log.info("%s", format_result(result).splitlines()[-1])
+        if not result["ok"] and (now_fn or (lambda: datetime.now(IST)))().astimezone(IST).time() < RETRY_UNTIL:
+            raise RuntimeError("integration check failed before 09:00; retrying")   # the scheduler releases the claim
 
     return IntegrationScheduler(Path(settings.state_dir), job, holidays=holidays,
                                 overdue_fn=lambda now: mark_overdue(settings, notifier, now, holidays))

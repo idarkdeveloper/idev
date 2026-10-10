@@ -344,10 +344,11 @@ If you ever see two engines (alerts arriving twice, Groww 429), check that nothi
 ## 12. Dead-man's switch (heartbeat)
 
 If the server or the watch service dies, nothing tells you. Set `HEARTBEAT_URL` and a monitoring site will email you
-when the pings stop. A separate heartbeat thread calls the URL every 5 minutes (any hour, weekends too), with a 10
-second timeout, but **every 60 seconds in the market window** (09:15 to 15:30 IST on a trading day), and only while the
-watch loop is making progress: if the loop has not finished or started an iteration for 3 minutes in the market window
-(3 x the check interval if that is longer), or for max(3 x the check interval, 20 minutes) outside it, it sends `/fail` with "watch loop stalled N min" instead of an
+when the pings stop. A separate heartbeat thread calls the URL **every 60 seconds, at any hour** (weekends too), with a 10
+second timeout, and only while the watch loop is making progress (the loop stamps its progress between the steps of a
+tick, so a long tick that keeps moving is not a stall). If the loop has not moved for 3 minutes in the market window
+(09:15 to 15:30 IST on a trading day; 3 x the check interval if that is longer), or for max(3 x the check interval, 20
+minutes) outside it, the thread sends `/fail` with "watch loop stalled N min" instead of an
 ok ping, and a tick that raised sends `/fail` with the error text at once. The next healthy moment pings ok at once.
 `/fail` is sent only to hc-ping.com addresses (or when `HEARTBEAT_FAIL=true`); other providers just stop getting
 pings, which their own grace period turns into an alert. The URL and the bot token are never logged (redacted even
@@ -357,10 +358,8 @@ with `-v`), only "heartbeat ok" / "heartbeat failed". After changing `HEARTBEAT_
 **Free healthchecks.io check**
 
 1. Sign up at https://healthchecks.io, **Add Check**. Name: `trading-agent-watch`.
-2. **Period** 1 minute, **Grace** 2 minutes. (Pings come every minute in the market window, so a dead service is
-   reported about 3 minutes after the last ping. Outside market hours the pings are 5 minutes apart: either leave the
-   check paused on weekends and overnight with healthchecks.io's *schedule* option (cron `15-30 9-15 * * 1-5`, time zone
-   Asia/Kolkata), or accept a "down" mail overnight.)
+2. **Period** 1 minute, **Grace** 2 minutes. (The service pings every minute around the clock, so a dead service is
+   reported about 3 minutes after the last ping, at any hour. No schedule or cron setting is needed.)
 3. **Integrations**: make sure *Email* has your address, and add the **Telegram** integration (healthchecks.io:
    Integrations, *Telegram*, follow its bot link) so a missed ping reaches your phone at once.
 4. Copy the check's **ping URL** (`https://hc-ping.com/<uuid>`), then on the server:

@@ -51,24 +51,24 @@ def beat_setup(in_window, loop_every=60.0):
     return h, s, now
 
 
-def test_in_the_market_window_the_loop_is_stalled_after_three_minutes_and_pings_every_minute():
+def test_in_the_market_window_the_loop_is_stalled_after_three_minutes():
     win = [True]
     h, s, now = beat_setup(win)
-    assert h._every_now() == 60.0 and h._stall_now() == 180.0
+    assert h.every == 60.0 and h._stall_now() == 180.0
     now[0] = 1000.0 + 179
     assert h.beat() == "ok"                      # 179 s without progress: still fine in the window
     now[0] = 1000.0 + 181
     assert h.beat() == "fail" and s.calls[-1] == ("POST", URL + "/fail")
     now[0] += 30
     assert h.beat() == "skip"                    # still stalled: one fail per minute at most
-    now[0] += 40
+    now[0] += 300
     assert h.beat() == "fail"
 
 
-def test_outside_the_window_the_five_and_twenty_minute_rules_stay():
+def test_outside_the_window_the_stall_limit_is_twenty_minutes_but_the_ping_is_still_every_minute():
     win = [False]
     h, s, now = beat_setup(win)
-    assert h._every_now() == 300.0 and h._stall_now() == 1200.0
+    assert h.every == 60.0 and h._stall_now() == 1200.0
     now[0] = 1000.0 + 600                        # 10 minutes of silence overnight is fine
     assert h.beat() == "ok"
     now[0] = 1000.0 + 1300
@@ -80,13 +80,16 @@ def test_a_slow_loop_interval_stretches_the_window_stall_to_three_intervals():
     assert h._stall_now() == 360.0
 
 
-def test_the_thread_pings_every_minute_in_the_window(monkeypatch):
+def test_the_ping_period_defaults_to_a_minute_at_every_hour():
     import trading_agent.heartbeat as hb
-    monkeypatch.setattr(hb, "WINDOW_PING_EVERY_S", 0.05)
+    assert hb.PING_EVERY_S == 60.0 and Heartbeat(URL, session=Pings()).every == 60.0
+
+
+def test_the_thread_keeps_pinging_whatever_the_hour():
     s = Pings()
-    h = Heartbeat(URL, session=s, every=300.0)
+    h = Heartbeat(URL, session=s, every=0.05)
     stop = threading.Event()
-    h.start(lambda: time.monotonic(), stall_s=1200, stop=stop, window=lambda: True, loop_every=60)
+    h.start(lambda: time.monotonic(), stall_s=1200, stop=stop, window=lambda: False, loop_every=60)
     try:
         end = time.time() + 3
         while time.time() < end and len([c for c in s.calls if c[0] == "GET"]) < 3:
