@@ -167,6 +167,15 @@ def test_cockpit_lines_portfolio_india_gauges_and_events():
     assert "📅 Events: none due in the next days" in telegram_brief(e)["html"]
 
 
+def test_evening_stale_day_says_no_trading_once():
+    ev = evening()
+    ev["data"]["stale_close"] = {"reason": "no trading today"}
+    h = telegram_brief(ev)["html"]
+    assert "Today: no trading" in h and h.lower().count("no trading") == 1
+    ev["data"]["stale_close"] = {"reason": "not closed"}
+    assert "Today: not closed yet" in telegram_brief(ev)["html"]
+
+
 def test_evening_has_movers_table_and_negative_news_line():
     ev = evening()
     ev["data"]["groww"]["holdings"] = [

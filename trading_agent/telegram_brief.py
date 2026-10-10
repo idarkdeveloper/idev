@@ -267,7 +267,7 @@ def _evening_lines(data: dict[str, Any]) -> list[str]:
     if _ok(g):
         # always shows today: the day's move, or "no trading" on a stale day; then the total
         if stale:
-            today = "Today: no trading"
+            today = "Today: no trading" if stale.get("reason") == "no trading today" else "Today: not closed yet"
         elif g.get("day_pl") is not None:
             today = f"Today {_e(srupee(g['day_pl']))} ({_e(pct_text(g.get('day_pct')))})"
         else:
@@ -279,7 +279,7 @@ def _evening_lines(data: dict[str, Any]) -> list[str]:
         out.append(f"📈 Nifty {_e(num(nf['close'], 2))} ({_e(pct_text(nf.get('change_pct'), 2))})")
     if _ok(nf):
         out += _cheat_lines(nf)
-    if stale:
+    if stale and not _ok(g):   # the money line already says it when there is one
         out.append("<i>" + _e("No trading today" if stale.get("reason") == "no trading today" else "The market has not closed yet") + "</i>")
     movers = _movers_table(g, stale)
     if movers:
