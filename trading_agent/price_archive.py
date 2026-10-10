@@ -100,6 +100,7 @@ class PriceArchive:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         c = self._conn()
         try:
+            c.execute("PRAGMA journal_mode=WAL")   # readers do not block the writer, nor it them (set once, persists in the file)
             c.executescript("""
                 CREATE TABLE IF NOT EXISTS bars (
                     symbol TEXT NOT NULL, date TEXT NOT NULL,
@@ -112,7 +113,11 @@ class PriceArchive:
             """)
             cols = {r["name"] for r in c.execute("PRAGMA table_info(splits)")}
             if "effective" not in cols:
-                c.execute("ALTER TABLE splits ADD COLUMN effective TEXT")
+                try:
+                    c.execute("ALTER TABLE splits ADD COLUMN effective TEXT")
+                except sqlite3.OperationalError as e:   # another process upgraded it first
+                    if "duplicate column" not in str(e).lower():
+                        raise
         finally:
             c.close()
 
@@ -173,30 +178,48 @@ class PriceArchive:
             out = [b for b in out if b["date"] >= cutoff]
         return out
 
+    def _plan(self, c: sqlite3.Connection, symbol: str, fresh_by: dict[str, dict[str, Any]]):
+        """What a fresh series would change, judged against the rows as they are RIGHT NOW in ``c``."""
+        fresh_close = {d: float(b["close"]) for d, b in fresh_by.items()}
+        have = {r["date"]: r for r in c.execute("SELECT * FROM bars WHERE symbol=?", (symbol,))}
+        new_bars = [b for d, b in fresh_by.items() if d not in have and self.is_closed(d, symbol)]
+        hit = find_split({d: r["close"] for d, r in have.items()}, fresh_close) if have else None
+        overlap = sorted(d for d in have if d in fresh_by)
+        adj_changes = self._adj_changes(have, fresh_by)
+        return have, new_bars, hit, overlap, adj_changes, fresh_close
+
+    @staticmethod
+    def _adj_changes(have: dict[str, Any], fresh_by: dict[str, dict[str, Any]]) -> list[tuple[float, str]]:
+        out = []
+        for d in sorted(d for d in have if d in fresh_by):
+            v = float(fresh_by[d].get("adj_close") or 0)
+            if v > 0 and abs(v - have[d]["adj_close"]) > 1e-9 * max(1.0, have[d]["adj_close"]):
+                out.append((v, d))
+        return out
+
     def _update(self, symbol: str, fresh: list[dict[str, Any]]) -> None:
         now = self.now_fn().isoformat(timespec="seconds")
         fresh_by = {b["date"]: b for b in fresh}
-        fresh_close = {d: float(b["close"]) for d, b in fresh_by.items()}
         c = self._conn()
         try:
-            have = {r["date"]: r for r in c.execute("SELECT * FROM bars WHERE symbol=?", (symbol,))}
-            new_bars = [b for d, b in fresh_by.items() if d not in have and self.is_closed(d, symbol)]
-            hit = find_split({d: r["close"] for d, r in have.items()}, fresh_close) if have else None
-            overlap = sorted(d for d in have if d in fresh_by)
+            # cheap early exit without the write lock: most calls change nothing
+            have, new_bars, hit, overlap, adj_changes, fresh_close = self._plan(c, symbol, fresh_by)
             if not hit:
                 for d in overlap:   # a disagreement that is not a split: the archive stays as it was
                     if abs(have[d]["close"] / fresh_close[d] - 1) > 0.005:
                         self.conflicts += 1
                         break
-            # decide the dividend-series changes before taking the write lock; most calls change nothing
-            adj_changes = [(float(fresh_by[d].get("adj_close") or 0), d) for d in overlap
-                           if float(fresh_by[d].get("adj_close") or 0) > 0
-                           and abs(float(fresh_by[d]["adj_close"]) - have[d]["adj_close"]) > 1e-9 * max(1.0, have[d]["adj_close"])]
             if not (new_bars or hit or adj_changes):
                 return
             with _LOCK:
                 c.execute("BEGIN IMMEDIATE")
                 try:
+                    # another process may have applied the same split (or added the same bars) since the check above:
+                    # decide again on the rows as they are now that the write lock is ours
+                    have, new_bars, hit, overlap, adj_changes, fresh_close = self._plan(c, symbol, fresh_by)
+                    if not (new_bars or hit or adj_changes):
+                        c.execute("COMMIT")
+                        return
                     self.writes += 1
                     if hit:
                         f, boundary = hit
@@ -206,9 +229,7 @@ class PriceArchive:
                         c.execute("INSERT INTO splits VALUES (?,?,?,?,?)", (symbol, now[:10], f, len(overlap), boundary))
                         log.info("price archive: %s split detected, factor %s from %s", symbol, f, boundary or "all dates")
                         have = {r["date"]: r for r in c.execute("SELECT * FROM bars WHERE symbol=?", (symbol,))}
-                        adj_changes = [(float(fresh_by[d].get("adj_close") or 0), d) for d in sorted(d for d in have if d in fresh_by)
-                                       if float(fresh_by[d].get("adj_close") or 0) > 0
-                                       and abs(float(fresh_by[d]["adj_close"]) - have[d]["adj_close"]) > 1e-9 * max(1.0, have[d]["adj_close"])]
+                        adj_changes = self._adj_changes(have, fresh_by)
                     ov = sorted(d for d in have if d in fresh_by)
                     if ov:
                         d0 = ov[0]

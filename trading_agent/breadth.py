@@ -21,7 +21,7 @@ import logging
 import threading
 import time
 from bisect import bisect_right
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -214,35 +214,41 @@ class BreadthStore:
 
     def tick(self, client: Any, now: datetime, members_fn: Callable[[], Iterable[str]],
              bars_fn: Callable[[str], list[dict[str, Any]]] | None = None, calendar: Any | None = None,
-             sleep: Callable[[float], Any] = time.sleep) -> dict[str, Any] | None:
+             sleep: Callable[[float], Any] = time.sleep, deadline: float | None = None) -> dict[str, Any] | None:
         """Watch loop: today's row once per trading day after 19:00 IST (retrying a not-yet-posted file up to MAX_TRIES),
         and a backfill of sessions missed in the last BACKFILL_DAYS trading days (a few per tick, each tried at most twice,
         using today's NIFTY 500 list for the members). Never raises. Returns today's row when stored now."""
         if client is None:
             return None
+
+        def left() -> float:   # seconds of this tick's network budget still unspent
+            return 1e9 if deadline is None else deadline - time.monotonic()
         members: list[str] | None = None
         todays = None
         try:
-            if self.due(now, calendar):
+            if self.due(now, calendar) and left() > 0:
                 members = list(members_fn())
                 try:
-                    todays = self.fetch_day(client.session, now.date(), members, bars_fn)
+                    todays = self.fetch_day(client.session, now.date(), members, bars_fn, timeout=max(1.0, min(20.0, left())))
                     self.note_try(now, True, "ok")
                 except Exception as e:  # noqa: BLE001
                     log.info("breadth not stored yet: %s", e)
                     self._note_failure(now, e)
-            if _is_trading(now.date(), calendar):
+            if _is_trading(now.date(), calendar) and _outside_market_window(now):
                 done = 0
                 for day in self.missing_days(now, calendar):
                     key = "bf-" + day
-                    if done >= BACKFILL_PER_TICK or not self.may_try(key, now, 2):
+                    if done >= BACKFILL_PER_TICK or not self.may_try(key, now, 2) or left() <= 0:
                         continue
                     members = members if members is not None else list(members_fn())
+                    if left() <= 0:   # loading the member list used the budget
+                        break
                     if done:
                         sleep(2.0)   # public archive host: be polite
                     done += 1
                     try:
-                        self.fetch_day(client.session, date.fromisoformat(day), members, bars_fn)
+                        self.fetch_day(client.session, date.fromisoformat(day), members, bars_fn,
+                                       timeout=max(1.0, min(20.0, left())))
                         self.note_try(now, True, "ok", key)
                     except Exception as e:  # noqa: BLE001
                         log.info("breadth backfill %s failed: %s", day, e)
@@ -253,6 +259,12 @@ class BreadthStore:
 
     def _note_failure(self, now: datetime, e: Exception) -> None:
         self.note_try(now, False, type(e).__name__)
+
+
+def _outside_market_window(now: datetime) -> bool:
+    """Backfills run before 09:00 or after 15:45 IST only: not while the market is open and the dashboard is busy."""
+    t = (now.astimezone(IST) if now.tzinfo else now).time()
+    return t < dtime(9, 0) or t >= dtime(15, 45)
 
 
 def nifty500_members(session: Any = None) -> list[str]:

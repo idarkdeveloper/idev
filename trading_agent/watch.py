@@ -48,6 +48,9 @@ def _plain(text: str) -> str:
     return re.sub(r"@(everyone|here|channel)", lambda m: "@ " + m.group(1), text)
 
 
+MARKET_DATA_BUDGET_S = 30.0   # network time the once-a-day NSE reads may spend in one tick
+
+
 class Watcher:
     def __init__(self, settings: Settings, *, every: int = 60, window: tuple[str, str] = ("08:45", "18:30"),
                  tz: tzinfo = IST, check_fn: Callable[[], Any] | None = None,
@@ -272,22 +275,27 @@ class Watcher:
         if self._data is None or not hasattr(self._data, "session"):
             return out
         s = self.settings
+        deadline = time.monotonic() + MARKET_DATA_BUDGET_S   # at most about this much network time per tick
         try:
             if getattr(s, "price_band_filter", False) and getattr(s, "market", "in") == "in":
                 from .bands import book_for
-                n = book_for(s).tick(self._data, now, self.holidays)
+                n = book_for(s).tick(self._data, now, self.holidays, timeout=20.0)
                 if n:
                     out["price_bands"] = n
             if getattr(s, "flows_breadth", False) and getattr(s, "market", "in") == "in":
                 from .breadth import BreadthStore, archive_bars_fn, nifty500_members
                 from .flows import FlowStore
-                row = FlowStore(s.state_dir).tick(self._data, now, self.holidays)
-                if row:
-                    out["flows"] = row["date"]
-                b = BreadthStore(s.state_dir).tick(self._data, now, lambda: nifty500_members(self._data.session),
-                                                   archive_bars_fn(s.state_dir), self.holidays)
-                if b:
-                    out["breadth"] = b["date"]
+                if time.monotonic() < deadline:
+                    row = FlowStore(s.state_dir).tick(self._data, now, self.holidays)
+                    if row:
+                        out["flows"] = row["date"]
+                if time.monotonic() < deadline:
+                    b = BreadthStore(s.state_dir).tick(self._data, now, lambda: nifty500_members(self._data.session),
+                                                       archive_bars_fn(s.state_dir), self.holidays, deadline=deadline)
+                    if b:
+                        out["breadth"] = b["date"]
+            if time.monotonic() >= deadline:
+                out["budget_used_up"] = True
         except Exception:  # noqa: BLE001 - market data never stops the watch
             log.exception("market data poll failed")
         return out

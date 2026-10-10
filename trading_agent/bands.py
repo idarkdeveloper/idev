@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 URL = "https://nsearchives.nseindia.com/content/equities/sec_list.csv"
 MAX_AGE_TRADING_DAYS = 2
 MAX_TRIES = 6
-RETRY_GAP = timedelta(minutes=20)
+BACKOFF_MINUTES = (5, 15, 60)   # wait after the 1st, 2nd and every later failed try
 SKIP_BANDS = (2, 5)
 CAUTION_BANDS = (10,)
 _LOCK = threading.Lock()
@@ -71,7 +71,7 @@ class BandBook:
         self.path = Path(state_dir) / "price_bands.json"
         self.enabled = enabled
         self.now_fn = now_fn or (lambda: datetime.now(IST))
-        self._tries: dict[str, tuple[int, datetime]] = {}
+        self.tries_path = Path(state_dir) / "price_bands_tries.json"
         self._cache: tuple[float, dict[str, Any]] | None = None
 
     # -- storage --------------------------------------------------------------
@@ -112,8 +112,27 @@ class BandBook:
             return False
         if self.fetched_on() == now.date().isoformat():
             return False
-        n, last = self._tries.get(now.date().isoformat(), (0, None))
-        return n < MAX_TRIES and (last is None or now - last >= RETRY_GAP)
+        n, last = self._read_tries(now.date().isoformat())
+        if n >= MAX_TRIES:
+            return False
+        return last is None or now - last >= timedelta(minutes=BACKOFF_MINUTES[min(n - 1, len(BACKOFF_MINUTES) - 1)])
+
+    def _read_tries(self, day: str) -> tuple[int, datetime | None]:
+        """Today's failed tries and when the last one was, from state (so a new BandBook each tick keeps the cap)."""
+        try:
+            d = json.loads(self.tries_path.read_text(encoding="utf-8")).get(day) or {}
+            last = datetime.fromisoformat(d["last"]) if d.get("last") else None
+            if last is not None and last.tzinfo is None:
+                last = last.replace(tzinfo=IST)
+            return int(d.get("tries", 0)), last
+        except (OSError, ValueError, AttributeError):
+            return 0, None
+
+    def _note_try(self, day: str, now: datetime) -> None:
+        n, _ = self._read_tries(day)
+        with _LOCK:
+            self.tries_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(self.tries_path, json.dumps({day: {"tries": n + 1, "last": now.isoformat(timespec="seconds")}}))
 
     def fetch(self, session: Any, day: date, timeout: float = 30.0) -> int:
         """Download and store the list. ``session`` is a requests session (NSEClient's). Returns the symbol count."""
@@ -124,14 +143,13 @@ class BandBook:
         self.save(bands, day)
         return len(bands)
 
-    def tick(self, client: Any, now: datetime, calendar: Any | None = None) -> int | None:
+    def tick(self, client: Any, now: datetime, calendar: Any | None = None, timeout: float = 20.0) -> int | None:
         """For the watch loop; never raises."""
         if client is None or not self.enabled or not self.due(now, calendar):
             return None
-        n, _ = self._tries.get(now.date().isoformat(), (0, None))
-        self._tries[now.date().isoformat()] = (n + 1, now if now.tzinfo else now.replace(tzinfo=IST))
+        self._note_try(now.date().isoformat(), now if now.tzinfo else now.replace(tzinfo=IST))
         try:
-            return self.fetch(client.session, now.date())
+            return self.fetch(client.session, now.date(), timeout=timeout)
         except Exception as e:  # noqa: BLE001
             self._warn_once(f"price band list unavailable: {e}", now.date())
             return None

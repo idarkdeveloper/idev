@@ -613,3 +613,107 @@ def test_morning_email_deals_are_consolidated_events(settings, tmp_path):
     assert len(out["deals"]) == 1 and out["deals"][0]["exchange"] == "NSE + BSE"
     assert out["deals"][0]["size"].startswith("2,110,000 sh @ ₹") and out["total"] == 1
     assert len(consolidate_deals(Data().trades_for_investors([], ""))) == 1
+
+
+# -- fix round 2 ---------------------------------------------------------------------------------------------
+def _watcher(settings, tmp_path, client):
+    from trading_agent.watch import Watcher
+    s = dataclasses.replace(settings, market="in", state_dir=tmp_path)
+    return Watcher(s, awake=None, data=client)
+
+
+def test_failing_band_fetch_is_capped_across_ticks_with_a_fresh_bandbook_each_time(settings, tmp_path):
+    sess = Session({"sec_list": Resp("", 503)})
+    client = Client(RuntimeError("down"), session=sess)
+    w = _watcher(settings, tmp_path, client)
+    t0 = datetime(2026, 10, 12, 8, 0, tzinfo=IST)
+    for i in range(10):                                          # ten minutes of one-minute ticks
+        w.poll_market_data(t0 + timedelta(minutes=i))
+    asked = [u for u in sess.calls if "sec_list" in u]
+    assert len(asked) == 2                                       # now, then after the 5 minute back-off
+    # the 15 minute and hourly back-offs, and the daily cap, hold too
+    for i in range(10, 400):
+        w.poll_market_data(t0 + timedelta(minutes=i))
+    assert len([u for u in sess.calls if "sec_list" in u]) <= 6
+
+
+def test_two_processes_applying_the_same_split_record_it_once(tmp_path):
+    path = tmp_path / "shared.sqlite"
+    mk = lambda: PriceArchive(path, now_fn=lambda: NOW)           # noqa: E731
+    a1, a2 = mk(), mk()
+    old = [_b(f"2026-09-{d:02d}", 1000 + d, vol=100) for d in range(21, 31)]
+    a1.merge("S.NS", old)
+    new = [_b(b["date"], b["close"] / 5, vol=500) for b in old]
+    real_plan, calls = a2._plan, []
+
+    def stale_then_real(c, symbol, fresh_by):
+        out = real_plan(c, symbol, fresh_by)
+        if not calls:                                            # a2's cheap check ran; before it takes the write lock
+            calls.append(1)                                      # the other process applies the split
+            a1.merge("S.NS", new)
+        return out
+    a2._plan = stale_then_real
+    a2.merge("S.NS", new)
+    assert len(a1.splits("S.NS")) == 1
+    assert a1.bars("S.NS")[0]["close"] == pytest.approx(1021 / 5)        # rescaled once, not twice
+    assert a1.bars("S.NS", raw=True)[0]["close"] == 1021
+
+
+def test_archive_opens_in_wal_and_survives_a_repeated_upgrade(tmp_path):
+    p = tmp_path / "w.sqlite"
+    PriceArchive(p)
+    PriceArchive(p)
+    import sqlite3
+    c = sqlite3.connect(p)
+    try:
+        assert c.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        c.execute("DROP TABLE splits")
+        c.execute("CREATE TABLE splits (symbol TEXT NOT NULL, detected_on TEXT NOT NULL, factor REAL NOT NULL, overlap INTEGER NOT NULL)")
+        c.commit()
+    finally:
+        c.close()
+    PriceArchive(p)                                              # an old table gets its missing column added
+    c = sqlite3.connect(p)
+    try:
+        assert "effective" in {r[1] for r in c.execute("PRAGMA table_info(splits)")}
+    finally:
+        c.close()
+
+
+def test_breadth_backfill_only_outside_the_market_window(tmp_path):
+    sess = Session({})
+    store, c = breadth.BreadthStore(tmp_path), Client(session=sess)
+    store.tick(c, datetime(2026, 10, 12, 10, 0, tzinfo=IST), lambda: ["A"], sleep=lambda s: None)
+    store.tick(c, datetime(2026, 10, 12, 15, 44, tzinfo=IST), lambda: ["A"], sleep=lambda s: None)
+    assert sess.calls == []                                      # market open
+    store.tick(c, datetime(2026, 10, 12, 15, 45, tzinfo=IST), lambda: ["A"], sleep=lambda s: None)
+    assert len(sess.calls) == 3
+    sess2, store2 = Session({}), breadth.BreadthStore(tmp_path / "m")
+    store2.tick(Client(session=sess2), datetime(2026, 10, 12, 8, 59, tzinfo=IST), lambda: ["A"], sleep=lambda s: None)
+    assert len(sess2.calls) == 3
+
+
+def test_market_data_poll_stops_when_the_network_budget_is_spent(settings, tmp_path, monkeypatch):
+    import time as _time
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(_time, "monotonic", lambda: clock["t"])
+
+    class Slow(Session):
+        def get(self, url, **kw):
+            if "ind_nifty500list" not in url:
+                clock["t"] += 31.0                               # every data request eats the whole budget
+            return super().get(url, **kw)
+
+    sess = Slow({"sec_list": (FX / "price_bands_sample.csv").read_bytes(),
+                 "ind_nifty500list": b"Symbol,Company Name,Industry\nA,A Ltd,x\n"})
+    client = Client(json.loads((FX / "fiidii_sample.json").read_text()), session=sess)
+    w = _watcher(settings, tmp_path, client)
+    out = w.poll_market_data(datetime(2026, 10, 12, 8, 0, tzinfo=IST))
+    assert out.get("price_bands") and out.get("budget_used_up") is True
+    assert client.gets == 0                                      # flows skipped
+    assert [u for u in sess.calls if "sec_bhavdata" in u] == []   # breadth and its backfill skipped
+    clock["t"] += 1.0
+    out2 = w.poll_market_data(datetime(2026, 10, 12, 8, 1, tzinfo=IST))    # next tick: the bands are stored, the rest runs
+    assert client.gets == 1 and out2.get("flows") == "2026-10-09"
+    assert len([u for u in sess.calls if "sec_bhavdata" in u]) == 1      # one backfill ate the budget; the rest wait
+    assert out2.get("budget_used_up") is True
