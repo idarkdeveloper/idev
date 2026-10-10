@@ -1016,12 +1016,16 @@ class App:
         ops: list[Callable[[], None]] = []   # memory changes, run only after every value checked and .env written
         is_demo = self.dotenv is None and self.demo_trades is not None
         st = self.settings
+        new_market = st.market
+        if isinstance(changes.get("market"), str) and changes["market"].strip().lower() in ("in", "us"):
+            new_market = changes["market"].strip().lower()
         for key, env_key in EDITABLE_ENV_KEYS.items():
             if key not in changes:
                 continue
             if is_demo and key.startswith("notify"):
                 continue  # the Demo page never sends notifications
             value = changes[key]
+            _check_type(key, value)
             if key in ("watch_investors", "watch_investor"):   # the page sends one comma list; line breaks are never a separator here
                 for item in (value if isinstance(value, (list, tuple)) else [value]):
                     _check_env_value(env_key, item)
@@ -1036,9 +1040,12 @@ class App:
                     continue
                 ops.append(lambda v=value: self._switch_market(v))
             elif key == "paper_starting_cash":
-                cash = float(value)
-                if cash <= 0:
-                    raise ValueError("starting cash must be positive")
+                try:
+                    cash = float(value)
+                except (TypeError, ValueError):
+                    raise ValueError("starting cash must be a number") from None
+                if not math.isfinite(cash) or cash <= 0:
+                    raise ValueError("starting cash must be a positive number")
                 ops.append(lambda c=cash: setattr(st, "paper_starting_cash", c))
                 value = f"{cash:g}"
             elif key == "watch_investors":
@@ -1055,7 +1062,11 @@ class App:
                     ops.append(lambda n=names: setattr(st, "watch_investor", n[0]))
                 value = names[0]
             else:
-                value = str(value).strip()
+                value = "" if value is None else str(value).strip()
+                if key == "watch_source" and value.lower() not in WATCH_SOURCES[new_market]:
+                    raise ValueError(f"watch_source must be one of {', '.join(sorted(WATCH_SOURCES[new_market]))}")
+                if key == "watch_source":
+                    value = value.lower()
                 ops.append(lambda k=key, v=value: setattr(st, k, (v or None) if k.startswith("notify") else v))
             applied[env_key] = value
         for k, v in applied.items():
@@ -1343,6 +1354,28 @@ def _cost_table(market: str) -> dict[str, Any]:
         return {"model": "flat", "round_trip_bps": m.round_trip_bps(0)}
     return {"model": "india_delivery", "examples": {str(n): round(m.round_trip_bps(n), 1) for n in (10_000, 25_000, 100_000)},
             "slippage_bps_one_way": m.slippage_bps}
+
+
+WATCH_SOURCES = {"in": {"deals", "bulk", "block", "insider"}, "us": {"congress", "insider"}}
+
+
+def _check_type(key: str, value: Any) -> None:
+    """Settings arrive as JSON: refuse a list, dict, number or bool where text is expected, with a plain message."""
+    if key in ("watch_investors", "watch_investor"):
+        ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
+        if not ok:
+            raise ValueError(f"{key} must be text or a list of names")
+    elif key in ("auto_trade", "groww_gtt_stops"):
+        if isinstance(value, (list, tuple, dict)):
+            raise ValueError(f"{key} must be true or false")
+    elif key == "paper_starting_cash":
+        if isinstance(value, (bool, list, tuple, dict)):
+            raise ValueError("starting cash must be a number")
+    elif key.startswith("notify"):
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{key} must be text (or null to clear it)")
+    elif not isinstance(value, str):
+        raise ValueError(f"{key} must be text")
 
 
 def _check_env_value(key: str, value: Any) -> None:

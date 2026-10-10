@@ -11,6 +11,13 @@ import requests
 log = logging.getLogger(__name__)
 
 
+def _mentions(text: str) -> str:
+    """Break Slack/Discord mentions and markup openers, keeping line breaks."""
+    for bad in ("<!", "<@", "<#"):
+        text = text.replace(bad, bad[0] + " " + bad[1])
+    return re.sub(r"@(everyone|here|channel)", lambda m: "@ " + m.group(1), text)
+
+
 def clean_text(text: object, limit: int = 200) -> str:
     """Third-party or model text going into a subject or webhook line: one line, no Slack/Discord mentions or
     markup openers (<! <@ <# @everyone @here @channel), capped in length."""
@@ -59,7 +66,7 @@ class Notifier:
                 log.warning("email delivery failed: %s", e)
         if "webhook" in self.channels:
             try:
-                r = self.session.post(self.webhook_url, json={"text": f"*{subject}*\n{body}"},
+                r = self.session.post(self.webhook_url, json={"text": _mentions(f"*{subject}*\n{body}")},
                                       timeout=30)
                 r.raise_for_status()
                 delivered.append("webhook")

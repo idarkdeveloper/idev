@@ -12,7 +12,12 @@ def _load_dotenv(path: Path) -> None:
     """Minimal .env loader (no extra dependency). Existing env vars win."""
     if not path.exists():
         return
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    data = path.read_bytes()
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:  # saved by an older writer or a Windows editor in the local code page
+        text = data.decode("cp1252", errors="replace")
+    for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue

@@ -16,7 +16,7 @@ from .investors import classify_client, describe
 from .momentum import momentum_summary
 from .notify import Notifier, clean_text
 from .risk import atr, position_size
-from .quiver import DisclosedTrade, followed_names, matches_investor
+from .quiver import DisclosedTrade, followed_names
 from .state import State
 
 log = logging.getLogger(__name__)
@@ -407,6 +407,17 @@ def build_tools(ctx: AgentContext) -> list[Any]:
     return tools
 
 
+def _same_investor(said: str, followed: str) -> bool:
+    """Claude's name for a followed investor: equal, or every word of one is a whole word of the other (at least
+    3 characters), so "a" never matches every name."""
+    if said.upper() == followed.upper():
+        return True
+    if len(said.strip()) < 3:
+        return False
+    a, b = set(said.upper().replace(".", " ").split()), set(followed.upper().replace(".", " ").split())
+    return bool(a) and bool(b) and (a <= b or b <= a)
+
+
 def _rec_investor(ctx: AgentContext, given: str, ticker: str) -> str:
     """The followed investor(s) a recommendation came from: what Claude named (matched to the followed list),
     else whoever made the new trades in that ticker, else the only followed name."""
@@ -414,8 +425,7 @@ def _rec_investor(ctx: AgentContext, given: str, ticker: str) -> str:
     given = (given or "").strip()
     if given:
         # only followed names ever come back: Claude's text is matched to the list, never passed through
-        hits = [n for n in followed if any(n.upper() == g.upper() or matches_investor(g, n) or matches_investor(n, g)
-                                           for g in (p.strip() for p in given.split(",")) if g)]
+        hits = [n for n in followed if any(_same_investor(g, n) for g in (p.strip() for p in given.split(",")) if g)]
         if hits:
             return ", ".join(hits)
     found: list[str] = []
