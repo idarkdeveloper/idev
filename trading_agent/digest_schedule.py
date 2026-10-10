@@ -51,14 +51,36 @@ def build_digest(kind: str, ctx: DigestContext, *, writer: str | None = None, se
     data = build_data(kind, ctx)
     summary, name = write_summary(kind, data, settings, session=session, client=client, known=ctx.known,
                                   cancelled=ctx.expired, known_symbols=ctx.known_symbols)
-    return {**render(data, summary, name), "writer": name, "summary": summary, "data": data}
+    images: list[dict[str, Any]] = []
+    if kind == "evening" and getattr(settings, "digest_charts", True) and isinstance(data.get("bulletin"), dict) and not ctx.expired():
+        try:
+            from .charts import bulletin_images   # matplotlib is loaded here, never at import time
+            images = bulletin_images(data["bulletin"])
+        except Exception as e:  # noqa: BLE001 - no pictures: the bulletin goes out as text
+            log.warning("bulletin charts unavailable: %s: %s", type(e).__name__, e)
+    return {**render(data, summary, name, images), "writer": name, "summary": summary, "data": data, "images": images}
 
 
-def send_digest(notifier: Any, email: dict[str, Any]) -> list[str]:
+def send_digest(notifier: Any, email: dict[str, Any], kind: str | None = None, day: str | None = None) -> list[str]:
+    """Send one built email. ``kind`` and ``day`` name the logical send (the scheduler's retry of the same kind and day
+    must not make a second email), and go to a notifier that takes an ``idempotency_key``."""
+    import inspect
+    from .digest_render import strip_cid_images, strip_chart_mentions
+    images = email.get("images") or None
     try:
-        return notifier.send(email["subject"], email["text"], html=email["html"])
-    except TypeError:  # a notifier that takes no HTML part
-        return notifier.send(email["subject"], email["text"])
+        params = inspect.signature(notifier.send).parameters
+    except (TypeError, ValueError):
+        params = {}
+    takes_var = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    extra = {"idempotency_key": f"{kind}:{day}"} if kind and day and ("idempotency_key" in params or takes_var) else {}
+    if images and ("images" in params or takes_var):
+        return notifier.send(email["subject"], email["text"], html=email["html"], images=images, **extra)
+    text, html = email["text"], email["html"]
+    if images:   # a notifier without inline-image support: the pictures and the mentions of them are left out
+        text, html = strip_chart_mentions(text), strip_cid_images(html)
+    if not params or "html" in params or takes_var:
+        return notifier.send(email["subject"], text, html=html, **extra)
+    return notifier.send(email["subject"], text)   # a notifier that takes no HTML part
 
 
 def _external(delivered: Any) -> bool:
@@ -280,7 +302,7 @@ class DigestScheduler:
             detail = result["error"]
         else:
             try:
-                delivered = send_digest(self._notifier(), result["email"])
+                delivered = send_digest(self._notifier(), result["email"], kind, day)
                 if _external(delivered):
                     outcome = "sent"
                 else:

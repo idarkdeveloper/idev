@@ -1,5 +1,5 @@
 (function(){
-  const {$, esc, pct, toast, api, tile, C, lineChart, rupeesShort, inr, sinr, spct, lookupTakeaway, attachSuggest, shortDate, factorTakeaway, signalTakeaway, signalRows} = TA;
+  const {$, esc, pct, toast, api, tile, C, lineChart, rupeesShort, inr, sinr, spct, lookupTakeaway, attachSuggest, shortDate, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway} = TA;
   let T = null, slug = null, side = "buy";
   const WHO = {you: "You", agent: "Agent (rules)", nifty: "Nifty"};
   const tone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
@@ -123,7 +123,21 @@
     $("ask-result").innerHTML = T.claude.slice().reverse().map(c => `<div class="ann"><div class="meta">${esc(fmtDay(c.date))} · may include hindsight</div><div>${esc(c.summary)}</div>
       ${(c.recommendations || []).map(r => `<div class="row" style="gap:6px;margin-top:4px"><span class="act ${esc(r.action)}">${esc(r.action.toUpperCase())}</span><b>${esc(r.ticker)}</b><span class="pill">${esc(r.confidence)}</span></div><div class="sub">${esc(r.headline)}. ${esc(r.rationale)}</div>`).join("")}</div>`).join("");
   }
+  // The plain-English summary: shown from the first step, titled "Final summary" once the replay has ended.
+  function summaryHtml(){
+    const m = T.summary;
+    if(!m) return "";
+    const cell = h => h ? `<td class="num">${h.qty}</td><td class="num">${inr(h.value)}</td><td class="num ${tone(h.pl)}">${sinr(h.pl)}${h.pl_pct == null ? "" : " (" + spct(h.pl_pct) + ")"}</td>` : `<td class="num sub">-</td><td class="num sub">-</td><td class="num sub">-</td>`;
+    const rows = (m.table || []).map(r => `<tr><td><a href="#" data-lookup="${esc(r.symbol)}" style="font-weight:600;text-decoration:none">${esc(r.symbol)}</a></td>${cell(r.you)}${cell(r.agent)}</tr>`).join("");
+    return `<div class="card"><div class="cardhead"><h2>${esc(m.title)}</h2><span class="sub">as of ${esc(shortDate(m.as_of))}</span></div>
+      <div class="cardbody"><div class="callout"><b style="color:var(--color-accent)">What this means.</b>
+        ${m.lines.map(l => `<div style="margin-top:4px"><b>${esc(l.label)}.</b> ${esc(l.text)}</div>`).join("")}
+        <div style="margin-top:6px"><b>${esc(m.bottom)}</b></div></div>
+        ${rows ? `<h3 style="margin-top:10px">Holdings: you vs agent</h3><div class="scroll"><table><thead><tr><th rowspan="2">Stock</th><th colspan="3" class="num">You</th><th colspan="3" class="num">Agent</th></tr>
+          <tr><th class="num">Qty</th><th class="num">Value</th><th class="num">P&amp;L</th><th class="num">Qty</th><th class="num">Value</th><th class="num">P&amp;L</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="sub" style="margin-top:8px">Neither portfolio holds any stock right now.</div>`}</div></div>`;
+  }
   function renderScore(){
+    $("summary").innerHTML = summaryHtml();
     const s = T.scorecard, n = T.next;
     const days = (new Date(T.trial.ended) - new Date(T.trial.start)) / 86400000;
     if(!s){ $("scorecard").innerHTML = ""; return; }
@@ -209,8 +223,41 @@
     return r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file && /^https?:\/\//.test(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
       : `<div class="sub">${esc(r.announcements_error || "none in the 60 days before the replay date")}</div>`;
   }
+  // ---- Position size and Trade cost, as of the replay date ----
+  $("rz-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const f = Object.fromEntries(new FormData(ev.target).entries()), t = (f.ticker || "").trim().toUpperCase();
+    if(!t) return;
+    $("suggest").classList.remove("open"); $("rz-ticker").blur();
+    $("rz-result").innerHTML = `<span class="sub">Sizing ${esc(t)}…</span>`;
+    try {
+      const r = await api(`/replay/api/trial/${slug}/size?ticker=${encodeURIComponent(t)}&risk_pct=${encodeURIComponent(f.risk_pct)}&max_pct=${encodeURIComponent(f.max_pct)}`);
+      const c = r.round_trip_cost, note = sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct));
+      $("rz-result").innerHTML = `${r.warning ? `<div class="callout" style="margin-bottom:6px">${esc(r.warning)}</div>` : ""}<div class="kv">${r.name_today ? `<span>Name today</span><span>${esc(r.name_today)}</span>` : ""}<span>Your equity</span><span>${inr(r.equity)}</span><span>Price</span><span>${inr(r.price, 2)}</span><span>ATR(14)</span><span>${r.atr != null ? inr(r.atr, 2) + " (" + pct(r.atr_pct) + ")" : "n/a"}</span>
+        <span>Shares</span><span>${r.qty}</span><span>Position</span><span>${inr(r.notional)}</span><span>Stop</span><span>${inr(r.stop, 2)}</span>
+        <span>Max position</span><span>${inr(r.max_notional)}</span>${c ? `<span>Round-trip cost</span><span>${inr(c.total, 2)} (${c.total_bps.toFixed(0)} bps)</span>` : ""}</div>
+        <div class="sub" style="margin-top:6px">${esc(r.basis || r.reason || "")} · as of ${esc(fmtDay(r.today))}</div>
+        ${note ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${esc(note)}</div>` : ""}
+        ${T.trial.ended || !r.qty || r.warning ? "" : '<div class="row" style="margin-top:8px"><button type="button" class="small" id="rz-use">Use on order</button></div>'}`;
+      if($("rz-use")) $("rz-use").addEventListener("click", () => { $("ro-symbol").value = r.ticker; $("ro-qty").value = r.qty; $("ro-amount").value = ""; document.querySelector('#ro-form [data-side="buy"]').click(); $("ro-form").scrollIntoView({behavior: "smooth", block: "center"}); });
+    } catch(e){ $("rz-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
+  });
+  $("rc-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const amount = $("rc-amount").value;
+    try {
+      const r = await api(`/replay/api/trial/${slug}/cost?amount=${encodeURIComponent(amount)}`);
+      const row = (k, label) => `<span>${label}</span><span>${inr(r.buy[k], 2)} / ${inr(r.sell[k], 2)}</span>`;
+      $("rc-result").innerHTML = `<div class="sub" style="margin-bottom:6px">buy / sell</div><div class="kv">${row("brokerage", "Brokerage")}${row("stt", "STT")}${row("exchange", "Exchange")}${row("sebi", "SEBI fee")}${row("stamp_duty", "Stamp duty")}${row("dp_charge", "DP charge")}${row("gst", "GST")}
+        <span style="font-weight:600">Charges, round trip</span><span style="font-weight:600">${inr(r.charges, 2)} (${r.charges_bps.toFixed(1)} bps)</span>
+        <span>+ slippage ${r.slippage_bps_one_way} bps/side</span><span>${inr(r.total, 2)} (${r.total_bps.toFixed(1)} bps)</span></div>
+        <div class="sub" style="margin-top:6px">A trade must gain at least ${(r.total_bps / 100).toFixed(2)}% just to break even.</div>
+        ${T.trial.ended ? "" : '<div class="row" style="margin-top:8px"><button type="button" class="small" id="rc-use">Use on order</button></div>'}`;
+      if($("rc-use")) $("rc-use").addEventListener("click", () => { $("ro-amount").value = amount; $("ro-qty").value = ""; $("ro-form").scrollIntoView({behavior: "smooth", block: "center"}); $("ro-symbol").focus(); });
+    } catch(e){ $("rc-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
+  });
   $("rl-form").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("rl-ticker").value.trim().toUpperCase(); if(t) lookup(t); });
-  attachSuggest(["rl-ticker", "ro-symbol"], (input, s) => { if(input.id === "rl-ticker") lookup(s); else $("ro-amount").focus(); });
+  attachSuggest(["rl-ticker", "ro-symbol", "rz-ticker"], (input, s) => { if(input.id === "rl-ticker") lookup(s); else if(input.id === "rz-ticker") input.focus(); else $("ro-amount").focus(); });
   document.querySelectorAll("[data-tool]").forEach(b => b.addEventListener("click", async () => {
     try {
       const j = await api(`/replay/api/trial/${slug}/tool`, {kind: b.dataset.tool, years: Number($("tl-years").value) || 3});

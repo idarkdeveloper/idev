@@ -199,7 +199,7 @@ class Trial:
         data = {"name": name.strip(), "slug": slug, "start": start, "clock": start, "universe": universe,
                 "benchmark": BENCHMARKS[universe], "cash": cash, "top": top, "dividends": dividends,
                 "auto_stop": False, "ended": None, "last_rebalance_month": None, "equity": [],
-                "rebalances": [], "stops": [], "picks": None, "claude": [], "claude_presses": 0}
+                "rebalances": [], "stops": [], "rebalance_count": 0, "agent_stop_count": 0, "counts_exact": True, "picks": None, "claude": [], "claude_presses": 0}
         root.mkdir(parents=True)
         try:
             t = cls(root, data, source, universe_obj, screen_fn)

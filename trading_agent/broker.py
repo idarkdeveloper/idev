@@ -101,6 +101,22 @@ class Account:
         return {"cash": self.cash, "equity": self.equity, "currency": self.currency, "paper": self.paper}
 
 
+BSE_ONLY_MESSAGE = "BSE-only stock, no NSE listing: tracked for information, not tradable here"
+
+
+BSE_ONLY_GROWW_MESSAGE = (BSE_ONLY_MESSAGE + "; a .BO symbol is not a valid Groww trading symbol, "
+                          "so no order or GTT can be sent for it")
+
+
+def refuse_bse_only(symbol: Any, side: str = "buy", groww: bool = False) -> None:
+    """A BSE deal with no NSE listing is tracked as ``<code>.BO``; it is information only.
+
+    Simulated brokers refuse only a buy (an existing position can still be sold or stopped out); Groww refuses
+    both sides, because it would only fail there."""
+    if str(symbol or "").strip().upper().endswith(".BO") and (groww or side == "buy"):
+        raise ValueError(BSE_ONLY_GROWW_MESSAGE if groww else BSE_ONLY_MESSAGE)
+
+
 class Broker(Protocol):
     name: str
 
@@ -170,6 +186,7 @@ class AlpacaPaperBroker:
                      qty: float | None = None) -> dict[str, Any]:
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
+        refuse_bse_only(symbol, side)
         if (notional is None) == (qty is None):
             raise ValueError("pass exactly one of notional or qty")
         body: dict[str, Any] = {
@@ -450,6 +467,7 @@ class LocalPaperBroker:
                      extra_fn: Any | None = None) -> dict[str, Any]:
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
+        refuse_bse_only(symbol, side)
         if (notional is None) == (qty is None):
             raise ValueError("pass exactly one of notional or qty")
         price = self.latest_price(symbol)  # may be a network call: no lock held
@@ -466,6 +484,7 @@ class LocalPaperBroker:
         symbol = symbol.upper()
         if side not in {"buy", "sell"}:
             raise ValueError("side must be 'buy' or 'sell'")
+        refuse_bse_only(symbol, side)
         if (notional is None) == (qty is None):
             raise ValueError("pass exactly one of notional or qty")
         if price is None:

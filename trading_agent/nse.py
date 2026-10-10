@@ -32,15 +32,22 @@ import logging
 import re
 import time
 import xml.etree.ElementTree as ET
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
 import requests
 
 from .quiver import DisclosedTrade, filter_by_investor, filter_by_investors
+from .timezones import IST
 
 log = logging.getLogger(__name__)
+
+
+def log_bse_failure_once(error: Exception) -> None:
+    """BSE is a second source: say once per day that it failed, then carry on with NSE alone."""
+    from .bse import warn_once_per_day
+    warn_once_per_day(error)
 
 BASE_URL = "https://www.nseindia.com"
 HEADERS = {
@@ -217,6 +224,8 @@ def check_ticker(symbol: str) -> str:
 
 class NSEClient:
     """Pass ``session`` to inject a fake in tests."""
+
+    bse: Any | None = None  # a BSEClient: its bulk/block deals are added to NSE's (BSE_DEALS)
 
     def __init__(self, session: requests.Session | None = None, timeout: float = 30.0,
                  base_url: str = BASE_URL, cache_dir: Path | None = None,
@@ -447,12 +456,15 @@ class NSEClient:
 
         ``source``: ``deals`` (bulk + block, default), ``bulk``, ``block`` or ``insider``.
         """
-        return _dedupe(filter_by_investor(self._rows(source, days), investor))
+        rows = self._rows(source, days) + self._bse_rows(source, days, [investor])
+        return _dedupe(filter_by_investor(rows, investor))
 
     def trades_for_investors(self, investors: Iterable[str], source: str = "deals",
                              days: int = 30) -> list[DisclosedTrade]:
         """Trades matching any of several followed names, from one fetch; a trade matching two appears once."""
-        return _dedupe(filter_by_investors(self._rows(source, days), investors))
+        names = list(investors)
+        rows = self._rows(source, days) + self._bse_rows(source, days, names)
+        return _dedupe(filter_by_investors(rows, names))
 
     def _rows(self, source: str, days: int) -> list[DisclosedTrade]:
         rows: list[DisclosedTrade] = []
@@ -464,13 +476,29 @@ class NSEClient:
             rows += self.insider_trades(days)
         return rows
 
+    def _bse_rows(self, source: str, days: int, investors: Iterable[str] | None) -> list[DisclosedTrade]:
+        """BSE's bulk/block deals for the followed names, or nothing: BSE problems never break the NSE read."""
+        kinds = {"deals": ("bulk", "block"), "bulk": ("bulk",), "block": ("block",)}.get(source, ())
+        if getattr(self, "bse", None) is None or not kinds:  # off, or insider filings (BSE has no equivalent here)
+            return []
+        try:
+            end = datetime.now(IST).date()  # the exchange's calendar day, not the server's
+            return self.bse.deals(end - timedelta(days=days), end, kinds=kinds,
+                                  investors=None if investors is None else list(investors))
+        except Exception as e:  # noqa: BLE001
+            log_bse_failure_once(e)
+            return []
+
     def history_for_ticker_many(self, investors: Iterable[str], ticker: str, days: int = 365) -> list[DisclosedTrade]:
         """One fetch of the ticker's deals, filtered to any of the followed names."""
+        names = list(investors)
         rows = self.historical_deals(days, "bulk") + self.historical_deals(days, "block")
-        return _dedupe(filter_by_investors([t for t in rows if t.ticker == ticker.upper()], investors))
+        rows += self._bse_rows("deals", days, names)
+        return _dedupe(filter_by_investors([t for t in rows if t.ticker == ticker.upper()], names))
 
     def history_for_ticker(self, investor: str, ticker: str, days: int = 365) -> list[DisclosedTrade]:
         rows = self.historical_deals(days, "bulk") + self.historical_deals(days, "block")
+        rows += self._bse_rows("deals", days, [investor])
         return _dedupe(filter_by_investor([t for t in rows if t.ticker == ticker.upper()], investor))
 
 
@@ -480,7 +508,8 @@ def _dedupe(rows: Iterable[DisclosedTrade]) -> list[DisclosedTrade]:
     seen: set[tuple[str, ...]] = set()
     out = []
     for t in rows:
-        k = (t.investor, t.ticker, t.transaction, t.transaction_date, t.size)
+        # The same trade on NSE and on BSE is two real trades, so the exchange is part of the identity.
+        k = (t.investor, t.ticker, t.transaction, t.transaction_date, t.size, t.exchange)
         if k not in seen:
             seen.add(k)
             out.append(t)

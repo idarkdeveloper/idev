@@ -68,6 +68,11 @@ def step(trial: Any, until: str, *, today: str | None = None,
     report: dict[str, Any] = {"from": start, "to": until, "days": len(days), "rebalances": [],
                               "stops": [], "dividends": []}
     with trial.transaction():
+        d = trial.data
+        if "rebalance_count" not in d or "agent_stop_count" not in d:  # an older save: seed from the (trimmed) lists
+            d.setdefault("rebalance_count", max(len(d["rebalances"]) - 1, 0))
+            d.setdefault("agent_stop_count", sum(1 for x in d.get("stops", []) if x.get("who") == "agent" and "error" not in x))
+            d["counts_exact"] = False
         prev = start
         for i, day in enumerate(days):
             trial.clock.advance_to(day)
@@ -76,10 +81,13 @@ def step(trial: Any, until: str, *, today: str | None = None,
                     progress(f"rebalancing the agent on {day}")
                 trial.rebalance_agent()
                 report["rebalances"].append(day)
+                trial.data["rebalance_count"] = trial.data.get("rebalance_count", 0) + 1
             stops = _stops(trial, "agent", day)
             if trial.data["auto_stop"]:
                 stops += _stops(trial, "you", day)
             trial.data["stops"] = (trial.data["stops"] + stops)[-500:]
+            trial.data["agent_stop_count"] = trial.data.get("agent_stop_count", 0) + sum(
+                1 for x in stops if x["who"] == "agent" and "error" not in x)
             report["stops"] += stops
             if trial.data["dividends"] == "cash":
                 report["dividends"] += _dividends(trial, prev, day)

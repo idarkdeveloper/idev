@@ -113,7 +113,7 @@
       <div class="card">
         <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
         <div class="row" id="deal-filter" role="group" aria-label="Show deals by investor" style="gap:6px;padding:8px 16px" hidden></div>
-        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Source</th><th>Who</th><th>Client type</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
+        <div class="scroll"><table><thead><tr><th>Date</th><th>Side</th><th>Stock</th><th class="num">Size</th><th>Exchange</th><th>Source</th><th>Who</th><th>Client type</th><th>Status</th></tr></thead><tbody id="deals"></tbody></table></div>
       </div>
       <div class="card">
         <div class="cardhead"><h2>Order history</h2><span class="sub" id="fees-note"></span></div>
@@ -237,6 +237,9 @@
         <div class="radio" style="align-items:center;border:none;padding:0"><input type="checkbox" id="f-autoexit" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-autoexit" style="color:var(--ink)">Sell paper positions that hit their trailing stop</label></div>
       </div>
     </div>
+    <div class="group"><span class="group-title">Deal sources</span>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-bse" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-bse" style="color:var(--ink)">Also read BSE bulk and block deals</label><div class="sub">Many mid and small-cap deals happen only on BSE. Public data, no login; NSE is always read.</div></div></div>
+    </div>
     <div class="group"><span class="group-title">Stop-losses at Groww</span>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-gtt" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-gtt" style="color:var(--ink)">Keep a GTT stop-loss at Groww for each live holding</label><div class="sub" id="f-gtt-note">A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Only acts when GROWW_LIVE_ORDERS=true.</div></div></div>
     </div>
@@ -249,6 +252,7 @@
           <label for="f-dg-pm-t">Send after (IST)</label><input id="f-dg-pm-t" name="digest_evening" type="time" value="15:45"></div>
       </div>
       <div class="field"><label for="f-dg-writer">Summary on top</label><select id="f-dg-writer" name="digest_writer"><option value="claude">Claude Haiku (default; the rules when it fails)</option><option value="auto">Ollama, then Claude (falls back to the rules)</option><option value="ollama">Ollama only (falls back to the rules)</option><option value="rules">Written by the rules (no AI)</option><option value="none">No summary</option></select></div>
+      <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-bul" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-bul" style="color:var(--ink)">Market bulletin in the evening email</label></div><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-chart" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-chart" style="color:var(--ink)">With chart pictures</label></div><div class="sub">Nifty levels, ADX and RSI, global markets, commodities and a concept of the day. Readings of past prices, never a forecast.</div></div>
       <div class="row"><button type="button" class="small" id="btn-dg-morning">Preview morning</button><button type="button" class="small" id="btn-dg-evening">Preview evening</button>
         <input type="checkbox" id="dg-summary" style="width:20px;height:20px;min-height:20px;margin:0"><label for="dg-summary" class="sub">with the AI summary (uses your Claude credit)</label></div>
     </div>
@@ -277,7 +281,7 @@
 (function(){
   const {$, esc, money, signed, pct, when, cap, toast, api, tile, C, NS, niceTicks, shortDate, lineChart,
          histogram, rupeesShort, inr, sinr, spct, daysAgo, shortDay, clip, lookupTakeaway, attachSuggest,
-         currency, sym, factorTakeaway, signalTakeaway, signalRows} = TA;
+         currency, sym, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway} = TA;
   let S = null, pollTimer = null;
   TA.setCurrency(() => (S && S.settings && S.settings.currency) || "INR");
   const MODE = document.body.dataset.mode || "live";
@@ -395,18 +399,18 @@
     renderTiles();
 
     $("newcount").textContent = `${newDeals} new`; $("newcount").className = "pill ok"; $("newcount").style.fontWeight = "600";
-    $("dealsrc").textContent = S.deals_error ? "fetch failed: " + S.deals_error : (s.data_source === "nse" ? "NSE, last 30 days" : "QuiverQuant");
+    $("dealsrc").textContent = S.deals_error ? "fetch failed: " + S.deals_error : (s.data_source === "nse" ? (s.bse_deals ? "NSE + BSE, last 30 days" : "NSE, last 30 days") : "QuiverQuant");
     renderDealFilter(inv);
     const shown = dealsShown(inv);
     $("deals").innerHTML = shown.length ? shown.map(d => `<tr>
         <td class="mono" style="white-space:nowrap">${esc(d.transaction_date)}</td>
         <td><span class="side-chip ${d.transaction==="Sale"?"sell":"buy"}">${d.transaction==="Sale"?"SELL":d.transaction==="Purchase"?"BUY":esc(d.transaction)}</span></td>
         <td><div style="font-weight:600"><a href="#" data-lookup="${esc(d.ticker)}" style="text-decoration:none">${esc(d.ticker)}</a></div><div class="sub">${esc(d.investor)}</div></td>
-        <td class="num">${esc(d.size)}</td><td>${esc(d.source)}</td>
+        <td class="num">${esc(d.size)}</td><td>${esc(d.exchange||"NSE")}</td><td>${esc(d.source)}</td>
         <td>${esc((d.who||[]).join(", "))}</td>
         <td><span class="pill">${esc(WHO[d.client_type]||d.client_type||"")}</span></td>
         <td><span class="pill ${d.status==="new"?"ok":""}">${d.status==="new"?"New":"Analysed"}</span></td></tr>`).join("")
-      : `<tr><td colspan="8" class="empty">${S.deals.length ? "No deals by the selected investors in the window." : `No disclosed deals by ${esc(inv.join(", "))} in the window.`}</td></tr>`;
+      : `<tr><td colspan="9" class="empty">${S.deals.length ? "No deals by the selected investors in the window." : `No disclosed deals by ${esc(inv.join(", "))} in the window.`}</td></tr>`;
 
     if(MODE === "demo"){
     $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
@@ -998,27 +1002,6 @@
   attachSuggest(["lk-ticker", "sz-ticker", "tk-symbol"], (input, s) => { if(input.id === "lk-ticker") lookup(s); else input.focus(); });
 
   // ---- "What this means" for a looked-up stock and for a position size ----
-  function sizeTakeaway(r, riskPct, maxPct){
-    if(!r || !r.price || !r.equity) return "";
-    const out = [], share = r.notional / r.equity;
-    if(!r.qty){
-      return `At ${money(r.price, 2)} a share, even one share would break the ${maxPct}% cap on your ${money(r.equity)} account, so the suggested size is zero.`;
-    }
-    out.push(`Buy ${r.qty} share${r.qty === 1 ? "" : "s"} for about ${money(r.notional)}: ${(share * 100).toFixed(1)}% of your ${money(r.equity)}.`);
-    if(r.atr){
-      const byRisk = Math.floor((r.equity * riskPct / 100) / (2 * r.atr));
-      if(byRisk > r.qty) out.push(`The ${maxPct}% cap set this: the ${riskPct}% risk rule alone would allow about ${byRisk} shares (${money(byRisk * r.price)}), so the cap is protecting you from putting too much in one stock.`);
-      else out.push(`The ${riskPct}% risk rule set this: a ${pct(2 * r.atr / r.price)} move (twice the usual daily range) would cost about ${riskPct}% of your equity.`);
-    } else out.push("There was no volatility data, so it is sized at half the cap.");
-    if(r.stop){
-      const loss = r.qty * (r.price - r.stop);
-      out.push(`If it falls to the stop at ${money(r.stop, 2)} (${pct(r.stop / r.price - 1)}), you would lose about ${money(loss)}, ${(loss / r.equity * 100).toFixed(2)}% of your equity.`);
-    }
-    const c = r.round_trip_cost;
-    if(c) out.push(`Buying and selling costs about ${money(c.total)} (${(c.total_bps / 100).toFixed(2)}%), so it must rise ${(c.total_bps / 100).toFixed(2)}% just to break even${c.total_bps > 70 ? "; at this size the flat ₹20 charges weigh heavily, and a bigger, rarer trade costs less in percent" : ""}.`);
-    return out.join(" ");
-  }
-
   const SENT = {positive: ["ok", "▲ Positive"], negative: ["bad", "▼ Negative"], neutral: ["", "● Neutral"]};
   const safeUrl = (u) => /^https?:\/\//i.test(String(u || "")) ? u : "";
   const istStamp = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) + " IST"; };
@@ -1167,9 +1150,9 @@
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
-    $("f-gtt").checked = !!s.groww_gtt_stops;
+    $("f-gtt").checked = !!s.groww_gtt_stops; $("f-bse").checked = s.bse_deals !== false;
     $("f-dg-writer").value = s.digest_writer || "claude";
-    $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on;
+    $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on; $("f-dg-bul").checked = s.digest_bulletin !== false; $("f-dg-chart").checked = s.digest_charts !== false;
     $("f-dg-am-t").value = s.digest_morning || "09:00"; $("f-dg-pm-t").value = s.digest_evening || "15:45";
     $("f-dg-note").textContent = s.digest_channel ? "Sent by the watch service on NSE trading days to your email or webhook. They never place an order." : "Add RESEND_API_KEY with an email address (or a webhook) above, or nothing is sent. Preview still works.";
     $("f-gtt-note").textContent = c.groww_live_orders ? "A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Uses REAL orders on Groww." : "Saved, but inactive: GROWW_LIVE_ORDERS is not true in .env, so no GTT orders are placed.";
@@ -1198,7 +1181,7 @@
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked;
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.bse_deals = $("f-bse").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked;
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);

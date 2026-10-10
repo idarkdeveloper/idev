@@ -6,7 +6,9 @@ Everything that goes into the HTML is escaped; the subject goes through ``clean_
 
 from __future__ import annotations
 
+import base64
 import html as _html
+import re
 from datetime import datetime
 from typing import Any
 
@@ -57,8 +59,9 @@ def subject(data: dict[str, Any]) -> str:
 
 def _block(title: str | None, lines: list[str] | None = None, table: dict[str, Any] | None = None,
            tone: str | None = None, kv: list[tuple[str, str]] | None = None,
-           cards: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    return {"title": title, "lines": lines or [], "table": table, "tone": tone, "kv": kv or [], "cards": cards}
+           cards: list[dict[str, Any]] | None = None, images: list[dict[str, str]] | None = None, cont: bool = False) -> dict[str, Any]:
+    return {"title": title, "lines": lines or [], "table": table, "tone": tone, "kv": kv or [], "cards": cards,
+            "images": images or [], "cont": cont}
 
 
 def _unavail(title: str, sec: dict[str, Any]) -> dict[str, Any]:
@@ -180,12 +183,76 @@ def _deals_block(sec: dict[str, Any], title: str) -> dict[str, Any]:
         return _unavail(title, sec)
     if not sec["deals"]:
         return _block(title, [f"No deals by {', '.join(sec['following'])} since {sec['since']}."])
-    rows = [[x["ticker"], x["transaction"], x["size"], ", ".join(x["who"]) or x["investor"], x["reported"]] for x in sec["deals"]]
+    rows = [[x["ticker"] + (" (BSE)" if x.get("exchange") == "BSE" else ""), x["transaction"], x["size"], ", ".join(x["who"]) or x["investor"], x["reported"]] for x in sec["deals"]]
     lines = [f"{sec['total']} deal(s) since {sec['since']}" + (f"; the first {len(rows)} are shown." if sec["total"] > len(rows) else ".")]
     return _block(title, lines, {"head": ["Stock", "Deal", "Size", "Who", "Reported"], "rows": rows, "num": []})
 
 
-def _evening_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
+def _picture(images: list[dict[str, Any]] | None, cid: str) -> list[dict[str, str]]:
+    """The inline picture ``cid`` as a block image, only when it was really made."""
+    for i in images or []:
+        if i.get("cid") == cid:
+            return [{"cid": cid, "alt": str(i.get("alt") or cid)}]
+    return []
+
+
+def _bulletin_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """The market bulletin: Nifty 50 (close, 15-minute chart, text, 4-hour chart, text, levels, indicators, candle),
+    global markets, commodities and the concept of the day. A part that is unavailable says so; the rest stays."""
+    b = d.get("bulletin")
+    if not isinstance(b, dict):
+        return []
+    blocks: list[dict[str, Any]] = []
+    nf = b.get("nifty")
+    if isinstance(nf, dict) and "unavailable" in nf:
+        blocks.append(_unavail("Market bulletin: Nifty 50", nf))
+    elif isinstance(nf, dict):
+        L = nf.get("lines") or {}
+        head = [L["headline"]] if L.get("headline") else []
+        if str(nf.get("session")) != str(d.get("date") or nf.get("session")):
+            head.insert(0, f"Figures are for the session of {nf['session']}.")
+        blocks.append(_block("Market bulletin: Nifty 50", head, images=_picture(images, "nifty15")))
+        mid = [L[k] for k in ("ema", "range") if L.get(k)]
+        blocks.append(_block(None, mid, images=_picture(images, "nifty4h"), cont=True))
+        rest = [L[k] for k in ("four_hour", "levels", "pivots", "adx", "four_hour_adx", "rsi", "candle") if L.get(k)]
+        rest += [f"Note: {n}" for n in nf.get("notes") or []]
+        rest.append(b.get("note") or "")
+        blocks.append(_block(None, [x for x in rest if x], cont=True))
+    g = b.get("global")
+    if isinstance(g, dict) and "unavailable" in g:
+        blocks.append(_unavail("Global markets", g))
+    elif isinstance(g, dict):
+        lines = list(g.get("region_lines") or [])
+        lines += [x for x in (g.get("futures_line"), g.get("vix_line")) if x]
+        lines.append(g.get("note") or "")
+        if g.get("skipped"):
+            lines.append(f"{g['skipped']} index(es) could not be read and are left out.")
+        rows = [[r["market"], num_intl(r["close"], 2), pct_text(r["d1_pct"], 2), r["trend"] or "",
+                 (f"{r['why']['title']} ({r['why']['source']})" if r.get("why") else "")] for r in g["markets"]]
+        cards = [{"style": "market", "meta": r["line"],
+                  "why": (f"In the news: {r['why']['title']} ({r['why']['source']})" if r.get("why") else "")} for r in g["markets"]]
+        blocks.append(_block("Global markets", [x for x in lines if x],
+                             {"head": ["Market", "Close", "1d", "Trend", "In the news"], "rows": rows, "num": [1, 2]}, cards=cards))
+    c = b.get("commodities")
+    if isinstance(c, dict) and "unavailable" in c:
+        blocks.append(_unavail("Commodities corner", c))
+    elif isinstance(c, dict):
+        rows = [[r["name"], f"${num_intl(r['last'], 2)}", pct_text(r["d1_pct"], 2), pct_text(r["d5_pct"], 2), r["trend"] or ""]
+                for r in c["rows"]]
+        lines = [r["reading"] for r in c["rows"]] + [c.get("note") or ""]
+        if c.get("skipped"):
+            lines.append(f"{c['skipped']} commodity price(s) could not be read and are left out.")
+        blocks.append(_block("Commodities corner", [x for x in lines if x],
+                             {"head": ["Commodity", "Last", "1d", "5d", "Trend"], "rows": rows, "num": [1, 2, 3],
+                              "html": {"head": ["Commodity", "Last", "1d", "5d"], "num": [1, 2, 3], "nowrap": [0],
+                                       "rows": [r[:4] for r in rows]}}))
+    k = b.get("concept")
+    if isinstance(k, dict) and "unavailable" not in k and k.get("title"):
+        blocks.append(_block(f"{k.get('label', 'Concept of the day')}: {k['title']}", [k["text"], "Where you see it: " + k["uses"]]))
+    return blocks
+
+
+def _evening_blocks(d: dict[str, Any], images: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     stale = d.get("stale_close")
     if stale:
@@ -245,6 +312,7 @@ def _evening_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
                  inr(x["pl"], 0, True) if x["pl"] is not None else "n/a", pct_text(x["pl_pct"])] for x in p["positions"]]
         blocks.append(_block("Practice account", lines, {"head": ["Stock", "Qty", "Avg", "Price", "P&L", "P&L %"], "rows": rows,
                                                          "num": [1, 2, 3, 4, 5]} if rows else None))
+    blocks += _bulletin_blocks(d, images)
     n = d["news"]
     if "unavailable" in n:
         blocks.append(_unavail("News for your stocks today", n))
@@ -264,7 +332,8 @@ def _evening_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
     return blocks
 
 
-def document(data: dict[str, Any], summary: str | None = None, writer: str = "none") -> dict[str, Any]:
+def document(data: dict[str, Any], summary: str | None = None, writer: str = "none",
+             images: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     kind = data["kind"]
     try:
         day = datetime.fromisoformat(data["generated_at"]).strftime("%a %d %b %Y")
@@ -284,7 +353,7 @@ def document(data: dict[str, Any], summary: str | None = None, writer: str = "no
         saved = next((n[len("Using "):] for n in data["watch"].get("notes", []) if n.startswith("Using ")), None)
     if saved:
         blocks.append(_block(None, ["Using " + saved + "."], tone="warn"))
-    blocks += _morning_blocks(data) if kind == "morning" else _evening_blocks(data)
+    blocks += _morning_blocks(data) if kind == "morning" else _evening_blocks(data, images)
     foot = [FOOTER] + ([DELAYED] if data.get("delayed") else [])
     return {"title": head, "blocks": blocks, "footer": foot}
 
@@ -311,9 +380,13 @@ def to_text(doc: dict[str, Any]) -> str:
     out = [doc["title"], "=" * len(doc["title"]), ""]
     for b in doc["blocks"]:
         head, sep, tail = (b["title"] or "").partition(" (")   # "IN SHORT (written by ...)": only the name is upper-cased
-        out.append(head.upper() + sep + tail)
+        if b["title"] is None and b.get("cont") and out and out[-1] == "":
+            out.pop()   # a continuation of the block above: no blank line, no heading
+        if b["title"] is not None or not b.get("cont"):
+            out.append(head.upper() + sep + tail)
         out += [f"{k}: {v}" for k, v in b.get("kv") or []]
         out += b["lines"]
+        out += [f"[Chart: {i['alt']}]" for i in b.get("images") or []]
         if b["table"]:
             out += _text_table(b["table"])
         out.append("")
@@ -335,11 +408,14 @@ def to_html(doc: dict[str, Any]) -> str:
              f'<tr><td style="padding:16px 20px;background:#111827;color:#ffffff;font-size:18px;font-weight:bold;{font}">{_e(doc["title"])}</td></tr>']
     for b in doc["blocks"]:
         colour = TONES.get(b["tone"], TONES[None])
-        parts.append(f'<tr><td style="padding:14px 20px 4px 20px;{font}">')
+        parts.append(f'<tr><td style="padding:{4 if b.get("cont") else 14}px 20px 4px 20px;{font}">')
         if b["title"]:
             parts.append(f'<div style="font-size:15px;font-weight:bold;color:{colour};border-bottom:1px solid #e5e7eb;padding-bottom:4px">{_e(b["title"])}</div>')
         for line in b["lines"]:
             parts.append(f'<div style="font-size:14px;color:#111827;line-height:1.45;padding-top:6px">{_e(line)}</div>')
+        for img in b.get("images") or []:   # inline picture attached to the email (content id), or a data: URL in the preview
+            parts.append(f'<img src="cid:{_e(img["cid"])}" alt="{_e(img["alt"])}" width="600" '
+                         'style="display:block;width:100%;max-width:600px;height:auto;border:0;margin-top:8px">')
         if b.get("kv"):
             parts.append('<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;border-collapse:collapse;width:100%">')
             for k, v in b["kv"]:
@@ -348,6 +424,10 @@ def to_html(doc: dict[str, Any]) -> str:
             parts.append("</table>")
         t = None if b.get("cards") else b["table"]   # the watch list is cards on a phone, not a table
         for card in b.get("cards") or []:
+            if card.get("style") == "market":   # the index line, then the headline that names it (if any) in small type
+                why = (f'<div style="font-size:11px;color:#6b7280;line-height:1.35">{_e(card["why"])}</div>' if card.get("why") else "")
+                parts.append(f'<div style="margin-top:7px"><div style="font-size:13px;color:#111827">{_e(card["meta"])}</div>{why}</div>')
+                continue
             if card.get("style") == "news":   # small muted line, then the headline at full width (linked when it has a link)
                 head = _e(card["title"])
                 if str(card.get("link") or "").startswith(("http://", "https://")):
@@ -385,6 +465,25 @@ def to_html(doc: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def render(data: dict[str, Any], summary: str | None = None, writer: str = "none") -> dict[str, str]:
-    doc = document(data, summary, writer)
+def strip_chart_mentions(text: str) -> str:
+    """The text part without its "[Chart: ...]" lines (when the pictures are not sent)."""
+    return re.sub(r"(?m)^\[Chart: .*\]\n", "", text)
+
+
+def strip_cid_images(html: str) -> str:
+    """The HTML without its inline pictures (when they cannot be sent)."""
+    return re.sub(r"<img\b[^>]*\bsrc=\"cid:[^\"]*\"[^>]*>", "", html)
+
+
+def inline_data_urls(html: str, images: list[dict[str, Any]] | None) -> str:
+    """The HTML with each ``cid:`` picture replaced by a data: URL, for a browser or the dashboard preview."""
+    for i in images or []:
+        url = "data:image/png;base64," + base64.b64encode(i["content"]).decode("ascii")
+        html = html.replace(f'src="cid:{i["cid"]}"', f'src="{url}"')
+    return html
+
+
+def render(data: dict[str, Any], summary: str | None = None, writer: str = "none",
+           images: list[dict[str, Any]] | None = None) -> dict[str, str]:
+    doc = document(data, summary, writer, images)
     return {"subject": subject(data), "text": to_text(doc), "html": to_html(doc)}

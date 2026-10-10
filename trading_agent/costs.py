@@ -84,3 +84,17 @@ class FlatCosts:
 
 def cost_model_for(market: str) -> IndianDeliveryCosts | FlatCosts:
     return IndianDeliveryCosts() if market == "in" else FlatCosts()
+
+
+def cost_quote_for(market: str, amount: float) -> dict[str, Any]:
+    """Round-trip charges for one amount under a market's cost model (shared by Live and Replay)."""
+    if not amount > 0 or amount == float("inf"):
+        raise ValueError("amount must be positive")
+    m = cost_model_for(market)
+    if not hasattr(m, "round_trip"):
+        bps = m.round_trip_bps(amount)
+        return {"amount": amount, "model": "flat", "total_bps": bps, "total": amount * bps / 10_000}
+    rt = m.round_trip(amount)
+    return {"amount": amount, "model": "india_delivery", "buy": rt["buy"], "sell": rt["sell"],
+            "charges": rt["charges"], "charges_bps": rt["charges_bps"], "total": rt["total"],
+            "total_bps": rt["total_bps"], "slippage_bps_one_way": m.slippage_bps}

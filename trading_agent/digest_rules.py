@@ -141,6 +141,12 @@ def _evening(d: dict[str, Any]) -> list[str]:
         fills = p.get("stop_fills_today") or []
         if fills:
             out.append(f"{len(fills)} stop-loss sell{'s' if len(fills) != 1 else ''} today ({_names([f['symbol'] for f in fills])}).")
+    nf = (d.get("bulletin") or {}).get("nifty") if isinstance(d.get("bulletin"), dict) else None
+    if _ok(nf):
+        t = f"Nifty closed at {num(nf['close'], 2)} ({pct_text(nf['change_pct'], 2)})"
+        if nf.get("adx") is not None:
+            t += f", daily ADX {nf['adx']:.0f} ({nf.get('adx_band')})"
+        out.append(t + ".")
     news = d.get("news")
     if _ok(news):
         items = news.get("items") or []

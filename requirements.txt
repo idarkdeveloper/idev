@@ -3,3 +3,4 @@ requests>=2.31,<3
 pytest>=8
 pypdf>=4
 tzdata; sys_platform == "win32"
+matplotlib>=3.8,<4

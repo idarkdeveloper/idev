@@ -52,6 +52,7 @@ EDITABLE_ENV_KEYS = {
     "watch_investor": "WATCH_INVESTOR",  # one name (older form); watch_investors below is the list
     "watch_investors": "INVESTORS",
     "watch_source": "WATCH_SOURCE",
+    "bse_deals": "BSE_DEALS",  # also read BSE bulk/block deals beside NSE's
     "auto_trade": "AUTO_TRADE",
     "notify_email_to": "NOTIFY_EMAIL_TO",
     "notify_webhook_url": "NOTIFY_WEBHOOK_URL",
@@ -63,6 +64,8 @@ EDITABLE_ENV_KEYS = {
     "digest_morning": "DIGEST_MORNING",
     "digest_evening": "DIGEST_EVENING",
     "digest_writer": "DIGEST_WRITER",
+    "digest_bulletin": "DIGEST_BULLETIN",
+    "digest_charts": "DIGEST_CHARTS",
     # Only has an effect when GROWW_LIVE_ORDERS=true, which the dashboard can never set.
     "groww_gtt_stops": "GROWW_GTT_STOPS",
 }
@@ -403,10 +406,11 @@ class App:
                 "notify_email_to": s.notify_email_to or "",
                 "notify_webhook_url": s.notify_webhook_url or "",
                 "paper_starting_cash": s.paper_starting_cash,
-                "groww_gtt_stops": s.groww_gtt_stops,
+                "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,
                 "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
                 "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
                 "digest_enabled": s.digest_enabled, "digest_writer": s.digest_writer,
+                "digest_bulletin": s.digest_bulletin, "digest_charts": s.digest_charts,
                 "digest_channel": bool(s.resend_api_key and s.notify_email_to) or bool(s.notify_webhook_url),
                 "max_slippage_pct": s.max_slippage_pct,
                 "demo": self.demo_trades is not None,
@@ -1072,8 +1076,8 @@ class App:
             elif key in ("digest_morning", "digest_evening"):
                 value = parse_digest_time(key.split("_")[1], value)   # ValueError (a 400) when not HH:MM or out of range
                 ops.append(lambda k=key, v=value: setattr(st, k, v))
-            elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
-                value = "true" if value in (True, "true", "1", 1, "on") else "false"
+            elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
+                value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
                 value = str(value).strip().lower()
@@ -1118,7 +1122,11 @@ class App:
             _write_env(self.dotenv, applied)
         for op in ops:
             op()
-        if "watch_investor" in changes or "watch_investors" in changes or "watch_source" in changes:
+        if "bse_deals" in changes and self._data is not None and hasattr(self._data, "bse"):
+            from .bse import make_bse_client
+            self._data.bse = make_bse_client(self.settings)  # None when switched off: no more BSE calls
+        if ("watch_investor" in changes or "watch_investors" in changes or "watch_source" in changes
+                or "bse_deals" in changes):
             self._deals, self._deals_at = None, 0.0
         if applied:
             self._settings_version += 1
@@ -1147,17 +1155,8 @@ class App:
 
     # -- calculators and tools ------------------------------------------------
     def cost_quote(self, amount: float) -> dict[str, Any]:
-        from .costs import cost_model_for
-        if amount <= 0:
-            raise ValueError("amount must be positive")
-        m = cost_model_for(self.settings.market)
-        if not hasattr(m, "round_trip"):
-            bps = m.round_trip_bps(amount)
-            return {"amount": amount, "model": "flat", "total_bps": bps, "total": amount * bps / 10_000}
-        rt = m.round_trip(amount)
-        return {"amount": amount, "model": "india_delivery", "buy": rt["buy"], "sell": rt["sell"],
-                "charges": rt["charges"], "charges_bps": rt["charges_bps"], "total": rt["total"],
-                "total_bps": rt["total_bps"], "slippage_bps_one_way": m.slippage_bps}
+        from .costs import cost_quote_for
+        return cost_quote_for(self.settings.market, amount)
 
     def size_quote(self, ticker: str, equity: float | None = None, risk_pct: float = 1.0,
                    max_pct: float = 10.0) -> dict[str, Any]:
@@ -1324,7 +1323,10 @@ class App:
             email = build_digest(kind, ctx, writer=writer)
         finally:
             root._preview_lock.release()
-        return {k: email[k] for k in ("subject", "text", "html", "writer")}
+        from .digest_render import inline_data_urls
+        out = {k: email[k] for k in ("subject", "text", "html", "writer")}
+        out["html"] = inline_data_urls(out["html"], email.get("images"))   # the preview iframe shows the charts as data: URLs
+        return out
 
     def groww_test(self) -> dict[str, Any]:
         """Check Groww credentials end to end without ever returning the token."""
@@ -1401,15 +1403,32 @@ def _cost_table(market: str) -> dict[str, Any]:
 WATCH_SOURCES = {"in": {"deals", "bulk", "block", "insider"}, "us": {"congress", "insider"}}
 
 
+_TRUE_WORDS, _FALSE_WORDS = {"true", "1", "yes", "on"}, {"false", "0", "no", "off"}
+
+
+def _bool_setting(key: str, value: Any) -> bool:
+    """A switch from JSON: true/false, 1/0, or the words true, false, 1, 0, yes, no, on, off. Anything else is a 400
+    (a typo must not silently switch something off)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    word = value.strip().lower() if isinstance(value, str) else None
+    if word in _TRUE_WORDS:
+        return True
+    if word in _FALSE_WORDS:
+        return False
+    raise ValueError(f"{key} must be true or false")
+
+
 def _check_type(key: str, value: Any) -> None:
     """Settings arrive as JSON: refuse a list, dict, number or bool where text is expected, with a plain message."""
     if key in ("watch_investors", "watch_investor"):
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops", "digest_morning_on", "digest_evening_on"):
-        if isinstance(value, (list, tuple, dict)):
-            raise ValueError(f"{key} must be true or false")
+    elif key in ("auto_trade", "groww_gtt_stops", "bse_deals", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts"):
+        _bool_setting(key, value)
     elif key in ("digest_morning", "digest_evening", "digest_writer"):
         if not isinstance(value, str):
             raise ValueError(f"{key} must be a time as text, HH:MM")

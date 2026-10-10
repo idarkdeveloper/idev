@@ -286,7 +286,7 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
     ideas, too_expensive = [], []
     for row in res["top"][:int(s.digest_top)]:
         price = row.get("last_close")
-        if not price:
+        if not price or str(row.get("symbol", "")).upper().endswith(".BO"):  # BSE-only stocks are never buy ideas
             continue
         try:
             bars = ctx.prices.history(row["symbol"], "2y")
@@ -571,7 +571,7 @@ def _deals(ctx: DigestContext, kind: str, today: date) -> dict[str, Any]:
         keep = [t for t in trades if t.report_date >= since.isoformat()]
     keep.sort(key=lambda t: (t.report_date, t.transaction_date), reverse=True)
     rows = [{"investor": clean_text(t.investor, 80), "who": [clean_text(n, 60) for n in followed_names(t.investor, s.investors)],
-             "ticker": clean_text(t.ticker, 20), "name": clean_text(ctx.name_of.get(t.ticker.upper()) or "", 80),
+             "ticker": clean_text(t.ticker, 20), "exchange": t.exchange, "name": clean_text(ctx.name_of.get(t.ticker.upper()) or (t.raw.get("bse_name") if isinstance(t.raw, dict) else "") or "", 80),
              "transaction": clean_text(t.transaction, 20),
              "size": clean_text(t.size, 60), "reported": t.report_date, "traded": t.transaction_date}
             for t in keep[:MAX_DEALS]]
@@ -1017,6 +1017,9 @@ def evening_report(ctx: DigestContext) -> dict[str, Any]:
     data["groww"] = _section(_groww_close, "Groww portfolio", ctx, today, closed)
     data["practice"] = _section(_practice_close, "practice account", ctx, today, closed,
                                 (data["groww"] if "unavailable" not in data["groww"] else None))
+    if getattr(ctx.settings, "digest_bulletin", True):
+        from .bulletin import build_bulletin   # imported here: bulletin.py builds on this module
+        data["bulletin"] = build_bulletin(ctx, data.get("stale_close"))
     data["news"] = _section(_news_today, "news", ctx, today)
     data["deals"] = _section(_deals, "deals", ctx, "evening", today)
     return data
