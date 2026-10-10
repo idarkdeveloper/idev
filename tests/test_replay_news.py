@@ -26,7 +26,10 @@ def test_history_is_cached_per_symbol(tmp_path):
 def test_news_is_sliced_at_the_clock(tmp_path):
     news = ClockedNews(client(tmp_path), ReplayClock("2021-03-01"))
     r = news.for_symbol("TATASTEEL", days=30)
-    assert [a["text"] for a in r["items"]] == ["on the day", "in window"] and r["error"] is None
+    # the 18:00 announcement of the clock day is after the 15:00 IST cut-off: usable only from the next trading day
+    assert [a["text"] for a in r["items"]] == ["in window"] and r["error"] is None
+    assert [a["text"] for a in ClockedNews(news.client, ReplayClock("2021-03-02")).for_symbol("TATASTEEL", days=30)["items"]] \
+        == ["future", "on the day", "in window"]
     with pytest.raises(FutureDataError):
         news.for_symbol("TATASTEEL", until="2021-03-02")
 

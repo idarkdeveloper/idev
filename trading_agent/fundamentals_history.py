@@ -33,7 +33,9 @@ from typing import Any, Iterable
 
 import requests
 
-log = logging.getLogger(__name__)
+from .filing_time import usable_by
+
+log =logging.getLogger(__name__)
 
 BASE = "https://www.nseindia.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -77,7 +79,7 @@ def _stamp(s: str | None) -> str | None:
         return None
     t = re.search(r"(\d{1,2}):(\d{2})(?::(\d{2}))?", s[11:] if s else "")
     return datetime(d.year, d.month, d.day, int(t.group(1)), int(t.group(2)), int(t.group(3) or 0)).isoformat() \
-        if t else d.isoformat() + "T00:00:00"
+        if t else d.isoformat()   # no time of day: usable_from treats a bare date as after the close
 
 
 def parse_results_xbrl(xml_text: str, period_end: date) -> dict[str, Any]:
@@ -278,10 +280,12 @@ def _ttm(by_end: dict[str, dict[str, Any]], end: date) -> float | None:
     return sum(qs)
 
 
-def point_in_time(records: list[dict[str, Any]], day: str | date) -> dict[str, Any] | None:
-    """Fundamentals as known at the end of ``day``, from filings broadcast by then."""
+def point_in_time(records: list[dict[str, Any]], day: str | date, holidays: Any | None = None) -> dict[str, Any] | None:
+    """Fundamentals as known at the close of ``day``: filings whose ``usable_from`` is on or before it (a result
+    broadcast at or after 15:00 IST on day T counts from the next trading day; ``holidays`` is an optional NSE
+    calendar, weekends are always skipped)."""
     cutoff = (day.isoformat() if isinstance(day, date) else str(day)[:10]) + "T23:59:59"
-    known = [r for r in records if r["available"] <= cutoff]
+    known = [r for r in records if usable_by(r["available"], cutoff[:10], holidays)]
     if not known:
         return None
     by_end = {r["period_end"]: r for r in known}

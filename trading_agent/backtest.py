@@ -11,8 +11,11 @@ from __future__ import annotations
 import statistics
 from bisect import bisect_right
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any, Iterable
 
+from .deal_events import consolidate_deals
+from .filing_time import usable_from
 from .investors import classify_client
 from .quiver import DisclosedTrade, followed_names
 
@@ -116,11 +119,31 @@ def _forward(bars: list[dict[str, Any]], dates: list[str], after: str,
     return entry["date"], entry["close"], rets
 
 
+def visible_after(deal: DisclosedTrade) -> str:
+    """The date the entry close must be strictly after: when the deal became public, not when it was struck.
+
+    Bulk and block deals are published that evening, so their own date is right (first close strictly after it).
+    An insider (PIT) trade is disclosed days after the trade; when the filing's broadcast time is known it is used
+    through ``usable_from`` (at or after 15:00 IST means the next trading day), else the report date, which is never
+    earlier than the trade."""
+    if deal.source == "insider":
+        raw = deal.raw if isinstance(deal.raw, dict) else {}
+        stamp = raw.get("filed_at") or raw.get("broadcastDateTime") or raw.get("brdCstDt")
+        if stamp:
+            try:
+                return max(deal.transaction_date, (usable_from(stamp) - timedelta(days=1)).isoformat())
+            except ValueError:
+                pass
+        return max(deal.transaction_date, deal.report_date or "")
+    return deal.transaction_date
+
+
 def run_backtest(investor: str, deals: list[DisclosedTrade], prices: Any,
                  horizons: Iterable[int] = DEFAULT_HORIZONS, cost_bps: float = DEFAULT_COST_BPS,
                  benchmark: str = BENCHMARK, history_range: str = "2y") -> BacktestResult:
     """``prices`` needs ``history(symbol, range_) -> bars`` (``YahooPrices`` does)."""
     horizons = tuple(horizons)
+    deals = consolidate_deals(deals)   # the same client on NSE and BSE the same day is one event, counted once
     bench = prices.history(benchmark, history_range)
     bench_dates = [b["date"] for b in bench]
     cache: dict[str, list[dict[str, Any]]] = {}
@@ -133,11 +156,11 @@ def run_backtest(investor: str, deals: list[DisclosedTrade], prices: Any,
             if bars is None:
                 bars = cache[d.ticker] = prices.history(d.ticker, history_range)
             dates = [b["date"] for b in bars]
-            o.entry_date, o.entry_price, o.returns = _forward(bars, dates, d.transaction_date, horizons)
+            o.entry_date, o.entry_price, o.returns = _forward(bars, dates, visible_after(d), horizons)
             if o.entry_date is None:
                 o.error = "no price after deal date"
             else:
-                _, _, b_ret = _forward(bench, bench_dates, d.transaction_date, horizons)
+                _, _, b_ret = _forward(bench, bench_dates, visible_after(d), horizons)
                 for h in horizons:
                     r, b = o.returns.get(h), b_ret.get(h)
                     o.excess[h] = (r - b) if r is not None and b is not None else None

@@ -12,6 +12,7 @@ from anthropic import beta_tool
 
 from .broker import BSE_ONLY_MESSAGE, Broker
 from .config import Settings
+from .deal_events import consolidate_deals
 from .investors import classify_client, describe
 from .momentum import momentum_summary
 from .notify import Notifier, clean_text
@@ -226,7 +227,7 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                 merged.setdefault(t.key, t)
         except Exception as e:  # noqa: BLE001
             return json.dumps({"error": str(e)})
-        rows = sorted(merged.values(), key=lambda t: (t.report_date, t.transaction_date), reverse=True)
+        rows = sorted(consolidate_deals(merged.values()), key=lambda t: (t.report_date, t.transaction_date), reverse=True)
         mine = []
         for t in rows[:25]:
             d = t.to_dict()
@@ -463,7 +464,7 @@ def enrich_trade(ctx: AgentContext, trade: DisclosedTrade) -> dict[str, Any]:
 
 
 def build_user_message(ctx: AgentContext) -> str:
-    trades = [enrich_trade(ctx, t) for t in ctx.result.new_trades]
+    trades = [enrich_trade(ctx, t) for t in consolidate_deals(ctx.result.new_trades)]  # one event per deal, NSE + BSE summed
     names = ctx.settings.investors
     if not ctx.settings.auto_trade:
         mode = "recommendation-only (no order tool)"

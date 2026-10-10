@@ -287,12 +287,13 @@ class Watcher:
             until = self._blocked_until
             when = (f"until {until.astimezone(IST).strftime('%H:%M IST')}" if until else "until it is back")
             by: dict[str, list[Any]] = {}
-            for t in fresh:
+            from .deal_events import consolidate_deals, event_text
+            for t in consolidate_deals(fresh):   # one alert line per deal event, not one per exchange
                 by.setdefault(clean_text(t.investor, 120), []).append(t)
             for who, ts in by.items():
                 self._notifier.send(
                     f"[DEAL] {who}: {len(ts)} new deal(s) - analysis paused: Groww unavailable {when}",
-                    "\n".join(clean_text(t.summary(), 300) for t in ts)
+                    "\n".join(clean_text(event_text(t) if (t.raw or {}).get("consolidated") else t.summary(), 300) for t in ts)
                     + "\n\nThese are not analysed yet; the full check runs on them when Groww is back.")
         return [t.to_dict() for t in fresh]
 

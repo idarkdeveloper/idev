@@ -116,6 +116,8 @@ def short_name(name: str | None) -> str:
     """'Senco Gold Limited' -> 'Senco Gold'; 'Coal India Limited' -> 'Coal India'. Only legal suffixes and a
     trailing '(India)' go, and never a dangling 'of' / 'and' / '&'."""
     words = (name or "").replace(",", " ").split()
+    if len(words) > 2 and words[0].lower() == "the":   # "The Tata Power Company" is "Tata Power Company" in a headline
+        words = words[1:]
     while len(words) > 1:
         last = words[-1].lower()
         if last in _LEGAL_SUFFIXES or (last == "(india)" and len(words) > 2):
