@@ -62,7 +62,10 @@ class GrowwAuthorisationError(RuntimeError):
 
 AUTH_MESSAGE = ("Groww rejected the sell: demat authorisation (DDPI/e-DIS) is missing. "
                 "Enable DDPI in the Groww app.")
-_AUTH_RE = re.compile(r"TPIN|e-?DIS|DDPI|CDSL|authori[sz]ation\s+(required|pending)", re.I)
+_AUTH_RE = re.compile(
+    r"\bTPIN\b|\be-?DIS\b|\bDDPI\b|\bCDSL\b"
+    r"|\b(demat|holdings?|sell|DP)\b.{0,30}\bauthori[sz]\w*"
+    r"|\bauthori[sz]\w*\s+(required|pending|failed)\b.{0,30}\b(sell|demat|holdings?)\b", re.I)
 
 
 def is_authorisation_problem(text: Any) -> bool:
@@ -639,20 +642,22 @@ class GrowwBroker:
         resp = self.session.request(method, f"{self.base_url}/{path.lstrip('/')}",
                                     headers=_headers(self.token), timeout=self.timeout, **kw)
         data = resp.json() if resp.content else {}
-        writes = method.upper() != "GET" and path.lstrip("/").startswith(("order/", "order-advance/"))
         if isinstance(data, dict) and data.get("status") == "FAILURE":
             err = data.get("error") or {}
-            text = f"Groww {err.get('code')}: {err.get('message')}"
-            if writes and is_authorisation_problem(text):
-                raise GrowwAuthorisationError(f"{AUTH_MESSAGE} ({text})")
-            raise RuntimeError(text)
+            raise RuntimeError(f"Groww {err.get('code')}: {err.get('message')}")
         try:
             resp.raise_for_status()
         except requests.HTTPError as e:
-            if writes and is_authorisation_problem(f"{getattr(resp, 'text', '')} {e}"):
-                raise GrowwAuthorisationError(f"{AUTH_MESSAGE} ({e})") from e
+            e.body = str(getattr(resp, "text", ""))[:500]  # kept so a sell's authorisation text can be recognised
             raise
         return data.get("payload", data) if isinstance(data, dict) else data
+
+    @staticmethod
+    def _as_authorisation(e: BaseException) -> GrowwAuthorisationError | None:
+        """The GrowwAuthorisationError for a failed SELL whose error text is about DDPI / e-DIS, else None."""
+        if is_authorisation_problem(f"{e} {getattr(e, 'body', '')}"):
+            return GrowwAuthorisationError(f"{AUTH_MESSAGE} ({e})")
+        return None
 
     # -- live-sell warnings (DDPI, T1) -------------------------------------------
     def _alert(self, key: str, subject: str, body: str) -> None:
@@ -901,9 +906,12 @@ class GrowwBroker:
             self.warn_sell_without_ddpi(symbol)
         try:
             payload = self._place(body)
-        except GrowwAuthorisationError as e:
+        except (RuntimeError, requests.HTTPError) as e:
+            auth = self._as_authorisation(e) if side == "sell" else None  # a buy never becomes an authorisation error
+            if auth is None:
+                raise
             self.alert_authorisation(symbol, str(e))
-            raise
+            raise auth from e
         order: dict[str, Any] = {
             "id": payload.get("groww_order_id"), "groww_order_id": payload.get("groww_order_id"),
             "order_reference_id": payload.get("order_reference_id") or ref,
@@ -943,8 +951,8 @@ class GrowwBroker:
     def modify_order(self, groww_order_id: str, price: float, qty: int, order_type: str = "LIMIT") -> dict[str, Any]:
         """Change the price of an open order (POST order/modify, as in the growwapi SDK)."""
         self._require_live("modify an order")
-        body = {"quantity": int(qty), "order_type": order_type.upper(), "segment": SEGMENT,
-                "groww_order_id": groww_order_id, "price": float(price)}
+        body = {"quantity": int(qty), "price": float(price), "trigger_price": None,
+                "order_type": order_type.upper(), "segment": SEGMENT, "groww_order_id": groww_order_id}
         return self._req("POST", "order/modify", json=body)
 
     def order_list(self, page: int = 0, page_size: int = 100) -> list[dict[str, Any]]:
@@ -980,9 +988,12 @@ class GrowwBroker:
         self.warn_sell_without_ddpi(symbol)
         try:
             out = self._req("POST", "order-advance/create", json=body)
-        except GrowwAuthorisationError as e:
+        except (RuntimeError, requests.HTTPError) as e:
+            auth = self._as_authorisation(e)  # a GTT stop is always a sell
+            if auth is None:
+                raise
             self.alert_authorisation(symbol, str(e))
-            raise
+            raise auth from e
         note = out.get("remark") or out.get("message") or out.get("status_message")
         if is_authorisation_problem(note):
             self.alert_authorisation(symbol, str(note))

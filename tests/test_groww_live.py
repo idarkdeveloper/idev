@@ -493,7 +493,7 @@ def _isolated_env(tmp_path, monkeypatch, **env):
     monkeypatch.chdir(tmp_path)  # no real .env is read
     for k in ("GROWW_ACCESS_TOKEN", "GROWW_API_KEY", "GROWW_API_SECRET", "GROWW_TOTP_SECRET",
               "GROWW_LIVE_ORDERS", "GROWW_GTT_STOPS", "AUTO_TRADE", "BROKER", "RESEND_API_KEY",
-              "NOTIFY_WEBHOOK_URL", "MARKET"):
+              "NOTIFY_WEBHOOK_URL", "MARKET", "GROWW_SELL_T1", "GROWW_DDPI_CONFIRMED"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
     for k, v in env.items():

@@ -30,7 +30,11 @@ from .groww import (IST, GrowwBroker, TokenCache, classify_status, limit_price, 
 
 DEFAULT_LIVE_TEST_SYMBOL = "ITC"  # liquid large cap, 0.05 tick
 AGENT_REFERENCE_PREFIXES = ("TA-", "VT-", "SL-")  # make_reference_id prefixes used by this agent
+ORDER_PAGE_SIZE = 100  # Groww's maximum
+ORDER_PAGES = 5
 MODIFY_UP_PCT = 0.5
+MODIFY_SKIP_IF_LTP_DROP_PCT = 1.0  # the market fell this much since the order was priced: do not modify
+MODIFY_READ_BACKOFF = (0.5, 1.0, 2.0)
 MODIFY_MAX_PCT_OF_LTP = 98.0  # the modified price must stay at least 2% below LTP so it cannot fill
 
 DDPI_MANUAL_CHECK = ("confirm in the Groww app (Profile -> Settings -> Demat / DDPI authorisation) that DDPI is "
@@ -97,15 +101,50 @@ def read_only_checks(broker: GrowwBroker, *, token_source: str, cache: TokenCach
     return c
 
 
+STILL_OPEN = "TEST ORDER MAY STILL BE OPEN: CANCEL IT IN THE GROWW APP NOW"
+
+
+def _cancel_if_placed(broker: GrowwBroker, c: Check, ref: str) -> None:
+    """The placement call failed or timed out: it may have reached Groww. Look it up by reference; cancel if so."""
+    try:
+        found = broker.order_status_by_reference(ref)
+    except Exception as e:  # noqa: BLE001
+        c.add("live: lookup after failed placement", None,
+              f"could not look up reference {ref} ({type(e).__name__}: {e}); check the Groww app for it")
+        return
+    oid = found.get("groww_order_id")
+    if not oid:
+        c.add("live: lookup after failed placement", None, f"reference {ref} not found at Groww: nothing was placed")
+        return
+    c.add("live: lookup after failed placement", False,
+          f"the order WAS placed (id {oid}, {found.get('order_status')}); cancelling it")
+    try:
+        broker.cancel_order(oid)
+        after = broker.confirm_order(oid, tries=3)
+        gone = after["order_status"] in ("CANCELLED", "CANCELLATION_REQUESTED")
+        c.add("live: cancel order", gone, f"now {after['order_status']}" if gone else f"{STILL_OPEN} (id {oid})")
+    except Exception as e:  # noqa: BLE001
+        c.add("live: cancel order", False, f"{type(e).__name__}: {e}. {STILL_OPEN} (id {oid})")
+
+
 def _order_list_rows(broker: GrowwBroker, c: Check) -> None:
     """Print today's order list: count, open orders, and orders not placed by the agent."""
+    rows: list[dict[str, Any]] = []
+    capped = False
     try:
-        rows = broker.order_list()
+        for page in range(ORDER_PAGES):
+            got = broker.order_list(page, ORDER_PAGE_SIZE)
+            rows += got
+            if len(got) < ORDER_PAGE_SIZE:
+                break
+        else:
+            capped = True
     except Exception as e:  # noqa: BLE001
         c.add("live: today's orders", False, f"{type(e).__name__}: {e}")
         return
     open_rows = [r for r in rows if classify_status(r.get("order_status")) == "open"]
-    c.add("live: today's orders", True, f"{len(rows)} order(s) today, {len(open_rows)} open (compare with the Groww app)")
+    c.add("live: today's orders", True, f"{len(rows)} order(s) today{f' (first {ORDER_PAGES * ORDER_PAGE_SIZE} only)' if capped else ''}, "
+          f"{len(open_rows)} open (compare with the Groww app)")
     for r in open_rows:
         ref = str(r.get("order_reference_id") or "")
         mine = ref.startswith(AGENT_REFERENCE_PREFIXES)
@@ -115,7 +154,8 @@ def _order_list_rows(broker: GrowwBroker, c: Check) -> None:
     foreign = [r for r in rows if not str(r.get("order_reference_id") or "").startswith(AGENT_REFERENCE_PREFIXES)]
     if foreign:
         c.add("live: orders not from the agent", None,
-              f"{len(foreign)} of {len(rows)} today's order(s) carry no agent reference (placed in the app or elsewhere)")
+              f"{len(foreign)} of {len(rows)} today's order(s) carry no agent reference (placed in the app or elsewhere; "
+              "orders fired by a GTT may also lack the agent prefix)")
 
 
 def _modify_price(price: float, ltp: float, tick: float) -> float | None:
@@ -130,24 +170,38 @@ def _modify_price(price: float, ltp: float, tick: float) -> float | None:
     return new
 
 
-def _modify_step(broker: GrowwBroker, c: Check, oid: str, price: float, ltp: float, tick: float) -> None:
-    new = _modify_price(price, ltp, tick)
+def _modify_step(broker: GrowwBroker, c: Check, oid: str, price: float, ltp: float, tick: float,
+                 symbol: str) -> None:
+    try:
+        fresh = broker.latest_price(symbol)  # the market may have moved since the order was priced
+    except Exception as e:  # noqa: BLE001
+        c.add("live: modify order", None, f"could not fetch a fresh price ({type(e).__name__}: {e}); modify skipped")
+        return
+    if fresh <= ltp * (1 - MODIFY_SKIP_IF_LTP_DROP_PCT / 100) + 1e-9:
+        c.add("live: modify order", None, f"{symbol} fell from {ltp} to {fresh} (1% or more) since the order "
+              "was priced; modify skipped, cancelling")
+        return
+    ref_ltp = min(ltp, fresh)
+    new = _modify_price(price, ref_ltp, tick)
     if new is None:
-        c.add("live: modify order", None, f"no room to raise {price} and stay 2% below LTP {ltp}; skipped")
+        c.add("live: modify order", None, f"no room to raise {price} and stay 2% below LTP {ref_ltp}; skipped")
         return
     try:
         broker.modify_order(oid, new, 1)
         seen = None
-        for read in (broker.order_status, broker.order_detail):
+        for i, wait in enumerate(MODIFY_READ_BACKOFF):  # the status call has no price: only order detail does
+            broker.sleep(wait)
             try:
-                seen = (read(oid) or {}).get("price")
+                d = broker.order_detail(oid) or {}
             except Exception:  # noqa: BLE001
-                seen = None
-            if seen is not None:
-                break
-        ok = seen is not None and abs(float(seen) - new) < 1e-6
-        c.add("live: modify order", ok if seen is not None else None,
-              f"limit {price} -> {new} (+{MODIFY_UP_PCT:g}%, {new / ltp * 100:.2f}% of LTP); price read back: {seen}")
+                continue
+            seen = d.get("price")
+            if seen is not None and abs(float(seen) - new) < 1e-6:
+                break  # MODIFICATION_REQUESTED in between is fine: keep polling until the price shows
+        ok = None if seen is None else abs(float(seen) - new) < 1e-6
+        c.add("live: modify order", ok,
+              f"limit {price} -> {new} (+{MODIFY_UP_PCT:g}%, {new / ref_ltp * 100:.2f}% of LTP); "
+              f"price read back from order detail: {seen}")
     except Exception as e:  # noqa: BLE001 - the cancel below must still run
         c.add("live: modify order", False, f"{type(e).__name__}: {e}")
 
@@ -170,8 +224,9 @@ def live_test(broker: GrowwBroker, symbol: str = DEFAULT_LIVE_TEST_SYMBOL, *, of
             "transaction_type": "BUY", "order_reference_id": ref}
     try:
         placed = broker._req("POST", "order/create", json=body)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - it may still have reached Groww: look it up by reference
         c.add("live: place limit order", False, f"{type(e).__name__}: {e}")
+        _cancel_if_placed(broker, c, ref)
         return c
     oid = placed.get("groww_order_id")
     c.add("live: place limit order", bool(oid), f"id {oid}, status {placed.get('order_status')}, "
@@ -189,7 +244,7 @@ def live_test(broker: GrowwBroker, symbol: str = DEFAULT_LIVE_TEST_SYMBOL, *, of
         c.add("live: order detail fields", "average_fill_price" in detail and "filled_quantity" in detail,
               ", ".join(sorted(detail)[:12]))
         if st["status"] == "open":
-            _modify_step(broker, c, oid, price, ltp, tick)
+            _modify_step(broker, c, oid, price, ltp, tick, symbol)
         else:
             c.add("live: modify order", None, f"order is {st['order_status']}, not open; modify skipped")
     finally:
@@ -201,12 +256,18 @@ def live_test(broker: GrowwBroker, symbol: str = DEFAULT_LIVE_TEST_SYMBOL, *, of
             try:
                 broker.cancel_order(oid)
                 after = broker.confirm_order(oid, tries=3)
-                c.add("live: cancel order", after["order_status"] in ("CANCELLED", "CANCELLATION_REQUESTED"),
-                      f"now {after['order_status']}")
+                gone = after["order_status"] in ("CANCELLED", "CANCELLATION_REQUESTED")
+                c.add("live: cancel order", gone,
+                      f"now {after['order_status']}" if gone else
+                      f"now {after['order_status']}. {STILL_OPEN} (id {oid})")
             except Exception as e:  # noqa: BLE001
-                c.add("live: cancel order", False, f"{type(e).__name__}: {e} - CANCEL {oid} IN THE GROWW APP")
+                c.add("live: cancel order", False, f"{type(e).__name__}: {e}. {STILL_OPEN} (id {oid})")
+        elif now is None:
+            c.add("live: cancel order", False, f"could not read the order status. {STILL_OPEN} (id {oid})")
         else:
-            c.add("live: cancel order", None, "order was no longer open (filled or rejected); check the Groww app")
+            c.add("live: cancel order", False,
+                  f"the test buy is {now}, not open: it was not left resting. If it FILLED you now own 1 share "
+                  f"of {symbol}; check the Groww app (id {oid})")
 
     free = broker.sellable_qty(symbol)
     if free < 1:

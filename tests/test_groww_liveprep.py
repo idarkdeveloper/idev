@@ -13,6 +13,7 @@ from trading_agent.live import GttStopManager
 from trading_agent.live_alerts import alert_once
 from trading_agent.state import State
 from .conftest import FakeSession, Seq
+from .test_ui import server  # noqa: F401  (fixture)
 from .test_groww_live import CHECK_ROUTES, GTT_ROUTES, ok, routes
 
 T1_ONLY = ok({"holdings": [
@@ -30,10 +31,11 @@ def live(sess, **kw):
 
 # ---- 1. DDPI / e-DIS ---------------------------------------------------------
 def test_authorisation_text_detection():
-    for t in ("TPIN required", "e-DIS authorisation failed", "edis pending", "DDPI not enabled",
-              "CDSL rejected", "Authorization required", "authorisation pending"):
+    for t in ("TPIN required", "e-DIS authorisation pending", "Sell authorization failed",
+              "Holdings not authorised for sell", "DDPI not enabled", "CDSL rejected"):
         assert is_authorisation_problem(t), t
-    for t in ("Insufficient quantity", "", None, "price out of range"):
+    for t in ("Authorization required", "Unauthorized", "predisposed", "redistributed", "Insufficient quantity",
+              "", None, "price out of range"):
         assert not is_authorisation_problem(t), t
 
 
@@ -98,7 +100,17 @@ def test_sell_rejected_after_placement_is_flagged_from_status_remark():
     assert [a[0] for a in b.alerts] == ["auth-RELIANCE"]
 
 
-def test_http_error_text_also_detected_for_writes_only():
+def test_buy_failure_with_authorisation_text_keeps_the_normal_error():
+    bad = {("POST", "/order/create"): {"status": "FAILURE",
+                                        "error": {"code": "GA999", "message": "TPIN authorisation pending"}}}
+    b = live(FakeSession(routes(bad)), ddpi_confirmed=True)
+    with pytest.raises(RuntimeError) as e:
+        b.submit_order("RELIANCE", "buy", qty=1)
+    assert not isinstance(e.value, GrowwAuthorisationError) and b.alerts == []
+    b._req("GET", "holdings/user")  # reads are never converted either
+
+
+def test_http_error_text_detected_on_a_sell_only():
     class Resp:
         content = b"x"
         text = "TPIN needed"
@@ -115,12 +127,17 @@ def test_http_error_text_also_detected_for_writes_only():
         def request(self, *a, **k):
             return Resp()
 
-    b = live(Sess(), ddpi_confirmed=True)
-    with pytest.raises(GrowwAuthorisationError):
-        b._req("POST", "order/create", json={})
     import requests
-    with pytest.raises(requests.HTTPError):  # a read keeps its normal error
-        b._req("GET", "holdings/user")
+    b = live(Sess(), ddpi_confirmed=True)
+    with pytest.raises(requests.HTTPError):  # _req itself raises the normal error
+        b._req("POST", "order/create", json={})
+    b.latest_price = lambda s: 100.0
+    b.tick_size = lambda s: 0.05
+    b.sellable_qty = lambda s: 5
+    with pytest.raises(GrowwAuthorisationError):
+        b.submit_order("RELIANCE", "sell", qty=1)
+    with pytest.raises(requests.HTTPError):
+        b.submit_order("RELIANCE", "buy", qty=1)
 
 
 def test_alert_once_per_day_per_key(tmp_path):
@@ -219,11 +236,16 @@ LIVE_ROUTES = {
 }
 
 
-def status_seq(price=None):
-    open_ = {"groww_order_id": "GMK1", "order_status": "OPEN"}
-    # confirm_order x2, the read-back after the modify, the pre-cancel check, then the post-cancel confirm
-    return Seq(ok(open_), ok(open_), ok({**open_, **({"price": price} if price else {})}), ok(open_),
-               ok({"groww_order_id": "GMK1", "order_status": "CANCELLED"}))
+def status_seq():
+    open_ = {"groww_order_id": "GMK1", "order_status": "OPEN"}  # the status call has no price field
+    # confirm_order x2, the pre-cancel check, then the post-cancel confirm
+    return Seq(ok(open_), ok(open_), ok(open_), ok({"groww_order_id": "GMK1", "order_status": "CANCELLED"}))
+
+
+def detail_seq(*prices):
+    """order_detail answers: the field check first, then one per read-back poll."""
+    return Seq(*[ok({"groww_order_id": "GMK1", "average_fill_price": None, "filled_quantity": 0,
+                     "price": p, "order_status": "OPEN" if p == 388.0 else "MODIFICATION_REQUESTED"}) for p in prices])
 
 
 def test_live_test_prints_order_list_and_flags_foreign_orders():
@@ -241,18 +263,114 @@ def test_live_test_modifies_up_half_percent_rounded_to_tick_then_cancels():
     # LTP 400, tick 0.05: rests at 388.00 (3% below); +0.5% = 389.94 -> 389.90; cap 98% of LTP = 392.00
     sess = FakeSession({**routes(), **LIVE_ROUTES,
                         ("POST", "/order/modify"): ok({"groww_order_id": "GMK1", "order_status": "MODIFICATION_REQUESTED"}),
-                        ("GET", "/order/status/GMK1"): status_seq(price=389.90)})
+                        ("GET", "/order/status/GMK1"): status_seq(),
+                        ("GET", "/order/detail/GMK1"): detail_seq(388.0, 388.0, 389.9)})
     c = live_test(live(sess), "ITC")
     res = {r["check"]: r for r in c.rows}
     create = next(x[2]["json"] for x in sess.calls if x[1].endswith("/order/create"))
     mod = next(x[2]["json"] for x in sess.calls if x[1].endswith("/order/modify"))
     assert create["trading_symbol"] == "ITC" and create["price"] == 388.0
-    assert mod == {"quantity": 1, "order_type": "LIMIT", "segment": "CASH", "groww_order_id": "GMK1", "price": 389.9}
+    assert mod == {"quantity": 1, "order_type": "LIMIT", "segment": "CASH", "groww_order_id": "GMK1", "price": 389.9,
+                   "trigger_price": None}
+    assert not any("/order/status/GMK1" in x[1] and x[2].get("params", {}).get("price") for x in sess.calls)
+    assert "price read back from order detail: 389.9" in res["live: modify order"]["detail"]
     assert mod["price"] <= 400.0 * 0.98
     assert res["live: modify order"]["ok"] is True, res["live: modify order"]
     assert res["live: cancel order"]["ok"] is True
     order = [x[1].rsplit("/", 2)[-2:] for x in sess.calls if x[0] == "POST"]
     assert order.index(["order", "modify"]) < order.index(["order", "cancel"])
+
+
+def test_live_test_skips_modify_when_market_fell_and_caps_on_fresh_ltp():
+    # fresh LTP 394 is 1.5% below 400: skip the modify, still cancel
+    sess = FakeSession({**routes(), **LIVE_ROUTES, ("GET", "/live-data/ltp"): Seq(ok({"NSE_ITC": 400.0}), ok({"NSE_ITC": 394.0})),
+                        ("GET", "/order/status/GMK1"): status_seq()})
+    c = live_test(live(sess), "ITC")
+    res = {r["check"]: r for r in c.rows}
+    assert not any(x[1].endswith("/order/modify") for x in sess.calls)
+    assert res["live: modify order"]["ok"] is None and "fell" in res["live: modify order"]["detail"]
+    assert res["live: cancel order"]["ok"] is True
+    # fresh LTP 396 (1% down is the limit, 0.99% is not): cap = 396.1 * 0.98 = 388.178 -> 388.15, never above
+    sess = FakeSession({**routes(), **LIVE_ROUTES, ("GET", "/live-data/ltp"): Seq(ok({"NSE_ITC": 400.0}), ok({"NSE_ITC": 396.1})),
+                        ("POST", "/order/modify"): ok({"order_status": "MODIFICATION_REQUESTED"}),
+                        ("GET", "/order/status/GMK1"): status_seq(), ("GET", "/order/detail/GMK1"): detail_seq(388.0, 388.0, 388.15)})
+    live_test(live(sess), "ITC")
+    mod = next(x[2]["json"] for x in sess.calls if x[1].endswith("/order/modify"))
+    assert mod["price"] == 388.15 <= 396.1 * 0.98 + 1e-9
+
+
+def test_live_test_cancel_failure_and_filled_test_buy_are_loud():
+    sess = FakeSession({**routes(), **LIVE_ROUTES, ("POST", "/order/cancel"): RuntimeError("down"),
+                        ("GET", "/order/status/GMK1"): status_seq()})
+    res = {r["check"]: r for r in live_test(live(sess), "ITC").rows}
+    assert res["live: cancel order"]["ok"] is False
+    assert "TEST ORDER MAY STILL BE OPEN: CANCEL IT IN THE GROWW APP NOW (id GMK1)" in res["live: cancel order"]["detail"]
+    filled = {"groww_order_id": "GMK1", "order_status": "EXECUTED", "filled_quantity": 1}
+    sess = FakeSession({**routes(), **LIVE_ROUTES, ("GET", "/order/status/GMK1"): ok(filled)})
+    res = {r["check"]: r for r in live_test(live(sess), "ITC").rows}
+    assert res["live: cancel order"]["ok"] is False and "FILLED" in res["live: cancel order"]["detail"]
+    assert not any(x[1].endswith("/order/cancel") for x in sess.calls)
+
+
+def test_live_test_placement_timeout_looks_up_by_reference_and_cancels():
+    import requests
+    sess = FakeSession({**routes(), **LIVE_ROUTES, ("POST", "/order/create"): requests.Timeout("slow"),
+                        ("GET", "/order/status/GMK1"): Seq(ok({"order_status": "CANCELLED"}))})
+    res = {r["check"]: r for r in live_test(live(sess), "ITC").rows}
+    assert res["live: place limit order"]["ok"] is False
+    assert res["live: lookup after failed placement"]["ok"] is False and "WAS placed" in res["live: lookup after failed placement"]["detail"]
+    assert any(x[1].endswith("/order/cancel") for x in sess.calls) and res["live: cancel order"]["ok"] is True
+
+
+def test_order_list_reads_pages_and_notes_gtt_prefix():
+    page = [{"groww_order_id": f"O{i}", "trading_symbol": "ITC", "order_status": "EXECUTED", "order_reference_id": "TA-1234567890AB"}
+            for i in range(100)]
+    sess = FakeSession({**routes(), ("GET", "/order/list"): ok({"order_list": page})})
+    from trading_agent.groww_check import _order_list_rows, Check
+    c = Check()
+    _order_list_rows(live(sess), c)
+    assert sum(1 for x in sess.calls if x[1].endswith("/order/list")) == 5
+    assert "500 order(s) today (first 500 only)" in c.rows[0]["detail"]
+    sess = FakeSession({**routes(), **LIVE_ROUTES})
+    c = Check()
+    _order_list_rows(live(sess), c)
+    assert sum(1 for x in sess.calls if x[1].endswith("/order/list")) == 1
+    assert any("GTT" in r["detail"] for r in c.rows)
+
+
+def test_alert_failure_is_not_marked_and_retries(tmp_path):
+    p = tmp_path / "a.json"
+    calls = []
+
+    def flaky(s, b):
+        calls.append(s)
+        if len(calls) == 1:
+            raise RuntimeError("smtp down")
+    assert alert_once(p, "k", flaky, "s", "b") is False and not p.exists()
+    assert alert_once(p, "k", flaky, "s", "b") is True and alert_once(p, "k", flaky, "s", "b") is False
+    assert len(calls) == 2
+    assert not p.with_name("a.json.lock").exists()
+
+
+def test_settings_post_writes_both_env_lines(server):
+    base, app = server
+    from .test_ui import _post
+    status, j = _post(base + "/api/settings", {"groww_ddpi_confirmed": True, "groww_sell_t1": True})
+    assert status == 200 and j["applied"]["GROWW_DDPI_CONFIRMED"] == "true" and j["applied"]["GROWW_SELL_T1"] == "true"
+    env = (app.settings.state_dir / ".env").read_text()
+    assert "GROWW_DDPI_CONFIRMED=true" in env and "GROWW_SELL_T1=true" in env
+    assert app.settings.groww_ddpi_confirmed is True and app.settings.groww_sell_t1 is True
+    status, j = _post(base + "/api/settings", {"groww_sell_t1": "maybe"})
+    assert status == 400
+
+
+def test_cli_warns_when_symbol_without_live_test(tmp_path, monkeypatch, capsys):
+    from trading_agent import cli
+    from .test_groww_live import _isolated_env
+    _isolated_env(tmp_path, monkeypatch)
+    cli.main(["groww-check", "--symbol", "TCS"])  # no credentials: stops early, so check the order of messages
+    cap = capsys.readouterr()
+    assert "--symbol only applies with --live-test" in cap.err
 
 
 def test_live_test_cancels_even_when_modify_fails():

@@ -352,6 +352,8 @@ def cmd_groww_check(args: argparse.Namespace) -> int:
     from .groww_check import format_rows, live_test, read_only_checks, save
     from .runner import make_groww, token_cache
     settings = _settings(args)
+    if args.symbol and not args.live_test:
+        print("--symbol only applies with --live-test; ignoring it.", file=sys.stderr)
     if args.ip:  # needs no credentials: what IP does Groww see from this machine?
         return _check_public_ip(settings)
     if not settings.has_groww_credentials:
