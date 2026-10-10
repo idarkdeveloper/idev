@@ -28,7 +28,7 @@ import re
 import struct
 import time
 import uuid
-from datetime import datetime, timedelta, time as dtime
+from datetime import datetime, timedelta, timezone, time as dtime
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -158,6 +158,37 @@ def _headers(token: str) -> dict[str, str]:
     }
 
 
+class TokenRequestError(requests.HTTPError):
+    """Groww answered the token request with an error status (429, 401, 5xx ...)."""
+
+    def __init__(self, status: int, *, retry_after: str | None = None, text: str = ""):
+        super().__init__(f"Groww token request failed: HTTP {status}")
+        self.status = status
+        self.retry_after = retry_after
+        self.text = text
+
+
+class GrowwTokenUnavailable(RuntimeError):
+    """No Groww token can be had right now: a recent token request failed and we are waiting.
+
+    Raised without any network call while the cool-down is active. ``str(e)`` is the plain
+    message to show the user; ``until`` is when the next request is allowed.
+    """
+
+    def __init__(self, message: str, until: datetime | None = None, status: int | None = None):
+        super().__init__(message)
+        self.until = until
+        self.status = status
+
+
+def _retry_after_header(resp: Any) -> str | None:
+    headers = getattr(resp, "headers", None)
+    try:
+        return (headers.get("Retry-After") or headers.get("retry-after")) if headers else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def request_access_token(api_key: str, *, secret: str | None = None, totp: str | None = None,
                          session: requests.Session | None = None, base_url: str = BASE_URL) -> dict[str, Any]:
     """Exchange an API key for a daily access token. Returns {"token", "expiry"?}."""
@@ -171,6 +202,11 @@ def request_access_token(api_key: str, *, secret: str | None = None, totp: str |
         body = {"key_type": "totp", "totp": totp}
     sess = session or requests.Session()
     resp = sess.post(f"{base_url}/token/api/access", headers=_headers(api_key), json=body, timeout=30)
+    status = getattr(resp, "status_code", 200)
+    if isinstance(status, int) and status >= 400:
+        # The reply text is kept only to spot a "daily limit" wording; it is never shown or stored.
+        raise TokenRequestError(status, retry_after=_retry_after_header(resp),
+                                text=str(getattr(resp, "text", "") or "")[:500])
     resp.raise_for_status()
     data = resp.json()
     payload = data.get("payload") if isinstance(data.get("payload"), dict) else data
@@ -247,23 +283,174 @@ class TokenCache:
         except FileNotFoundError:
             pass
 
+    # -- cool-down after a refused token request ---------------------------------
+    @property
+    def block_path(self) -> Path:
+        return self.path.with_suffix(".block")
+
+    def read_block(self) -> dict[str, Any] | None:
+        """The last failure record ({until, status, reason, at, strikes, key}), or None."""
+        try:
+            data = json.loads(self.block_path.read_text())
+            datetime.fromisoformat(data["until"])
+            return data if isinstance(data, dict) else None
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def active_block(self, api_key: str, now: datetime | None = None) -> dict[str, Any] | None:
+        """The cool-down still in force for this key, else None."""
+        now = now or datetime.now(IST)
+        b = self.read_block()
+        if not b or now >= datetime.fromisoformat(b["until"]):
+            return None
+        if b.get("status") in (401, 403) and b.get("key") != self.fingerprint(api_key):
+            return None  # the key was changed since: the old rejection says nothing about the new one
+        return b
+
+    def write_block(self, record: dict[str, Any]) -> None:
+        """Atomic, owner-only. Holds no token, key or secret: only the status, a fixed phrase and times."""
+        self.block_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.block_path.with_name(self.block_path.name + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(record))
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, self.block_path)
+
+    def clear_block(self) -> None:
+        try:
+            self.block_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+TOKEN_BLOCK_429_S = 15 * 60
+TOKEN_BLOCK_429_CAP_S = 6 * 3600
+TOKEN_BLOCK_AUTH_S = 30 * 60
+TOKEN_BLOCK_NETWORK_S = 2 * 60
+
+_REASONS = {429: "429 Too Many Requests", 401: "401 Unauthorized", 403: "403 Forbidden"}
+_warned_blocks: set[str] = set()
+
+
+def _parse_retry_after(value: str | None, now: datetime) -> float | None:
+    """Seconds to wait from a Retry-After header: delta-seconds or an HTTP-date."""
+    if not value:
+        return None
+    value = str(value).strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+        when = parsedate_to_datetime(value)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return max(0.0, (when - now).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+def _block_message(status: int | None, until: datetime, now: datetime) -> str:
+    u = until.astimezone(IST)
+    when = u.strftime("%H:%M IST") + ("" if u.date() == now.astimezone(IST).date() else u.strftime(" on %d %b"))
+    if status == 429:
+        return (f"Groww refused a new login token (429 Too Many Requests). Next try after {when}. "
+                "Nothing else to do; the agent keeps working without Groww data until then.")
+    if status in (401, 403):
+        return (f"Groww rejected the API key, secret or TOTP ({_REASONS.get(status, status)}). Check "
+                f"GROWW_API_KEY and GROWW_API_SECRET (or GROWW_TOTP_SECRET) in .env; retrying will not help until "
+                f"they are fixed. Next try after {when}. The agent keeps working without Groww data until then.")
+    return (f"Could not get a login token from Groww ({'HTTP ' + str(status) if status else 'network error'}). "
+            f"Next try after {when}. Nothing else to do; the agent keeps working without Groww data until then.")
+
+
+def _record_token_failure(cache: TokenCache, api_key: str, exc: BaseException,
+                          now: datetime) -> GrowwTokenUnavailable:
+    status = exc.status if isinstance(exc, TokenRequestError) else None
+    prev = cache.read_block()
+    strikes = 1
+    if status == 429:
+        wait = float(TOKEN_BLOCK_429_S)
+        ra = _parse_retry_after(getattr(exc, "retry_after", None), now)
+        if ra is not None:
+            wait = max(wait, ra)
+        try:
+            recent = bool(prev and prev.get("status") == 429
+                          and now - datetime.fromisoformat(prev["at"]) < timedelta(hours=12))
+        except (KeyError, ValueError, TypeError):
+            recent = False
+        if recent:
+            strikes = int(prev.get("strikes") or 1) + 1
+            wait = wait * 2 ** (strikes - 1)
+        wait = min(wait, TOKEN_BLOCK_429_CAP_S)
+        until = now + timedelta(seconds=wait)
+        text = (getattr(exc, "text", "") or "").lower()
+        if "daily" in text and "limit" in text:
+            until = max(until, next_token_expiry(now))
+    elif status in (401, 403):
+        until = now + timedelta(seconds=TOKEN_BLOCK_AUTH_S)
+    else:
+        until = now + timedelta(seconds=TOKEN_BLOCK_NETWORK_S)
+    reason = _REASONS.get(status, f"HTTP {status}" if status else "network error")
+    try:
+        cache.write_block({"until": until.isoformat(timespec="seconds"), "status": status, "reason": reason,
+                           "at": now.isoformat(timespec="seconds"), "strikes": strikes,
+                           "key": cache.fingerprint(api_key)})
+    except OSError:
+        log.warning("Could not save the Groww token cool-down file")
+    return GrowwTokenUnavailable(_block_message(status, until, now), until, status)
+
+
+def _block_error(b: dict[str, Any], now: datetime) -> GrowwTokenUnavailable:
+    until = datetime.fromisoformat(b["until"])
+    return GrowwTokenUnavailable(_block_message(b.get("status"), until, now), until, b.get("status"))
+
+
+def warn_token_block_once(exc: GrowwTokenUnavailable, logger: logging.Logger | None = None) -> bool:
+    """Log the cool-down message once per block period (not on every poll). True if it logged."""
+    key = exc.until.isoformat() if exc.until else str(exc)
+    if key in _warned_blocks:
+        return False
+    _warned_blocks.add(key)
+    (logger or log).warning("%s", exc)
+    return True
+
 
 def cached_access_token(api_key: str, cache: TokenCache, *, secret: str | None = None,
                         totp_fn: Callable[[], str] | None = None, now: datetime | None = None,
-                        session: requests.Session | None = None, fresh: bool = False) -> str:
-    """Reuse the cached token while valid, otherwise generate one and cache it."""
+                        session: requests.Session | None = None, fresh: bool = False,
+                        force: bool = False) -> str:
+    """Reuse the cached token while valid, otherwise generate one and cache it.
+
+    After a failed request the failure is remembered in ``<cache>.block`` and no new request is made
+    (GrowwTokenUnavailable, no network) until the cool-down ends, so a refusal is not made worse by
+    retrying. ``force=True`` ignores the cool-down.
+    """
     now = now or datetime.now(IST)
     if not fresh:
         tok = cache.get(api_key, now)
         if tok:
             return tok
-    info = request_access_token(api_key, secret=secret, totp=totp_fn() if totp_fn else None,
-                                session=session)
+    if not force:
+        blk = cache.active_block(api_key, now)
+        if blk:
+            raise _block_error(blk, now)
+    try:
+        info = request_access_token(api_key, secret=secret, totp=totp_fn() if totp_fn else None,
+                                    session=session)
+    except (requests.RequestException, OSError, RuntimeError) as e:  # HTTP error, network, or no token in reply
+        raise _record_token_failure(cache, api_key, e, now) from None
     expires = next_token_expiry(now)
     reported = _parse_expiry(info.get("expiry"))
     if reported is not None and reported > now:
         expires = min(expires, reported)
     cache.put(api_key, info["token"], expires)
+    cache.clear_block()
     return info["token"]
 
 

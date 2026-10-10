@@ -11,8 +11,11 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
+import requests
+
 from .broker import LocalPaperBroker
 from .config import load_settings, parse_investors
+from .groww import GrowwTokenUnavailable
 from .quiver import _norm_congress, fetch_followed, filter_by_investors
 from .runner import check, make_broker
 from .state import State
@@ -203,8 +206,27 @@ def cmd_groww_token(args: argparse.Namespace) -> int:
     from .runner import resolve_groww_token
     settings = _settings(args)
     settings.groww_access_token = None  # use key + secret / TOTP (cached until 06:00 IST)
-    print(resolve_groww_token(settings, fresh=args.fresh))
+    if args.force:
+        print(_FORCE_WARNING, file=sys.stderr)
+    try:
+        token = resolve_groww_token(settings, fresh=args.fresh, force=args.force)
+    except (GrowwTokenUnavailable, requests.HTTPError) as e:
+        print(_token_error_text(e), file=sys.stderr)
+        return 2
+    print(token)
+    print("This is your Groww access token - treat it like a password.", file=sys.stderr)
     return 0
+
+
+_FORCE_WARNING = ("Warning: --force ignores the wait after Groww refused a login token; asking again may "
+                  "extend Groww's wait.")
+
+
+def _token_error_text(e: BaseException) -> str:
+    """The line shown when a token request fails: the clear message, never the token or a traceback."""
+    if isinstance(e, GrowwTokenUnavailable):
+        return str(e)
+    return f"Groww refused the login token request ({type(e).__name__}). Try again later."
 
 
 def _fmt_live_order(o: dict[str, Any]) -> str:
@@ -346,7 +368,13 @@ def cmd_groww_check(args: argparse.Namespace) -> int:
         source = "cached token (no new generation used)"
     else:
         source = "newly generated from the API key (counts toward 150 a day)"
-    broker = make_groww(settings)
+    if args.force:
+        print(_FORCE_WARNING, file=sys.stderr)
+    try:
+        broker = make_groww(settings, force=True) if args.force else make_groww(settings)
+    except (GrowwTokenUnavailable, requests.HTTPError) as e:
+        print(_token_error_text(e), file=sys.stderr)
+        return 2
     ticks = InstrumentTicks(settings.state_dir / "cache")
     c = read_only_checks(broker, token_source=source, cache=cache, api_key=settings.groww_api_key,
                          tick_fn=lambda sym: ticks.tick_size(sym, settings.groww_exchange))
@@ -788,6 +816,8 @@ def build_parser() -> argparse.ArgumentParser:
         .set_defaults(func=cmd_reset)
     sp = sub.add_parser("groww-token", help="print a Groww access token (cached until 06:00 IST)")
     sp.add_argument("--fresh", action="store_true", help="generate a new one even if the cached token is valid")
+    sp.add_argument("--force", action="store_true",
+                    help="ask Groww even while waiting after a refusal (may extend Groww's wait)")
     sp.set_defaults(func=cmd_groww_token)
     sp = sub.add_parser("holdings", help="your real Groww holdings: buy price, current price, P&L (read-only)")
     sp.set_defaults(func=cmd_holdings)
@@ -808,6 +838,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="also place a REAL 1-share limit buy below market (then cancel) and a test GTT")
     sp.add_argument("--offset-pct", type=float, default=3.0, help="how far below the last price to rest the buy")
     sp.add_argument("--i-understand-real-orders", action="store_true")
+    sp.add_argument("--force", action="store_true",
+                    help="ask Groww for a token even while waiting after a refusal (may extend Groww's wait)")
     sp.add_argument("--ip", action="store_true",
                     help="only print this machine's public IP and whether it matches GROWW_ALLOWED_IP (no credentials)")
     sp.set_defaults(func=cmd_groww_check)
@@ -917,7 +949,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
-    return args.func(args)
+    try:
+        return args.func(args)
+    except GrowwTokenUnavailable as e:  # any command: a clear line instead of a traceback
+        print(_token_error_text(e), file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import requests
 from .agent import AgentContext, RunResult, run_agent
 from .broker import AlpacaPaperBroker, Broker, LocalPaperBroker
 from .config import Settings
+from .groww import GrowwTokenUnavailable, warn_token_block_once
 from .costs import cost_model_for
 from .momentum import MomentumScreen
 from .notify import Notifier
@@ -26,9 +27,13 @@ def token_cache(settings: Settings) -> Any:
     return TokenCache(settings.state_dir / "groww_token.json")
 
 
-def resolve_groww_token(settings: Settings, *, fresh: bool = False, session: Any | None = None) -> str:
+def resolve_groww_token(settings: Settings, *, fresh: bool = False, session: Any | None = None,
+                        force: bool = False) -> str:
     """GROWW_ACCESS_TOKEN wins; otherwise reuse the cached generated token until it
-    expires (06:00 IST), and only then generate a new one (Groww allows 150 a day)."""
+    expires (06:00 IST), and only then generate a new one (Groww allows 150 a day).
+
+    Raises GrowwTokenUnavailable, with no network call, while a refused request is cooling down
+    (``force`` ignores the cool-down)."""
     from .groww import cached_access_token, totp_now
 
     if settings.groww_access_token and not fresh:
@@ -36,22 +41,23 @@ def resolve_groww_token(settings: Settings, *, fresh: bool = False, session: Any
     key = settings.groww_api_key
     if key and settings.groww_api_secret:
         return cached_access_token(key, token_cache(settings), secret=settings.groww_api_secret,
-                                   fresh=fresh, session=session)
+                                   fresh=fresh, session=session, force=force)
     if key and settings.groww_totp_secret:
         totp_secret = settings.groww_totp_secret
         return cached_access_token(key, token_cache(settings), totp_fn=lambda: totp_now(totp_secret),
-                                   fresh=fresh, session=session)
+                                   fresh=fresh, session=session, force=force)
     raise SystemExit("Groww selected but no GROWW_ACCESS_TOKEN or GROWW_API_KEY + "
                      "GROWW_API_SECRET / GROWW_TOTP_SECRET is set.")
 
 
-def make_groww(settings: Settings, price_fn: Any | None = None) -> Any:
-    """The real Groww client. Order calls inside it refuse unless GROWW_LIVE_ORDERS=true."""
+def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool = False) -> Any:
+    """The real Groww client. Order calls inside it refuse unless GROWW_LIVE_ORDERS=true.
+    Raises GrowwTokenUnavailable while Groww's token endpoint is cooling down after a refusal."""
     from .groww import GrowwBroker, InstrumentTicks
 
     ticks = InstrumentTicks(settings.state_dir / "cache") if settings.groww_live_orders else None
     session = groww_session(settings)
-    return GrowwBroker(resolve_groww_token(settings, session=session), live_orders=settings.groww_live_orders,
+    return GrowwBroker(resolve_groww_token(settings, session=session, force=force), live_orders=settings.groww_live_orders,
                        exchange=settings.groww_exchange, price_fallback=price_fn,
                        max_slippage_pct=settings.max_slippage_pct, session=session,
                        allowed_ip=settings.groww_allowed_ip,
@@ -81,11 +87,28 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
     sim_path = settings.state_dir / "paper_broker.json"
     price_fn = price_fn or free_prices(settings)
     if settings.use_groww:
-        groww = groww or make_groww(dataclasses.replace(settings, groww_live_orders=False), price_fn)
+        read_only = dataclasses.replace(settings, groww_live_orders=False)
+        try:
+            groww = groww or make_groww(read_only, price_fn)
+        except GrowwTokenUnavailable as e:
+            # Groww will not give us a token right now: price from the free source and keep trying Groww
+            # (a file read, no network, while the cool-down lasts) so it is used again once it is lifted.
+            warn_token_block_once(e, log)
+            groww = None
+        holder = {"g": groww}
+
+        def groww_or_free(symbol: str) -> float:
+            if holder["g"] is None:
+                try:
+                    holder["g"] = make_groww(read_only, price_fn)
+                except GrowwTokenUnavailable as e:
+                    warn_token_block_once(e, log)
+                    return price_fn(symbol)
+            return holder["g"].latest_price(symbol)
 
         def make() -> LocalPaperBroker:
             return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
-                                    price_fn=groww.latest_price, currency="INR", whole_shares=True,
+                                    price_fn=groww_or_free, currency="INR", whole_shares=True,
                                     cost_model=cost_model_for("in"), shared=True)
         sim = make()
         if sim.is_untouched_mirror:
@@ -104,10 +127,15 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
 def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
     price_fn = price_fn or free_prices(settings)
     if settings.use_groww:
-        groww = make_groww(settings, price_fn)
         if settings.groww_live_orders:
+            groww = make_groww(settings, price_fn)  # GrowwTokenUnavailable: live orders are refused, not faked
             log.warning("GROWW_LIVE_ORDERS=true: orders will use REAL money on Groww.")
             return groww
+        try:
+            groww = make_groww(settings, price_fn)
+        except GrowwTokenUnavailable as e:
+            warn_token_block_once(e, log)
+            groww = None  # practice account on free prices until Groww hands out a token again
         # Paper mode: a separate practice account (PAPER_STARTING_CASH, no stocks) with live
         # prices from Groww and simulated fills. Real holdings are shown on their own and
         # are never copied in, so the two never look like duplicates.

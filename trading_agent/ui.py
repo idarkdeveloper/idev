@@ -32,6 +32,7 @@ from .config import Settings, load_settings, parse_investors
 from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
+from .groww import GrowwTokenUnavailable
 from .runner import check, free_prices, make_broker, equity_key, make_data_source, make_notifier, make_practice_broker
 from .state import STATE_LOCK, State
 from .stops import FILLS_KEY, PracticeStopChecker
@@ -1254,7 +1255,7 @@ class App:
             g = GrowwBroker(resolve_groww_token(s), live_orders=False, exchange=s.groww_exchange,
                             price_fallback=nse_then_bse(self.prices, bse))
             positions = g.positions()
-        except SystemExit as e:
+        except (SystemExit, GrowwTokenUnavailable) as e:
             return {"linked": True, "error": str(e)}
         except Exception as e:  # noqa: BLE001
             return {"linked": True, "error": f"{type(e).__name__}: {e}"}
@@ -1301,7 +1302,7 @@ class App:
             g = GrowwBroker(token, live_orders=False, exchange=s.groww_exchange, price_fallback=self.prices)
             holdings = g.holdings()
             acct = g.account()
-        except SystemExit as e:
+        except (SystemExit, GrowwTokenUnavailable) as e:
             return {"ok": False, "message": str(e)}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "message": f"{type(e).__name__}: {e}"}

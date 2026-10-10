@@ -15,6 +15,7 @@ from datetime import datetime, time as dtime, timedelta, tzinfo
 from typing import Any, Callable
 
 from .config import Settings
+from .groww import GrowwTokenUnavailable, warn_token_block_once
 from .risk import check_stops
 from .state import STATE_LOCK, State
 from .timezones import IST
@@ -166,6 +167,9 @@ class Watcher:
             return []
         try:
             positions = self._broker.positions()
+        except GrowwTokenUnavailable as e:
+            warn_token_block_once(e, log)  # one warning per cool-down, not one per tick
+            return []
         except Exception as e:  # noqa: BLE001
             log.warning("positions unavailable for stop check: %s", e)
             return []
