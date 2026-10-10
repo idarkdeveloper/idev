@@ -34,7 +34,7 @@ from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followe
 from .momentum import MomentumScreen, momentum_summary
 from .groww import GrowwTokenUnavailable, warn_token_block_once
 from .runner import (check, free_prices, make_broker, equity_key, make_data_source, make_notifier,
-                     make_practice_broker, read_groww_portfolio)
+                     make_practice_broker, read_groww_portfolio, cached_notifier)
 from .state import STATE_LOCK, State
 from .stops import FILLS_KEY, PracticeStopChecker
 from .digest_schedule import build_digest, make_scheduler
@@ -664,7 +664,7 @@ class App:
                     broker_factory=lambda: self.broker,
                     notifier=notifier, prices=self.prices,
                     auto_exit=want_exit, holidays=self.holidays,
-                    digest=make_scheduler(self.settings, lambda: make_notifier(self.settings), data=self.data, prices=self.prices,
+                    digest=make_scheduler(self.settings, cached_notifier(self.settings), data=self.data, prices=self.prices,
                                           news=self.news, holidays=self.holidays,
                                           practice=wbroker if isinstance(wbroker, LocalPaperBroker) else None,
                                           groww=lambda: self.my_portfolio(), context=self.context),

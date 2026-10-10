@@ -60,6 +60,7 @@ class DigestContext:
     now: Callable[[], datetime] = lambda: datetime.now(IST)  # noqa: E731
     delayed: bool = True  # prices come from Yahoo
     screen_budget_s: float = 240.0
+    names: Any = None  # CompanyNames: the full NSE equity list (cached), for the summary's known-name check
     calendar: Any = None  # NSEHolidays-like (is_trading_day): finds the previous trading day
     known: set = field(default_factory=set)  # every symbol / company word seen, so a summary cannot name others
     cancel: threading.Event | None = None  # set when the build has timed out
@@ -294,18 +295,26 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
             "sizing": "1% of equity at risk on a 2x ATR move, at most 10% of equity per stock"}
 
 
-_COMMON = {"IDEA", "BANK", "POWER", "STEEL", "GOLD", "LIFE", "OIL", "GAS", "ENERGY", "FINANCE", "CAPITAL", "GLOBAL",
-           "INDIA", "INDIAN", "NATIONAL", "STATE", "UNION", "INDUSTRIES", "LIMITED", "FIRST", "GENERAL", "NEXT",
-           "SOUTH", "NORTH", "EAST", "WEST", "MARKET", "TRADE", "GROUP", "SERVICES", "TECH", "PHARMA"}
+COMMON_WORDS = {
+    "IDEA", "BANK", "POWER", "STEEL", "GOLD", "LIFE", "OIL", "GAS", "ENERGY", "FINANCE", "CAPITAL", "GLOBAL", "INDIA",
+    "INDIAN", "NATIONAL", "STATE", "UNION", "INDUSTRIES", "LIMITED", "FIRST", "GENERAL", "NEXT", "SOUTH", "NORTH", "EAST",
+    "WEST", "MARKET", "TRADE", "GROUP", "SERVICES", "TECH", "PHARMA", "CHEMICALS", "TEXTILES", "FOODS", "MOTORS", "HOUSING",
+    "INFRA", "ENGINEERING", "TECHNOLOGIES", "SOLUTIONS", "SYSTEMS", "PRODUCTS", "MATERIALS", "LABORATORIES", "HOLDINGS",
+    "ENTERPRISES", "VENTURES", "INTERNATIONAL", "COMPANY", "CORPORATION", "COMMUNICATIONS", "ELECTRIC", "ELECTRICALS",
+    "PETROLEUM", "RESOURCES", "MINING", "SHIPPING", "LOGISTICS", "HEALTHCARE", "INSURANCE", "SECURITIES", "PROPERTIES",
+    "REALTY", "MEDIA", "AUTO", "PAPER", "CEMENT", "SUGAR", "FERTILISERS", "PORTS", "TRADING", "INVESTMENTS", "INDUSTRIAL",
+    "MANUFACTURING", "PRICE", "PRICES", "STOCK", "STOCKS", "SHARE", "SHARES", "TODAY", "NEWS", "WATCH", "CASH", "VALUE",
+    "NEW", "BEST", "TOP", "HIGH", "LOW", "OPEN", "CLOSE", "PRIME", "ROYAL", "STAR", "BLUE", "GREEN", "SMART", "PURE"}
+_COMMON = COMMON_WORDS
 
 
 def _remember(ctx: DigestContext, symbol: Any, name: Any) -> None:
     """Note a symbol and the distinctive words of a company name; the summary writer rejects any of them that the
     data does not carry."""
     if symbol:
-        ctx.known.add(str(symbol).upper())
+        ctx.known.add(str(symbol).upper())   # always: an upper-case OIL is still checked
     for w in re.findall(r"[A-Za-z&]{4,}", str(name or "")):
-        if w.upper() not in _COMMON:
+        if w.upper() not in COMMON_WORDS:
             ctx.known.add(w.upper())
 
 
@@ -523,7 +532,20 @@ def _header(ctx: DigestContext, kind: str) -> dict[str, Any]:
             "delayed": bool(ctx.delayed), "currency": "₹"}
 
 
+def load_known(ctx: DigestContext) -> None:
+    """Every NSE symbol and distinctive company word, from the cached equity list, so a summary cannot name a stock
+    the data does not list. Falls back to what the run sees (universe, holdings) when the list is unavailable."""
+    if ctx.names is None:
+        return
+    try:
+        for sym, name in ctx.names._nse_names().items():
+            _remember(ctx, sym, name)
+    except Exception as e:  # noqa: BLE001
+        log.warning("digest: the NSE equity list is unavailable for the name check: %s", e)
+
+
 def morning_brief(ctx: DigestContext) -> dict[str, Any]:
+    load_known(ctx)
     today = ctx.now().date()
     data = _header(ctx, "morning")
     data["mood"] = _section(_mood, "market mood", ctx)
@@ -680,6 +702,7 @@ def _is_on(published: Any, day: date) -> bool:
 
 
 def evening_report(ctx: DigestContext) -> dict[str, Any]:
+    load_known(ctx)
     today = ctx.now().date()
     data = _header(ctx, "evening")
     data["groww"] = _section(_groww_close, "Groww portfolio", ctx, today)
@@ -730,8 +753,14 @@ def make_context(settings: Any, *, data: Any = None, prices: Any = None, news: A
                                             shared=True)
             except Exception as e:  # noqa: BLE001
                 log.warning("digest practice account unavailable: %s", e)
+    names = None
+    try:
+        from .instruments import CompanyNames
+        names = CompanyNames(cache)
+    except Exception:  # noqa: BLE001
+        pass
     return DigestContext(
-        settings=settings, prices=prices, prices_bse=YahooPrices(suffix=".BO", cache_dir=cache), context=context,
+        names=names, settings=settings, prices=prices, prices_bse=YahooPrices(suffix=".BO", cache_dir=cache), context=context,
         data=data, news=news, practice=practice, calendar=holidays,
         groww=groww or (lambda: read_groww_portfolio(settings, prices, datetime.now(IST).isoformat(timespec="seconds"))),
         universe=load_universe, state_path=Path(settings.state_dir) / "state.json")

@@ -337,6 +337,19 @@ def make_notifier(settings: Settings) -> Notifier:
                     email_from=settings.notify_email_from, webhook_url=settings.notify_webhook_url)
 
 
+def cached_notifier(settings: Settings) -> Any:
+    """A function returning the notifier for the current settings. It builds a new Notifier only when the email or
+    webhook settings have changed, not on every call (the watch service asks on every tick)."""
+    holder: dict[str, Any] = {}
+
+    def get() -> Notifier:
+        key = (settings.resend_api_key, settings.notify_email_to, settings.notify_email_from, settings.notify_webhook_url)
+        if holder.get("key") != key:
+            holder["key"], holder["n"] = key, make_notifier(settings)
+        return holder["n"]
+    return get
+
+
 def equity_key(broker: Any) -> str:
     """Which curve in state.json a broker's points belong to: the practice account has its own."""
     return "practice_equity" if isinstance(broker, LocalPaperBroker) else "equity_history"

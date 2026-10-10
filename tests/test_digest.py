@@ -724,7 +724,7 @@ def test_settings_keys_are_validated_and_written(app, s):
     env = (s.state_dir / ".env").read_text()
     assert "DIGEST_EVENING=16:05" in env and "DIGEST_MORNING_ON=false" in env
     assert s.digest_morning_on is False and s.digest_evening == "16:05" and s.digest_morning == "09:30"
-    for bad in ("25:00", "9", "abc", "09:60", "", "05:59", "12:00"):
+    for bad in ("25:00", "9", "abc", "09:60", "", "05:59", "11:01"):
         with pytest.raises(ValueError):
             app.update_settings({"digest_morning": bad})
     for key, bad in (("digest_morning", 900), ("digest_evening_on", ["x"]), ("digest_morning", ["09:00"])):
@@ -948,8 +948,9 @@ def test_practice_day_change_needs_a_point_from_the_previous_trading_day(s):
 # ---------- times ----------
 def test_digest_times_are_limited_to_sensible_hours(app, s):
     from trading_agent.config import parse_digest_time
-    assert parse_digest_time("morning", "6:00") == "06:00" and parse_digest_time("evening", "19:59") == "19:59"
-    for kind, bad in (("morning", "05:59"), ("morning", "12:00"), ("evening", "15:29"), ("evening", "20:00")):
+    assert parse_digest_time("morning", "6:00") == "06:00" and parse_digest_time("evening", "19:00") == "19:00"
+    assert parse_digest_time("morning", "11:00") == "11:00" and parse_digest_time("evening", "15:30") == "15:30"
+    for kind, bad in (("morning", "05:59"), ("morning", "11:01"), ("evening", "15:29"), ("evening", "19:01")):
         with pytest.raises(ValueError, match="can be sent between"):
             parse_digest_time(kind, bad)
         with pytest.raises(ValueError, match="can be sent between"):
@@ -1080,3 +1081,180 @@ def test_snapshot_is_created_owner_only(s, monkeypatch):
     runner.save_groww_snapshot(s, [{"symbol": "X", "qty": 1, "avg_price": 1.0}])
     assert any(p.endswith(".tmp") and "groww_holdings" in p and m == 0o600 for p, m in seen)
     assert (s.state_dir / "groww_holdings.json").exists() and not list(s.state_dir.glob("*.tmp"))
+
+
+# ===================== fix round 2 =====================
+ADVICE_PROBES = [
+    "You may wish to consider trimming your INFY position.",
+    "It may be prudent to step away from TCS for now.",
+    "Consider reducing INFY.",
+    "Perhaps take some money off the table in INFY.",
+    "Buy INFY on dips.",
+    "Accumulate INFY.",
+    "Add to INFY.",
+    "Avoid TCS.",
+    "INFY is a strong buy.",
+    "Short TCS.",
+    "Book profits in INFY.",
+    "Get out of TCS.",
+]
+HOLD = {"kind": "morning", "date": "2026-10-12", "buy_ideas": {"ideas": [{"symbol": "INFY", "price": 123.45}, {"symbol": "TCS", "price": 99.0}]}}
+
+
+@pytest.mark.parametrize("text", ADVICE_PROBES)
+def test_advice_aimed_at_the_reader_is_rejected(text):
+    ok, why = digest_writer.validate_summary(text, HOLD, {"INFY", "TCS"})
+    assert not ok and ("advice" in why), (text, why)
+
+
+def test_the_fixed_data_nouns_are_not_advice():
+    for text in ("INFY and TCS are today's buy ideas.", "There are no new buys today, but INFY would pass.",
+                 "INFY passes the screen at ₹123.45 and TCS at ₹99."):
+        ok, why = digest_writer.validate_summary(text, HOLD, {"INFY", "TCS"})
+        assert ok, (text, why)
+
+
+class Names:
+    def _nse_names(self):
+        return {"PAYTM": "One 97 Communications Limited", "NYKAA": "FSN E-Commerce Ventures Limited",
+                "ADANIENT": "Adani Enterprises Limited", "INFY": "Infosys Limited", "OIL": "Oil India Limited",
+                "IDEA": "Vodafone Idea Limited"}
+
+
+def test_known_names_come_from_the_whole_nse_list_in_both_emails(s):
+    for build in (morning_brief, evening_report):
+        ctx = ctx_for(s, names=Names())
+        build(ctx)
+        assert {"PAYTM", "NYKAA", "ADANI", "OIL", "INFOSYS"} <= ctx.known, build.__name__
+    data = {"kind": "evening", "date": "2026-10-12", "groww": {"holdings": [{"symbol": "INFY", "name": "Infosys Limited"}]}}
+    for text in ("Paytm and Nykaa look strong.", "Adani shares look attractive today."):
+        assert not digest_writer.validate_summary(text, data, ctx.known)[0], text
+    assert digest_writer.validate_summary("Infosys is steady.", data, ctx.known)[0]
+
+
+def test_common_words_pass_in_lower_case_but_an_upper_case_symbol_is_checked():
+    ctx = DigestContext(settings=None, names=Names())
+    digest.load_known(ctx)
+    data = {"kind": "morning", "date": "2026-10-12", "buy_ideas": {"ideas": [{"symbol": "INFY", "price": 123.45}]}}
+    assert digest_writer.validate_summary("Oil prices are steady and INFY passes at ₹123.45.", data, ctx.known)[0]
+    ok, why = digest_writer.validate_summary("OIL passes at ₹123.45.", data, ctx.known)
+    assert not ok
+
+
+def test_look_alike_and_fullwidth_letters_are_rejected():
+    data = {"kind": "morning", "date": "2026-10-12", "buy_ideas": {"ideas": [{"symbol": "ABC", "price": 123.45}]}}
+    assert digest_writer.validate_summary("ABC passes the screen at ₹123.45.", data, set())[0]
+    assert not digest_writer.validate_summary("ABC passes the screen at ₹123.45 with str\u043eng m\u043ementum.", data, set())[0]   # Cyrillic o
+    assert not digest_writer.validate_summary("ABC passes the screen at ₹123.45 and \u0430lso rises.", data, set())[0]            # Cyrillic a
+    assert not digest_writer.validate_summary("\uff3a\uff2f\uff2d\uff21\uff34\uff2f passes at ₹123.45.", data, set())[0]          # fullwidth ZOMATO
+    assert digest_writer.validate_summary("ABC passes the screen \u2014 at \u20b9123.45; it\u2019s steady.", data, set())[0]   # typographic punctuation is fine
+
+
+@pytest.mark.parametrize("text", ["ABC passes the screen, up 1.2L.", "ABC passes the screen at ₹1.2L.", "ABC passes at ₹3 lac."])
+def test_a_trailing_L_is_a_lakh_unit(text):
+    data = {"kind": "morning", "date": "2026-10-12", "buy_ideas": {"ideas": [{"symbol": "ABC", "price": 123.45, "x": 1.2, "y": 3}]}}
+    assert not digest_writer.validate_summary(text, data, set())[0]
+
+
+def test_both_groupings_of_a_number_in_the_data_are_accepted():
+    data = {"kind": "evening", "date": "2026-10-12", "groww": {"value": 168993.2}}
+    for text in ("The value is ₹1,68,993.", "The value is ₹168,993."):
+        assert digest_writer.validate_summary(text, data, set())[0], text
+    assert "1,68,993" in digest_writer.SYSTEM
+
+
+# ---------- claims ----------
+def test_only_one_contender_takes_over_a_stale_claim(s):
+    a, _ = sched(s)
+    b, _ = sched(s)
+    path = a._claim_path("morning", "2026-10-12")
+    for _ in range(15):
+        path.write_text("999")
+        old = time.time() - 4000
+        os.utime(path, (old, old))
+        gate = threading.Barrier(2)
+        got = []
+
+        def go(sc):
+            gate.wait()
+            got.append(sc._claim("morning", "2026-10-12"))
+        ts = [threading.Thread(target=go, args=(x,)) for x in (a, b)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        assert sorted(got) == [False, True], got
+        path.unlink()
+        assert not list(s.state_dir.glob("*.stale.*"))
+
+
+def test_the_loser_of_the_rename_gives_up(s, monkeypatch):
+    a, _ = sched(s)
+    path = a._claim_path("morning", "2026-10-12")
+    path.write_text("999")
+    old = time.time() - 4000
+    os.utime(path, (old, old))
+    monkeypatch.setattr(os, "replace", lambda *x, **k: (_ for _ in ()).throw(FileNotFoundError("someone else got it")))
+    assert a._claim("morning", "2026-10-12") is False
+
+
+def test_sent_but_not_recorded_keeps_the_claim_and_never_resends(s, monkeypatch, caplog):
+    real = digest_schedule._update_state
+    fails = {"n": 1}
+
+    def flaky(sd, fn):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise OSError("disk full")
+        return real(sd, fn)
+    monkeypatch.setattr(digest_schedule, "_update_state", flaky)
+    sc, n = sched(s)
+    old_claim = s.state_dir / "digest_morning_2026-10-09.claim"
+    old_claim.write_text("1")
+    with caplog.at_level(logging.ERROR, logger="trading_agent"):
+        assert run(sc, at(9, 5))["started"] == "morning"
+    claim = s.state_dir / "digest_morning_2026-10-12.claim"
+    assert len(n.sent) == 1 and claim.exists() and sc._unmarked == {"morning": "2026-10-12"}
+    assert any("recording it" in r.getMessage() for r in caplog.records)
+    assert not old_claim.exists()                                       # yesterday's claim is swept on each tick
+    assert not sent_marks(s)
+    info = run(sc, at(9, 6))                                            # retries the record, never the email
+    assert info.get("started") is None and len(n.sent) == 1
+    assert sent_marks(s) == {"morning": "2026-10-12"} and not claim.exists() and not sc._unmarked
+
+
+def test_a_stuck_build_is_logged_then_replaced(s, caplog):
+    gate = threading.Event()
+    calls = []
+
+    def build(kind, cancel=None):
+        calls.append(kind)
+        if len(calls) == 1:
+            gate.wait(5)
+        return email(kind)
+    now = [0.0]
+    sc, n = sched(s, build_fn=build, timeout=0.2, clock=lambda: now[0])
+    assert sc.tick(at(9, 5))["started"] == "morning"
+    sc.wait(2)
+    assert sc.last["outcome"] == "timeout"
+    now[0] = 0.3
+    assert sc.tick(at(9, 6))["busy"] is True
+    with caplog.at_level(logging.ERROR, logger="trading_agent"):
+        now[0] = 0.5                                                    # more than 2 x the timeout
+        assert sc.tick(at(9, 7))["busy"] is True and sc.tick(at(9, 7))["busy"] is True
+    assert sum("stuck" in r.getMessage() for r in caplog.records) == 1   # loud, once
+    now[0] = 0.7                                                        # more than 3 x: the old thread cannot send, start anew
+    assert run(sc, at(9, 8))["started"] == "morning"
+    assert len(calls) == 2 and len(n.sent) == 1
+    gate.set()
+
+
+def test_the_notifier_is_rebuilt_only_when_its_settings_change(s, monkeypatch):
+    built = []
+    monkeypatch.setattr(runner, "make_notifier", lambda st: built.append(1) or Notifier(resend_api_key=st.resend_api_key, email_to=st.notify_email_to))
+    s.resend_api_key, s.notify_email_to = "re_x", "a@b.c"
+    get = runner.cached_notifier(s)
+    first = get()
+    assert get() is first and get() is first and len(built) == 1
+    s.notify_email_to = "d@e.f"
+    second = get()
+    assert second is not first and second.email_to == "d@e.f" and len(built) == 2
+

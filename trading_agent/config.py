@@ -37,7 +37,7 @@ MAX_INVESTORS = 10
 DIGEST_WRITERS = ("auto", "ollama", "claude", "none")
 
 
-DIGEST_TIME_RANGE = {"morning": ("06:00", "11:59"), "evening": ("15:30", "19:59")}
+DIGEST_TIME_RANGE = {"morning": ("06:00", "11:00"), "evening": ("15:30", "19:00")}
 
 
 def parse_digest_time(kind: str, value: object) -> str:

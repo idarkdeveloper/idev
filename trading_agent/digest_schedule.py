@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import threading
+import uuid
 import time
 from datetime import datetime, time as dtime, tzinfo
 from pathlib import Path
@@ -81,7 +82,8 @@ class DigestScheduler:
 
     def __init__(self, settings: Any, ctx_factory: Callable[[], DigestContext], notifier: Any, *, holidays: Any = None,
                  tz: tzinfo = IST, timeout: float = BUILD_TIMEOUT_S, retry_after: float = RETRY_AFTER_S,
-                 max_tries: int = MAX_TRIES, build_fn: Callable[..., dict[str, Any]] | None = None):
+                 max_tries: int = MAX_TRIES, build_fn: Callable[..., dict[str, Any]] | None = None,
+                 clock: Callable[[], float] = time.monotonic):
         self.settings = settings
         self.ctx_factory = ctx_factory
         self.notifier = notifier   # a Notifier, or a function returning one (read again at every check)
@@ -91,6 +93,10 @@ class DigestScheduler:
         self.retry_after = retry_after
         self.max_tries = max_tries
         self._build_fn = build_fn
+        self._clock = clock
+        self._inner_at = 0.0
+        self._warned_slow = False
+        self._unmarked: dict[str, str] = {}   # sent, but recording it failed: kind -> day (never sent again today)
         self._lock = threading.Lock()
         self._worker: threading.Thread | None = None
         self._inner: threading.Thread | None = None  # the build; it may outlive its timeout and keeps the slot busy
@@ -125,7 +131,18 @@ class DigestScheduler:
         return [k for k in KINDS if self._wanted(k) and self._start(k) <= t < LATEST[k]]
 
     def _busy(self) -> bool:
-        return any(t is not None and t.is_alive() for t in (self._worker, self._inner))
+        if self._worker is not None and self._worker.is_alive():
+            return True
+        if self._inner is None or not self._inner.is_alive():
+            return False
+        age = self._clock() - self._inner_at
+        if age > 3 * self.timeout:
+            return False   # abandoned: it never sends, so a new build is safe
+        if age > 2 * self.timeout and not self._warned_slow:
+            self._warned_slow = True
+            log.error("a daily-email build has been running for %.0fs (limit %.0fs) and is stuck; a new one starts "
+                      "at %.0fs", age, self.timeout, 3 * self.timeout)
+        return True
 
     def _claim_path(self, kind: str, day: str) -> Path:
         return Path(self.settings.state_dir) / f"digest_{kind}_{day}.claim"
@@ -137,11 +154,7 @@ class DigestScheduler:
             try:
                 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
-                try:
-                    if time.time() - path.stat().st_mtime <= self.timeout + 60:
-                        return False
-                    path.unlink()   # left by a crashed run
-                except OSError:
+                if not self._take_over_stale(path):
                     return False
                 continue
             except OSError:
@@ -151,18 +164,72 @@ class DigestScheduler:
             return True
         return False
 
+    def _take_over_stale(self, path: Path) -> bool:
+        """Remove a claim left by a crashed run. The stale file is first renamed to a name of our own: only one
+        contender can win that rename, the others find nothing and give up. A file that turns out fresh (someone
+        claimed in between) is put back."""
+        try:
+            if time.time() - path.stat().st_mtime <= self.timeout + 60:
+                return False
+            mine = path.with_name(f"{path.name}.stale.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}")
+            os.replace(path, mine)
+        except OSError:
+            return False   # gone, or another contender won the rename
+        try:
+            fresh = time.time() - mine.stat().st_mtime <= self.timeout + 60
+            if fresh:
+                try:
+                    os.link(mine, path)   # fails if someone has claimed again; then theirs stands
+                except OSError:
+                    pass
+            return not fresh
+        except OSError:
+            return False
+        finally:
+            try:
+                mine.unlink()
+            except OSError:
+                pass
+
+    def _clean_old_claims(self, today: str) -> None:
+        """Claim files dated before today are never needed again."""
+        try:
+            for f in Path(self.settings.state_dir).glob("digest_*_*.claim"):
+                day = f.name[:-len(".claim")].rsplit("_", 1)[-1]
+                if day < today:
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
+    def _retry_marks(self, sd: Any) -> None:
+        """A digest that was sent but could not be recorded: try the record again (its claim is still held)."""
+        for kind, day in list(self._unmarked.items()):
+            def mark(d: dict[str, Any], kind: str = kind, day: str = day) -> None:
+                d.setdefault("sent", {})[kind] = day
+            try:
+                _update_state(sd, mark)
+            except OSError:
+                continue
+            del self._unmarked[kind]
+            self._release(kind, day)
+
     def tick(self, now: datetime | None = None) -> dict[str, Any]:
         """Start the digest that is due, if any. Returns at once; the work runs on a worker thread."""
         now = (now or datetime.now(self.tz)).astimezone(self.tz)
+        day, sd = now.date().isoformat(), self.settings.state_dir
+        self._clean_old_claims(day)
+        self._retry_marks(sd)
         kinds = self.due(now)
         if not kinds:
             return {"due": []}
-        day, sd = now.date().isoformat(), self.settings.state_dir
         with self._lock:
             if self._busy():
                 return {"busy": True, "due": kinds}
             for kind in kinds:
-                if time.monotonic() < self._next_try.get(kind, 0.0):
+                if self._clock() < self._next_try.get(kind, 0.0) or self._unmarked.get(kind) == day:
                     continue
                 st = read_digest_state(sd)
                 tries = (st.get("tries") or {}).get(kind) or {}
@@ -202,6 +269,7 @@ class DigestScheduler:
                 result["error"] = f"{type(e).__name__}: {e}"
 
         self._inner = inner = threading.Thread(target=build, daemon=True, name=f"digest-build-{kind}")
+        self._inner_at, self._warned_slow = self._clock(), False
         inner.start()
         inner.join(self.timeout)
         outcome, detail = "failed", None
@@ -227,13 +295,21 @@ class DigestScheduler:
                 tries = d.setdefault("tries", {})
                 cur = tries.get(kind) or {}
                 tries[kind] = {"date": day, "n": (cur.get("n", 0) if cur.get("date") == day else 0) + 1}
+        marked = True
         try:
             _update_state(self.settings.state_dir, mark)   # marked sent first, then the claim goes
         except OSError as e:
-            log.warning("could not record the %s digest in %s: %s", kind, DIGEST_STATE_FILE, e)
-        self._release(kind, day)
+            marked = False
+            log.error("the %s digest %s but recording it in %s failed (%s)", kind,
+                      "was sent" if outcome == "sent" else "failed", DIGEST_STATE_FILE, e)
+        if marked:
+            self._release(kind, day)
+        else:   # keep the claim (it expires) so nobody sends it again; this scheduler also remembers
+            if outcome == "sent":
+                self._unmarked[kind] = day
+            self._next_try[kind] = self._clock() + max(self.retry_after, 60.0)
         if outcome != "sent":
-            self._next_try[kind] = time.monotonic() + self.retry_after
+            self._next_try[kind] = self._clock() + self.retry_after
             log.warning("%s digest not sent: %s (%s)", kind, outcome, detail)
         else:
             log.info("%s digest sent: %s", kind, result["email"]["subject"])

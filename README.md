@@ -306,7 +306,7 @@ dashboard) to your email (Resend) and/or webhook. They never place an order.
   may be delayed. If Groww refuses a login, the emails use your saved holdings (`state/groww_holdings.json`, written
   after every successful read) and say so (with how many trading days old they are when more than one).
 - Each email is sent once per trading day (remembered in `state/digest_state.json`, with a claim file so two processes cannot both send it).
-  The morning time must be 06:00-11:59 and the evening 15:30-19:59 IST. A late start still sends the morning one before 12:00 and the evening one before 20:00. Amounts use Indian grouping (₹5,00,000). Switch each on or off and
+  The morning time must be 06:00-11:00 and the evening 15:30-19:00 IST. A late start still sends the morning one before 12:00 and the evening one before 20:00. Amounts use Indian grouping (₹5,00,000). Switch each on or off and
   set its time under Settings, where Preview shows the rendered email on the Live or Demo page.
 - `python -m trading_agent digest morning|evening [--send] [--writer auto|ollama|claude|none]` prints the email
   (and with `--send` mails it). Keys: `DIGEST_ENABLED`, `DIGEST_MORNING_ON`, `DIGEST_EVENING_ON`, `DIGEST_MORNING`,
