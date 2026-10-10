@@ -46,6 +46,12 @@ python -m trading_agent check --investor "ASHISH KACHOLIA,VIJAY KEDIA"
 python -m trading_agent loop --every 30
 ```
 
+If Groww refuses a new login token (HTTP 429, or a rejected key), the agent remembers it in
+`state/groww_token.block` and stops asking until the wait is over; `groww-token` / `groww-check`
+print when to try again (`--force` asks anyway and may extend Groww's wait). Meanwhile the watch keeps
+alerting on new deals ("analysis paused: Groww unavailable"), announcements and news, and the full
+check analyses those deals once Groww is back. Stop and order checks pause during the wait.
+
 Other commands: `portfolio` (account + P&L), `history` (past recommendations),
 `reset` (forget seen trades, reset the paper account), `groww-token` (mint a daily token),
 `check --json`, and `--market us` to switch to the US stack.

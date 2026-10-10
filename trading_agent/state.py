@@ -54,6 +54,10 @@ class State:
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         for t in trades:
             self.data["seen"][t.key] = {"at": now, "summary": t.summary()}
+        alerted = self.data.get("alerted_while_blocked")
+        if alerted:  # analysed now: the "analysis paused" alert for it has done its job
+            for t in trades:
+                alerted.pop(t.key, None)
 
     def record_run(self, info: dict[str, Any]) -> None:
         info = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **info}

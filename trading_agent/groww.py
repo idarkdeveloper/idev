@@ -337,7 +337,7 @@ class TokenCache:
                 continue
             if b.get("status") in (401, 403) and b.get("key") != self.fingerprint(api_key):
                 continue  # the key was changed since: the old rejection says nothing about the new one
-            if best is None or b["until"] > best["until"]:
+            if best is None or datetime.fromisoformat(b["until"]) > datetime.fromisoformat(best["until"]):
                 best = b
         return best
 
@@ -355,7 +355,7 @@ class TokenCache:
         _mem_blocks.pop(str(self.block_path), None)
         try:
             self.block_path.unlink()
-        except FileNotFoundError:
+        except OSError:  # missing, or locked / read-only: the success itself must not fail over it
             pass
 
 
@@ -363,6 +363,7 @@ TOKEN_BLOCK_429_S = 15 * 60
 TOKEN_BLOCK_429_CAP_S = 6 * 3600
 TOKEN_BLOCK_AUTH_S = 30 * 60
 TOKEN_BLOCK_NETWORK_S = 2 * 60
+RETRY_AFTER_MAX_S = 24 * 3600  # a Retry-After beyond a day is clamped (garbage or hostile values)
 
 _REASONS = {429: "429 Too Many Requests", 401: "401 Unauthorized", 403: "403 Forbidden"}
 _warned_blocks: set[str] = set()
@@ -374,15 +375,20 @@ def _parse_retry_after(value: str | None, now: datetime) -> float | None:
         return None
     value = str(value).strip()
     try:
-        return max(0.0, float(value))
+        secs = float(value)
+        return max(0.0, min(secs, RETRY_AFTER_MAX_S)) if math.isfinite(secs) else float(RETRY_AFTER_MAX_S)
     except ValueError:
         pass
+    except OverflowError:
+        return float(RETRY_AFTER_MAX_S)
     try:
         from email.utils import parsedate_to_datetime
         when = parsedate_to_datetime(value)
         if when.tzinfo is None:
             when = when.replace(tzinfo=timezone.utc)
-        return max(0.0, (when - now).total_seconds())
+        return max(0.0, min((when - now).total_seconds(), RETRY_AFTER_MAX_S))
+    except OverflowError:
+        return float(RETRY_AFTER_MAX_S)
     except (TypeError, ValueError):
         return None
 

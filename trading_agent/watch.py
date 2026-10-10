@@ -11,7 +11,7 @@ import logging
 import re
 import threading
 import time
-from datetime import datetime, time as dtime, timedelta, tzinfo
+from datetime import datetime, time as dtime, timedelta, timezone, tzinfo
 from typing import Any, Callable
 
 from .config import Settings
@@ -55,6 +55,8 @@ class Watcher:
                  news: Any | None = None, broker_factory: Callable[[], Any] | None = None):
         self.settings = settings
         self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
+        self._blocked_until: datetime | None = None
+        self._broker_warned: dict[str, float] = {}
         self._prices = prices  # object with .history(symbol, range) for ATR-based stops
         self.auto_exit = auto_exit  # sell paper positions that hit their trailing stop
         self.every = max(15, int(every))
@@ -239,11 +241,58 @@ class Watcher:
         """The broker, built now if it could not be at start (Groww refusing a login token). While it cannot
         be built the watch runs alerts-only: deals, announcements and news, with a single warning per block."""
         if self._broker is None and self._broker_factory is not None:
+            self._blocked_until = None
             try:
                 self._broker = self._broker_factory()
             except GrowwTokenUnavailable as e:
+                self._blocked_until = e.until
                 warn_token_block_once(e, log)
+            except (Exception, SystemExit) as e:  # noqa: BLE001 - whatever stops the broker: keep the alerts running
+                key = f"{type(e).__name__}: {e}"
+                if time.monotonic() - self._broker_warned.get(key, -3600.0) >= 3600.0:
+                    self._broker_warned[key] = time.monotonic()
+                    log.warning("broker unavailable, watching alerts only: %s", key)
         return self._broker
+
+    def poll_deals_blocked(self) -> list[dict[str, Any]]:
+        """Alerts-only mode: tell the user about new deals without analysing them (that needs the broker).
+
+        Nothing is marked seen, so the full check analyses each one once the broker is back; the keys already
+        alerted are remembered (state ``alerted_while_blocked``) so every deal alerts once, not every tick."""
+        if self._data is None:
+            return []
+        from .quiver import fetch_followed
+        try:
+            trades = fetch_followed(self._data, self.settings.investors, self.settings.watch_source)
+        except Exception as e:  # noqa: BLE001
+            log.warning("deals unavailable: %s", e)
+            return []
+        path = self.settings.state_dir / "state.json"
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with STATE_LOCK:  # reload and change only our own key, so a write made meanwhile is kept
+            st = State(path)
+            seen = st.data["seen"]
+            alerted = st.data.setdefault("alerted_while_blocked", {})
+            for k in [k for k in alerted if k in seen]:
+                del alerted[k]
+            fresh = [t for t in st.new_trades(trades) if t.key not in alerted]
+            for t in fresh:
+                alerted[t.key] = now
+            if fresh:
+                st.save()
+        if fresh and self._notifier is not None:
+            from .notify import clean_text
+            until = self._blocked_until
+            when = (f"until {until.astimezone(IST).strftime('%H:%M IST')}" if until else "until it is back")
+            by: dict[str, list[Any]] = {}
+            for t in fresh:
+                by.setdefault(clean_text(t.investor, 120), []).append(t)
+            for who, ts in by.items():
+                self._notifier.send(
+                    f"[DEAL] {who}: {len(ts)} new deal(s) - analysis paused: Groww unavailable {when}",
+                    "\n".join(clean_text(t.summary(), 300) for t in ts)
+                    + "\n\nThese are not analysed yet; the full check runs on them when Groww is back.")
+        return [t.to_dict() for t in fresh]
 
     def tick(self, force: bool = False) -> dict[str, Any]:
         now = datetime.now(self.tz)
@@ -258,6 +307,7 @@ class Watcher:
         alerts_only = self.ensure_broker() is None and self._broker_factory is not None
         if alerts_only:
             info["alerts_only"] = "Groww is unavailable: stop and order checks are paused"
+            info["new_deals_unanalysed"] = self.poll_deals_blocked()
         try:
             if self._check_fn is not None and not alerts_only:
                 result = self._check_fn()
