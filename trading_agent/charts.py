@@ -138,7 +138,7 @@ def _draw_intraday(bars15: list[dict[str, Any]], ema21: list[float | None] | Non
         labels.append((prev_close, f"prev {prev_close:,.0f}", PREV))
     for lv in levels or []:
         v = lv.get("value")
-        if not _in_view([v], lo_y, hi_y, span):
+        if v is None or not _in_view([v], lo_y, hi_y, span):
             continue
         ax.axhline(v, color=LEVEL, linestyle=(0, (1, 3)), linewidth=1.8, zorder=1)
         labels.append((float(v), f"{SHORT.get(lv.get('label', ''), lv.get('label', ''))} {v:,.0f}", LEVEL))
