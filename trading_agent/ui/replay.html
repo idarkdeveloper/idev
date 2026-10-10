@@ -64,6 +64,7 @@
     </div>
     <div id="summary"></div>
     <div id="scorecard"></div>
+    <div id="deals-summary"></div>
     <section class="cols">
       <div class="main">
         <div class="card">
@@ -83,6 +84,12 @@
             <label class="row sub" style="gap:6px"><input type="checkbox" id="ro-autostop"> Auto-sell at my trailing stops (checked every trading day of a step)</label>
             <div class="sub">Fills at the replay day's closing price, whole shares, Indian delivery charges deducted.</div>
           </form>
+        </div>
+        <div class="card" id="deals-card">
+          <div class="cardhead"><h2>Disclosed deals</h2><span class="sub" id="dl-sub">bulk and block deals public by the replay date</span></div>
+          <div class="row" id="dl-filter" role="group" aria-label="Show deals by investor" style="gap:6px;padding:8px 16px" hidden></div>
+          <div class="scroll"><table><thead><tr><th>Reported</th><th>Side</th><th>Stock</th><th class="num">Shares</th><th class="num">Price</th><th class="num">Value</th><th>Exchange</th><th>Who</th><th>Client type</th></tr></thead><tbody id="dl-rows"><tr><td colspan="9" class="empty">Loading disclosed deals…</td></tr></tbody></table></div>
+          <div class="cardbody"><div class="sub" id="dl-note" aria-live="polite">Only deals that were public on the replay date are listed: nothing reported later. Click a stock to look it up and fill the order form (you still press Place).</div></div>
         </div>
         <div class="card">
           <div class="cardhead"><h2>Agent's picks as of today</h2><span class="sub" id="pk-sub"></span></div>
