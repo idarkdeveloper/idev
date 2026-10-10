@@ -2129,3 +2129,11 @@ def test_summaries_show_company_names_with_the_code():
     from trading_agent.digest_schedule import telegram_summary
     email = {"summary": "S.", "data": {"watch": {"items": [{"symbol": "VEDL", "name": "Vedanta Limited", "reasons": ["down 29%"]}]}}}
     assert "- Vedanta (VEDL): down 29%" in telegram_summary(email)
+
+
+def test_a_count_of_holdings_said_with_today_is_not_an_amount():
+    from trading_agent.digest_writer import _today_conflict
+    data = {"portfolio": {"groww": {"day_pl": 0.0, "total_pl": -21722.0}}}
+    assert _today_conflict("Today 13 of your holdings are flagged, with a portfolio loss overall.", data) is None
+    assert _today_conflict("13 holdings flagged today in the portfolio.", data) is None
+    assert _today_conflict("Your portfolio lost 21722 today.", data) is not None   # an amount still has to be today's move

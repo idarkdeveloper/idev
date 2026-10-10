@@ -226,7 +226,9 @@ def telegram_brief(email: dict[str, Any], allowed_hosts: Any = None) -> dict[str
                            _macro_line(data.get("world"), data.get("gauges")), _premarket_line(data)) if x]
     else:
         mid = _evening_lines(data)
-    summary = _summary_line(email.get("summary"))
+    # the rules summary only repeats the mood / action / world lines above it; keep a model-written one
+    writer = str(email.get("writer") or "")
+    summary = None if writer in ("rules", "none") else _summary_line(email.get("summary"))
     deals = _deals_line(data.get("deals"))
     tail = [deals] if deals else []
     head = _header(data, kind)

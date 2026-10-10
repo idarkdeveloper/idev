@@ -139,3 +139,9 @@ def test_payload_is_html_with_button_and_html_rejection_retries_plain_once():
     assert "parse_mode" not in plain and "<b>" not in plain["text"] and "Morning brief" in plain["text"]
     s3 = Sess(first=500)   # other errors are not retried
     assert "telegram" not in send_digest(notifier(s3), e, "morning", "2026-10-12") and len(s3.calls) == 1
+
+
+def test_the_rules_summary_is_left_out_of_telegram_but_a_model_one_stays():
+    base = {"summary": "UNIQUE SUMMARY TEXT.", "data": {"kind": "morning", "date": "2026-10-12"}}
+    assert "UNIQUE SUMMARY TEXT" not in telegram_brief({**base, "writer": "rules"})["html"]
+    assert "UNIQUE SUMMARY TEXT" in telegram_brief({**base, "writer": "claude:claude-haiku-5-5"})["html"]

@@ -298,6 +298,10 @@ _TODAY = re.compile(r"\b(today|this session|so far today)\b", re.I)
 _MONEYISH = re.compile(r"\b(portfolio|holdings?|account|practice|groww|value|equity|worth|lost|gained|profit|loss)\b", re.I)
 
 
+_COUNT_AFTER = re.compile(r"\s*(?:of\s+(?:your|the|these|all)\s+)?(?:\w+\s+)?(holdings?|stocks?|shares?|names?|deals?|"
+                          r"ideas?|candidates?|compan(?:y|ies)|positions?|investors?|days?|sessions?|flagged|pass)\b", re.I)
+
+
 def _today_conflict(text: str, data: dict[str, Any]) -> str | None:
     """An amount described as 'today' in a sentence about the portfolio must be today's move (or its absolute value),
     not the total: 'lost 21722 today' when today was ₹0 is rejected."""
@@ -317,6 +321,8 @@ def _today_conflict(text: str, data: dict[str, Any]) -> str | None:
                 continue
             if n == int(n) and n <= 10:
                 continue
+            if n == int(n) and _COUNT_AFTER.match(sentence, m.end()):
+                continue   # "13 holdings flagged today" is a count, not an amount that moved today
             k = min(len(lit.split(".")[1]) if "." in lit else 0, 2)
             if not any(round(a, k) == n for a in allowed):
                 return f"gives {lit} as today's figure, which is not today's move"
