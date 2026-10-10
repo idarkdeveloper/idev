@@ -207,7 +207,7 @@ def test_daily_email_gives_telegram_the_summary_and_key_lines():
     s = Session()
     send_digest(tg_notifier(s), email, "morning", "2026-10-12")
     sent = [c for c in s.calls if c[1].endswith("/sendMessage")]
-    assert "FULL EMAIL TEXT" not in sent[0][2]["json"]["text"] and "AAA at 100.0" in sent[0][2]["json"]["text"]
+    assert "FULL EMAIL TEXT" not in sent[0][2]["json"]["text"] and "Holdings to review (1 flagged)" in sent[0][2]["json"]["text"] and "BBB" in sent[0][2]["json"]["text"]
     assert s.calls[-1][1].endswith("/sendPhoto")
 
 

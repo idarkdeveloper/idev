@@ -176,7 +176,8 @@ class Notifier:
 
     def send(self, subject: str, body: str, html: str | None = None,
              images: list[dict[str, Any]] | None = None, idempotency_key: str | None = None,
-             telegram_text: str | None = None) -> list[str]:
+             telegram_text: str | None = None, telegram_html: str | None = None,
+             telegram_plain: str | None = None, telegram_button: dict[str, Any] | None = None) -> list[str]:
         """``images``: [{"cid", "filename", "content" (bytes)}] shown inline in the HTML part through Resend's
         attachments. If Resend refuses them, the email goes again without the pictures (their <img> tags removed);
         webhooks get the text only. Telegram (when configured) gets ``telegram_text`` (default: the body) as plain text
@@ -211,7 +212,8 @@ class Notifier:
             except requests.RequestException as e:
                 log.warning("webhook delivery failed: %s", e)
         if "telegram" in self.channels and not self._tg_done(idempotency_key):
-            if self._telegram(subject, body if telegram_text is None else telegram_text, images):
+            if self._telegram(subject, body if telegram_text is None else telegram_text, images,
+                              html=telegram_html, plain=telegram_plain, button=telegram_button):
                 delivered.append("telegram")
                 self._tg_mark(idempotency_key)
         self.sent.append({"subject": subject, "body": body, "delivered": delivered})
@@ -242,17 +244,34 @@ class Notifier:
         r = self.session.post(f"https://api.telegram.org/bot{self.telegram_token}/{method}", timeout=30, **kw)
         r.raise_for_status()
 
-    def _telegram(self, subject: str, text: str, images: list[dict[str, Any]] | None) -> bool:
-        """Never raises and never logs the URL or the token: errors are redacted (``bot***``)."""
+    def _telegram(self, subject: str, text: str, images: list[dict[str, Any]] | None, html: str | None = None,
+                  plain: str | None = None, button: dict[str, Any] | None = None) -> bool:
+        """Never raises and never logs the URL or the token: errors are redacted (``bot***``). ``html`` (a ready brief,
+        already escaped) goes as one message with the optional URL ``button``; if Telegram answers 400 (cannot parse
+        it), ``plain`` goes once without parse mode."""
         ok = False
         try:
-            msgs = telegram_chunks(f"{subject}\n{text}".strip())
-            if msgs:
-                first_line, _, rest = msgs[0].partition("\n")
-                msgs[0] = f"<b>{first_line}</b>" + (f"\n{rest}" if rest else "")
-            for m in msgs:
-                self._tg("sendMessage", json={"chat_id": self.telegram_chat_id, "text": m, "parse_mode": "HTML",
-                                              "disable_web_page_preview": True})
+            if html is not None:
+                msg = {"chat_id": self.telegram_chat_id, "text": html, "parse_mode": "HTML", "disable_web_page_preview": True}
+                if button:
+                    msg["reply_markup"] = button
+                try:
+                    self._tg("sendMessage", json=msg)
+                except requests.RequestException as e:
+                    if getattr(getattr(e, "response", None), "status_code", None) != 400:
+                        raise
+                    log.warning("telegram refused the HTML message; sending it as plain text")
+                    self._tg("sendMessage", json={"chat_id": self.telegram_chat_id, "text": plain if plain is not None else _html.unescape(re.sub(r"<[^>]+>", "", html)),
+                                                  "disable_web_page_preview": True})
+                msgs = [html]
+            else:
+                msgs = telegram_chunks(f"{subject}\n{text}".strip())
+                if msgs:
+                    first_line, _, rest = msgs[0].partition("\n")
+                    msgs[0] = f"<b>{first_line}</b>" + (f"\n{rest}" if rest else "")
+                for m in msgs:
+                    self._tg("sendMessage", json={"chat_id": self.telegram_chat_id, "text": m, "parse_mode": "HTML",
+                                                  "disable_web_page_preview": True})
             ok = bool(msgs)
         except Exception as e:  # noqa: BLE001 - Telegram must never cost the email or the alert
             log.warning("telegram delivery failed: %s: %s", type(e).__name__, redact(e, self.telegram_token))
