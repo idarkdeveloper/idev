@@ -73,7 +73,7 @@ def test_freshness_with_no_heartbeat_file(tmp_path):
     assert f["market_open"] is True
     assert f["watch"] == {"seen": False, "at": None, "age_s": None, "every": None, "last_error": None,
                           "tick_finished": None, "level": "unseen"}
-    assert set(f) == {"now", "market_open", "live_orders", "watch", "prices", "deals"}
+    assert set(f) == {"now", "market_open", "live_orders", "nse_degraded", "watch", "prices", "deals"}
     assert f["prices"]["last_close"].startswith("2026-10-09T15:30") and f["prices"]["bar_at"] is None
     assert f["deals"] == {"age_s": None, "fetched_at": None}
 
