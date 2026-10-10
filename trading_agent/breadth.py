@@ -19,11 +19,13 @@ import io
 import json
 import logging
 import threading
+import time
 from bisect import bisect_right
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .filing_time import _is_trading, next_trading_day, previous_trading_day
 from .state import atomic_write
 from .timezones import IST
 
@@ -35,6 +37,8 @@ WEAK_DAYS = 3        # this many weak days in a row is "broad selling"
 MA_DAYS = 50
 FETCH_AFTER_HOUR = 19
 MAX_TRIES = 8
+BACKFILL_DAYS = 10
+BACKFILL_PER_TICK = 3
 RETRY_GAP = timedelta(minutes=20)
 _LOCK = threading.Lock()
 _MONTHS = {m: i for i, m in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
@@ -163,10 +167,33 @@ class BreadthStore:
             return True
         return now - last >= RETRY_GAP
 
-    def note_try(self, now: datetime, done: bool, outcome: str) -> None:
+    def may_try(self, key: str, now: datetime, max_tries: int = MAX_TRIES) -> bool:
+        a = self._load()["attempts"].get(key)
+        if not a:
+            return True
+        if a.get("done") or a.get("tries", 0) >= max_tries:
+            return False
+        try:
+            last = datetime.fromisoformat(a["last"])
+            last = last if last.tzinfo else last.replace(tzinfo=IST)
+        except (KeyError, ValueError):
+            return True
+        return now - last >= RETRY_GAP
+
+    def missing_days(self, now: datetime, calendar: Any | None = None, n: int = BACKFILL_DAYS) -> list[str]:
+        """Up to ``n`` trading days before today that have no stored row (newest first)."""
+        have = set(self._load()["days"])
+        out, d = [], now.date()
+        for _ in range(n):
+            d = previous_trading_day(d, calendar)
+            if d.isoformat() not in have:
+                out.append(d.isoformat())
+        return sorted(out, reverse=True)   # newest first: the recent sessions matter most
+
+    def note_try(self, now: datetime, done: bool, outcome: str, key: str | None = None) -> None:
         with _LOCK:
             d = self._load()
-            key = now.date().isoformat()
+            key = key or now.date().isoformat()
             a = d["attempts"].get(key, {})
             d["attempts"][key] = {"tries": a.get("tries", 0) + 1, "done": done, "last": now.isoformat(timespec="seconds"),
                                   "outcome": outcome}
@@ -186,18 +213,46 @@ class BreadthStore:
         return row
 
     def tick(self, client: Any, now: datetime, members_fn: Callable[[], Iterable[str]],
-             bars_fn: Callable[[str], list[dict[str, Any]]] | None = None, calendar: Any | None = None) -> dict[str, Any] | None:
-        """Watch loop: once per trading day after 19:00 IST (retrying a not-yet-posted file up to MAX_TRIES). Never raises."""
-        if client is None or not self.due(now, calendar):
+             bars_fn: Callable[[str], list[dict[str, Any]]] | None = None, calendar: Any | None = None,
+             sleep: Callable[[float], Any] = time.sleep) -> dict[str, Any] | None:
+        """Watch loop: today's row once per trading day after 19:00 IST (retrying a not-yet-posted file up to MAX_TRIES),
+        and a backfill of sessions missed in the last BACKFILL_DAYS trading days (a few per tick, each tried at most twice,
+        using today's NIFTY 500 list for the members). Never raises. Returns today's row when stored now."""
+        if client is None:
             return None
+        members: list[str] | None = None
+        todays = None
         try:
-            row = self.fetch_day(client.session, now.date(), members_fn(), bars_fn)
-            self.note_try(now, True, "ok")
-            return row
-        except Exception as e:  # noqa: BLE001
-            log.info("breadth not stored yet: %s", e)
-            self.note_try(now, False, f"{type(e).__name__}")
-            return None
+            if self.due(now, calendar):
+                members = list(members_fn())
+                try:
+                    todays = self.fetch_day(client.session, now.date(), members, bars_fn)
+                    self.note_try(now, True, "ok")
+                except Exception as e:  # noqa: BLE001
+                    log.info("breadth not stored yet: %s", e)
+                    self._note_failure(now, e)
+            if _is_trading(now.date(), calendar):
+                done = 0
+                for day in self.missing_days(now, calendar):
+                    key = "bf-" + day
+                    if done >= BACKFILL_PER_TICK or not self.may_try(key, now, 2):
+                        continue
+                    members = members if members is not None else list(members_fn())
+                    if done:
+                        sleep(2.0)   # public archive host: be polite
+                    done += 1
+                    try:
+                        self.fetch_day(client.session, date.fromisoformat(day), members, bars_fn)
+                        self.note_try(now, True, "ok", key)
+                    except Exception as e:  # noqa: BLE001
+                        log.info("breadth backfill %s failed: %s", day, e)
+                        self.note_try(now, False, type(e).__name__, key)
+        except Exception:  # noqa: BLE001 - never stops the watch
+            log.exception("breadth tick failed")
+        return todays
+
+    def _note_failure(self, now: datetime, e: Exception) -> None:
+        self.note_try(now, False, type(e).__name__)
 
 
 def nifty500_members(session: Any = None) -> list[str]:
@@ -270,10 +325,21 @@ def history(start: str, end: str, archive: Any, membership: Any, symbol_fn: Call
 
 
 # -- derived + the email line ------------------------------------------------------
-def weak_streak(rows: list[dict[str, Any]], weak: float = WEAK) -> int:
-    """Consecutive most-recent sessions with advance ratio below ``weak``."""
+def _gap_free(rows: list[dict[str, Any]], calendar: Any | None) -> list[dict[str, Any]]:
+    """The longest run at the end of the series with no missing trading day between its rows."""
+    run = rows[-1:]
+    for r in reversed(rows[:-1]):
+        if next_trading_day(date.fromisoformat(r["date"]), calendar) == date.fromisoformat(run[0]["date"]):
+            run.insert(0, r)
+        else:
+            break
+    return run
+
+
+def weak_streak(rows: list[dict[str, Any]], weak: float = WEAK, calendar: Any | None = None) -> int:
+    """Consecutive most-recent TRADING DAYS with advance ratio below ``weak`` (a missing session ends the run)."""
     n = 0
-    for r in reversed(rows):
+    for r in reversed(_gap_free(sorted(rows, key=lambda x: x["date"]), calendar) if rows else []):
         if r.get("ratio") is not None and r["ratio"] < weak:
             n += 1
         else:
@@ -285,7 +351,8 @@ def _ordinal(n: int) -> str:
     return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
 
 
-def breadth_line(rows: list[dict[str, Any]], today: date | None = None, max_age_days: int = 5) -> str | None:
+def breadth_line(rows: list[dict[str, Any]], today: date | None = None, max_age_days: int = 5,
+                 calendar: Any | None = None) -> str | None:
     """'Breadth (NIFTY 500): 38% of stocks rose on Fri 9 Oct (below 35% is weak); 3rd day below 35%, broad selling;
     62% are above their 50-day average.' None when nothing is stored or it is too old."""
     if not rows:
@@ -298,7 +365,7 @@ def breadth_line(rows: list[dict[str, Any]], today: date | None = None, max_age_
         return None
     pct = round(last["ratio"] * 100)
     text = f"Breadth (NIFTY 500): {pct}% of stocks rose on {d.strftime('%a')} {d.day} {d.strftime('%b')} (below {round(WEAK * 100)}% is weak)"
-    streak = weak_streak(rows)
+    streak = weak_streak(rows, calendar=calendar)
     if streak >= 1:
         text += f"; {_ordinal(streak)} day below {round(WEAK * 100)}%"
         if streak >= WEAK_DAYS:

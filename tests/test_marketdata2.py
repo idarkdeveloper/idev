@@ -12,7 +12,7 @@ import pytest
 from trading_agent import breadth, flows
 from trading_agent.bands import BandBook, parse_sec_list
 from trading_agent.membership import Membership
-from trading_agent.price_archive import PriceArchive, detect_split
+from trading_agent.price_archive import PriceArchive, detect_split, find_split
 from trading_agent.prices import YahooPrices
 from trading_agent.screen import run_screen
 from trading_agent.timezones import IST
@@ -76,10 +76,18 @@ def test_parse_rejects_other_payloads(bad):
         flows.parse_fii_dii(bad)
 
 
+def _weekdays(n, start=date(2026, 9, 28)):
+    out, d = [], start
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d)
+        d += timedelta(days=1)
+    return out
+
+
 def _rows(nets):
-    d0 = date(2026, 9, 28)
-    return [{"date": (d0 + timedelta(days=i)).isoformat(), "fii_net": f, "dii_net": d, "fii_buy": 0, "fii_sell": 0,
-             "dii_buy": 0, "dii_sell": 0} for i, (f, d) in enumerate(nets)]
+    return [{"date": d.isoformat(), "fii_net": f, "dii_net": dd, "fii_buy": 0, "fii_sell": 0, "dii_buy": 0, "dii_sell": 0}
+            for d, (f, dd) in zip(_weekdays(len(nets)), nets)]
 
 
 def test_summary_five_day_and_negative_streak():
@@ -113,6 +121,8 @@ def test_store_is_idempotent_and_fetches_through_the_client(tmp_path):
 def test_flows_fetch_once_per_trading_day_after_19(tmp_path):
     payload = json.loads((FX / "fiidii_sample.json").read_text())
     store, c = flows.FlowStore(tmp_path), Client(payload)
+    for r in _rows([(1, 1)] * 5):                                  # earlier sessions stored: no morning catch-up
+        store.add(r)
     at = lambda h, m, day=9: datetime(2026, 10, day, h, m, tzinfo=IST)   # noqa: E731
     assert store.tick(c, at(18, 59)) is None and c.gets == 0     # before 19:00
     assert store.tick(c, at(19, 0))["date"] == "2026-10-09"
@@ -137,7 +147,7 @@ def test_parse_real_price_band_fixture():
 
 
 def _book(tmp_path, on=True):
-    b = BandBook(tmp_path, enabled=on)
+    b = BandBook(tmp_path, enabled=on, now_fn=lambda: datetime(2026, 10, 9, 12, 0, tzinfo=IST))
     b.save({"AAA": 2, "BBB": 5, "CCC": 10, "DDD": 20, "EEE": None}, date(2026, 10, 9))
     return b
 
@@ -163,11 +173,13 @@ def test_bands_fetched_before_nine_once_per_day(tmp_path):
     sess = Session({"sec_list.csv": (FX / "price_bands_sample.csv").read_bytes()})
     client = Client(session=sess)
     b = BandBook(tmp_path)
-    assert b.tick(client, datetime(2026, 10, 12, 9, 0, tzinfo=IST)) is None       # 09:00 is too late
     assert b.tick(client, datetime(2026, 10, 12, 8, 30, tzinfo=IST)) > 20
     assert b.tick(client, datetime(2026, 10, 12, 8, 31, tzinfo=IST)) is None       # already stored for today
     assert len(sess.calls) == 1
+    late = BandBook(tmp_path / "late")                                              # missing at 11:40: fetched then
+    assert late.tick(client, datetime(2026, 10, 12, 11, 40, tzinfo=IST)) > 20
     assert b.tick(client, datetime(2026, 10, 11, 8, 30, tzinfo=IST)) is None       # Sunday
+    assert BandBook(tmp_path / "sun").tick(client, datetime(2026, 10, 11, 8, 30, tzinfo=IST)) is None
     assert BandBook(tmp_path / "x").tick(Client(session=Session({"sec_list": Resp("", 503)})),
                                          datetime(2026, 10, 13, 8, 0, tzinfo=IST)) is None   # failure: no raise
 
@@ -238,6 +250,7 @@ def test_breadth_line_streak_and_broad_selling():
 def test_breadth_fetch_day_stores_and_retries(tmp_path):
     sess = Session({"sec_bhavdata_full_09102026.csv": (FX / "bhavcopy_sample.csv").read_bytes()})
     client, store = Client(session=sess), breadth.BreadthStore(tmp_path)
+    store.add_many(_prior_rows())                                   # nothing to backfill: only today's fetch is tested here
     at = lambda h, m: datetime(2026, 10, 9, h, m, tzinfo=IST)   # noqa: E731
     assert store.tick(client, at(18, 0), lambda: ["20MICRONS"]) is None and not sess.calls
     row = store.tick(client, at(19, 1), lambda: ["20MICRONS", "21STCENMGM", "360ONE"])
@@ -245,11 +258,22 @@ def test_breadth_fetch_day_stores_and_retries(tmp_path):
     assert store.tick(client, at(19, 40), lambda: ["20MICRONS"]) is None and len(sess.calls) == 1   # done
     # not posted yet (404): tried again later, at most every 20 minutes
     s2, st2 = Session({}), breadth.BreadthStore(tmp_path / "b")
+    st2.add_many(_prior_rows())
     c2 = Client(session=s2)
     assert st2.tick(c2, at(19, 0), lambda: ["A"]) is None and st2.tick(c2, at(19, 10), lambda: ["A"]) is None
     assert len(s2.calls) == 1
     st2.tick(c2, at(19, 21), lambda: ["A"])
     assert len(s2.calls) == 2
+
+
+def _prior_rows():
+    """Stored sessions for the ten trading days before Fri 9 Oct 2026 (so the backfill has nothing to do)."""
+    days, d = [], date(2026, 10, 8)
+    while len(days) < 10:
+        if d.weekday() < 5:
+            days.append(d)
+        d -= timedelta(days=1)
+    return [_row(x.isoformat(), 0.5) for x in days]
 
 
 def _archive_with_members(tmp_path, n=25, days=60):
@@ -352,7 +376,7 @@ def test_todays_open_bar_is_not_archived(tmp_path):
     out = a.merge("X.NS", [_b("2026-10-08", 100), _b("2026-10-09", 101)])
     assert [b["date"] for b in out] == ["2026-10-08", "2026-10-09"]        # served ...
     assert [b["date"] for b in a.bars("X.NS")] == ["2026-10-08"]           # ... but not kept
-    after = _arch(tmp_path, now=datetime(2026, 10, 9, 16, 0, tzinfo=IST))
+    after = _arch(tmp_path, now=datetime(2026, 10, 9, 18, 0, tzinfo=IST))
     after.merge("X.NS", [_b("2026-10-09", 101)])
     assert [b["date"] for b in after.bars("X.NS")] == ["2026-10-08", "2026-10-09"]
 
@@ -420,3 +444,172 @@ def test_summary_may_quote_the_flow_and_breadth_lines_but_not_other_numbers():
     assert ok, why
     bad, _ = validate_summary("Foreign investors sold about ₹9,999 cr on Friday.", data)
     assert not bad
+
+
+# -- fix round 1 -------------------------------------------------------------------------------------------
+def test_every_production_price_source_has_the_archive(settings, tmp_path):
+    from trading_agent.runner import free_prices
+    s = dataclasses.replace(settings, market="in", state_dir=tmp_path)
+    y = free_prices(s)
+    assert y.archive is not None and y.archive.path == tmp_path / "prices" / "archive.sqlite"
+    assert (tmp_path / "prices" / "archive.sqlite").exists()
+
+
+def test_late_split_only_older_bars_are_rescaled(tmp_path):
+    a = _arch(tmp_path)
+    old = [_b(f"2026-09-{d:02d}", 1000 + d, vol=100) for d in range(14, 26)]            # 12 bars in old share units
+    a.merge("L.NS", old)
+    # the split took effect on 26 Sep; the archive then captured 26-30 Sep already in NEW units
+    a.merge("L.NS", [_b("2026-09-26", 200.0, vol=500), _b("2026-09-29", 201.0, vol=500)], "max")
+    assert a.splits("L.NS") == []                                  # a lone pair of new-unit bars is no overlap to judge yet
+    fresh = [_b(b["date"], b["close"] / 5, vol=500) for b in old] + [_b("2026-09-26", 200.0, vol=500), _b("2026-09-29", 201.0, vol=500)]
+    arch_close = {b["date"]: b["close"] for b in a.bars("L.NS")}
+    f = find_split(arch_close, {b["date"]: b["close"] for b in fresh})
+    assert f == (5.0, "2026-09-26")
+    out = a.merge("L.NS", fresh, "max")
+    sp = a.splits("L.NS")
+    assert len(sp) == 1 and sp[0]["factor"] == 5.0 and sp[0]["effective"] == "2026-09-26"
+    by = {b["date"]: b for b in out}
+    assert by["2026-09-14"]["close"] == pytest.approx(1014 / 5) and by["2026-09-14"]["volume"] == 500
+    assert by["2026-09-26"]["close"] == 200.0 and by["2026-09-29"]["close"] == 201.0     # the new-unit bars untouched
+    assert a.bars("L.NS", raw=True)[0]["close"] == 1014                                  # as first seen
+    a.merge("L.NS", fresh + [_b("2026-09-30", 202.0, vol=500)], "max")
+    assert len(a.splits("L.NS")) == 1
+
+
+def test_find_split_rejects_a_step_that_is_not_clean():
+    arch = {f"d{i}": 100.0 for i in range(8)}
+    clean = {k: (20.0 if i < 5 else 100.0) for i, k in enumerate(arch)}
+    assert find_split(arch, clean) == (5.0, "d5")
+    messy = {k: (20.0 if i < 5 else 130.0) for i, k in enumerate(arch)}
+    assert find_split(arch, messy) is None
+    assert find_split(arch, {k: 100.0 for k in arch}) is None
+
+
+def test_unchanged_fetch_is_not_written_again(tmp_path):
+    a = _arch(tmp_path)
+    bars = [_b("2026-10-05", 100), _b("2026-10-06", 101)]
+    a.merge("W.NS", bars)
+    n = a.writes
+    for _ in range(5):
+        a.merge("W.NS", [dict(b) for b in bars])
+    assert a.writes == n
+    a2 = PriceArchive(tmp_path / "p.sqlite", now_fn=lambda: NOW)                    # a new process: reads, writes nothing
+    a2.merge("W.NS", bars)
+    assert a2.writes == 0
+    a.merge("W.NS", bars + [_b("2026-10-07", 102)])
+    assert a.writes == n + 1
+
+
+def test_foreign_markets_are_archived_only_when_two_days_old(tmp_path):
+    a = _arch(tmp_path)
+    a.merge("^GSPC", [_b("2026-10-06", 1), _b("2026-10-07", 2), _b("2026-10-08", 3), _b("2026-10-09", 4)])
+    assert [b["date"] for b in a.bars("^GSPC")] == ["2026-10-06", "2026-10-07"]      # 8 and 9 Oct may still be partial
+    a.merge("^NSEI", [_b("2026-10-08", 3), _b("2026-10-09", 4)])
+    assert [b["date"] for b in a.bars("^NSEI")] == ["2026-10-08"]                    # Indian: 9 Oct is final only after 18:00
+
+
+def test_bar_not_final_before_eighteen(tmp_path):
+    a = _arch(tmp_path, now=datetime(2026, 10, 9, 17, 59, tzinfo=IST))
+    a.merge("X.NS", [_b("2026-10-09", 1)])
+    assert a.bars("X.NS") == []
+    assert _arch(tmp_path / "x", now=datetime(2026, 10, 9, 18, 0, tzinfo=IST)).is_closed("2026-10-09", "X.NS")
+
+
+def test_stale_band_list_means_no_filtering(tmp_path):
+    def book(now):
+        b = BandBook(tmp_path, now_fn=lambda: now)
+        b.save({"AAA": 2}, date(2026, 10, 7))                                        # Wednesday's list
+        return b
+    assert book(datetime(2026, 10, 9, 12, tzinfo=IST)).refuse_buy("AAA")             # 2 trading days old: still used
+    stale = book(datetime(2026, 10, 12, 12, tzinfo=IST))                              # Monday: 3 trading days old
+    assert stale.refuse_buy("AAA") is None and not stale.active() and stale.rule("AAA")["band"] == "unknown"
+    assert book(datetime(2026, 10, 9, 12, tzinfo=IST)).active()
+
+
+def test_band_fetch_retries_are_capped(tmp_path):
+    client = Client(session=Session({"sec_list": Resp("", 503)}))
+    b = BandBook(tmp_path)
+    t0 = datetime(2026, 10, 12, 8, 0, tzinfo=IST)
+    for i in range(30):
+        b.tick(client, t0 + timedelta(minutes=21 * i))
+    assert len(client.session.calls) == 6
+
+
+def test_morning_catch_up_when_the_evening_fetch_was_missed(tmp_path):
+    payload = json.loads((FX / "fiidii_sample.json").read_text())          # the session of Fri 9 Oct
+    store, c = flows.FlowStore(tmp_path), Client(payload)
+    mon = lambda h, m: datetime(2026, 10, 12, h, m, tzinfo=IST)            # noqa: E731
+    assert store.tick(c, mon(8, 0))["date"] == "2026-10-09" and len(store.rows()) == 1       # Monday morning, Friday missing
+    assert store.tick(c, mon(8, 30)) is None and c.gets == 1                                 # stored: no more asking
+    assert flows.FlowStore(tmp_path / "n").tick(Client(payload), mon(9, 30)) is None         # not in the morning window
+
+
+def test_five_day_net_and_streaks_count_trading_days_only():
+    d = _weekdays(8)
+    rows = [{"date": x.isoformat(), "fii_net": -100.0, "dii_net": 10.0} for x in d]
+    del rows[5]                                                                             # one session missing
+    s = flows.summarize(rows)
+    assert s["negative_streak"] == 2 and s["window_label"] == "5 of the last 6 sessions"
+    assert "net FII over 5 of the last 6 sessions" in flows.flows_line(rows)
+    full = [{"date": x.isoformat(), "fii_net": -100.0, "dii_net": 10.0} for x in d]
+    assert flows.summarize(full)["negative_streak"] == 8 and "5-day net FII" in flows.flows_line(full)
+    # a market holiday is not a gap when the calendar knows it
+    class Cal:
+        def is_trading_day(self, day):
+            return day.weekday() < 5 and day != d[5]
+    assert flows.summarize(rows, calendar=Cal())["negative_streak"] == 7
+    br = [_row(x.isoformat(), 0.2) for x in d]
+    del br[5]
+    assert breadth.weak_streak(br) == 2 and breadth.weak_streak(br, calendar=Cal()) == 7
+
+
+def test_breadth_backfills_missed_sessions_from_the_bhavcopy(tmp_path):
+    csv_bytes = (FX / "bhavcopy_sample.csv").read_bytes()
+    # the sample is the 9 Oct file: serve it for the days asked and check only the day it really is gets stored
+    sess = Session({"sec_bhavdata_full_09102026.csv": csv_bytes})
+    store = breadth.BreadthStore(tmp_path)
+    c = Client(session=sess)
+    sleeps = []
+    store.tick(c, datetime(2026, 10, 12, 8, 0, tzinfo=IST), lambda: ["20MICRONS", "360ONE"], calendar=None, sleep=sleeps.append)
+    asked = [u.rsplit("_", 1)[1] for u in sess.calls]
+    assert asked == ["09102026.csv", "08102026.csv", "07102026.csv"]                       # newest first, three a tick
+    assert {r["date"] for r in store.rows()} == {"2026-10-09"}                              # 8 and 7 Oct are not served: 404
+    assert len(sleeps) == 2                                                              # polite pauses between requests
+    for _ in range(4):
+        store.tick(c, datetime(2026, 10, 12, 8, 0, tzinfo=IST) + timedelta(minutes=25 * (_ + 1)), lambda: ["A"], sleep=lambda s: None)
+    assert len(sess.calls) <= 20                                                           # each missing day is tried at most twice
+
+
+def test_forward_screen_filter_is_recorded_with_a_date(tmp_path):
+    from trading_agent.costs import cost_model_for
+    from trading_agent.forward import ForwardTest, format_forward
+    ft = ForwardTest(tmp_path, universe="NIFTYMIDCAP150", top=2, capital=100_000, price_fn=lambda s: 100.0,
+                     cost_model=cost_model_for("in"), now=lambda: datetime(2026, 10, 9, 16, 0, tzinfo=IST))
+    ft.run(lambda: {"top": [{"symbol": "A"}, {"symbol": "B"}], "eligible": 5, "bands_applied": False})
+    assert ft.data.get("band_filter_since") is None
+    ft.run(lambda: {"top": [{"symbol": "A"}], "eligible": 5, "bands_applied": True}, force_rebalance=True)
+    assert ft.data["band_filter_since"] == "2026-10-09"
+    s = ft.summary()
+    assert s["band_filter_since"] == "2026-10-09" and "Price-band filter on since 2026-10-09" in format_forward(s)
+
+
+def test_morning_email_deals_are_consolidated_events(settings, tmp_path):
+    from trading_agent.deal_events import consolidate_deals
+    from trading_agent.digest import DigestContext, _deals
+    from trading_agent.quiver import DisclosedTrade
+
+    def deal(ex, client, qty, px):
+        return DisclosedTrade("bulk", client, "ABC", "Purchase", "2026-10-08", "2026-10-08", f"{qty} sh @ ₹{px}",
+                              {"qty": str(qty), "watp": str(px), "nse_symbol": "ABC"}, exchange=ex)
+
+    class Data:
+        def trades_for_investors(self, names, source, **kw):
+            return [deal("NSE", "HRTI PRIVATE LIMITED", 1_500_000, 250.0), deal("BSE", "HRTI PVT LTD", 610_000, 272.0)]
+
+    s = dataclasses.replace(settings, market="in", state_dir=tmp_path, watch_investors=["HRTI"], watch_source="deals")
+    ctx = DigestContext(settings=s, data=Data(), now=lambda: datetime(2026, 10, 9, 8, 0, tzinfo=IST))
+    out = _deals(ctx, "morning", date(2026, 10, 9))
+    assert len(out["deals"]) == 1 and out["deals"][0]["exchange"] == "NSE + BSE"
+    assert out["deals"][0]["size"].startswith("2,110,000 sh @ ₹") and out["total"] == 1
+    assert len(consolidate_deals(Data().trades_for_investors([], ""))) == 1

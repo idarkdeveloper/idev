@@ -88,7 +88,7 @@ def test_dividends_reinvest_and_cash_agree(tmp_path):
         totals[mode] = t.you.account().equity
         if mode == "cash":
             assert t.you.credits() == [{"at": "2021-06-15", "amount": 100.0, "note": "dividend X"}]
-    assert abs(totals["reinvest"] - totals["cash"]) < 5  # only charges on a slightly different notional
+    assert abs(totals["reinvest"] - totals["cash"]) < 20  # the reinvestment's own purchase charges
 
 
 def test_failed_step_leaves_the_trial_unchanged(tmp_path):

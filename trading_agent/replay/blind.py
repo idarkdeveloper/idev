@@ -523,7 +523,9 @@ def run_cli(args: Any, settings: Any, *, source: Any | None = None, news_client:
 
     if source is None:
         from ..prices import YahooPrices
-        source = YahooPrices(suffix=".NS", cache_dir=Path(settings.state_dir) / "cache", cache_ttl=7 * 86400)
+        from ..price_archive import archive_for
+        source = YahooPrices(suffix=".NS", cache_dir=Path(settings.state_dir) / "cache", cache_ttl=7 * 86400,
+                              archive=archive_for(settings))
     if news_client is None:
         from ..nse import NSEClient
         news_client = NSEClient(cache_dir=Path(settings.state_dir) / "cache")

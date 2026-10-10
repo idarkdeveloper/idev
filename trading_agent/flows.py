@@ -22,6 +22,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+from .filing_time import _is_trading, count_sessions, next_trading_day, previous_trading_day
 from .state import atomic_write
 from .timezones import IST
 
@@ -30,6 +31,7 @@ log = logging.getLogger(__name__)
 REFERER = "https://www.nseindia.com/reports/fii-dii"
 PATH = "api/fiidiiTradeReact"
 FETCH_AFTER = time(19, 0)   # NSE posts between about 18:00 and 19:00 IST
+MORNING_UNTIL = time(9, 0)   # next-morning catch-up window
 MAX_TRIES = 6
 RETRY_GAP = timedelta(minutes=20)
 _LOCK = threading.Lock()
@@ -119,70 +121,101 @@ class FlowStore:
         self.add(row)
         return row
 
-    def due(self, now: datetime, calendar: Any | None = None) -> bool:
-        """True when the fetch should run: a trading day, at or after 19:00 IST, not done today, with at most MAX_TRIES
-        tries a day, RETRY_GAP apart (NSE sometimes posts late; until it does the API still serves the last session)."""
+    def slot(self, now: datetime, calendar: Any | None = None) -> tuple[str, str] | None:
+        """(session date to expect, attempt key) when a fetch should run now, else None.
+
+        Evening: a trading day, 19:00 IST or later, expecting today's session. Next morning (before 09:00 IST): if the
+        previous trading day's session is still missing from the store (the evening fetch failed or the service was
+        down), expect that one. At most MAX_TRIES tries per slot, RETRY_GAP apart (NSE sometimes posts late; until it
+        does the API still serves the previous session)."""
         now = now.astimezone(IST) if now.tzinfo else now
         day = now.date()
-        if now.time() < FETCH_AFTER:
-            return False
-        if calendar is not None and hasattr(calendar, "is_trading_day"):
-            if not calendar.is_trading_day(day):
-                return False
-        elif day.weekday() >= 5:
-            return False
-        a = self._load()["attempts"].get(day.isoformat())
-        if not a:
-            return True
-        if a.get("done") or a.get("tries", 0) >= MAX_TRIES:
-            return False
-        try:
-            last = datetime.fromisoformat(a["last"])
-            last = last if last.tzinfo else last.replace(tzinfo=IST)
-        except (KeyError, ValueError):
-            return True
-        return now - last >= RETRY_GAP
+        if not _is_trading(day, calendar):
+            return None
+        if now.time() >= FETCH_AFTER:
+            target, key = day, day.isoformat()
+        elif now.time() < MORNING_UNTIL:
+            target, key = previous_trading_day(day, calendar), "am-" + day.isoformat()
+            if target.isoformat() in self._load()["days"]:
+                return None
+        else:
+            return None
+        a = self._load()["attempts"].get(key)
+        if a:
+            if a.get("done") or a.get("tries", 0) >= MAX_TRIES:
+                return None
+            try:
+                last = datetime.fromisoformat(a["last"])
+                last = last if last.tzinfo else last.replace(tzinfo=IST)
+                if now - last < RETRY_GAP:
+                    return None
+            except (KeyError, ValueError):
+                pass
+        return target.isoformat(), key
 
-    def claim(self, now: datetime, outcome: str, done: bool) -> None:
+    def due(self, now: datetime, calendar: Any | None = None) -> bool:
+        return self.slot(now, calendar) is not None
+
+    def claim(self, now: datetime, outcome: str, done: bool, key: str | None = None) -> None:
         with _LOCK:
             d = self._load()
-            key = now.date().isoformat()
+            key = key or now.date().isoformat()
             a = d["attempts"].get(key, {})
             d["attempts"][key] = {"tries": a.get("tries", 0) + 1, "done": done, "last": now.isoformat(timespec="seconds"),
                                   "outcome": outcome}
             self._save(d)
 
     def tick(self, client: Any, now: datetime, calendar: Any | None = None) -> dict[str, Any] | None:
-        """For the watch loop: fetch once per trading day after 19:00 IST. Never raises. The day counts as done only when
-        NSE returns today's session; otherwise it is retried a few times."""
-        if client is None or not self.due(now, calendar):
+        """For the watch loop: the evening fetch after 19:00 IST on trading days, and the next-morning catch-up before
+        09:00 when the last session is missing. Never raises. A slot counts as done only when NSE returns the session it
+        expects; otherwise it is retried a few times."""
+        sl = self.slot(now, calendar) if client is not None else None
+        if sl is None:
             return None
+        target, key = sl
         try:
             row = self.fetch(client)
-            fresh = row["date"] == (now.astimezone(IST) if now.tzinfo else now).date().isoformat()
-            self.claim(now, "ok" if fresh else "still " + row["date"], fresh)
+            fresh = row["date"] == target
+            self.claim(now, "ok" if fresh else "still " + row["date"], fresh, key)
             return row if fresh else None
         except Exception as e:  # noqa: BLE001 - a flows failure must never stop the watch
             log.warning("FII/DII flows unavailable: %s", e)
-            self.claim(now, "error: " + type(e).__name__, False)
+            self.claim(now, "error: " + type(e).__name__, False, key)
             return None
 
 
-def summarize(rows: list[dict[str, Any]], window: int = 5) -> dict[str, Any] | None:
-    """Latest session, the cumulative net of the last ``window`` stored sessions and the negative-combined streak."""
+def _gap_free(rows: list[dict[str, Any]], calendar: Any | None) -> list[dict[str, Any]]:
+    """The longest run of rows at the end of the series with no missing trading day between them."""
+    run = rows[-1:]
+    for r in reversed(rows[:-1]):
+        if next_trading_day(date.fromisoformat(r["date"]), calendar) == date.fromisoformat(run[0]["date"]):
+            run.insert(0, r)
+        else:
+            break
+    return run
+
+
+def summarize(rows: list[dict[str, Any]], window: int = 5, calendar: Any | None = None) -> dict[str, Any] | None:
+    """Latest session, the cumulative net of the last ``window`` stored sessions and the negative-combined streak.
+
+    The streak counts consecutive trading days only (a missing session ends it). The window is the last ``window`` stored
+    sessions; when they do not cover consecutive trading days, ``window_label`` says so ("5 of the last 7 sessions")."""
     if not rows:
         return None
+    rows = sorted(rows, key=lambda r: r["date"])
     last = rows[-1]
     recent = rows[-window:]
+    span = count_sessions(date.fromisoformat(recent[0]["date"]), date.fromisoformat(recent[-1]["date"]), calendar)
+    label = f"{len(recent)}-day" if span <= len(recent) else f"{len(recent)} of the last {span} sessions"
     streak = 0
-    for r in reversed(rows):
+    for r in reversed(_gap_free(rows, calendar)):
         if r["fii_net"] + r["dii_net"] < 0:
             streak += 1
         else:
             break
     return {"date": last["date"], "fii_net": last["fii_net"], "dii_net": last["dii_net"],
             "combined_net": round(last["fii_net"] + last["dii_net"], 2),
-            "days": len(recent),
+            "days": len(recent), "window_span": span, "window_label": label,
             "fii_net_5d": round(sum(r["fii_net"] for r in recent), 2),
             "dii_net_5d": round(sum(r["dii_net"] for r in recent), 2),
             "combined_net_5d": round(sum(r["fii_net"] + r["dii_net"] for r in recent), 2),
@@ -194,15 +227,22 @@ def _cr(v: float) -> str:
     return f"{sign}₹{abs(round(v)):,.0f} cr"
 
 
-def flows_line(rows: list[dict[str, Any]], today: date | None = None, max_age_days: int = 5) -> str | None:
+def flows_line(rows: list[dict[str, Any]], today: date | None = None, max_age_days: int = 5,
+               calendar: Any | None = None) -> str | None:
     """'FII −₹3,569 cr, DII +₹4,743 cr on Fri 9 Oct (provisional NSE figures); 5-day net FII −₹8,100 cr', or None
-    when nothing is stored or the newest session is too old to call current."""
-    s = summarize(rows)
+    when nothing is stored or the newest session is too old to call current. Sessions missing from the stored run are
+    labelled ("net FII over 5 of the last 7 sessions −₹8,100 cr")."""
+    s = summarize(rows, calendar=calendar)
     if s is None:
         return None
     d = date.fromisoformat(s["date"])
     if today is not None and (today - d).days > max_age_days:
         return None
     when = f"{d.strftime('%a')} {d.day} {d.strftime('%b')}"
-    tail = f"; {s['days']}-day net FII {_cr(s['fii_net_5d'])}" if s["days"] >= 2 else ""
+    if s["days"] < 2:
+        tail = ""
+    elif s["window_span"] <= s["days"]:
+        tail = f"; {s['days']}-day net FII {_cr(s['fii_net_5d'])}"
+    else:
+        tail = f"; net FII over {s['window_label']} {_cr(s['fii_net_5d'])}"
     return f"FII {_cr(s['fii_net'])}, DII {_cr(s['dii_net'])} on {when} (provisional NSE figures){tail}"

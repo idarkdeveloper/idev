@@ -239,6 +239,8 @@
     </div>
     <div class="group"><span class="group-title">Deal sources</span>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-bse" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-bse" style="color:var(--ink)">Also read BSE bulk and block deals</label><div class="sub">Many mid and small-cap deals happen only on BSE. Public data, no login; NSE is always read.</div></div></div>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-flows" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-flows" style="color:var(--ink)">Show FII/DII flows and market breadth in the morning email</label><div class="sub">Public NSE files, fetched after 19:00 IST. Information only; nothing trades on it.</div></div></div>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-bands" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-bands" style="color:var(--ink)">Skip stocks with a 2% or 5% price band when buying</label><div class="sub">Liquidity can vanish in a fall. Sells and stop-losses are never blocked.</div></div></div>
     </div>
     <div class="group"><span class="group-title">Stop-losses at Groww</span>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-gtt" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-gtt" style="color:var(--ink)">Keep a GTT stop-loss at Groww for each live holding</label><div class="sub" id="f-gtt-note">A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Only acts when GROWW_LIVE_ORDERS=true.</div></div></div>
@@ -701,7 +703,7 @@
       + stat("Profit / loss", sinr(m.pl), "on holdings with a price", tone(m.pl))
       + stat("Return", spct(m.pl_pct), "vs what you paid", tone(m.pl_pct));
     if(!keepRows) rows.innerHTML = m.holdings.length ? m.holdings.map(h => `<tr>
-        <td><div style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.kind === "bond" ? ' <span class="pill warn" style="font-size:10px;padding:1px 6px">Bond</span>' : ""}${h.exchange === "BSE" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">BSE</span>' : ""}</div>
+        <td><div style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.kind === "bond" ? ' <span class="pill warn" style="font-size:10px;padding:1px 6px">Bond</span>' : ""}${h.exchange === "BSE" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill" title="NSE daily price band" style="font-size:10px;padding:1px 6px">Band ${esc(MP.bands[h.symbol])}</span>` : ""}</div>
           ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}${h.kind === "bond" ? ` · bond${h.maturity ? " maturing " + esc(h.maturity) : ""}` : ""}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}${h.price != null ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
         <td class="num">${h.qty}</td><td class="num">${inr(h.avg_price, 2)}</td>
         <td class="num">${h.price != null ? inr(h.price, 2) : '<span class="sub">no price</span>'}</td>
@@ -721,7 +723,7 @@
       return;
     }
     const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
-    $("fw-sub").textContent = `top ${f.top} of ${f.universe} vs ${f.benchmark} · started ${shortDate((f.started||"").slice(0,10))}`;
+    $("fw-sub").textContent = `top ${f.top} of ${f.universe} vs ${f.benchmark} · started ${shortDate((f.started||"").slice(0,10))}${f.band_filter_since ? " · price-band filter since " + shortDate(f.band_filter_since) : ""}`;
     const h = f.history || [];
     const fall = v => v != null && v < 0 ? "worst fall " + pct(v) : "no fall yet";
     el.innerHTML = `<div class="stats">
@@ -1150,7 +1152,7 @@
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
-    $("f-gtt").checked = !!s.groww_gtt_stops; $("f-bse").checked = s.bse_deals !== false;
+    $("f-gtt").checked = !!s.groww_gtt_stops; $("f-bse").checked = s.bse_deals !== false; $("f-flows").checked = s.flows_breadth !== false; $("f-bands").checked = s.price_band_filter !== false;
     $("f-dg-writer").value = s.digest_writer || "claude";
     $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on; $("f-dg-bul").checked = s.digest_bulletin !== false; $("f-dg-chart").checked = s.digest_charts !== false;
     $("f-dg-am-t").value = s.digest_morning || "09:00"; $("f-dg-pm-t").value = s.digest_evening || "15:45";
@@ -1181,7 +1183,7 @@
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.bse_deals = $("f-bse").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked;
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.bse_deals = $("f-bse").checked; body.flows_breadth = $("f-flows").checked; body.price_band_filter = $("f-bands").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked;
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);

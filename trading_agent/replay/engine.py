@@ -41,16 +41,32 @@ def _stops(trial: Any, who: str, day: str) -> list[dict[str, Any]]:
     return out
 
 
-def _dividends(trial: Any, after: str, day: str) -> list[dict[str, Any]]:
+def _dividends(trial: Any, after: str, day: str, reinvest: bool = False) -> list[dict[str, Any]]:
+    """Dividends with an ex-date in (after, day] on the shares held. Cash: qty x amount is credited. Reinvest: the same
+    credit, then as many whole shares as it buys at the day's raw close (charges applied), the rest stays as cash.
+    ``trial.prices.dividends`` only shows ex-dates up to the replay clock."""
     out = []
     for who in ("you", "agent", "nifty"):
         broker = trial.broker(who)
         for p in broker.positions():
             for d in trial.prices.dividends(p.symbol):
-                if after < d["date"] <= day:
-                    amount = round(d["amount"] * p.qty, 2)
-                    broker.credit(amount, f"dividend {p.symbol}", day)
-                    out.append({"date": day, "who": who, "symbol": p.symbol, "amount": amount})
+                if not after < d["date"] <= day:
+                    continue
+                amount = round(d["amount"] * p.qty, 2)
+                broker.credit(amount, f"dividend {p.symbol}", day)
+                row = {"date": day, "who": who, "symbol": p.symbol, "amount": amount}
+                if reinvest:
+                    try:
+                        price = float(trial.prices.latest_price(p.symbol))
+                        n = int(amount // price)
+                        while n > 0 and n * price + trial.cost_model.charges("buy", n * price) > amount:
+                            n -= 1
+                        if n > 0:
+                            broker.submit_order(p.symbol, "buy", qty=n)
+                            row.update(reinvested_shares=n, price=price)
+                    except Exception as e:  # noqa: BLE001 - the cash stays; the failure is shown
+                        row["error"] = str(e)
+                out.append(row)
     return out
 
 
@@ -74,8 +90,11 @@ def step(trial: Any, until: str, *, today: str | None = None,
             d.setdefault("agent_stop_count", sum(1 for x in d.get("stops", []) if x.get("who") == "agent" and "error" not in x))
             d["counts_exact"] = False
         prev = start
+        raw = getattr(trial, "raw_basis", False)
         for i, day in enumerate(days):
             trial.clock.advance_to(day)
+            if raw:   # entitlement is the shares held at the previous close, so this runs before today's trades and stops
+                report["dividends"] += _dividends(trial, prev, day, reinvest=trial.data["dividends"] == "reinvest")
             if day[:7] != trial.data["last_rebalance_month"]:
                 if progress:
                     progress(f"rebalancing the agent on {day}")
@@ -89,7 +108,7 @@ def step(trial: Any, until: str, *, today: str | None = None,
             trial.data["agent_stop_count"] = trial.data.get("agent_stop_count", 0) + sum(
                 1 for x in stops if x["who"] == "agent" and "error" not in x)
             report["stops"] += stops
-            if trial.data["dividends"] == "cash":
+            if not raw and trial.data["dividends"] == "cash":   # an older save: its original rule
                 report["dividends"] += _dividends(trial, prev, day)
             trial.data["equity"].append(trial.point())
             prev = day

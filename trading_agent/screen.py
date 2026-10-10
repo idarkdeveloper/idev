@@ -121,6 +121,7 @@ def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20
         r["name"] = names.get(r["symbol"], {}).get("name", "")
         r["industry"] = names.get(r["symbol"], {}).get("industry", "")
     band_skipped = 0
+    bands_applied = bands is not None and bool(getattr(bands, "active", lambda: True)())
     if bands is not None:   # bands.BandBook: 2% / 5% band stocks are not buy candidates, a 10% band is a caution
         for r in rows:
             rule = bands.rule(r["symbol"])
@@ -139,7 +140,8 @@ def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20
     eligible = [r for r in rows if r["eligible"]]
     return {"universe_size": len(members), "scored": len(rows), "eligible": len(eligible),
             "errors": sum(1 for s in stats.values() if "error" in s),
-            "top": eligible[:top], "all": rows, "fundamentals": overlay, "band_skipped": band_skipped}
+            "top": eligible[:top], "all": rows, "fundamentals": overlay, "band_skipped": band_skipped,
+            "bands_applied": bands_applied}
 
 
 def format_screen(result: dict[str, Any], top: int = 20) -> str:

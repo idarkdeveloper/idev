@@ -573,6 +573,8 @@ def _deals(ctx: DigestContext, kind: str, today: date) -> dict[str, Any]:
     else:
         since = _last_digest_date(ctx) or today - timedelta(days=3)
         keep = [t for t in trades if t.report_date >= since.isoformat()]
+    from .deal_events import consolidate_deals
+    keep = consolidate_deals(keep)   # one row per deal event: the same client on NSE and BSE is "NSE + BSE", quantities summed
     keep.sort(key=lambda t: (t.report_date, t.transaction_date), reverse=True)
     rows = [{"investor": clean_text(t.investor, 80), "who": [clean_text(n, 60) for n in followed_names(t.investor, s.investors)],
              "ticker": clean_text(t.ticker, 20), "exchange": t.exchange, "name": clean_text(ctx.name_of.get(t.ticker.upper()) or (t.raw.get("bse_name") if isinstance(t.raw, dict) else "") or "", 80),
@@ -810,14 +812,14 @@ def _flow_breadth_lines(ctx: DigestContext) -> dict[str, Any]:
     today = ctx.now().date()
     try:
         from .flows import FlowStore, flows_line
-        line = flows_line(FlowStore(Path(s.state_dir)).rows(), today)
+        line = flows_line(FlowStore(Path(s.state_dir)).rows(), today, calendar=ctx.calendar)
         if line:
             out["flows_line"] = line
     except Exception:  # noqa: BLE001 - never stop the email
         log.exception("flows line failed")
     try:
         from .breadth import BreadthStore, breadth_line
-        line = breadth_line(BreadthStore(Path(s.state_dir)).rows(), today)
+        line = breadth_line(BreadthStore(Path(s.state_dir)).rows(), today, calendar=ctx.calendar)
         if line:
             out["breadth_line"] = line
     except Exception:  # noqa: BLE001
@@ -1074,11 +1076,13 @@ def make_context(settings: Any, *, data: Any = None, prices: Any = None, news: A
     from .runner import free_prices, read_groww_portfolio
     from .screen import load_universe
 
+    from .price_archive import archive_for
     cache = Path(settings.state_dir) / "cache"
+    arch = archive_for(settings)
     prices = prices or free_prices(settings)
     if context is None:
         from .regime import GlobalContext
-        context = GlobalContext(YahooPrices(suffix="", cache_dir=cache, cache_ttl=900))
+        context = GlobalContext(YahooPrices(suffix="", cache_dir=cache, cache_ttl=900, archive=arch))
     if news is None:
         try:
             from .instruments import CompanyNames
@@ -1091,7 +1095,7 @@ def make_context(settings: Any, *, data: Any = None, prices: Any = None, news: A
         if sim.exists():
             try:
                 from .instruments import nse_then_bse
-                bse = prices_bse or YahooPrices(suffix=".BO", cache_dir=cache)
+                bse = prices_bse or YahooPrices(suffix=".BO", cache_dir=cache, archive=arch)
                 practice = LocalPaperBroker(sim, starting_cash=settings.paper_starting_cash, price_fn=nse_then_bse(prices, bse),
                                             currency="INR", whole_shares=True, cost_model=cost_model_for("in"),
                                             shared=True)
@@ -1104,7 +1108,7 @@ def make_context(settings: Any, *, data: Any = None, prices: Any = None, news: A
     except Exception:  # noqa: BLE001
         pass
     return DigestContext(
-        names=names, world_prices=YahooPrices(suffix="", cache_dir=cache, cache_ttl=6 * 3600), settings=settings, prices=prices, prices_bse=prices_bse or YahooPrices(suffix=".BO", cache_dir=cache), context=context,
+        names=names, world_prices=YahooPrices(suffix="", cache_dir=cache, cache_ttl=6 * 3600, archive=arch), settings=settings, prices=prices, prices_bse=prices_bse or YahooPrices(suffix=".BO", cache_dir=cache, archive=arch), context=context,
         data=data, news=news, practice=practice, calendar=holidays,
         groww=groww or (lambda: read_groww_portfolio(settings, prices, datetime.now(IST).isoformat(timespec="seconds"))),
         universe=load_universe, state_path=Path(settings.state_dir) / "state.json")

@@ -11,11 +11,11 @@ from __future__ import annotations
 import statistics
 from bisect import bisect_right
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Iterable
 
 from .deal_events import consolidate_deals
-from .filing_time import usable_from
+from .filing_time import next_trading_day, parse_ts, usable_from
 from .investors import classify_client
 from .quiver import DisclosedTrade, followed_names
 
@@ -123,18 +123,24 @@ def visible_after(deal: DisclosedTrade) -> str:
     """The date the entry close must be strictly after: when the deal became public, not when it was struck.
 
     Bulk and block deals are published that evening, so their own date is right (first close strictly after it).
-    An insider (PIT) trade is disclosed days after the trade; when the filing's broadcast time is known it is used
-    through ``usable_from`` (at or after 15:00 IST means the next trading day), else the report date, which is never
-    earlier than the trade."""
+    An insider (PIT) trade is disclosed days after the trade. The visible date comes from the filing's BROADCAST time
+    (``filed_at`` / ``broadcastDateTime`` on XBRL rows, ``date`` on the older JSON rows when it carries a time of day)
+    through ``usable_from`` (at or after 15:00 IST means the next trading day). The intimation date (``intimDt`` /
+    ``DateOfIntimationToCompany``, the date told to the company, not the market) is never the visible date: with no broadcast
+    time the trade is treated as visible two trading days after it."""
     if deal.source == "insider":
         raw = deal.raw if isinstance(deal.raw, dict) else {}
-        stamp = raw.get("filed_at") or raw.get("broadcastDateTime") or raw.get("brdCstDt")
-        if stamp:
-            try:
-                return max(deal.transaction_date, (usable_from(stamp) - timedelta(days=1)).isoformat())
-            except ValueError:
-                pass
-        return max(deal.transaction_date, deal.report_date or "")
+        for key in ("filed_at", "broadcastDateTime", "brdCstDt", "date"):
+            stamp = raw.get(key)
+            t = parse_ts(stamp) if stamp else None
+            if isinstance(t, datetime):   # a bare date has no time of day: not a broadcast time
+                return max(deal.transaction_date, (usable_from(t) - timedelta(days=1)).isoformat())
+        try:
+            base = date.fromisoformat((deal.report_date or deal.transaction_date)[:10])
+        except ValueError:
+            return deal.transaction_date
+        visible = next_trading_day(next_trading_day(base))
+        return max(deal.transaction_date, (visible - timedelta(days=1)).isoformat())
     return deal.transaction_date
 
 

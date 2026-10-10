@@ -50,7 +50,9 @@ class ReplayApp:
         self.dir = self.settings.state_dir / "replay"
         if source is None:
             from ..prices import YahooPrices
-            source = YahooPrices(suffix=".NS", cache_dir=self.settings.state_dir / "cache", cache_ttl=7 * 86400)
+            from ..price_archive import archive_for
+            source = YahooPrices(suffix=".NS", cache_dir=self.settings.state_dir / "cache", cache_ttl=7 * 86400,
+                                  archive=archive_for(self.settings))
         self.source = source
         self._universes: dict[str, Any] = {}
         self.universe_factory = universe_factory or (lambda n: ReplayUniverse(n, self.settings.state_dir))

@@ -35,7 +35,7 @@ import requests
 
 from .filing_time import usable_by
 
-log =logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
 BASE = "https://www.nseindia.com"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -267,7 +267,8 @@ def _ttm(by_end: dict[str, dict[str, Any]], end: date) -> float | None:
         return ytd
     prev_same = by_end.get(date(end.year - 1, end.month, end.day).isoformat())
     prev_fy = by_end.get(date(_fy_end(end).year - 1, 3, 31).isoformat())
-    if ytd is not None and prev_same and prev_fy and prev_same.get("profit_ytd") is not None             and prev_fy.get("profit_ytd") is not None:
+    if ytd is not None and prev_same and prev_fy and prev_same.get("profit_ytd") is not None \
+            and prev_fy.get("profit_ytd") is not None:
         return ytd + prev_fy["profit_ytd"] - prev_same["profit_ytd"]
     ends = [date(end.year - (1 if end.month - 3 * k <= 0 else 0), (end.month - 3 * k - 1) % 12 + 1, 1) for k in range(4)]
     qs = []

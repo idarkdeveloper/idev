@@ -88,7 +88,8 @@ def groww_session(settings: Settings) -> requests.Session:
 def free_prices(settings: Settings) -> YahooPrices:
     """Keyless quotes and history: NSE via Yahoo (.NS / .BO suffix), US bare symbols."""
     suffix = (".BO" if settings.groww_exchange == "BSE" else ".NS") if settings.market == "in" else ""
-    return YahooPrices(suffix=suffix, cache_dir=settings.state_dir / "cache")
+    from .price_archive import archive_for
+    return YahooPrices(suffix=suffix, cache_dir=settings.state_dir / "cache", archive=archive_for(settings))
 
 
 def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww: Any | None = None) -> LocalPaperBroker:
@@ -299,7 +300,8 @@ def read_groww_portfolio(settings: Settings, prices: Any, stamp: str = "") -> di
     "holdings", "invested", "value", "pl", "pl_pct", "unpriced"}. The dashboard and the daily emails use it."""
     from .groww import GrowwBroker
     from .instruments import CompanyNames, nse_then_bse
-    bse = YahooPrices(suffix=".BO", cache_dir=settings.state_dir / "cache")
+    from .price_archive import archive_for
+    bse = YahooPrices(suffix=".BO", cache_dir=settings.state_dir / "cache", archive=archive_for(settings))
     if not settings.has_groww_credentials:
         return {"linked": False}   # no credentials: a leftover snapshot is not shown
     failure: dict[str, Any]
@@ -435,8 +437,9 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     if live_run:  # free price history for momentum and the global regime
         prices = free_prices(settings)
         momentum = momentum or MomentumScreen(prices)
+        from .price_archive import archive_for
         context = context or GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache",
-                                                       cache_ttl=900))
+                                                       cache_ttl=900, archive=archive_for(settings)))
     news = None
     if settings.market == "in":
         from .news import NewsService

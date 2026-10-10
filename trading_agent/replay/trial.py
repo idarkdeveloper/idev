@@ -94,7 +94,13 @@ class Trial:
         self.screen_fn = screen_fn or default_screen
         self.cost_model = cost_model_for("in")
         self.clock = ReplayClock(data["clock"])
-        self.prices = ClockedPrices(source, self.clock, field="close" if data["dividends"] == "cash" else "adj_close")
+        # price_basis "raw" (every replay made since the dividend fix): fills, stops, values and share counts use the real
+        # (split-adjusted) close; dividends arrive as events on their ex-dates (engine._dividends), in cash or reinvested.
+        # An older save has no marker and keeps its original basis (reinvest = dividend-adjusted prices), so its saved
+        # fills and positions stay consistent with the prices it is valued at.
+        self.raw_basis = data.get("price_basis") == "raw"
+        self.prices = ClockedPrices(source, self.clock,
+                                    field="close" if self.raw_basis or data["dividends"] == "cash" else "adj_close")
         self._open_brokers()
 
     # -- files -------------------------------------------------------------------
@@ -198,7 +204,7 @@ class Trial:
             raise ValueError(f"a replay called {slug} already exists")
         data = {"name": name.strip(), "slug": slug, "start": start, "clock": start, "universe": universe,
                 "benchmark": BENCHMARKS[universe], "cash": cash, "top": top, "dividends": dividends,
-                "auto_stop": False, "ended": None, "last_rebalance_month": None, "equity": [],
+                "price_basis": "raw", "auto_stop": False, "ended": None, "last_rebalance_month": None, "equity": [],
                 "rebalances": [], "stops": [], "rebalance_count": 0, "agent_stop_count": 0, "counts_exact": True, "picks": None, "claude": [], "claude_presses": 0}
         root.mkdir(parents=True)
         try:

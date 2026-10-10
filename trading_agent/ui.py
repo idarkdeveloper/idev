@@ -1316,6 +1316,10 @@ class App:
         out = read_groww_portfolio(self.settings, self.prices, _now())
         if not out.get("at"):  # not linked, or an error: not cached
             return out
+        try:
+            out["bands"] = self._bands_for([str(h.get("symbol")) for h in out.get("holdings") or []])
+        except Exception:  # noqa: BLE001 - the pill is a nicety
+            out["bands"] = {}
         self._my_portfolio, self._my_portfolio_at = out, time.time()
         return out
 
@@ -1770,7 +1774,9 @@ def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: in
     from .regime import GlobalContext
     from .prices import YahooPrices
 
-    context = GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache", cache_ttl=900))
+    from .price_archive import archive_for
+    context = GlobalContext(YahooPrices(suffix="", cache_dir=settings.state_dir / "cache", cache_ttl=900,
+                                        archive=archive_for(settings)))
     # --demo is the offline sample dashboard, isolated in state_dir/demo-sample. Without it the app is the
     # real one, and its /demo page is the same page with the practice account.
     app = sample_app(settings, context) if demo else App(settings, context=context)

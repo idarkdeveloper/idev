@@ -64,6 +64,23 @@ def next_trading_day(day: date, holidays: Any | None = None) -> date:
     return d
 
 
+def previous_trading_day(day: date, holidays: Any | None = None) -> date:
+    """The last trading day strictly before ``day``."""
+    d = day - timedelta(days=1)
+    while not _is_trading(d, holidays):
+        d -= timedelta(days=1)
+    return d
+
+
+def count_sessions(first: date, last: date, holidays: Any | None = None) -> int:
+    """Trading days in [first, last], both ends included (0 when last is before first)."""
+    n, d = 0, first
+    while d <= last:
+        n += _is_trading(d, holidays)
+        d += timedelta(days=1)
+    return n
+
+
 def _is_trading(day: date, holidays: Any | None) -> bool:
     if holidays is not None and hasattr(holidays, "is_trading_day"):
         return bool(holidays.is_trading_day(day))

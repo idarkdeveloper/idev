@@ -166,7 +166,8 @@ def cmd_holdings(args: argparse.Namespace) -> int:
         return 1
     from .instruments import CompanyNames, nse_then_bse
     from .prices import YahooPrices
-    bse = YahooPrices(suffix=".BO", cache_dir=settings.state_dir / "cache")
+    from .price_archive import archive_for
+    bse = YahooPrices(suffix=".BO", cache_dir=settings.state_dir / "cache", archive=archive_for(settings))
     g = GrowwBroker(resolve_groww_token(settings), live_orders=False, exchange=settings.groww_exchange,
                     price_fallback=nse_then_bse(free_prices(settings), bse))
     rows = sorted(g.positions(), key=lambda p: -(p.market_value or p.qty * p.avg_entry_price))
@@ -297,6 +298,50 @@ def cmd_fundamentals_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_market_data(args: argparse.Namespace) -> int:
+    """FII/DII flows, NIFTY 500 breadth and NSE price bands: show what is stored, or fetch now (public NSE files)."""
+    from datetime import datetime
+    from .bands import book_for
+    from .breadth import BreadthStore, archive_bars_fn, breadth_line, nifty500_members
+    from .filing_time import previous_trading_day
+    from .flows import FlowStore, flows_line
+    from .holidays import NSEHolidays
+    from .nse import NSEClient
+    from .timezones import IST
+
+    settings = _settings(args)
+    now = datetime.now(IST)
+    cal = NSEHolidays(cache_dir=settings.state_dir / "cache")
+    which = args.fetch
+    todo = ["flows", "breadth", "bands"] if which == "all" else [which] if which else []
+    status = 0
+    if todo:
+        client = NSEClient(cache_dir=settings.state_dir / "cache")
+        for name in todo:
+            try:
+                if name == "flows":
+                    row = FlowStore(settings.state_dir).fetch(client)
+                    print(f"flows: stored the session of {row['date']}")
+                elif name == "bands":
+                    n = book_for(settings).fetch(client.session, now.date())
+                    print(f"bands: stored {n} symbols")
+                else:
+                    today = now.date()
+                    day = today if (now.hour >= 19 and cal.is_trading_day(today)) else previous_trading_day(today, cal)
+                    row = BreadthStore(settings.state_dir).fetch_day(
+                        client.session, day, nifty500_members(client.session), archive_bars_fn(settings.state_dir))
+                    print(f"breadth: stored {row['date']} ({row['n']} stocks, ratio {row['ratio']})")
+            except Exception as e:  # noqa: BLE001
+                status = 1
+                print(f"{name}: failed ({type(e).__name__}: {e})")
+    print(flows_line(FlowStore(settings.state_dir).rows(), calendar=cal) or "flows: nothing stored yet")
+    print(breadth_line(BreadthStore(settings.state_dir).rows(), calendar=cal) or "breadth: nothing stored yet")
+    book = book_for(settings)
+    print(f"price bands: list from {book.fetched_on() or 'never'}, filter {'on' if book.enabled else 'off'}"
+          + ("" if book.active() or not book.enabled else " (list missing or stale: not filtering)"))
+    return status
+
+
 def cmd_forward(args: argparse.Namespace) -> int:
     """Paper-trade the factor screen forward, month by month, against its index fund."""
     from .costs import cost_model_for
@@ -320,7 +365,8 @@ def cmd_forward(args: argparse.Namespace) -> int:
     def screen() -> dict:
         members = load_universe(ft.universe)
         print(f"Ranking {len(members)} {ft.universe} members for this month's rebalance…")
-        return run_screen(members, prices, top=ft.data["top"])
+        from .bands import book_for
+        return run_screen(members, prices, top=ft.data["top"], bands=book_for(settings))
 
     print(format_forward(ft.run(screen, force_rebalance=args.rebalance)))
     return 0
@@ -874,6 +920,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--refresh", action="store_true")
     sp.add_argument("--limit", type=int, default=30)
     sp.set_defaults(func=cmd_orders)
+    sp = sub.add_parser("market-data", help="FII/DII flows, NIFTY 500 breadth and price bands: show, or fetch now")
+    sp.add_argument("--fetch", nargs="?", const="all", choices=["flows", "breadth", "bands", "all"],
+                    help="fetch from the public NSE files now (default: only show what is stored)")
+    sp.set_defaults(func=cmd_market_data)
     sp = sub.add_parser("forward", help="paper-trade the factor screen forward against its index fund")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--top", type=int, default=20, help="names to hold (set on the first run)")

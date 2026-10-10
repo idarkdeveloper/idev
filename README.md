@@ -546,6 +546,25 @@ Filings are usable from the next trading day when disseminated at or after 15:00
 fundamentals history, Replay's announcements and the insider backtest all use that one rule. Price levels (ATR, stops,
 fills) use Yahoo's `close` (split-adjusted); `adj_close` is for returns and momentum only.
 
+The archive is on for every price source built from the settings (the NSE and BSE quotes, the world indices, the digest, the
+dashboard, Replay). Indian bars are saved once final (before today, or today after 18:00 IST); other markets only when two
+days old. A split that Yahoo applies later, even one that happened after the archive already held newer bars, rescales only
+the older saved bars. The same client's bulk and block deals in a stock on one day are merged into one event along with the
+NSE and BSE ones. The forward test's screen uses the price-band filter too, from the date shown on its card (earlier
+rebalances were made without it). Replay is deliberately NOT band-filtered: there is no point-in-time band history.
+
+Replay prices: new replays run on the real (split-adjusted) close for fills, stops, values and whole-share rounding. Dividends
+come from Yahoo's dividend events on their ex-dates: "cash" credits quantity x amount; "reinvest" credits it and buys extra
+whole shares at that day's close (charges applied, the rest stays cash). Replays saved before this change keep their original
+dividend-adjusted basis (they carry no `price_basis` marker), so their saved fills stay consistent; start a new replay for
+exact real-price results.
+
+`python -m trading_agent market-data` shows the stored flows, breadth and band list; `--fetch flows|breadth|bands|all` fetches
+them now from the public NSE files. A missed FII/DII session is retried the next morning before 09:00, a missed breadth
+session is backfilled from the bhavcopy (last 10 trading days), and five-day sums and streaks only count consecutive
+trading days (a gap is labelled, e.g. "5 of the last 7 sessions"). A price band list more than 2 trading days old is
+treated as missing (no filtering).
+
 ## Configuration (`.env`)
 
 | Variable | Purpose |

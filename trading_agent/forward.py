@@ -181,6 +181,10 @@ class ForwardTest:
         rebalanced = None
         if (force_rebalance or self.rebalance_due()) and screen_fn is not None:
             result = screen_fn()
+            if result.get("bands_applied") and not self.data.get("band_filter_since"):
+                # registered change: from now on 2% / 5% price-band stocks are not picked. Results before this date
+                # were produced without the filter, so they are not comparable one to one.
+                self.data["band_filter_since"] = self.now().date().isoformat()
             picks = [r["symbol"] for r in result.get("top", [])]
             rebalanced = self.rebalance(picks, eligible=result.get("eligible"))
         self.mark()
@@ -214,7 +218,7 @@ class ForwardTest:
                                  "pl": p.unrealized_pl})
             holdings.sort(key=lambda h: -h["value"])
         return {"universe": d["universe"], "top": d["top"], "benchmark": d["benchmark"], "capital": cap,
-                "started": d.get("started"), "days": len(hist), "strategy_return": strat, "benchmark_return": bench,
+                "started": d.get("started"), "band_filter_since": d.get("band_filter_since"), "days": len(hist), "strategy_return": strat, "benchmark_return": bench,
                 "gap": (strat - bench) if strat is not None and bench is not None else None,
                 "strategy_max_drawdown": dd("equity"), "benchmark_max_drawdown": dd("bench"),
                 "charges_paid": self.broker.performance()["fees_paid"], "last_rebalance": d.get("last_rebalance"),
@@ -226,6 +230,9 @@ def format_forward(s: dict[str, Any]) -> str:
     pct = lambda v: "n/a" if v is None else f"{v*100:+.2f}%"  # noqa: E731
     lines = [f"Forward test: top {s['top']} of {s['universe']} vs {s['benchmark']}, "
              f"₹{s['capital']:,.0f} each, started {(s['started'] or 'not yet')[:10]}, {s['days']} daily point(s)"]
+    if s.get("band_filter_since"):
+        lines.append(f"Price-band filter on since {s['band_filter_since']}: stocks with a 2% or 5% NSE band are not picked "
+                     "(earlier rebalances were made without it).")
     if s.get("rebalanced"):
         r = s["rebalanced"]
         ok = [t for t in r["trades"] if "error" not in t]

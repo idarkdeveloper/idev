@@ -7,6 +7,10 @@ backtest's per-event statistics) works on ``consolidate_deals``: deals with the 
 name, side) become ONE ``DisclosedTrade`` whose quantity and value are the sums, whose price is the
 quantity-weighted average and whose ``exchange`` lists the venues ("NSE + BSE"). A deal with no partner is returned
 unchanged (the same object), so nothing else changes for it.
+
+Note: the grouping key has no exchange and no bulk/block label, so a client's BULK and BLOCK deals in the same stock, side
+and day (on one exchange or both) are merged into one event too. That is deliberate: it is one decision, and the signal
+should count it once. The event keeps the first deal's ``source`` label.
 """
 
 from __future__ import annotations

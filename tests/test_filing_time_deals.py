@@ -81,7 +81,15 @@ def test_insider_entry_waits_for_the_filing():
     r = run_backtest("x", [_insider("2026-01-14T15:28:00")], Px(), horizons=(1,))
     assert r.outcomes[0].entry_date == "2026-01-15"
     r = run_backtest("x", [_insider(None)], Px(), horizons=(1,))
-    assert r.outcomes[0].entry_date == "2026-01-13"           # report date, strictly after
+    assert r.outcomes[0].entry_date == "2026-01-14"           # no broadcast time: intimation (Mon 12) + 2 trading days
+    d = _insider(None)
+    d = DisclosedTrade(d.source, d.investor, d.ticker, d.transaction, d.transaction_date, d.report_date, d.size,
+                       {"date": "14-Jan-2026 15:30:00"})      # older JSON rows: "date" carries the broadcast time
+    assert run_backtest("x", [d], Px(), horizons=(1,)).outcomes[0].entry_date == "2026-01-15"
+    d2 = DisclosedTrade(d.source, d.investor, d.ticker, d.transaction, d.transaction_date, d.report_date, d.size,
+                        {"date": "2026-01-14"})                # a bare date is not a broadcast time
+    assert run_backtest("x", [d2], Px(), horizons=(1,)).outcomes[0].entry_date == "2026-01-14"
+    assert visible_after(_insider(None)) == "2026-01-13"       # intimDt itself is never the visible date
 
 
 def test_bulk_deal_entry_unchanged():
