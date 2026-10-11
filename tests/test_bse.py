@@ -337,7 +337,7 @@ def test_dashboard_deals_show_the_exchange_column(settings):
     deals = app.snapshot()["deals"]
     assert sorted(d["exchange"] for d in deals) == ["BSE", "NSE"]
     html = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "index.html").read_text(encoding="utf-8")
-    assert "<th>Exchange</th>" in html and "d.exchange" in html
+    assert "<th>Where</th>" in html and "d.exchange" in html   # Live v2: the Where column shows the exchange badge
 
 
 def test_settings_switch_saves_and_turns_bse_off(settings, tmp_path):

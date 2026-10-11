@@ -118,8 +118,9 @@ def test_stock_page_is_one_component_without_page_globals():
     assert "document.getElementById" not in code and "getElementById" not in code   # nothing by page id: it only touches its own root
     assert "document.querySelector" not in code and "document.addEventListener" not in code and "window.addEventListener" not in code
     assert "uid" in JS and 'id="${id}-t-${k}"' in JS                                 # ids are per instance, so two can coexist
-    # index.html mounts it twice: in the Look up card and in the phone drawer
-    assert 'TA.stockPage($("lk-result")' in INDEX and 'TA.stockPage($("sp-drawer-body")' in INDEX
+    # index.html mounts it once, in the stock's full-view modal; the Look up card is a summary that opens it
+    assert 'TA.stockPage($("sp-drawer-body")' in INDEX and 'TA.stockPage($("lk-result")' not in INDEX
+    assert 'data-open-full="${esc(sym)}"' in INDEX and "TA.stockPage.helpers.agentChecks(" in INDEX
 
 
 def test_exchange_switch_drives_chart_price_and_quote():

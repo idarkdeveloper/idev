@@ -383,10 +383,6 @@ header { position: relative; z-index: 30; }   /* the header's menus open over th
 .prot-line { display: none; margin-top: 4px; flex-direction: column; gap: 3px; }
 td.prot-cell { min-width: 180px; max-width: 280px; }
 td.prot-cell > * + * { margin-top: 4px; }
-@media (max-width: 700px) {
-  #mp-card .prot-cell, #mp-card th.prot-cell { display: none; }
-  #mp-card .prot-line { display: flex; }
-}
 
 /* Charts: a vertical swipe on the plot always scrolls the page; a tap shows the tooltip (see common.js) */
 .chart svg, .chart .hit { touch-action: pan-y pinch-zoom; }
@@ -471,33 +467,6 @@ dialog.pal[open] { display: flex; }
   .sc-name { max-width: 120px; }
 }
 
-/* ---- Top of the dashboard: portfolio and stock page side by side from 1200 px (60 / 40) ---- */
-@media (min-width: 1200px) {
-  .topsplit { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 32px; align-items: start; }
-  .split-left, .split-right { display: flex; flex-direction: column; gap: 32px; min-width: 0; }
-  .split-right { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; overscroll-behavior: contain; padding-bottom: 2px; }
-  .split-left .cols { flex-direction: column; flex-wrap: nowrap; }
-  .split-left .cols > .main, .split-left .cols > .side { flex: 0 0 auto; width: 100%; }
-  /* the portfolio table must fit its 60 %: tighter cells, Protection as an icon with a tooltip, names on one line */
-  #mp-card table { min-width: 0; font-size: 13px; }
-  #mp-card th, #mp-card td { padding: 6px 5px; }
-  #mp-card .prot-cell, #mp-card th.prot-cell { display: none; }
-  #mp-card .prot-line { display: flex; flex-direction: row; gap: 4px; }
-  #mp-card .prot-line .prot > span:last-child, #mp-card .prot-line .prot-warn > span:last-child {
-    position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  #mp-card td:first-child .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
-  #mp-card tfoot td { padding-top: 8px; }
-}
-@media (min-width: 1200px) and (max-width: 1399px) {   /* the narrowest 60 %: Invested can be worked out from Qty and Buy price */
-  #mp-card thead th:nth-child(5), #mp-card tbody tr:not(.sell-row) td:nth-child(5), #mp-card tfoot td:nth-child(5) { display: none; }
-}
-@media (max-width: 1199px) {
-  .topsplit, .split-left, .split-right { display: contents; }
-  #mp-card { order: 1; } .split-right > [data-anchor="lookup"] { order: 2; }
-  .split-right > [data-anchor="size"] { order: 3; } .split-right > [data-anchor="costs"] { order: 4; }
-  .split-left > .cols { order: 5; } main > footer { order: 9; }
-}
-
 /* ---- Stock page (stockpage.js): header, chart, tabs, collapsible sections, phone bar and drawer. Tokens only. ---- */
 .sp { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .sp-head { display: flex; flex-direction: column; gap: 4px; }
@@ -568,13 +537,245 @@ dialog.pal[open] { display: flex; }
   .sp-bar-note { flex: 0 1 90px; font-size: 11px; line-height: 1.2; }
   .sp-px { font-size: 28px; }
 }
-/* Phone drawer: the stock page slides in from the right; a modal dialog, so focus is trapped and Esc closes it. */
-dialog.sp-drawer { margin: 0 0 0 auto; padding: 0; width: min(100%, 560px); max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0;
-  overflow: hidden; }
-dialog.sp-drawer[open] { display: flex; flex-direction: column; animation: sp-slide .2s ease-out; }
-.sp-drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--color-divider); }
-.sp-drawer-title { font-family: var(--font-heading); font-size: 14px; color: var(--color-muted); }
-.sp-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 12px 0; }
-@keyframes sp-slide { from { transform: translateX(100%); } to { transform: none; } }
+/* The stock's full view: a modal dialog over the dashboard (focus is trapped, Esc closes it); full screen on a phone.
+   From 900 px the stock page sits in two columns: price, chart and holding on the left, the tabs on the right. */
+dialog.sp-drawer { margin: auto; padding: 0; width: min(1080px, calc(100vw - 32px)); max-width: none; height: calc(100dvh - 48px); max-height: calc(100dvh - 48px);
+  border-radius: var(--radius-lg); background: var(--color-bg); overflow: hidden; }
+dialog.sp-drawer[open] { display: flex; flex-direction: column; animation: sp-pop .16s ease-out; }
+.sp-drawer-head { display: flex; align-items: center; gap: 14px; padding: 10px 20px; border-bottom: 1px solid var(--color-divider); background: var(--color-bg); }
+.sp-modal-t { display: flex; flex-direction: column; min-width: 0; }
+.sp-drawer-title { font-family: var(--font-heading); font-size: 15px; font-weight: 500; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 20px 24px 0; }
+.sp-modal-foot { padding: 10px 24px 14px; border-top: 1px solid var(--color-divider); font-size: 12px; }
+.sp-main, .sp-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (min-width: 900px) {
+  dialog.sp-drawer .sp { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr); gap: 28px; align-items: start; padding-bottom: 20px; }
+  dialog.sp-drawer .sp-main { position: sticky; top: 0; }
+}
+@media (max-width: 700px) {
+  dialog.sp-drawer { width: 100%; height: 100dvh; max-height: 100dvh; margin: 0; border-radius: 0; }
+  .sp-drawer-head { padding: 8px 12px; } .sp-drawer-body { padding: 12px 12px 0; } .sp-modal-foot { padding: 8px 12px; }
+}
+@keyframes sp-pop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { dialog.sp-drawer[open] { animation: none; } }
+/* The agent's checklist (in the stock page's Overview tab) */
+.sp-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.sp-check { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 4px 8px; padding: 8px 0; border-top: 1px solid var(--color-rule); }
+.sp-check:first-child { border-top: none; }
+.sp-ck { width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700;
+  border: 1.5px solid currentColor; }
+.sp-ck-pass, .sp-call-pass { color: var(--color-profit); } .sp-ck-warn, .sp-call-warn { color: var(--color-replay); } .sp-ck-fail, .sp-call-fail { color: var(--color-loss); }
+.sp-call { font-weight: 600; }
+.sp-ck-t { display: flex; flex-direction: column; min-width: 0; }
+.sp-ck-l { font-size: 13.5px; font-weight: 600; }
+.sp-ck-bottom { padding-top: 8px; border-top: 1px solid var(--color-rule); font-size: 13px; color: var(--color-label); text-wrap: pretty; }
 .ck-inds { margin-top: 0; }
+
+/* ---- Live v2: header menu, workspace tabs (or one page with a section list), Overview, Deals, Research, Tools. Tokens only. ---- */
+.hdr { max-width: 1600px; padding: 14px 24px; }
+.brand-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46ch; }
+#lastcheck { padding: 0 4px; }
+details.menu.more > summary { color: var(--color-text); border: 1px solid var(--color-divider); border-radius: var(--radius-md); width: 40px; padding: 0; justify-content: center; }
+details.menu.more > summary:hover { background: var(--color-hover); }
+details.menu.more .menu-pop { min-width: 320px; max-width: calc(100vw - 24px); z-index: 31; }
+.menu-status { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px 8px; }
+.menu-status:empty { display: none; }
+.menu-sep { height: 1px; background: var(--color-divider); margin: 6px 4px; }
+.menu-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 10px; }
+.menu-row .seg button { min-height: 30px; padding: 0 10px; font-size: 13px; color: var(--color-muted); }
+.menu-row .seg button[aria-pressed="true"] { color: var(--color-text); background: var(--color-neutral-900); box-shadow: inset 0 0 0 1px var(--color-accent); }
+#btn-watch.on { color: var(--color-accent); }
+#canary-banner { border: 1px solid var(--color-replay); border-radius: var(--radius-md); padding: 10px 14px; font-weight: 600; }
+
+.ws-tabbar { max-width: 1600px; margin: 0 auto; padding: 0 24px; }
+.ws-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--color-divider); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.ws-tabs button { min-height: 46px; padding: 0 12px; border: none; border-radius: 0;
+  background: transparent; color: var(--color-muted); font-size: 14px; font-weight: 500; gap: 8px; }
+.ws-tabs button:hover { color: var(--color-text); background: transparent; }
+.ws-tabs button[aria-selected="true"] { color: var(--color-text); box-shadow: inset 0 -2px 0 var(--color-accent); }
+.ws-count { font-size: 11px; padding: 0 7px; line-height: 18px; border-radius: 999px; background: var(--color-accent); color: var(--color-bg); font-weight: 700; }
+main.ws-main { flex-direction: row; align-items: flex-start; gap: 28px; padding-top: 20px; }
+.ws-content { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 28px; }
+.ws-panel { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.ws-nav { display: none; }
+:root[data-layout="sections"] .ws-tabbar { display: none; }
+:root[data-layout="sections"] .ws-nav { display: flex; flex: 0 0 200px; position: sticky; top: 52px; flex-direction: column; gap: 14px; }
+.ws-navgroup { display: flex; flex-direction: column; gap: 1px; }
+.ws-navhead { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--color-muted); padding: 0 8px 4px; }
+.ws-nav a { display: flex; align-items: center; min-height: 30px; padding: 0 8px; font-size: 13.5px; color: var(--color-text); border-radius: 6px; }
+.ws-nav a:hover { background: var(--color-hover); color: var(--color-text); }
+@media (max-width: 900px) { :root[data-layout="sections"] .ws-nav { display: none; } }
+
+/* Overview: regime and markets, since your last visit, portfolio beside the recommendations */
+.ov-today { display: flex; flex-direction: column; gap: 12px; }
+.regime-card { flex-direction: row; flex-wrap: wrap; align-items: stretch; }
+.regime-left { flex: 1 1 340px; min-width: 0; padding: 12px 18px; display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+.regime-left .regime { flex: none; flex-wrap: nowrap; align-items: center; }
+.regime-left .regime .sig { flex: 1 1 auto; min-width: 0; text-wrap: pretty; }
+@media (max-width: 600px) { .regime-left .regime { flex-wrap: wrap; } }
+.regime-card .mkts { align-content: center; }
+.regime-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.icon-btn { width: 32px; padding: 0; }
+.regime-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap;
+  background: var(--color-accent-800); color: var(--color-accent-100); }
+.regime-chip .dot { background: var(--color-replay); } .regime-chip.on .dot { background: var(--color-profit); } .regime-chip.off .dot { background: var(--color-loss); }
+.regime-card .mkts { flex: 2 1 560px; min-width: 0; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); padding-left: 0; border-top: none; border-left: 1px solid var(--color-divider); }
+.regime-card .mkt { padding: 9px 12px; margin: 0; border-right: none; gap: 1px; }
+.regime-card .mkt .k { font-size: 10.5px; } .regime-card .mkt .v { font-size: 15px; }
+.mkt .c.pl-profit, .mkt .c.pl-loss { font-weight: 600; }
+@media (max-width: 900px) { .regime-card .mkts { border-left: none; border-top: 1px solid var(--color-divider); } }
+.since { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 14px 10px 18px; border-radius: var(--radius-lg);
+  border: 1px solid var(--color-accent); background: var(--color-accent-900); }
+.since-title { font-weight: 600; }
+.since-chips { display: contents; }
+.since-chip { min-height: 30px; padding: 0 12px; font-size: 13px; font-weight: 400; background: var(--color-surface); border-radius: 999px; gap: 6px; }
+.since-chip:hover { border-color: var(--color-accent); background: var(--color-surface); }
+.since-chip b { color: var(--color-accent); font-weight: 700; }
+.since-seen { margin-left: auto; min-height: 30px; border: none; font-size: 13px; font-weight: 400; color: var(--color-muted); }
+.since-seen:hover { color: var(--color-text); }
+.ov-meta { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.ov-meta span:empty { display: none; }
+.ov-split { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.ov-split > #mp-card { flex: 2 1 720px; }
+.recs-col { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.recs-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.recs { display: flex; flex-direction: column; gap: 12px; }
+#mp-card .tiles { background: none; box-shadow: none; border-radius: 0; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); padding-left: 18px; }
+#mp-card .tile { padding: 4px 16px 14px 0; margin-right: 16px; gap: 2px; }
+#mp-card .tile .big { font-size: 24px; line-height: 30px; }
+.ws-panel > .tiles { margin: 0; }
+.cardhead > h2 + .sub { min-width: 0; }
+
+/* Data tables: rules between rows, the table scrolls inside its card */
+.tscroll { border-top: 1px solid var(--color-divider); }
+.card > .tscroll { padding: 0; }
+table.dt { min-width: 600px; }
+.dt th { padding: 10px 12px 8px; }
+.dt td { padding: 9px 12px; vertical-align: middle; }
+.dt th:first-child, .dt td:first-child { padding-left: 18px; }
+.dt th:last-child, .dt td:last-child { padding-right: 18px; }
+.dt tbody tr { background: none; border-bottom: 1px solid var(--color-rule); }
+.dt tbody tr:last-child { border-bottom: none; }
+.dt tbody tr:hover { background: var(--color-row-hover); }
+.dt tbody tr.is-new > td { background: var(--color-accent-900); }
+.dt thead tr { background: none; border-bottom: 1px solid var(--color-divider); }
+.dt tr[data-open-stock] { cursor: pointer; }
+.dt tfoot td { font-weight: 600; border-top: 1px solid var(--color-divider); }
+.nowrap { white-space: nowrap; }
+.sym { font-weight: 600; color: var(--color-accent); }
+.sym-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.l2 { font-size: 12px; }
+.pill.mini { font-size: 10px; padding: 1px 6px; }
+.spark-col { width: 84px; }
+svg.spark { display: block; overflow: visible; }
+svg.spark path, svg.lk-mini path { fill: none; stroke-width: 1.5; stroke-linejoin: round; }
+svg.spark.up path, svg.lk-mini.up path { stroke: var(--color-profit); } svg.spark.down path, svg.lk-mini.down path { stroke: var(--color-loss); }
+.stop-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--color-muted); white-space: nowrap; }
+.stop-state.solid { color: var(--color-profit); } .stop-state.warn { color: var(--color-replay); } .stop-state.bad { color: var(--color-loss); }
+.stop-warn { display: inline-flex; gap: 4px; align-items: flex-start; font-size: 12px; color: var(--color-replay); font-weight: 600; max-width: 240px; white-space: normal; }
+td.prot-cell { min-width: 120px; }
+.new-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent); margin-right: 8px; vertical-align: middle; }
+:root[data-density="compact"] .dt td { padding: 5px 10px; }
+:root[data-density="compact"] .dt td:first-child { padding-left: 18px; } :root[data-density="compact"] .dt td:last-child { padding-right: 18px; }
+:root[data-density="compact"] .dt { font-size: 13px; }
+:root[data-density="compact"] .dt .l2 { display: none; }
+
+/* Recommendations */
+.recs .rec { padding: 14px 16px; gap: 8px; border-left: none; }
+.rec-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.rec-when { margin-left: auto; font-size: 12px; white-space: nowrap; }
+.new-badge { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; padding: 1px 7px; border-radius: 999px; background: var(--color-accent); color: var(--color-bg); }
+.recs .rec .rationale { font-size: 13.5px; line-height: 20px; color: var(--color-label); }
+.rec-inv { font-size: 12px; }
+.rec-why > summary { cursor: pointer; font-size: 13px; color: var(--color-muted); }
+.rec-why[open] > summary { margin-bottom: 4px; }
+.rec-actions { gap: 8px; }
+
+/* Deals: investor chips, removable filter chips, + Add filter and its popover */
+.chips-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 18px 12px; }
+.chipset { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+.chips-row button.chip { min-height: 30px; border-radius: 999px; font-size: 13px; font-weight: 400; padding: 0 12px; }
+.chips-row button.chip[aria-pressed="true"] { background: var(--color-accent-900); box-shadow: none; }
+.chip-sep { width: 1px; height: 20px; background: var(--color-divider); margin: 0 4px; }
+.fchip { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 10px; min-height: 30px; border: 1px solid var(--color-accent); border-radius: 999px;
+  font-size: 13px; background: var(--color-accent-900); }
+.fchip button { width: 24px; min-height: 24px; height: 24px; padding: 0; border: none; border-radius: 999px; color: var(--color-muted); font-size: 15px; }
+.chip-add { min-height: 30px; padding: 0 12px; font-size: 13px; color: var(--color-accent); border: 1px dashed var(--color-accent); border-radius: 999px; }
+.chip-add:hover { background: var(--color-accent-900); }
+.popover { position: fixed; z-index: 41; background: var(--color-surface); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); padding: 14px;
+  display: flex; flex-direction: column; gap: 12px; }
+.dp-vals { display: flex; flex-wrap: wrap; gap: 4px; }
+.dp-vals button { font-weight: 400; }
+.dp-vals button[aria-pressed="true"] { color: var(--color-accent); border-color: var(--color-accent); }
+.dp-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 20px; align-items: start; }
+.grid-2.tools { grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.cardfoot { display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-top: 1px solid var(--color-divider); }
+.runs .run { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; gap: 12px; padding: 10px 0; font-size: 13.5px; background: none; border-bottom: 1px solid var(--color-rule); }
+.runs .run:last-child { border-bottom: none; }
+.run-what b { font-weight: 600; }
+@media (max-width: 600px) { .runs .run { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
+
+/* Research: Look up card, Claude's track record, collapsible Factor screen / Signal lab / Backtest */
+.lk-head { align-items: center; }
+.lk-form { margin-left: auto; display: flex; gap: 8px; flex: 0 1 420px; min-width: min(240px, 100%); }
+.lk-form input { flex: 1 1 auto; min-width: 0; }
+.lk-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px; }
+.lk-id { display: flex; flex-direction: column; gap: 2px; min-width: 180px; }
+.lk-code { font-size: 12px; letter-spacing: .02em; }
+.lk-name { font-size: 16px; font-weight: 500; }
+.lk-px { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; white-space: nowrap; font-size: 13px; }
+.lk-price { font-family: var(--font-heading); font-size: 26px; line-height: 30px; font-weight: 500; }
+svg.lk-mini { flex: 0 1 260px; min-width: 140px; height: 56px; display: block; }
+svg.lk-mini path { stroke-width: 1.75; vector-effect: non-scaling-stroke; }
+.lk-verdict { display: flex; flex-direction: column; gap: 6px; flex: 1 1 260px; min-width: 0; }
+.lk-call { font-size: 15px; font-weight: 600; } .warn-text { color: var(--color-replay); }
+.lk-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ck-pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--color-divider); white-space: nowrap; }
+.ck-pass { color: var(--color-profit); } .ck-warn { color: var(--color-replay); } .ck-fail { color: var(--color-loss); }
+.lk-open { min-height: 40px; padding: 0 16px; }
+.big-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.big-num { font-family: var(--font-heading); font-size: 30px; line-height: 34px; font-weight: 500; white-space: nowrap; }
+details.coll > summary { cursor: pointer; list-style: none; padding: 14px 18px; }
+details.coll > summary::-webkit-details-marker { display: none; }
+.coll-arrow { width: 12px; flex: none; align-self: center; }
+.coll-arrow::before { content: "\25B8"; color: var(--color-muted); font-size: 14px; }
+details.coll[open] .coll-arrow::before { content: "\25BE"; }
+.sc-open { margin-left: auto; font-size: 13px; }
+.inline-check { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--color-text); cursor: pointer; }
+
+/* Tools: Position size and Trade cost */
+.sz-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.cs-head { align-items: center; }
+.cs-head input { margin-left: auto; width: 140px; text-align: right; }
+table.cs-table { min-width: 0; font-size: 13.5px; }
+.cs-table td, .cs-table th { padding: 5px 0; } .cs-table td.num, .cs-table th.num { width: 90px; }
+.cs-table tfoot td { font-weight: 600; border-top: 1px solid var(--color-divider); padding-top: 7px; }
+
+/* Factor screen, forward: the line beside its figures */
+.fw-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr); gap: 20px; align-items: center; }
+.fw-chartcol { min-width: 0; }
+.fw-side { display: flex; flex-direction: column; gap: 10px; }
+.fw-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.fw-stats .mkt { padding: 0; margin: 0; border-right: none; }
+#fw-card .cardbody { border-top: none; padding-top: 0; }
+@media (max-width: 800px) { .fw-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* Phone: the header wraps, tabs scroll sideways, nothing scrolls the page sideways at 360 px */
+@media (max-width: 700px) {
+  .hdr { padding: 12px 16px; gap: 10px; }
+  .hdr .controls { margin-left: 0; width: 100%; flex-wrap: wrap; }
+  #lastcheck { order: 9; flex-basis: 100%; padding: 0; }
+  .ws-tabbar { padding: 0 8px; }
+  .ws-tabs { flex-wrap: nowrap; }
+  main.ws-main { padding-top: 14px; }
+  .lk-form { flex: 1 1 100%; margin-left: 0; }
+  .cs-head input { margin-left: 0; flex: 1 1 100px; width: auto; }
+  .since-seen { margin-left: 0; }
+  .brand-sub { max-width: 60vw; }
+}
+.menu-row > .theme-label { white-space: nowrap; }
+.mp-table td.stock-cell, .mp-table td.prot-cell { white-space: nowrap; }
+.mp-table td.prot-cell { min-width: 0; }
+.grid-2 table.dt { min-width: 440px; }
+#mp-body:has(#mp-stats:empty) { display: none; }
