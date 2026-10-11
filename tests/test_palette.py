@@ -85,7 +85,7 @@ def test_practice_buy_on_live_goes_to_the_demo_page_not_to_an_order():
 
 
 # ---------- markup and accessibility ----------
-@pytest.mark.parametrize("html", [INDEX, REPLAY], ids=["index", "replay"])
+@pytest.mark.parametrize("html", [INDEX, REPLAY, (UI / "screener.html").read_text(encoding="utf-8")], ids=["index", "replay", "screener"])
 def test_pages_have_the_search_button_and_load_the_palette(html):
     assert 'id="btn-palette"' in html and 'aria-haspopup="dialog"' in html and 'aria-keyshortcuts="Control+K Meta+K"' in html
     assert "<span>Search</span>" in html     # a visible label, so a phone user can find it

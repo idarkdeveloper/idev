@@ -610,6 +610,7 @@ treated as missing (no filtering).
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Mirror every alert and daily email to Telegram (`TELEGRAM_ALERTS=false` = off). Runbook section 13. |
 | `HEARTBEAT_URL` | https ping URL called every 5 minutes by the watch service (healthchecks.io style dead-man's switch). Runbook section 12. |
 | `TA_ALLOWED_HOSTS` | Extra Host names the dashboard answers to besides localhost, as a comma list of exact names (for phone access over Tailscale: `box.tail1234.ts.net`). Any other Host gets HTTP 421. Runbook section 15. |
+| `TRADINGVIEW_SCREENER`, `TA_ROLE` | Screener page (`/screener`): `TRADINGVIEW_SCREENER=true` (default `false`, also a Settings switch) adds a few display-only TradingView columns from its unofficial scanner endpoint, whose terms restrict automated access. One request per list at most every 15 minutes; any error or HTTP 403/429 pauses it for 24 hours. `TA_ROLE=server` (set it in the cloud server's `.env`) makes the code refuse to call TradingView from that box. |
 | `INTEGRATION_CHECK`, `INTEGRATION_CLAUDE` | `true` / `false` (defaults). The daily read-only check of the live services at 08:30 IST, and whether it also makes one 5-token Claude call. See *Development*. |
 | `QUIVER_API_KEY`, `ALPACA_*` | US mode only. |
 | `NEWS_TAGGER`, `OLLAMA_URL`, `OLLAMA_MODEL`, `NEWS_CLAUDE_MODEL` | Headline tagging: `auto` (default, local Ollama `qwen2.5:3b` if running) / `ollama` / `claude` / `none`. See *News headlines*. |
