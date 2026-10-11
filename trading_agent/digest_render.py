@@ -672,4 +672,7 @@ def inline_data_urls(html: str, images: list[dict[str, Any]] | None) -> str:
 def render(data: dict[str, Any], summary: str | None = None, writer: str = "none",
            images: list[dict[str, Any]] | None = None) -> dict[str, str]:
     doc = document(data, summary, writer, images)
+    if data["kind"] == "morning":   # the morning brief has its own layout; the text part stays the shared one
+        from .digest_morning import to_html as morning_html
+        return {"subject": subject(data), "text": to_text(doc), "html": morning_html(data, summary, writer)}
     return {"subject": subject(data), "text": to_text(doc), "html": to_html(doc)}

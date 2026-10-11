@@ -1392,13 +1392,14 @@ def test_phone_layout_puts_the_name_under_the_symbol_and_keeps_numbers_on_one_li
     mail = digest_render.render(data)
     html, text = mail["html"], mail["text"]
     assert ">Name</th>" not in html and "Name" in text                                  # the text part keeps its Name column
-    cell = re.search(r"<td[^>]*>AAA<div[^>]*>Anand Rathi Wealth Management Limited</div></td>", html)
+    cell = re.search(r">AAA</div><div[^>]*>Anand Rathi Wealth Management · ₹1,234.50</div></td>", html)   # name and price under the symbol
     assert cell, html
-    assert re.search(r"<td align=\"right\" style=\"[^\"]*white-space:nowrap;\">₹1,234.50</td>", html)
+    assert re.search(r"<td align=\"right\" style=\"[^\"]*white-space:nowrap\"><div[^>]*>3 shares</div>", html)
+    assert re.search(r"<td align=\"right\" style=\"[^\"]*white-space:nowrap\">₹1,100.00</td>", html)
     assert "width=\"640\"" not in html and "max-width:640px;width:100%" in html
-    assert ">Flags<" not in html and "<ul" not in html            # one table, flags under the stock
+    assert ">Flags<" not in html and "<ul" not in html            # one row per holding, flags under the stock
     assert "TCS" in html and "2,156.00" in html and "also in practice" in html
-    assert "below avg" in html
+    assert "Below 200-day avg" in html
     assert "below avg" in text and "news" in text
 
 
@@ -1446,8 +1447,10 @@ def test_world_markets_region_lines_futures_vix_and_missing_indices(s):
             "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}
     mail = digest_render.render(data)
     assert "WORLD MARKETS" in mail["text"] and "US: uptrend (2 of 3 up, Dow down)" in mail["text"] and "3 index(es) could not be read" in mail["text"]
-    assert mail["text"].index("WORLD MARKETS") > 0 and ">Close</th>" not in mail["html"] and ">Index</th>" in mail["html"]
-    assert 'max-width:640px;width:100%' in mail["html"] and "white-space:nowrap" in mail["html"]
+    html = mail["html"]
+    assert mail["text"].index("WORLD MARKETS") > 0 and "Market context" in html and ">S&amp;P 500<" in html and ">Nasdaq 100 fut<" in html
+    assert "US: uptrend (2 of 3 up, Dow down)" in html and "3 index(es) could not be read" in html
+    assert 'max-width:640px;width:100%' in html and "white-space:nowrap" in html
     # the summary may speak about it, and only in terms of the data
     assert digest_writer.validate_summary("The US is in an uptrend and Asia is mixed.", data)[0]
     assert not digest_writer.validate_summary("US markets will open higher.", data)[0]
@@ -1500,7 +1503,8 @@ def test_gauges_values_warnings_and_the_phone_table(s):
     assert "RISK GAUGES" in mail["text"] and "⚠ Warning: US VIX is above 25; India VIX is above 20" in mail["text"]
     assert "⚠ warning: stress" in mail["text"] and "not a forecast" in mail["text"] and "1 gauge(s) could not be read" in mail["text"]
     assert "⚠ warning: stress; flat over the year" in mail["html"]          # the word, not only a colour or symbol
-    assert ">Reading</th>" not in mail["html"] and ">Gauge</th>" in mail["html"] and 'max-width:640px;width:100%' in mail["html"]
+    assert "⚠ Warning: US VIX is above 25; India VIX is above 20" in mail["html"] and ">Nifty Bank<" in mail["html"]
+    assert ">Reading</th>" not in mail["html"] and 'max-width:640px;width:100%' in mail["html"]
     assert digest_writer.validate_summary("India VIX is above 20 and the rupee is at a new 1-year low.", data)[0]
     assert "unavailable" in digest._gauges(ctx_for(s, world_prices=Src({})))
     quiet = digest._gauges(ctx_for(s, world_prices=Src({"^VIX": flat(12)})))
@@ -1806,7 +1810,8 @@ def test_the_watch_list_is_cards_on_a_phone_and_the_mood_has_no_duplicated_indic
     assert "Regime: neutral, score 0, trend down" in mood_text
     assert "Nifty: 22,520, +1.3% today, −3.9% in 20 days, below its 200-day average" in mood_text
     for dup in ("S&P", "VIX", "USD/INR", "Brent"):
-        assert dup not in mood_text and dup not in html.split("Market mood")[1].split("Holdings to watch")[0], dup
+        assert dup not in mood_text and dup not in html.split("Your portfolio")[0], dup   # the headline and Market figure name only the Nifty
+    assert "Nifty below 200-day avg" in html and "Risk-off" not in html
 
 
 # ===================== fix round 5 =====================
@@ -2037,9 +2042,10 @@ def test_the_email_labels_who_wrote_the_summary(s):
     data = {"kind": "morning", "date": "x", "generated_at": "2026-10-12T09:00:00+05:30", "delayed": False, "mood": digest.unavailable("x"),
             "buy_ideas": digest.unavailable("x"), "watch": digest.unavailable("x"), "deals": digest.unavailable("x")}
     rules = digest_render.render(data, "R.", "rules")
-    assert "IN SHORT (written by the rules)" in rules["text"] and "In short (written by the rules)" in rules["html"]
+    assert "IN SHORT (written by the rules)" in rules["text"] and "· written by the rules</span>" in rules["html"]
     haiku = digest_render.render(data, "H.", "claude:claude-haiku-4-5")
     assert "(written by Claude Haiku — check the numbers below)" in haiku["text"]
+    assert "· written by Claude Haiku, check the numbers below</span>" in haiku["html"]
 
 
 def test_a_today_amount_must_be_todays_move_not_the_total():

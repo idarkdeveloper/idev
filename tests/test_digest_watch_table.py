@@ -60,8 +60,11 @@ def test_no_buy_day_puts_holdings_after_mood_and_candidates_last_in_grey():
     assert t.index("MARKET MOOD") < t.index("HOLDINGS TO WATCH") < t.index("HELD BACK BY THE MARKET FILTER")
     assert t.index("CANDIDATE SCREEN") > t.index("HOLDINGS TO WATCH")
     html = digest_render.render(data(wait=True))["html"]
-    i = html.index("HELD BACK by the market filter")
-    assert "#d1d5db" in html[:i + 200] and "#15803d" not in html[i - 400:]
+    i = html.index("Would pass, held back by the market filter")
+    held = html[i:html.index("New deals by followed investors")]
+    assert "color:#6a6e82" in html[i - 60:i] and "#0a7a3c" not in held      # a held-back list: grey title, never green
+    assert "No new buys today: w. Rule: r." in held
+    assert html.index("Holdings to watch") < i                                # the holdings come first in the brief
     assert "Would pass, but" not in t
 
 
