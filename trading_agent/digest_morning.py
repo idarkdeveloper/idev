@@ -85,12 +85,18 @@ def headline(d: dict[str, Any]) -> str:
     return f"{lead}. {_plural(n_buy, 'buy idea')}, {watch}."
 
 
-def _stat(label: str, big: str, small: str, big_colour: str = INK, small_colour: str = BODY, bold_small: bool = False,
-          last: bool = False) -> str:
+def _glue(text: str) -> str:
+    """'+₹61,310' never breaks after its sign on a narrow phone (a word joiner between the sign and the ₹)."""
+    return re.sub(r"^([+−])₹", "\\1\u2060₹", text)
+
+
+def stat(label: str, big: str, small: str, big_colour: str = INK, small_colour: str = BODY, bold_small: bool = False,
+         last: bool = False, width: str = "33%") -> str:
+    """One figure tile: an eyebrow label, a big value and a small line under it."""
     edge = "" if last else f"border-right:1px solid {LINE};"
-    return (f'<td width="{"34%" if label == "Market" else "33%"}" style="padding:12px 14px;{edge}vertical-align:top;{FONT}">'
+    return (f'<td width="{width}" style="padding:12px 10px;{edge}vertical-align:top;{FONT}">'
             f'<div style="{EYEBROW}letter-spacing:.8px;color:{MUTED}">{_e(label)}</div>'
-            f'<div style="font-size:17px;font-weight:bold;color:{big_colour};padding-top:3px">{_e(big)}</div>'
+            f'<div style="font-size:17px;font-weight:bold;color:{big_colour};padding-top:3px">{_e(_glue(big))}</div>'
             f'<div style="font-size:12px;color:{small_colour};{"font-weight:bold;" if bold_small else ""}padding-top:2px">{_e(small)}</div></td>')
 
 
@@ -99,7 +105,7 @@ def _stats(d: dict[str, Any]) -> str:
     wait = "unavailable" not in mood and bool(mood.get("no_new_buys"))
     nf = mood.get("nifty") or {}
     if "unavailable" in mood:
-        market = _stat("Market", "n/a", "market data unavailable", MUTED)
+        market = stat("Market", "n/a", "market data unavailable", MUTED, width="34%")
     else:
         regime = str(mood.get("regime") or "")
         word = REGIME.get(regime, "Mixed")
@@ -112,28 +118,33 @@ def _stats(d: dict[str, Any]) -> str:
             sub = f"Nifty {num(nf['last'])} · {pct_text(nf.get('ret_1d_pct'), 2)}"
         else:
             sub = "Nifty n/a"
-        market = _stat("Market", word, sub, colour)
+        market = stat("Market", word, sub, colour, width="34%")
     p = watch.get("portfolio") if isinstance(watch.get("portfolio"), dict) else None
     if p and isinstance(p.get("value"), (int, float)):
         if isinstance(p.get("pl"), (int, float)):
             pct = f" ({pct_text(p['pl_pct'], 2)})" if isinstance(p.get("pl_pct"), (int, float)) else ""
             pl = f"{'−' if p['pl'] < 0 else '+'}{inr(abs(p['pl']))}{pct}"
-            port = _stat("Your portfolio", inr(p["value"]), pl, small_colour=_tone(pl), bold_small=True)
+            port = stat("Your portfolio", inr(p["value"]), pl, small_colour=_tone(pl), bold_small=True)
         else:
-            port = _stat("Your portfolio", inr(p["value"]), "P&L n/a")
+            port = stat("Your portfolio", inr(p["value"]), "P&L n/a")
     else:
-        port = _stat("Your portfolio", "n/a", "no portfolio figures", MUTED)
+        port = stat("Your portfolio", "n/a", "no portfolio figures", MUTED)
     if "unavailable" in watch:
-        look = _stat("Needs a look", "n/a", "holdings not checked", MUTED, last=True)
+        look = stat("Needs a look", "n/a", "holdings not checked", MUTED, last=True)
     else:
         items = watch.get("items") or []
         total, checked = int(watch.get("total", len(items))), int(watch.get("checked") or 0)
         below = sum(1 for i in items if _breached(i))
         big = f"{total} of {checked} holdings" if checked else _plural(total, "holding")
-        look = _stat("Needs a look", big, f"{below} below {'its' if below == 1 else 'their'} stop" if below else "none below a stop",
+        look = stat("Needs a look", big, f"{below} below {'its' if below == 1 else 'their'} stop" if below else "none below a stop",
                      small_colour=BAD if below else BODY, bold_small=bool(below), last=True)
+    return tiles([market, port, look])
+
+
+def tiles(cells: list[str]) -> str:
+    """The row of figure tiles under the headline (cells from ``stat``; the last one has last=True)."""
     return (f'<tr><td style="padding:12px 24px 4px"><table {TABLE} style="border-collapse:separate;border-spacing:0;'
-            f'border:1px solid {LINE};border-radius:10px"><tr>{market}{port}{look}</tr></table></td></tr>')
+            f'border:1px solid {LINE};border-radius:10px"><tr>{"".join(cells)}</tr></table></td></tr>')
 
 
 def _short(summary: str | None, writer: str) -> str:
@@ -362,33 +373,49 @@ def _context(d: dict[str, Any], pm: str | None) -> str:
     return "".join(out)
 
 
-# -- the whole email -------------------------------------------------------------------------------
-def to_html(d: dict[str, Any], summary: str | None = None, writer: str = "none") -> str:
+# -- the whole email (the header and the frame are shared with the evening email) -----------------
+def stamp(d: dict[str, Any]) -> str:
+    """'Mon 12 Oct 2026 · 09:00 IST' from the data's generated_at."""
     try:
         when = datetime.fromisoformat(d["generated_at"])
-        stamp = when.strftime("%a ") + str(when.day) + when.strftime(" %b %Y · %H:%M IST")
+        return when.strftime("%a ") + str(when.day) + when.strftime(" %b %Y · %H:%M IST")
     except (KeyError, TypeError, ValueError):
-        stamp = str(d.get("date") or "")
+        return str(d.get("date") or "")
+
+
+def top(eyebrow: str, when: str, title: str, extra: str = "") -> str:
+    """The first row: the eyebrow with the date on the right, the one-line headline, then ``extra`` (notes)."""
+    return (f'<tr><td style="padding:22px 24px 6px;{FONT}"><table {TABLE}><tr>'
+            f'<td style="{EYEBROW}letter-spacing:1.2px;color:{ACCENT};font-weight:bold;{FONT}">{_e(eyebrow)}</td>'
+            f'<td align="right" style="font-size:12px;color:{MUTED};white-space:nowrap;{FONT}">{_e(when)}</td></tr></table>'
+            f'<div style="font-size:24px;line-height:30px;font-weight:bold;color:{INK};padding-top:10px">{_e(title)}</div>'
+            f'{extra}</td></tr>')
+
+
+def frame(rows: str, delayed: bool) -> str:
+    """The grey page, the white 640 px card holding ``rows``, and the footer."""
+    foot = "<br>".join(_e(x) for x in [FOOTER] + ([DELAYED] if delayed else []))
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{SOFT};{FONT}">'
+            '<tr><td align="center" style="padding:16px 8px">'   # 8 px at the sides leaves room on a 360 px phone
+            f'<table role="presentation" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#ffffff;'
+            f'border-radius:12px;border:1px solid {LINE}">'
+            + rows
+            + f'<tr><td style="padding:22px 24px 22px;{FONT}"><div style="border-top:1px solid {LINE};padding-top:14px;font-size:12px;'
+            f'line-height:18px;color:{MUTED}">{foot}</div></td></tr></table></td></tr></table>')
+
+
+def to_html(d: dict[str, Any], summary: str | None = None, writer: str = "none") -> str:
     pm = (d.get("gauges") or {}).get("premarket_line") if isinstance(d.get("gauges"), dict) else None
     w = d.get("watch")
     watch: dict[str, Any] = w if isinstance(w, dict) else {}
     saved = next((n for n in watch.get("notes", []) if str(n).startswith("Using ")), None)
-    top = [f'<tr><td style="padding:22px 24px 6px;{FONT}"><table {TABLE}><tr>'
-           f'<td style="{EYEBROW}letter-spacing:1.2px;color:{ACCENT};font-weight:bold;{FONT}">Trading Agent · Morning brief</td>'
-           f'<td align="right" style="font-size:12px;color:{MUTED};white-space:nowrap;{FONT}">{_e(stamp)}</td></tr></table>'
-           f'<div style="font-size:24px;line-height:30px;font-weight:bold;color:{INK};padding-top:10px">{_e(headline(d))}</div>']
+    extra = ""
     if pm:   # the pre-market canary result, first thing under the headline
         bad = "FAILED" in str(pm)
-        top.append(f'<div style="margin-top:10px;padding:8px 12px;border-radius:8px;font-size:13px;line-height:19px;'
-                   f'color:{BAD if bad else INK};background:{"#fbeaea" if bad else SHORT_BG}">{_e(pm)}</div>')
+        extra += (f'<div style="margin-top:10px;padding:8px 12px;border-radius:8px;font-size:13px;line-height:19px;'
+                  f'color:{BAD if bad else INK};background:{"#fbeaea" if bad else SHORT_BG}">{_e(pm)}</div>')
     if saved:
-        top.append(_note(str(saved).rstrip(".") + ".", CAUTION_INK, "12.5px"))
-    top.append("</td></tr>")
-    foot = "<br>".join(_e(x) for x in [FOOTER] + ([DELAYED] if d.get("delayed") else []))
-    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{SOFT};{FONT}">'
-            '<tr><td align="center" style="padding:16px">'
-            f'<table role="presentation" cellpadding="0" cellspacing="0" style="max-width:640px;width:100%;background:#ffffff;'
-            f'border-radius:12px;border:1px solid {LINE}">'
-            + "".join(top) + _stats(d) + _short(summary, writer) + _watch(d) + _ideas(d) + _deals(d) + _context(d, pm)
-            + f'<tr><td style="padding:22px 24px 22px;{FONT}"><div style="border-top:1px solid {LINE};padding-top:14px;font-size:12px;'
-            f'line-height:18px;color:{MUTED}">{foot}</div></td></tr></table></td></tr></table>')
+        extra += _note(str(saved).rstrip(".") + ".", CAUTION_INK, "12.5px")
+    return frame(top("Trading Agent · Morning brief", stamp(d), headline(d), extra)
+                 + _stats(d) + _short(summary, writer) + _watch(d) + _ideas(d) + _deals(d) + _context(d, pm),
+                 bool(d.get("delayed")))

@@ -675,4 +675,7 @@ def render(data: dict[str, Any], summary: str | None = None, writer: str = "none
     if data["kind"] == "morning":   # the morning brief has its own layout; the text part stays the shared one
         from .digest_morning import to_html as morning_html
         return {"subject": subject(data), "text": to_text(doc), "html": morning_html(data, summary, writer)}
+    if data["kind"] == "evening":   # so has the close report
+        from .digest_evening import to_html as evening_html
+        return {"subject": subject(data), "text": to_text(doc), "html": evening_html(data, summary, writer, images)}
     return {"subject": subject(data), "text": to_text(doc), "html": to_html(doc)}
