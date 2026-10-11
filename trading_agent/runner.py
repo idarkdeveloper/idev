@@ -124,9 +124,11 @@ def practice_gate(settings: Settings) -> Any:
         halted = killswitch.reason(settings.state_dir, f"place a practice {side}")
         if halted or side != "buy" or getattr(settings, "market", "in") != "in":
             return halted
+        from . import day_brake
         from .collar import practice_buy_block
         from .groww_hours import default_calendar
-        return practice_buy_block(settings, calendar=default_calendar(settings))
+        # the live account's day brake holds practice buys too (the dashboard and Telegram share this path)
+        return day_brake.reason(settings.state_dir) or practice_buy_block(settings, calendar=default_calendar(settings))
     return gate
 
 

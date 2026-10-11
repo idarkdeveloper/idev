@@ -256,6 +256,7 @@ class Settings:
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     telegram_alerts: bool = True
+    telegram_commands: bool = False   # obey /commands from TELEGRAM_CHAT_ID (practice orders only); off by default
     heartbeat_fail: bool = False  # also send /fail to a heartbeat provider other than hc-ping.com
     forward_start: str | None = None  # YYYY-MM-DD the forward test started; the server rebuilds from it when the account is missing
     forward_universe: str = "NIFTYMIDCAP150"  # the paper forward test the server runs once a day after the close
@@ -459,7 +460,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         allowed_hosts=allowed_hosts,
         telegram_bot_token=telegram_token,
         telegram_chat_id=telegram_chat,
-        telegram_alerts=_bool(env("TELEGRAM_ALERTS"), True),
+        telegram_alerts=_bool(env("TELEGRAM_ALERTS"), True), telegram_commands=_bool(env("TELEGRAM_COMMANDS"), False),
         heartbeat_fail=_bool(env("HEARTBEAT_FAIL"), False),
         forward_start=forward_start,
         forward_universe=(env("FORWARD_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),

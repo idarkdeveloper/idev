@@ -195,7 +195,7 @@ def test_failing_first_and_counts(s):
     assert order == sorted(order, key=rank.get) and order[0] == "failing"
     assert rep["counts"]["failing"] == order.count("failing") and sum(rep["counts"].values()) == len(order)
     ids = {r["id"] for r in rep["sources"]}
-    assert ids == {"deals", "bse", "insider", "announcements", "yahoo", "flows", "breadth", "bands", "filters", "corp_actions", "clearing", "news", "groww", "canary", "watch"}
+    assert ids == {"deals", "bse", "insider", "announcements", "yahoo", "flows", "breadth", "bands", "filters", "corp_actions", "clearing", "news", "groww", "canary", "watch", "telegram_commands"}
     for r in rep["sources"]:
         assert r["feeds"] and r["schedule"] and r["status_text"]
 
