@@ -87,6 +87,7 @@ def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool =
     set. Raises GrowwTokenUnavailable while Groww's token endpoint is cooling down after a refusal, and while halted
     (``halt_ok``: the kill switch's own client, which only lists and cancels)."""
     from . import killswitch
+    from .collar import yahoo_opening
     from .groww import GrowwBroker, InstrumentTicks
 
     ticks = InstrumentTicks(settings.state_dir / "cache") if settings.groww_live_orders else None
@@ -99,12 +100,17 @@ def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool =
                        sell_t1=settings.groww_sell_t1, ddpi_confirmed=settings.groww_ddpi_confirmed,
                        alert_fn=live_alert_fn(settings), buy_gate=lambda: _buy_block(settings),
                        halt_fn=lambda what: killswitch.reason(settings.state_dir, what),
+                       collar_bps=settings.open_collar_bps if settings.groww_live_orders else None,
+                       open_price_fn=lambda sym: yahoo_opening(price_fn, sym),
+                       buy_timeout_s=settings.buy_timeout_s if settings.groww_live_orders else None,
                        tick_size_fn=(lambda sym: ticks.tick_size(sym, settings.groww_exchange)) if ticks else None)
 
 
 def _buy_block(settings: Settings) -> str | None:
+    """Why a live Groww buy is refused right now (the pre-market check, the opening collar), or None."""
+    from .collar import live_buy_block
     from .integration import buy_block
-    return buy_block(settings)
+    return buy_block(settings) or live_buy_block(settings)
 
 
 def practice_gate(settings: Settings) -> Any:
@@ -112,7 +118,12 @@ def practice_gate(settings: Settings) -> Any:
     from . import killswitch
 
     def gate(side: str) -> str | None:
-        return killswitch.reason(settings.state_dir, f"place a practice {side}")
+        halted = killswitch.reason(settings.state_dir, f"place a practice {side}")
+        if halted or side != "buy" or getattr(settings, "market", "in") != "in":
+            return halted
+        from .collar import practice_buy_block
+        from .groww_hours import default_calendar
+        return practice_buy_block(settings, calendar=default_calendar(settings))
     return gate
 
 

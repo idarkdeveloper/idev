@@ -394,8 +394,9 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             """Place an order. Only use after send_recommendation, only with high
             confidence, and never more than 10% of equity per order. The order goes to the
             configured brokerage (paper simulator unless live orders were explicitly enabled;
-            live Groww orders are DAY limit orders within MAX_SLIPPAGE_PCT of the last price
-            and may stay open unfilled). Sells only use free (unpledged, unlocked) shares.
+            live Groww orders are DAY limit orders within MAX_SLIPPAGE_PCT of the last price;
+            buys are refused before 09:17 IST, capped at today's opening price + 30 bps and
+            cancelled if unfilled after 120 s). Sells only use free (unpledged, unlocked) shares.
 
             Args:
                 symbol: Ticker symbol.
