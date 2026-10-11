@@ -52,6 +52,67 @@
             stopType: h.stop_type || null};
   }
 
+  // The agent's checklist for one stock, built only from data the dashboard already has: the lookup answer r
+  // (momentum, announcements, band, news), the market context ctx.regime and today's date. Each check is
+  // {key, label, state: "pass" | "warn" | "fail", detail}; call is the one-line verdict and its tone.
+  // nowMs is for tests; the page passes nothing.
+  const LIQUID_TURNOVER = 1e7;   // ₹1 crore a day, the factor screen's liquidity floor
+  function agentChecks(r, ctx, nowMs){
+    if(!r) return null;
+    const m = r.momentum || {}, sp = (v) => isNum(v) ? signedPercent(v, 1) : "n/a";
+    const now = isNum(nowMs) ? nowMs : Date.now();
+    const age = (at) => { const d = new Date(String(at || "").replace(" ", "T")); return isNaN(d) ? null : Math.floor((now - d) / 864e5); };
+    const checks = [];
+    const add = (key, label, state, detail) => checks.push({key, label, state, detail});
+    const v = m.error ? "insufficient" : (m.verdict || "insufficient");
+    add("trend", "Trend", v === "strong" ? "pass" : v === "weak" ? "fail" : "warn",
+      m.error ? "No price history to judge the trend" : v === "insufficient" ? "Not enough price history" :
+      `${v[0].toUpperCase() + v.slice(1)} momentum · 6M ${sp(m.ret_6m)} · 12-1 ${sp(m.ret_12_1)}`);
+    add("ma200", "200-day average", m.above_200dma === true ? "pass" : m.above_200dma === false ? "fail" : "warn",
+      m.above_200dma === true ? "Price is above it" : m.above_200dma === false ? "Below it: the rules make no new buy" : "Less than 200 days of prices");
+    const rg = ctx && ctx.regime && !ctx.regime.error ? ctx.regime : null, nifty = rg && rg.markets && rg.markets.nifty50;
+    if(!rg) add("market", "Market filter", "warn", "Market context unavailable");
+    else {
+      const off = rg.regime === "risk_off", below = !!(nifty && nifty.above_200dma === false);
+      const name = {risk_on: "Risk-on", risk_off: "Risk-off", neutral: "Neutral"}[rg.regime] || String(rg.regime || "Unknown");
+      add("market", "Market filter", off || below ? "fail" : "pass",
+        off || below ? `${name}${below ? ", Nifty below its 200-day average" : ""}: the rules hold off new buys`
+                     : `${name}, Nifty above its 200-day average`);
+    }
+    if(r.band_skip) add("band", "Price band", "fail", r.band_note || `${r.band || "Narrow"} band: the agent skips it`);
+    else if(r.band) add("band", "Price band", "pass", `${r.band} NSE price band`);
+    else add("band", "Price band", "pass", "No narrow NSE price band");
+    const anns = (r.announcements || []).filter(a => { const d = age(a.at); return d == null || d <= 60; });
+    const find = (re) => anns.find(a => re.test((a.category || "") + " " + (a.text || "")));
+    const res = find(/financial result|outcome of board meeting/i), tw = find(/trading window/i), bm = find(/board meeting/i);
+    const deal = find(/acquisition|amalgamation|merger|demerger|scheme of arrangement|takeover/i);
+    const day = (a) => String(a.at || "").slice(0, 10);
+    if(res && age(res.at) != null && age(res.at) <= 14) add("events", "Results and events", "warn", `Results out ${day(res)}: the price may still be reacting`);
+    else if(tw) add("events", "Results and events", "warn", `Trading window closed ${day(tw)}: results due within weeks`);
+    else if(bm) add("events", "Results and events", "warn", `Board meeting announced ${day(bm)}`);
+    else if(deal) add("events", "Results and events", "warn", `Corporate action ${day(deal)}: read it first`);
+    else add("events", "Results and events", r.announcements_error ? "warn" : "pass", r.announcements_error ? "Announcements unavailable" : "No results or board meeting announced");
+    const t = m.avg_turnover_60d;
+    if(!isNum(t)) add("liquidity", "Liquidity", "warn", "Turnover unknown");
+    else {
+      const cr = t / 1e7, txt = cr >= 1 ? "₹" + group(cr, cr >= 10 ? 0 : 1) + " Cr" : "₹" + group(t / 1e5, 1) + " L";
+      add("liquidity", "Liquidity", t >= LIQUID_TURNOVER ? "pass" : "fail", `Trades about ${txt} a day (60-day average)${t >= LIQUID_TURNOVER ? "" : ": too thin for the screen"}`);
+    }
+    const passN = checks.filter(c => c.state === "pass").length, fail = (k) => checks.some(c => c.key === k && c.state === "fail");
+    const strong = v === "strong" && m.above_200dma !== false, stockWait = v === "weak" || m.above_200dma === false;
+    const anyFail = checks.some(c => c.state === "fail"), anyWarn = checks.some(c => c.state === "warn");
+    let call, tone, bottom;
+    if(strong && !anyFail){ call = anyWarn ? "Passes, keep it small" : "Passes the rules"; tone = "pass";
+      bottom = anyWarn ? "Trend-wise it is the kind of stock the screen buys, but something above needs a look: keep any position small." : "Trend-wise it is the kind of stock the screen buys."; }
+    else if(stockWait){ call = "Wait"; tone = "fail"; bottom = "The momentum rules say wait; a disclosed buy here would be a watch, not a buy."; }
+    else if(strong && fail("market")){ call = "Market says wait"; tone = "warn"; bottom = "Trend-wise it passes, but the market filter says hold off new buys."; }
+    else if(strong){ call = "Passes the trend, fails a check"; tone = "warn"; bottom = "The trend passes, but a failed check above rules out a buy by the agent's rules."; }
+    else { call = "No clear signal"; tone = "warn"; bottom = "Nothing decisive either way; it needs a reason beyond the price trend."; }
+    return {checks, passN, n: checks.length, call, tone, bottom};
+  }
+  const CHECK_ICON = {pass: "✓", warn: "!", fail: "✕"};
+  const CHECK_WORD = {pass: "passes", warn: "needs a look", fail: "fails"};
+
   // ---------- the component ----------
   let uid = 0;
   const SENT = {positive: ["ok", "▲ Positive"], negative: ["bad", "▼ Negative"], neutral: ["", "● Neutral"]};
@@ -200,10 +261,22 @@
       if(!rows.length) return `<div class="sub">No same-industry stocks found in the index lists.</div>`;
       return `<div class="sp-sim">${rows.map(x => `<button type="button" class="sp-simrow" data-open="${esc(x.symbol)}" aria-label="Open ${esc(x.symbol)}"><span class="sp-simname"><b>${esc(x.symbol)}</b><span class="sub">${esc(x.name || "")}</span></span><span class="sp-simpx">${esc(rupees(x.price))}</span><span class="sp-simchg ${tone(x.change_pct)}">${esc(signedPercent(x.change_pct))}</span></button>`).join("")}</div>`;
     }
+    function checklistHtml(){
+      const r = st.r; if(!r) return loading("checklist");
+      const a = agentChecks(r, opts.context ? opts.context() : undefined);
+      return `<ul class="sp-checks">${a.checks.map(c => `<li class="sp-check"><span class="sp-ck sp-ck-${c.state}" aria-hidden="true">${CHECK_ICON[c.state]}</span>
+          <span class="sp-ck-t"><span class="sp-ck-l">${esc(c.label)}<span class="sr-only"> ${CHECK_WORD[c.state]}</span></span><span class="sub">${esc(c.detail)}</span></span></li>`).join("")}</ul>
+        <div class="sp-ck-bottom">${esc(a.bottom)}</div>`;
+    }
+    function checklistHint(){
+      const a = st.r ? agentChecks(st.r, opts.context ? opts.context() : undefined) : null;
+      return a ? `<span class="sp-call sp-call-${a.tone}">${esc(a.call)}</span> · ${a.passN} of ${a.n} pass` : "";
+    }
     function overviewHtml(){
       const fund = !!(st.stock && st.stock.fund);
       const dflt = !phone();
-      return sec("insights", "Insights", insightsHtml(), dflt)
+      return sec("checklist", "Agent's checklist", checklistHtml(), true, checklistHint())
+        + sec("insights", "Insights", insightsHtml(), dflt)
         + sec("performance", "Performance", performanceHtml(), true)
         + (fund ? "" : sec("fundamentals", "Fundamentals", fundamentalsHtml(), true))
         + (fund ? "" : sec("financials", "Financial performance", financialHtml(), true))
@@ -288,7 +361,7 @@
       root.querySelectorAll("[data-panel]").forEach(p => { p.hidden = p.dataset.panel !== k; });
     }
     function shell(){
-      root.innerHTML = `<div class="sp-head"></div><div class="sp-chartbox"></div><div class="sp-holdbox"></div>${tabsHtml()}
+      root.innerHTML = `<div class="sp-main"><div class="sp-head"></div><div class="sp-chartbox"></div><div class="sp-holdbox"></div></div><div class="sp-side">${tabsHtml()}</div>
         <div class="sp-bar" role="group" aria-label="Practice orders (practice account only)"><div class="sp-bar-note sub">Practice account only</div><div class="sp-bar-btns">${actionsHtml()}</div></div>`;
       paintHead(); paintHolding(); paintOverview(); paintTechnicals(); paintNews();
     }
@@ -397,7 +470,7 @@
     };
   }
 
-  const exported = {isNum, rupees, signedRupees, percent, signedPercent, ratio, crore, volume, tone, markerPos, circuitText, barLayout, periodView, holdingFigures};
+  const exported = {agentChecks, isNum, rupees, signedRupees, percent, signedPercent, ratio, crore, volume, tone, markerPos, circuitText, barLayout, periodView, holdingFigures};
   stockPage.helpers = exported;
   if(typeof window !== "undefined" && window.TA) window.TA.stockPage = stockPage;
   if(typeof module !== "undefined" && module.exports) module.exports = stockPage;

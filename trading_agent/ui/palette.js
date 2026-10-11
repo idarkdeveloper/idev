@@ -50,7 +50,8 @@
   }
 
   // ---- commands ----
-  // opts: {mode, sections: [{id, label}], refresh: bool}. Each command carries a plain descriptor, not a function.
+  // opts: {mode, workspaces: [{id, label}], sections: [{id, label}], holdings: [{symbol, name}], refresh: bool}.
+  // Each command carries a plain descriptor, not a function.
   function buildCommands(opts){
     opts = opts || {};
     const out = [];
@@ -58,11 +59,21 @@
       if(k === opts.mode) continue;
       out.push({id: "page-" + k, group: "Go to", label: PAGES[k][0] + " page", keywords: "page tab open " + k + (k === "screener" ? " stocks filter sort table scan" : ""), run: {kind: "page", url: PAGES[k][1]}});
     }
+    for(const w of (opts.workspaces || [])){   // the page's tabs (workspaces): Overview, Deals & orders, Research, Tools
+      out.push({id: "ws-" + w.id, group: "Go to", label: "Go to " + w.label, keywords: "tab workspace open switch " + w.id, run: {kind: "workspace", id: w.id}});
+    }
     for(const s of (opts.sections || [])){
       out.push({id: "sec-" + s.id, group: "Go to", label: s.label, keywords: "section card jump scroll " + s.id, run: {kind: "section", id: s.id}});
     }
     for(const c of ["dark", "light", "auto"]){
       out.push({id: "theme-" + c, group: "Theme", label: "Theme: " + c[0].toUpperCase() + c.slice(1), keywords: "colour color appearance mode switch " + c, run: {kind: "theme", choice: c}});
+    }
+    const seenH = {};
+    for(const h of (opts.holdings || [])){   // "Open stock" for each holding: the read-only stock view, never an order
+      const s = cleanSymbol(h && h.symbol);
+      if(!s || seenH[s]) continue;
+      seenH[s] = 1;
+      out.push({id: "hold-" + s, group: "Your holdings", label: "Open stock " + s, keywords: "holding stock view look up " + String((h && h.name) || ""), run: {kind: "stock", op: "lookup", symbol: s}});
     }
     if(opts.refresh) out.push({id: "refresh", group: "Data", label: "Refresh data", keywords: "reload update fetch latest", run: {kind: "refresh"}});
     return out;
@@ -192,7 +203,7 @@
   // ---- DOM: only install() below touches the page ----
   const isMac = () => { try { return /Mac|iPhone|iPad/i.test((navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || ""); } catch(e){ return false; } };
 
-  // host: {mode, sections(): [{id, label}], lookup(sym), size(sym), chart(sym), buy(sym), refresh(), goSection(id)}
+  // host: {mode, workspaces(): [{id, label}], goWorkspace(id), holdings(): [{symbol, name}], sections(): [{id, label}], lookup(sym), size(sym), chart(sym), buy(sym), refresh(), goSection(id)}
   // Every key is optional; a missing stock handler sends you to the page that has one.
   function install(host){
     host = host || {};
@@ -200,7 +211,9 @@
     let dlg = null, input, list, status, titleEl, model, searcher, opener = null, built = false;
 
     function commands(){
-      return buildCommands({mode, sections: typeof host.sections === "function" ? host.sections() : [], refresh: typeof host.refresh === "function"});
+      return buildCommands({mode, workspaces: typeof host.workspaces === "function" ? host.workspaces() : [],
+        sections: typeof host.sections === "function" ? host.sections() : [],
+        holdings: typeof host.holdings === "function" ? host.holdings() : [], refresh: typeof host.refresh === "function"});
     }
     function build(){
       if(built) return;
@@ -281,6 +294,7 @@
     function perform(run){
       try {
         if(run.kind === "page"){ location.assign(run.url); }
+        else if(run.kind === "workspace"){ if(typeof host.goWorkspace === "function") host.goWorkspace(run.id); }
         else if(run.kind === "section"){ if(typeof host.goSection === "function") host.goSection(run.id); }
         else if(run.kind === "theme"){ TA.theme.set(run.choice); TA.toast("Theme: " + run.choice); }
         else if(run.kind === "refresh"){ if(typeof host.refresh === "function") Promise.resolve(host.refresh()).then(() => TA.toast("Refreshed"), (e) => TA.toast(e && e.message ? e.message : "Refresh failed")); }

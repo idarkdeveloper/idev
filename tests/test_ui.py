@@ -668,21 +668,27 @@ def test_practice_card_sits_right_under_my_groww_portfolio():
     assert "Copy into practice account" in html and "Reset to my Groww portfolio" in html and "window.confirm" not in html
 
 
-def test_portfolio_and_stock_page_split_60_40_from_1200px():
-    """Portfolio (left) and the stock page (right, with Position size and Trade cost under it) share the top of the dashboard."""
+def test_live_v2_workspaces_layout():
+    """Live v2: four workspace tabs (Overview, Deals & orders, Research, Tools) or one page with a section list; the 60/40
+    split beside the portfolio is gone and the stock opens in a full-view modal."""
     ui = Path(__file__).resolve().parents[1] / "trading_agent" / "ui"
     html = (ui / "index.html").read_text(encoding="utf-8")
-    split, left, right = html.index('class="topsplit"'), html.index('class="split-left"'), html.index('class="split-right"')
-    mp, cols = html.index('id="mp-card"'), html.index('<section class="cols">')
-    lk, size, costs = html.index('data-anchor="lookup"'), html.index('data-anchor="size"'), html.index('data-anchor="costs"')
-    assert split < left < mp < cols < right < lk < size < costs < html.index("<footer>")
-    assert html.index('id="recs"') < right                                 # Recommendations stay under the portfolio
+    pos = [html.index(f'id="ws-{w}"') for w in ("overview", "deals", "research", "tools")]
+    assert pos == sorted(pos) and html.index('id="ws-tabs"') < pos[0]
+    ov, deals, research, tools = pos
+    assert ov < html.index('id="mp-card"') < html.index('data-anchor="recs"') < html.index('data-anchor="forward"') < deals
+    assert deals < html.index('data-anchor="orders"') < html.index('data-anchor="runs"') < research
+    assert research < html.index('data-anchor="lookup"') < html.index('data-anchor="backtest"') < tools
+    assert tools < html.index('data-anchor="size"') < html.index('data-anchor="costs"') < html.index("<footer>")
+    assert 'class="topsplit"' not in html and 'class="split-right"' not in html
+    for w in ("overview", "deals", "research", "tools"):
+        assert f'data-ws-tab="{w}"' in html and f'role="tab" id="wst-{w}"' in html
+    assert 'role="tablist"' in html and 'role="tabpanel"' in html
     css = (ui / "nocturne.css").read_text(encoding="utf-8")
-    assert "main { max-width: 1600px;" in css
-    top = css[css.index("Top of the dashboard"):]
-    assert "@media (min-width: 1200px)" in top and "grid-template-columns: minmax(0, 3fr) minmax(0, 2fr)" in top
-    assert "position: sticky" in top[:top.index("Stock page")] and "#mp-card .prot-cell" in top   # sticky right column, compact portfolio
-    assert "@media (max-width: 1199px)" in top and "display: contents" in top                      # below 1200 it is one column again
+    assert "main { max-width: 1600px;" in css and "Top of the dashboard" not in css
+    assert ':root[data-layout="sections"] .ws-nav' in css and ':root[data-layout="sections"] .ws-tabbar { display: none; }' in css
+    assert ':root[data-density="compact"] .dt .l2 { display: none; }' in css
+    assert "overflow-x: auto" in css[css.index(".ws-tabs {"):][:200]
 
 
 def test_tiles_and_recommendation_buttons_depend_on_mode():
