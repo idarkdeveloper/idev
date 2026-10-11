@@ -251,10 +251,14 @@ class App:
             return self.broker  # type: ignore[return-value]
         with self._lazy_lock:
             if self._practice is None:
-                try:
-                    b = self.broker  # paper mode: the same object, so there is one writer
-                except Exception:  # noqa: BLE001 - e.g. Groww unreachable: the practice account still works
-                    b = None
+                b: Any = self._broker
+                if b is None and not (self.settings.use_groww and self.settings.groww_live_orders):
+                    try:
+                        b = self.broker  # paper mode: the same object, so there is one writer
+                    except Exception:  # noqa: BLE001 - e.g. Groww unreachable: the practice account still works
+                        b = None
+                # with live orders on, the live broker is never built just to open the practice account (it would be
+                # a live-capable Groww client and could ask for a token): the practice account is its own object
                 self._practice = b if isinstance(b, LocalPaperBroker) else make_practice_broker(
                     self.settings, price_fn=self.prices)
             return self._practice
