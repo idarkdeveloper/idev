@@ -333,6 +333,7 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
     rows.append(_groww_row(settings, sd, now, cal, groww))
     rows.append(_canary_row(settings, sd, now, cal))
     rows.append(_watch_row(settings, sd, now, cal))
+    rows.append(_telegram_commands_row(settings, sd, now))
 
     rows.sort(key=lambda r: (STATUS_ORDER[r["status"]], r["name"]))
     counts = {k: sum(1 for r in rows if r["status"] == k) for k in STATUS_ORDER}
@@ -368,6 +369,24 @@ def _bands(sd: Path, now: datetime, cal: Any, nse_off: str | None) -> dict[str, 
                 error="every try today failed" if spent else None, error_at=now if spent else None, now=now,
                 schedule="once each trading day from the open; retries 5, 15 then 60 min apart, 6 a day",
                 detail=f"list of {_day_text(fetched)}" if fetched else "no list stored yet")
+
+
+def _telegram_commands_row(settings: Any, sd: Path, now: datetime) -> dict[str, Any]:
+    """telegram_commands.json: the command poller's last getUpdates round and last error (written by the watch)."""
+    from .telegram_bot import commands_configured
+    data = _dict(_read_json(sd / "telegram_commands.json"))
+    ok = _parse(data.get("last_poll_at"))
+    err_at = _parse(data.get("last_error_at"))
+    error = data.get("last_error") if err_at and (ok is None or err_at > ok) else None
+    on = commands_configured(settings)
+    return _row("telegram_commands", "Telegram commands (practice)", [ALERTS], configured=on, last_ok=ok,
+                rows=data.get("handled") if isinstance(data.get("handled"), int) else None,
+                late=on and (ok is None or (now - ok).total_seconds() > 300),
+                due_text="no getUpdates round in the last 5 minutes (is the watch service running?)",
+                error=error, error_at=err_at if error else None, failing=bool(error),
+                schedule="long-poll every 25 s by the watch service while TELEGRAM_COMMANDS=true",
+                detail="rows: updates handled since the start; only TELEGRAM_CHAT_ID is obeyed; orders are practice only",
+                now=now)
 
 
 def _clearing_row(settings: Any, sd: Path, now: datetime, runs: dict[str, Any], nse_off: str | None) -> dict[str, Any]:

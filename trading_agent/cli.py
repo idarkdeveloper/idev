@@ -929,10 +929,15 @@ def cmd_watch(args: argparse.Namespace) -> int:
         logging.getLogger(__name__).exception("the start-up clock check failed; carrying on")
     print(f"Watching {', '.join(settings.investors)} every {w.every}s, {args.window_start}-{args.window_end} IST, "
           f"NSE trading days. Ctrl+C to stop.")
+    from . import telegram_bot   # TELEGRAM_COMMANDS=true: its own thread, so read commands work even under HALT
+    bot_stop = telegram_bot.start(settings)
     try:
         w.run_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        if bot_stop is not None:
+            bot_stop.set()
     return 0
 
 

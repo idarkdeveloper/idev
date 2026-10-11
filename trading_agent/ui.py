@@ -1760,6 +1760,16 @@ class App:
         """The morning or evening email as it would be sent now, for the Settings dialog. Works on the Live and
         Demo pages (read-only; nothing is sent). The written summary is only made on request, since it can use
         Ollama or your Claude credit. On the offline sample dashboard the sections that need real data say so."""
+        email = self.digest_email(kind, with_summary)
+        from .digest_render import inline_data_urls
+        out = {k: email[k] for k in ("subject", "text", "html", "writer")}
+        out["html"] = inline_data_urls(out["html"], email.get("images"))   # the preview iframe shows the charts as data: URLs
+        return out
+
+    def digest_email(self, kind: str, with_summary: bool = False, groww: Any = None) -> dict[str, Any]:
+        """The built email (digest_schedule.build_digest's dict) as it would be sent now; nothing is sent. Raises
+        Busy while another is being built. ``groww`` overrides how the Groww holdings are read (default:
+        my_portfolio, the dashboard's market-hours rules)."""
         from .digest import DigestContext, make_context
         if kind not in ("morning", "evening"):
             raise ValueError("kind must be morning or evening")
@@ -1776,18 +1786,14 @@ class App:
                 except Exception:  # noqa: BLE001 - e.g. Groww unreachable: the digest says the practice account is unavailable
                     practice = None
                 ctx = make_context(root.settings, data=root.data, prices=root.prices, news=root.news,
-                                   holidays=root.holidays, context=root.context, groww=lambda: root.my_portfolio(),
-                                   practice=practice)
+                                   holidays=root.holidays, context=root.context,
+                                   groww=groww or (lambda: root.my_portfolio()), practice=practice)
             configured = root.settings.digest_writer
             # Preview shows the free rules summary; the AI writer (Ollama, then Claude) only when asked for
             writer = ("claude" if configured in ("rules", "none") else configured) if with_summary else "rules"
-            email = build_digest(kind, ctx, writer=writer)
+            return build_digest(kind, ctx, writer=writer)
         finally:
             root._preview_lock.release()
-        from .digest_render import inline_data_urls
-        out = {k: email[k] for k in ("subject", "text", "html", "writer")}
-        out["html"] = inline_data_urls(out["html"], email.get("images"))   # the preview iframe shows the charts as data: URLs
-        return out
 
     def groww_test(self) -> dict[str, Any]:
         """Check Groww credentials end to end without ever returning the token.
