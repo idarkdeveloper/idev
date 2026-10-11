@@ -121,7 +121,7 @@ check("sorting text is alphabetical", () => {
 check("the built-in presets match the brief and use valid filters", () => {
   const ids = S.PRESETS.map(p => p.id);
   for (const want of ["momentum", "near-high", "oversold", "dividend", "volume", "followed"]) assert.ok(ids.includes(want), want);
-  assert.deepStrictEqual(S.PRESETS.map(p => p.label), ["Momentum leaders", "Near 52-week high", "Oversold above 200-day", "High dividend", "Unusual volume", "Followed investors' buys"]);
+  assert.deepStrictEqual(S.PRESETS.map(p => p.label), ["Momentum leaders", "Near 52-week high", "Oversold above 200-day", "High dividend", "Unusual volume", "Followed investors' buys", "Exclude flagged"]);
   for (const p of S.PRESETS) {
     assert.ok(p.filters.length >= 1 && p.filters.every(S.validFilter), p.id);
     assert.ok(S.colByKey(p.sort.key), p.id);
@@ -211,6 +211,13 @@ check("sparkline path spans the box, puts the high at the top and the low at the
   const flat = S.sparkPath([7, 7, 7], 360, 140, 4);   // a flat line still draws, along the bottom
   assert.ok(flat && !/NaN|Infinity/.test(flat));
   assert.strictEqual(S.sparkPath([1, "x", null, 3], 10, 10, 0).split("L").length, 2);   // junk values are skipped
+});
+
+check("Exclude flagged keeps stocks the Indian buy filters do not hold back (unknown flags are not shown as clean)", () => {
+  const rs = [row({symbol: "A", filter_block: false}), row({symbol: "B", filter_block: true, filter_flags: "GSM stage 2"}), row({symbol: "C"})];
+  const p = S.presetById("unflagged");
+  assert.strictEqual(syms(S.applyFilters(rs, p.filters)), "A");
+  assert.ok(S.allColumns(false).includes("filter_flags") && !S.allColumns(false).includes("filter_block"));
 });
 
 console.log(JSON.stringify({n, failures}));

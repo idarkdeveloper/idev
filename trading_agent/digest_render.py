@@ -125,6 +125,8 @@ def _morning_blocks(d: dict[str, Any]) -> list[dict[str, Any]]:
             lines.append("Too expensive for this account size (one share > 10% of equity): " + ", ".join(pricey) + ".")
         for b in ideas.get("band_skipped") or []:
             lines.append(f"{b['symbol']}: {b['reason']}.")
+        if ideas.get("filters_note"):
+            lines.append(str(ideas["filters_note"])[0].upper() + str(ideas["filters_note"])[1:] + ".")
         cautions = [i["symbol"] + " (" + i["band_note"] + ")" for i in ideas["ideas"] if i.get("band_note")]
         if cautions:
             lines.append("Caution: " + "; ".join(cautions) + ".")
@@ -233,6 +235,8 @@ def _flags(i: dict[str, Any]) -> str:
              "below avg" if "200-day average" in low else
              "news" if low.startswith("negative news") else
              "results due" if " due " in low or low.endswith("due") else
+             "ASM/GSM" if "surveillance list" in low else
+             "pledge" if low.startswith("promoter pledge") else
              "big drop" if low.startswith("fell") else None)
         if f and f not in out:
             out.append(f)

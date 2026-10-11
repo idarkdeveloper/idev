@@ -108,11 +108,13 @@ class ScreenerService:
 
     def __init__(self, *, prices: Any, fundamentals: Any, load_universe: Callable[[str], list[dict[str, str]]],
                  bands: Callable[[], Any] | None = None, tv: Any | None = None,
+                 filters: Callable[[], Any] | None = None,
                  names: Callable[[list[str]], dict[str, str]] | None = None,
                  workers: int = 3, fund_workers: int = 2, pace: float = 0.1,
                  clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep):
         self.prices, self.fundamentals, self._load_universe = prices, fundamentals, load_universe
         self.bands, self.tv, self._names_fn = bands, tv, names
+        self.filters = filters   # indian_filters.FilterBook factory: ASM/GSM, results blackout, pledges (flags only here)
         self.workers, self.fund_workers, self.pace = workers, fund_workers, pace
         self.clock, self.sleep = clock, sleep
         self._lock = threading.Lock()
@@ -183,9 +185,15 @@ class ScreenerService:
     def _payload(self, key: str, rows: list[dict[str, Any]], *, pending: int, loading: bool, error: str | None) -> dict[str, Any]:
         as_of = max((r["as_of"] for r in rows if r.get("as_of")), default=None)
         tv = self.tv.status() if self.tv is not None else {"state": "off", "until": None}
+        note = None
+        if self.filters is not None:
+            try:
+                note = self.filters().note()
+            except Exception:  # noqa: BLE001
+                note = None
         return {"universe": key, "count": len(rows), "pending": pending, "loading": loading, "error": error,
                 "as_of": as_of, "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "source": SOURCE_NOTE, "tv": tv, "rows": rows}
+                "source": SOURCE_NOTE, "tv": tv, "rows": rows, "filters_note": note}
 
     def _rows(self, members: list[dict[str, str]], held: set[str], deals: dict[str, list[str]], key: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -197,6 +205,12 @@ class ScreenerService:
             sector, names = dict(self._sector), dict(self._names)
         scored = {r["symbol"]: r for r in score_universe(stats, min_turnover=TURNOVER_FLOOR)}
         book = self.bands() if self.bands is not None else None
+        fbook = None
+        if self.filters is not None:
+            try:
+                fbook = self.filters()
+            except Exception:  # noqa: BLE001 - the flags are a nicety on this page
+                fbook = None
         out = []
         for m in members:
             sym = m["symbol"]
@@ -221,6 +235,14 @@ class ScreenerService:
                 "as_of": met.get("as_of"), "ready": bool(met) and bool(fun), "spark": met.get("spark"),
                 "error": met.get("error") if "error" in met else None,
             }
+            if fbook is not None:   # a flag column and a yes/no the "Exclude flagged" preset filters on
+                try:
+                    c = fbook.check(sym)
+                    row["filter_flags"] = "; ".join(c["flags"]) or None
+                    row["filter_block"] = bool(c["block"])
+                    row["filter_note"] = "; ".join(c["reasons"]) or None
+                except Exception:  # noqa: BLE001
+                    pass
             tv = tv_snap.get(sym)
             if tv is not None:
                 row.update({"tv_summary": tv.get("summary"), "tv_summary_label": tv.get("summary_label"),

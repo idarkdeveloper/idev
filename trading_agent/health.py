@@ -316,6 +316,7 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
                              "from 19:00 IST on trading days, up to 8 tries 20 min apart",
                              lambda d: d.get("n") if isinstance(d.get("n"), int) else None, nse_off))
     rows.append(_bands(sd, now, cal, nse_off))
+    rows.append(_filters_row(settings, sd, now, cal, nse_off))
 
     # news
     ok, n, err, err_at = _run(runs, "news")
@@ -362,6 +363,37 @@ def _bands(sd: Path, now: datetime, cal: Any, nse_off: str | None) -> dict[str, 
                 error="every try today failed" if spent else None, error_at=now if spent else None, now=now,
                 schedule="once each trading day from the open; retries 5, 15 then 60 min apart, 6 a day",
                 detail=f"list of {_day_text(fetched)}" if fetched else "no list stored yet")
+
+
+def _filters_row(settings: Any, sd: Path, now: datetime, cal: Any, nse_off: str | None) -> dict[str, Any]:
+    """indian_filters.json: the ASM, GSM, board-meeting and pledge lists, each with its own date."""
+    from .indian_filters import LABEL, PARTS, SWITCH
+    data = _dict(_read_json(sd / "indian_filters.json"))
+    india = str(getattr(settings, "market", "in") or "in") == "in"
+    on = [p for p in PARTS if india and bool(getattr(settings, SWITCH[p], True))]
+    due = latest_at(now, dtime(10, 0), cal).date()
+    stamps, rows, missing = [], 0, []
+    for p in on:
+        blk = _dict(data.get(p))
+        t = _parse(blk.get("fetched_at"))
+        try:
+            fresh = date.fromisoformat(str(blk.get("date"))) >= due
+        except ValueError:
+            fresh = False
+        if t:
+            stamps.append(t)
+        rows += len(_dict(blk.get("symbols")))
+        if not fresh:
+            missing.append(LABEL[p])
+    tries = _dict(_dict(data.get("tries")).get(now.date().isoformat()))
+    errors = _dict(tries.get("errors"))
+    last_err = "; ".join(f"{LABEL.get(k, k)}: {v}" for k, v in errors.items()) or None
+    return _row("filters", "ASM/GSM, board meetings, pledges (NSE)", [AGENT, SCREEN, MORNING, DASH], configured=bool(on),
+                last_ok=min(stamps) if stamps else None, rows=rows or None, late=bool(missing),
+                due_text="not fetched for " + _day_text(due) + ": " + ", ".join(missing) if missing else "",
+                error=last_err, error_at=_parse(tries.get("last")) if last_err else None, failing=bool(nse_off), backoff=nse_off,
+                schedule="once each trading day from the open, through the NSE client; retries 5, 15 then 60 min apart",
+                detail="a missing or stale list blocks nothing (buys are then held back only by the other rules)", now=now)
 
 
 def _groww_row(settings: Any, sd: Path, now: datetime, cal: Any, panel: dict[str, Any]) -> dict[str, Any]:

@@ -316,7 +316,8 @@ class Watcher:
         return self._broker
 
     def poll_market_data(self, now: datetime) -> dict[str, Any]:
-        """Once-a-day public NSE reads: price bands (before 09:00), FII/DII flows and breadth (after 19:00). Each has its
+        """Once-a-day public NSE reads: price bands and the Indian-market filter lists (ASM/GSM, board meetings, pledges)
+        from the morning, FII/DII flows and breadth (after 19:00). Each has its
         own once-per-day guard in state and never raises; a quiet tick costs a few small file reads."""
         out: dict[str, Any] = {}
         if self._data is None or not hasattr(self._data, "session"):
@@ -342,6 +343,11 @@ class Watcher:
                                                        archive_bars_fn(s.state_dir), self.holidays, deadline=deadline)
                     if b:
                         out["breadth"] = b["date"]
+            if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:   # last: the lowest priority read
+                from .indian_filters import filters_for   # ASM/GSM, board meetings, pledges: once per trading day
+                got = filters_for(s, calendar=self.holidays).tick(self._data, now, deadline=deadline)
+                if got:
+                    out["indian_filters"] = got
             if time.monotonic() >= deadline:
                 out["budget_used_up"] = True
         except Exception:  # noqa: BLE001 - market data never stops the watch

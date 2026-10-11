@@ -186,6 +186,10 @@ class ForwardTest:
                 # registered change: from now on 2% / 5% price-band stocks are not picked. Results before this date
                 # were produced without the filter, so they are not comparable one to one.
                 self.data["band_filter_since"] = self.now().date().isoformat()
+            if result.get("filters_applied") and not self.data.get("indian_filters_since"):
+                # registered change: from now on ASM/GSM stocks, results within 5 trading days and high or rising
+                # promoter pledges are not picked; earlier rebalances were made without them
+                self.data["indian_filters_since"] = self.now().date().isoformat()
             picks = [r["symbol"] for r in result.get("top", [])]
             rebalanced = self.rebalance(picks, eligible=result.get("eligible"))
         self.mark()
@@ -219,7 +223,8 @@ class ForwardTest:
                                  "pl": p.unrealized_pl})
             holdings.sort(key=lambda h: -h["value"])
         return {"universe": d["universe"], "top": d["top"], "benchmark": d["benchmark"], "capital": cap,
-                "started": d.get("started"), "band_filter_since": d.get("band_filter_since"), "days": len(hist), "strategy_return": strat, "benchmark_return": bench,
+                "started": d.get("started"), "band_filter_since": d.get("band_filter_since"),
+                "indian_filters_since": d.get("indian_filters_since"), "days": len(hist), "strategy_return": strat, "benchmark_return": bench,
                 "gap": (strat - bench) if strat is not None and bench is not None else None,
                 "strategy_max_drawdown": dd("equity"), "benchmark_max_drawdown": dd("bench"),
                 "charges_paid": self.broker.performance()["fees_paid"], "last_rebalance": d.get("last_rebalance"),
@@ -234,6 +239,9 @@ def format_forward(s: dict[str, Any]) -> str:
     if s.get("band_filter_since"):
         lines.append(f"Price-band filter on since {s['band_filter_since']}: stocks with a 2% or 5% NSE band are not picked "
                      "(earlier rebalances were made without it).")
+    if s.get("indian_filters_since"):
+        lines.append(f"ASM/GSM, results-blackout and pledge filters on since {s['indian_filters_since']}: such stocks are not "
+                     "picked (earlier rebalances were made without them).")
     if s.get("rebalanced"):
         r = s["rebalanced"]
         ok = [t for t in r["trades"] if "error" not in t]

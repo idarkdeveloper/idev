@@ -277,7 +277,9 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
     for m in members:
         _remember(ctx, m["symbol"], m.get("name"))
     from .bands import book_for
-    res = run_screen(members, _Budget(ctx.prices, ctx.screen_budget_s, ctx), top=int(s.digest_top), bands=book_for(s))
+    from .indian_filters import filters_for
+    res = run_screen(members, _Budget(ctx.prices, ctx.screen_budget_s, ctx), top=int(s.digest_top), bands=book_for(s),
+                     filters=filters_for(s))
     equity, basis = float(s.paper_starting_cash), "starting cash"
     if ctx.practice is not None:
         try:
@@ -308,8 +310,12 @@ def _buy_ideas(ctx: DigestContext, no_new_buys: bool | None) -> dict[str, Any]:
     # stocks that ranked in the top but sit in a 2% / 5% price band: shown with the reason, never bought
     band_skipped = [{"symbol": r["symbol"], "reason": r["band_note"]} for r in res.get("all", [])
                     if r.get("band_skipped") and (r.get("rank") or 10 ** 6) <= 2 * int(s.digest_top)][:5]
+    # top-ranked stocks held back by the ASM/GSM, results-blackout or pledge filters: shown with the reason, never bought
+    band_skipped += [{"symbol": r["symbol"], "reason": r["filter_note"]} for r in res.get("all", [])
+                     if r.get("filter_skipped") and (r.get("rank") or 10 ** 6) <= 2 * int(s.digest_top)][:5]
     return {"universe": name, "universe_size": res["universe_size"], "scored": res["scored"],
             "eligible": res["eligible"], "errors": res["errors"], "ideas": ideas, "too_expensive": too_expensive, "band_skipped": band_skipped, "wait": bool(no_new_buys),
+            "filters_note": res.get("filters_note"),
             "equity": round(equity, 2), "equity_basis": basis,
             "sizing": "1% of equity at risk on a 2x ATR move, at most 10% of equity per stock"}
 
@@ -400,6 +406,24 @@ def _saved_label(info: dict[str, Any]) -> str | None:
     return f"saved holdings from {when} IST{old} ({info.get('reason')}){note}"
 
 
+def filter_reasons(fbook: Any, sym: str, have: list[str]) -> list[str]:
+    """Reasons from the Indian-market filters for a stock you hold: on an ASM/GSM list, results due (unless the email
+    already found the date), a high or rising promoter pledge. Review flags only: nothing ever sells on them."""
+    try:
+        c = fbook.check(sym)
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for f in c["flags"]:
+        if f.startswith(("ASM", "GSM")):
+            out.append(f"on NSE's surveillance list ({f}): review it; never sold for this")
+        elif f.startswith("Results due") and not any(" due " in r for r in have):
+            out.append("results due " + f[len("Results due "):])
+        elif f.startswith("Pledge") and any("pledge" in r for r in c["reasons"]):
+            out.append(f"promoter pledge warning ({f.removeprefix('Pledge ')})")
+    return out
+
+
 def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
     from .momentum import momentum_stats
     from .news import is_alert
@@ -413,6 +437,11 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
         notes.append("Using " + label)
     no_price = 0
     events: list[dict[str, Any]] = []
+    try:   # ASM/GSM, results due and pledge flags on holdings: shown for review, never a sell
+        from .indian_filters import filters_for
+        fbook: Any = filters_for(ctx.settings)
+    except Exception:  # noqa: BLE001
+        fbook = None
     for h in g_rows:
         if h.get("kind") == "bond" or h.get("price") is None:
             no_price += 1
@@ -513,6 +542,8 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
                 if not ann_err:
                     ann_err.append(f"{type(e).__name__}: {e}")
                     notes.append(f"Results dates: unavailable ({ann_err[0]})")
+        if fbook is not None:
+            reasons += filter_reasons(fbook, sym, reasons)
         if reasons:
             items.append({"symbol": sym, "name": clean_text(h.get("name") or "", 80), "source": h["source"],
                           "price": round(price, 2), "reasons": reasons, "loss_pct": round((price / h["avg"] - 1) * 100, 2),

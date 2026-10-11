@@ -265,7 +265,8 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             return json.dumps({"error": BSE_ONLY_MESSAGE + "; use action watch or hold"})
         if action == "buy":   # 2% / 5% price-band stocks are not bought (sells and stops are never blocked)
             from .bands import book_for
-            blocked = book_for(ctx.settings).refuse_buy(ticker.strip())
+            from .indian_filters import filters_for   # ASM/GSM, results blackout, promoter pledges: buys only
+            blocked = book_for(ctx.settings).refuse_buy(ticker.strip()) or filters_for(ctx.settings).refuse_buy(ticker.strip())
             if blocked:
                 return json.dumps({"error": blocked + "; use action watch or hold"})
         rec = {"action": action, "ticker": ticker.upper(), "headline": headline,
@@ -404,8 +405,10 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             live = ctx.live_money
             if side.lower() == "buy":
                 from .bands import book_for
+                from .indian_filters import filters_for
                 from .integration import buy_block
-                blocked = book_for(ctx.settings).refuse_buy(symbol.strip()) or buy_block(ctx.settings)
+                blocked = (book_for(ctx.settings).refuse_buy(symbol.strip()) or filters_for(ctx.settings).refuse_buy(symbol.strip())
+                           or buy_block(ctx.settings))
                 if blocked:
                     return json.dumps({"error": blocked})
             try:

@@ -242,6 +242,8 @@ def _ideas(d: dict[str, Any]) -> str:
         out.append(_note("Too expensive for this account size (one share > 10% of equity): " + ", ".join(pricey) + "."))
     for b in ideas.get("band_skipped") or []:
         out.append(_note(f"{b['symbol']}: {b['reason']}."))
+    if ideas.get("filters_note"):   # a filter whose NSE list could not be read blocks nothing: say so
+        out.append(_note(str(ideas["filters_note"])[0].upper() + str(ideas["filters_note"])[1:] + ".", CAUTION_INK))
     cautions = [i["symbol"] + " (" + i["band_note"] + ")" for i in rows if i.get("band_note")]
     if cautions:
         out.append(_note("Caution: " + "; ".join(cautions) + ".", CAUTION_INK))

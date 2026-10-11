@@ -570,6 +570,22 @@ and practice buys ("price band 5%: liquidity can vanish in a fall; not bought");
 stop exits are never blocked. The band shows as a small pill in Look up and the holdings table. No list for the day means
 no filtering. Both switches are on the Settings page.
 
+`ASM_GSM_FILTER`, `RESULTS_BLACKOUT_FILTER`, `PLEDGE_FILTER` (default `true`, India): three more filters on **buys only**,
+from public NSE lists the watch service fetches once per trading day through the NSE client (its circuit breaker and
+back-off), cached in `state/indian_filters.json`:
+* a stock on NSE's ASM (short- or long-term, any stage) or GSM surveillance list is never bought;
+* no new buy when the board meets for financial results within the next 5 trading days (today included);
+* no buy when pledged promoter shares are more than 20% of the promoter holding, or rose more than 5 percentage points
+  in the latest filing.
+They apply wherever a buy is proposed or placed: the agent's recommendations and orders, the factor screen and the
+Screener page (a "Filters" column and an "Exclude flagged" preset), the morning email's buy ideas, the practice order form
+(a warning you can override for practice) and the forward test (from the date it first used them, kept in its state).
+Holdings are flagged, never sold: ASM/GSM, "Results due <date>" and a pledge warning show on the portfolio rows, the stock
+page and the morning email. Filings disseminated at or after 15:00 IST count from the next trading day. A list that is
+missing, unreadable or more than 2 trading days old blocks nothing and says "filter data unavailable". Nothing here places,
+modifies or cancels an order. The tax-aware B2 buffer (defer a profitable rank-buffer exit aged 335-364 days to day 366)
+is not built: it waits for the B2 rank buffer.
+
 Closed daily bars are also kept in `state/prices/archive.sqlite`: if Yahoo drops or rewrites a ticker's history the saved
 bars are still served, and a split Yahoo applies later is detected and recorded (the bars as first seen are kept too).
 Filings are usable from the next trading day when disseminated at or after 15:00 IST (`filing_time.usable_from`); the
