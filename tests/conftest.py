@@ -34,6 +34,14 @@ def groww_window_open_by_default(monkeypatch):
     monkeypatch.setattr(gh, "now_ist", lambda: datetime(2026, 6, 9, 11, 0, tzinfo=IST))
 
 
+@pytest.fixture(autouse=True)
+def no_real_clock_check(monkeypatch):
+    """The integration check's "Server clock" step runs timedatectl; a CI runner has it, a container may not, so the
+    step count would depend on the machine. Unless a test passes its own runner, the clock is "not checked" (skipped)."""
+    import trading_agent.clockcheck as cc
+    monkeypatch.setattr(cc, "_run", lambda cmd: None)
+
+
 @pytest.fixture
 def sample_rows() -> list[dict]:
     fx = Path(__file__).resolve().parents[1] / "trading_agent" / "fixtures" / "congress_sample.json"
