@@ -387,7 +387,7 @@ def test_an_agent_runs_stale_state_never_creates_a_second_gtt_or_erases_the_watc
     settings.state_dir, settings.market = tmp_path, "in"
     settings.broker, settings.groww_live_orders, settings.groww_gtt_stops = "groww", True, True
     st, g, clock, _ = _suspended_bonus(tmp_path)                    # Friday 15:05: GTT cancelled, holding suspended
-    st.save()
+    st.save(fresh_keys=())
     monkeypatch.setattr(live, "_clock", lambda: clock[0])
     monkeypatch.setattr(runner, "free_prices", lambda s: type("P", (), {"history": lambda self, sym, r: []})())
     agent_state = State(tmp_path / "state.json")                    # the agent run loads state.json ...

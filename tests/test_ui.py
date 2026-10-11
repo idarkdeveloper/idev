@@ -278,7 +278,7 @@ def test_live_orders_gtt_status_and_gtt_toggle(server):
          "order_status": "REJECTED", "remark": "price band", "placed_at": "2000-01-01T10:00:00+05:30"}]
     st.data["gtt_stops"] = {"NVDA": {"smart_order_id": "gtt_1", "trigger": 153.0, "limit": 152.25, "qty": 2,
                                      "status": "ACTIVE"}}
-    st.save()
+    st.save(fresh_keys=())   # a fixture writing GTT records directly (normally only a locked GTT sync does)
     _, s = _get(base + "/api/state")
     assert [o.get("groww_order_id") for o in s["orders"]] == ["GMK1", None, "GMK2"]  # newest first
     assert s["orders"][0]["live"] and s["orders"][0]["status"] == "open"
