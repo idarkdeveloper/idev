@@ -80,15 +80,16 @@ def test_new_page_code_has_no_order_post():
 
 def test_tabs_are_addressable_and_old_anchors_map_into_them():
     ws = re.search(r"const WORKSPACES = (\[.*?\]);", INDEX).group(1)
-    assert [x[0] for x in json.loads(ws)] == ["overview", "deals", "research", "tools"]   # a data health tab joins later
+    assert [x[0] for x in json.loads(ws)] == ["overview", "deals", "research", "tools", "health"]   # Health: the data health tab
     block = _between("const WS_OF = {", "};")
     for anchor, tab in (("portfolio", "overview"), ("practice", "overview"), ("forward", "overview"), ("recs", "overview"),
                         ("deals", "deals"), ("orders", "deals"), ("runs", "deals"),
                         ("lookup", "research"), ("screen", "research"), ("signal-lab", "research"), ("backtest", "research"),
-                        ("track-record", "research"), ("size", "tools"), ("costs", "tools")):
+                        ("track-record", "research"), ("size", "tools"), ("costs", "tools"), ("health", "health"),
+                        ("groww-logins", "health")):
         assert re.search(rf'"?{re.escape(anchor)}"?: "{tab}"', block), anchor
         assert f'data-anchor="{anchor}"' in INDEX, anchor
-    for tab in ("overview", "deals", "research", "tools"):
+    for tab in ("overview", "deals", "research", "tools", "health"):
         assert f'{tab}: "{tab}"' in block
     # the chosen tab is remembered (only on a choice, never at load) and the hash names it
     assert 'store.set("liveTab", ws)' in INDEX and 'WS_OF[store.get("liveTab")]' in INDEX

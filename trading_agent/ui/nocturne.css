@@ -869,3 +869,30 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .mp-table td.prot-cell { min-width: 0; }
 .grid-2 table.dt { min-width: 440px; }
 #mp-body:has(#mp-stats:empty) { display: none; }
+
+/* ---- Health tab (data health and the Groww login counter). Tokens only; one column that fits 360 px. ---- */
+.hl-note { margin: 0 0 12px; }
+.hl-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.hl-item { border: 1px solid var(--color-divider); border-left-width: 3px; border-radius: var(--radius-md); padding: 10px 12px; min-width: 0; }
+.hl-item.hl-failing { border-left-color: var(--color-loss); }
+.hl-item.hl-late { border-left-color: var(--color-replay); }
+.hl-item.hl-ok { border-left-color: var(--color-profit); }
+.hl-item.hl-off { opacity: .75; }
+.hl-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hl-name { font-weight: 600; }
+.hl-facts { display: flex; flex-wrap: wrap; gap: 2px 14px; margin-top: 4px; font-size: 13px; color: var(--color-text); }
+.hl-line { margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.hl-delay { color: var(--color-replay); }
+.hl-backoff { color: var(--color-replay); }
+.hl-error { color: var(--color-loss); }
+.hl-count { margin-left: 6px; background: var(--color-loss); }
+.gl-count { font-size: 15px; }
+.gl-meter { height: 6px; border-radius: 3px; background: var(--color-divider); overflow: hidden; margin: 8px 0 6px; }
+.gl-meter span { display: block; height: 100%; background: var(--color-profit); }
+.gl-meter span.gl-amber { background: var(--color-replay); }
+.gl-meter span.gl-red, .gl-meter span.gl-stopped { background: var(--color-loss); }
+.hl-line.gl-amber { color: var(--color-replay); } .hl-line.gl-red, .hl-line.gl-stopped { color: var(--color-loss); font-weight: 600; }
+.gl-h { font-size: 13px; margin: 12px 0 4px; }
+.gl-last { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
+.gl-last li { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .7fr) minmax(0, 1fr); gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--color-rule); }
+#ws-health > .card + .card { margin-top: 16px; }

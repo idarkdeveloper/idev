@@ -501,13 +501,16 @@ def warn_token_block_once(exc: GrowwTokenUnavailable, logger: logging.Logger | N
 def cached_access_token(api_key: str, cache: TokenCache, *, secret: str | None = None,
                         totp_fn: Callable[[], str] | None = None, now: datetime | None = None,
                         session: requests.Session | None = None, fresh: bool = False,
-                        force: bool = False) -> str:
+                        force: bool = False, host: str = "") -> str:
     """Reuse the cached token while valid, otherwise generate one and cache it.
 
     After a failed request the failure is remembered in ``<cache>.block`` and no new request is made
     (GrowwTokenUnavailable, no network) until the cool-down ends, so a refusal is not made worse by
-    retrying. ``force=True`` ignores the cool-down.
+    retrying. ``force=True`` ignores the cool-down. Every request sent is counted in the login log next to the cache
+    (groww_logins.py, ``host`` names this machine); once 145 went out since 06:00 IST no more are sent today, even
+    with ``force``.
     """
+    from . import groww_logins
     now = now or datetime.now(IST)
     if not fresh:
         tok = cache.get(api_key, now)
@@ -523,6 +526,13 @@ def cached_access_token(api_key: str, cache: TokenCache, *, secret: str | None =
             blk = cache.active_block(api_key, now)
             if blk:
                 raise _block_error(blk, now)
+        logins = cache.path.parent / groww_logins.LOG_FILE
+        if groww_logins.hard_stop(logins, now):   # the daily budget is nearly spent: never send the 146th
+            until = next_token_expiry(now)
+            raise GrowwTokenUnavailable(
+                f"{groww_logins.STOP_AT} Groww login token requests were already sent since 06:00 IST (Groww allows "
+                f"{groww_logins.LIMIT} a day), so no more are sent until {until.astimezone(IST):%H:%M IST} tomorrow. "
+                "The agent keeps working without Groww data until then.", until, None)
         prev = cache.read_block()
         # Tell other processes on this machine a request is under way, so they wait instead of piling on.
         try:
@@ -536,10 +546,12 @@ def cached_access_token(api_key: str, cache: TokenCache, *, secret: str | None =
             info = request_access_token(api_key, secret=secret, totp=totp_fn() if totp_fn else None,
                                         session=session)
         except (requests.RequestException, OSError, RuntimeError) as e:  # HTTP error, network, or no token in reply
+            groww_logins.record(logins, now, host, groww_logins.result_of(e))
             raise _record_token_failure(cache, api_key, e, now, prev) from None
         except BaseException:
             cache.clear_block()
             raise
+        groww_logins.record(logins, now, host, "ok")
         expires = next_token_expiry(now)
         reported = _parse_expiry(info.get("expiry"))
         if reported is not None and reported > now:

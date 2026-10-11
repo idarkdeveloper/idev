@@ -409,7 +409,9 @@ class App:
         if self.demo_trades is not None or (fresh and not refresh):
             return self._deals or []
         try:
-            self._deals = fetch_followed(self.data, self.settings.investors, self.settings.watch_source)
+            from . import health
+            self._deals = health.recorded(self.settings.state_dir, health.deals_source(self.settings),
+                                          lambda: fetch_followed(self.data, self.settings.investors, self.settings.watch_source))
             self._deals_at = time.time()
             self._deals_error = None
         except Exception as e:  # noqa: BLE001
@@ -616,6 +618,12 @@ class App:
         return safety.freshness(self.settings.state_dir, self._now_dt(), holidays=self._safe_holidays(),
                                 live_orders=self._live_orders_on(), bar_at=root._bar_seen,
                                 deals_at=root._deals_at or None)
+
+    def health(self) -> dict[str, Any]:
+        """GET /api/health: every data source's last success, rows, delay, back-off and redacted last error (failing
+        first), and the Groww login counter. Read-only: from files on this machine, no network, never a Groww login."""
+        from .health import report
+        return report(self.settings, self._now_dt())   # the cached holiday list: never a network call
 
     # -- actions --------------------------------------------------------------
     def start_check(self, *, force: bool, dry_run: bool) -> Job:
@@ -1622,17 +1630,21 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
-    def my_portfolio(self, refresh: bool = False) -> dict[str, Any]:
+    def my_portfolio(self, refresh: bool = False, force: bool = False) -> dict[str, Any]:
         """Your real Groww holdings with buy price, current price and profit or loss.
 
         Read-only (the client is built with live orders off). Cached for a minute,
-        since the page polls; refresh=True fetches again.
+        since the page polls; refresh=True fetches again. ``force=True`` is the "Refresh from Groww" button: it reads
+        Groww even outside the Groww window, but never during a token cool-down (read_groww_portfolio(force=True)).
+        Every answer carries ``cooldown_until`` while Groww's token requests are cooling down, so the button can say
+        when it works again.
         """
         if self._parent is not None:  # the same real holdings, read once
-            return self._parent.my_portfolio(refresh)
-        if self._my_portfolio is not None and not refresh and time.time() - self._my_portfolio_at < 60:
-            return self._my_portfolio
-        out = read_groww_portfolio(self.settings, self.prices, _now())
+            return self._parent.my_portfolio(refresh, force=True) if force else self._parent.my_portfolio(refresh)
+        if self._my_portfolio is not None and not refresh and not force and time.time() - self._my_portfolio_at < 60:
+            return {**self._my_portfolio, **self._cooldown()}
+        out = read_groww_portfolio(self.settings, self.prices, _now(), force=force)
+        out.update(self._cooldown())
         if not out.get("at"):  # not linked, or an error: not cached
             return out
         try:
@@ -1641,6 +1653,27 @@ class App:
             out["bands"] = {}
         self._my_portfolio, self._my_portfolio_at = out, time.time()
         return out
+
+    def _cooldown(self) -> dict[str, Any]:
+        """{"cooldown_until": iso} while a refused Groww token request is cooling down (no network), else {}."""
+        from .runner import token_block
+        try:
+            b = token_block(self.settings)
+        except Exception:  # noqa: BLE001 - a status line, never worth an error
+            return {}
+        return {"cooldown_until": b.until.isoformat()} if b is not None and b.until is not None else {}
+
+    def refresh_from_groww(self) -> dict[str, Any]:
+        """POST /api/groww/refresh: read the holdings from Groww now, even outside the Groww window. Read-only; refused
+        while the token is cooling down after a refusal (no request is sent then); counted by the login counter when a
+        new token is needed."""
+        from .timezones import IST as _IST
+        self._on_live_page("Refresh from Groww")
+        cool = self._cooldown()
+        if cool:
+            raise Busy("Groww is cooling down after a refused login; try again after "
+                       + datetime.fromisoformat(cool["cooldown_until"]).astimezone(_IST).strftime("%H:%M IST") + ".")
+        return self.my_portfolio(refresh=True, force=True)
 
     def digest_preview(self, kind: str, with_summary: bool = False) -> dict[str, Any]:
         """The morning or evening email as it would be sent now, for the Settings dialog. Works on the Live and
@@ -1676,7 +1709,12 @@ class App:
         return out
 
     def groww_test(self) -> dict[str, Any]:
-        """Check Groww credentials end to end without ever returning the token."""
+        """Check Groww credentials end to end without ever returning the token.
+
+        An explicit user call: it may run outside the Groww window, but it never bypasses the cool-down after a refused
+        token request (no ``force``), and a new token it needs is counted by the login counter (and refused once 145
+        went out today)."""
+        from . import groww_hours
         from .groww import GrowwBroker
         from .runner import resolve_groww_token
         self._on_live_page("The Groww connection test")
@@ -1684,6 +1722,10 @@ class App:
         if not s.has_groww_credentials:
             return {"ok": False, "message": "No Groww credentials in .env (GROWW_ACCESS_TOKEN, or GROWW_API_KEY "
                                             "with GROWW_API_SECRET or GROWW_TOTP_SECRET)."}
+        try:
+            outside = not groww_hours.window_open(s)
+        except Exception:  # noqa: BLE001 - the calendar is a nicety here
+            outside = False
         try:
             token = resolve_groww_token(s)
             g = GrowwBroker(token, live_orders=False, exchange=s.groww_exchange, price_fallback=self.prices)
@@ -1693,7 +1735,8 @@ class App:
             return {"ok": False, "message": str(e)}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "message": f"{type(e).__name__}: {e}"}
-        return {"ok": True, "message": f"Connected: {len(holdings)} holdings, cash {acct.cash:,.2f} {acct.currency}",
+        note = " (outside the Groww window: an explicit check)" if outside else ""
+        return {"ok": True, "message": f"Connected: {len(holdings)} holdings, cash {acct.cash:,.2f} {acct.currency}{note}",
                 "holdings": len(holdings), "cash": acct.cash, "equity": acct.equity}
 
     def forward_summary(self) -> dict[str, Any] | None:
@@ -1928,6 +1971,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.freshness())
             elif path == "/api/integration":
                 self._json(app.integration())
+            elif path == "/api/health":
+                self._json(app.health())
             elif path == "/api/my-portfolio":
                 from urllib.parse import parse_qs
                 q = parse_qs(urlparse(self.path).query)
@@ -2138,6 +2183,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json(app.digest_preview(str(body.get("kind") or ""), bool(body.get("summary"))))
                 elif path == "/api/groww-test":
                     self._json(app.groww_test())
+                elif path == "/api/groww/refresh":
+                    self._json(app.refresh_from_groww())
                 elif path == "/api/factor-backtest":
                     job = app.start_factor_backtest(str(body.get("universe") or "NIFTY200"),
                                                     int(body.get("top", 20)), int(body.get("years", 4)))
