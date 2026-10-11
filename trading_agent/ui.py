@@ -566,7 +566,12 @@ class App:
             "protection": self.protection(positions, gtt),
             "live_orders": self._live_orders_on(),   # the one effective flag: the strip and the protection column both use it
             "halt": self._halt(),   # the kill switch: the strip turns red and every trading button is refused
+            "day_brake": self._day_brake(),   # live account down DAY_BRAKE_PCT today: no new buys this session
         }
+
+    def _day_brake(self) -> dict[str, Any] | None:
+        from . import day_brake
+        return day_brake.active(self.settings.state_dir) if self._live_orders_on() else None
 
     def _halt(self) -> dict[str, Any] | None:
         from . import killswitch

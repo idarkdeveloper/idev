@@ -404,6 +404,11 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                 notional_usd: Amount to trade in the account currency (INR or USD).
             """
             live = ctx.live_money
+            if live:
+                from .day_brake import reason as brake
+                braked = brake(ctx.settings.state_dir)   # no new buys and no rebalancing (sells) for the session
+                if braked:
+                    return json.dumps({"error": braked})
             if side.lower() == "buy":
                 from .bands import book_for
                 from .indian_filters import filters_for
@@ -416,6 +421,15 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                 equity = ctx.broker.account().equity
                 if notional_usd > 0.10 * equity + 1e-6:
                     return json.dumps({"error": f"order exceeds 10% of equity ({equity:.2f})"})
+                if live and side.lower() == "buy":   # a clearing holiday: yesterday's sale proceeds are not cash yet
+                    from .clearing import _now as clearing_now, hold, live_sells
+                    from .groww_hours import default_calendar
+                    held, why = hold(ctx.settings.state_dir, live_sells(ctx.state.data.get("live_orders", [])),
+                                     clearing_now().date(), default_calendar(ctx.settings))
+                    if held:
+                        cash = ctx.broker.available_cash() - held  # type: ignore[attr-defined]  # live: the Groww broker
+                        if notional_usd > cash + 1e-6:
+                            return json.dumps({"error": f"only {max(cash, 0):.2f} settled cash for this buy ({why})"})
                 order = ctx.broker.submit_order(symbol, side.lower(), notional=float(notional_usd))
             except Exception as e:  # noqa: BLE001
                 if live and not isinstance(e, (ValueError, PermissionError)):

@@ -293,6 +293,21 @@ class Watcher:
             self._notifier.send(f"[STOP] {len(fresh)} position(s) hit their stop", body)
         return fresh
 
+    def check_day_brake(self, now: datetime) -> dict[str, Any] | None:
+        """Live Groww only: the account down DAY_BRAKE_PCT from the previous close -> no buys for the session."""
+        from .live import is_live_broker
+        if not is_live_broker(self._broker) or self._groww_paused:
+            return None
+        from . import day_brake
+        from .live_alerts import make_alert_fn
+        notifier = self._notifier
+
+        def send(subject: str, body: str) -> None:
+            if notifier is not None:
+                notifier.send(subject, body)
+        return day_brake.evaluate(self.settings, self._broker, day_brake.prev_close_fn(self._prices, now.date()), now,
+                                  calendar=self.holidays, alert=make_alert_fn(self.settings.state_dir, send))
+
     def sync_live(self) -> dict[str, Any] | None:
         """Live Groww only: re-check open orders and keep GTT stop-losses in line."""
         from .live import is_live_broker, refresh_open_orders, sync_gtt_stops
@@ -361,6 +376,11 @@ class Watcher:
                 got = filters_for(s, calendar=self.holidays).tick(self._data, now, deadline=deadline)
                 if got:
                     out["indian_filters"] = got
+            if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:   # once a year (and monthly refresh)
+                from .clearing import ClearingHolidays
+                n_days = ClearingHolidays(s.state_dir).tick(self._data, now)
+                if n_days is not None:
+                    out["clearing_holidays"] = n_days
             if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:   # splits, bonuses: once a trading day
                 from .corp_actions import book_for as corp_book_for
                 n_rows = corp_book_for(s, calendar=self.holidays).tick(self._data, now)
@@ -482,6 +502,10 @@ class Watcher:
         if alerts_only:
             info["alerts_only"] = "Groww is unavailable: stop and order checks are paused"
             info["new_deals_unanalysed"] = self.poll_deals_blocked()
+        if not alerts_only:
+            braked = self.check_day_brake(now)
+            if braked:
+                info["day_brake"] = braked
         try:
             if self._check_fn is not None and not alerts_only and not self._groww_paused:
                 result = self._check_fn()

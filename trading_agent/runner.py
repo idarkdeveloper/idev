@@ -9,6 +9,7 @@ from typing import Any
 import requests
 
 from .agent import AgentContext, RunResult, run_agent
+from .clearing import practice_cash_hold
 from .broker import AlpacaPaperBroker, Broker, LocalPaperBroker
 from .config import Settings
 from .groww import GrowwTokenUnavailable, warn_token_block_once
@@ -107,10 +108,11 @@ def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool =
 
 
 def _buy_block(settings: Settings) -> str | None:
-    """Why a live Groww buy is refused right now (the pre-market check, the opening collar), or None."""
+    """Why a live Groww buy is refused right now (the pre-market check, the day brake, the opening collar), or None."""
+    from . import day_brake
     from .collar import live_buy_block
     from .integration import buy_block
-    return buy_block(settings) or live_buy_block(settings)
+    return buy_block(settings) or day_brake.reason(settings.state_dir) or live_buy_block(settings)
 
 
 def practice_gate(settings: Settings) -> Any:
@@ -194,7 +196,8 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
         def make() -> LocalPaperBroker:
             return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
                                     price_fn=groww_or_free, currency="INR", whole_shares=True,
-                                    cost_model=cost_model_for("in"), shared=True, order_gate=practice_gate(settings))
+                                    cost_model=cost_model_for("in"), shared=True, order_gate=practice_gate(settings),
+                                    cash_hold=practice_cash_hold(settings))
         sim = make()
         if sim.is_untouched_mirror:
             # Older versions copied the Groww holdings in on the first run. A copy nobody has
@@ -206,7 +209,8 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
         return sim
     return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash, price_fn=price_fn,
                             currency=settings.currency, whole_shares=settings.market == "in",
-                            cost_model=cost_model_for(settings.market), shared=True, order_gate=practice_gate(settings))
+                            cost_model=cost_model_for(settings.market), shared=True, order_gate=practice_gate(settings),
+                            cash_hold=practice_cash_hold(settings))
 
 
 def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:

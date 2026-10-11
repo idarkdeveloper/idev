@@ -211,10 +211,13 @@ class LocalPaperBroker:
     def __init__(self, path: Path, starting_cash: float = 80_000.0,
                  price_fn: Any | None = None, currency: str = "USD",
                  whole_shares: bool = False, cost_model: Any | None = None,
-                 now_fn: Any | None = None, shared: bool = False, order_gate: Any | None = None):
+                 now_fn: Any | None = None, shared: bool = False, order_gate: Any | None = None,
+                 cash_hold: Any | None = None):
         self.path = Path(path)
         # order_gate(side) -> the reason an order is refused right now (kill switch, opening collar), or None
         self.order_gate = order_gate
+        # cash_hold(orders) -> (amount, why): cash not to spend today (unsettled T-1 sale proceeds on a clearing holiday)
+        self.cash_hold = cash_hold
         # shared=True: another process (a separate ``watch``) may use this same file, so every change is made under a
         # lock file after re-reading the file. Only the practice account is shared; others skip the cost.
         self.shared = shared
@@ -508,8 +511,10 @@ class LocalPaperBroker:
         sale_facts: dict[str, Any] = {}  # what a sale adds to its order: cost basis, realised P&L, holding period
 
         if side == "buy":
-            if cost + fees > self._state["cash"] + 1e-9:
-                raise ValueError(f"Insufficient cash: need {cost + fees:.2f}, have {self._state['cash']:.2f}")
+            held, why = self.cash_hold(self._state["orders"]) if self.cash_hold is not None else (0.0, "")
+            avail = self._state["cash"] - held
+            if cost + fees > avail + 1e-9:
+                raise ValueError(f"Insufficient cash: need {cost + fees:.2f}, have {avail:.2f}" + (f" ({why})" if held else ""))
             new_qty = pos["qty"] + qty
             pos["avg_entry_price"] = (pos["qty"] * pos["avg_entry_price"] + cost) / new_qty
             pos["qty"] = new_qty
