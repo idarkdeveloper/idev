@@ -202,9 +202,10 @@ class Settings:
     state_dir: Path = field(default_factory=lambda: Path("state"))
     # Live-order safety (Groww)
     max_slippage_pct: float = 0.5  # limit price = LTP +/- this percent
-    # Opening collar: no buys before this IST time; buy limit = min(the MAX_SLIPPAGE cap, today's opening price + this
-    # many basis points); a buy still unfilled after BUY_TIMEOUT_S seconds is cancelled.
+    # Opening collar: no buys before OPEN_COLLAR_START (IST); until OPEN_COLLAR_END the buy limit is min(the MAX_SLIPPAGE
+    # cap, today's opening price + OPEN_COLLAR_BPS basis points); a buy still unfilled after BUY_TIMEOUT_S is cancelled.
     open_collar_start: str = "09:17"
+    open_collar_end: str = "09:45"   # after this the buy limit is the MAX_SLIPPAGE cap alone
     open_collar_bps: float = 30.0
     buy_timeout_s: int = 120
     day_brake_pct: float = 3.5  # live account down this much from the previous close: no new buys for the session
@@ -353,6 +354,12 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         raise SystemExit("OPEN_COLLAR_START must be a time as HH:MM, e.g. 09:17") from None
     if not "09:15" <= collar_start <= "15:00":
         raise SystemExit(f"OPEN_COLLAR_START must be between 09:15 and 15:00 IST, got {collar_start}")
+    try:
+        collar_end = parse_hhmm(env("OPEN_COLLAR_END") or "09:45")
+    except ValueError:
+        raise SystemExit("OPEN_COLLAR_END must be a time as HH:MM, e.g. 09:45") from None
+    if not collar_start < collar_end <= "15:30":
+        raise SystemExit(f"OPEN_COLLAR_END must be after OPEN_COLLAR_START ({collar_start}) and at most 15:30, got {collar_end}")
     collar_bps = _number("OPEN_COLLAR_BPS", env("OPEN_COLLAR_BPS"), 30.0, 1.0, 200.0)
     buy_timeout = int(_number("BUY_TIMEOUT_S", env("BUY_TIMEOUT_S"), 120, 10, 900))
     day_brake = _number("DAY_BRAKE_PCT", env("DAY_BRAKE_PCT"), 3.5, 0.5, 20.0)
@@ -417,7 +424,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         notify_webhook_url=env("NOTIFY_WEBHOOK_URL") or None,
         state_dir=Path(env("STATE_DIR") or "state"),
         max_slippage_pct=slippage,
-        open_collar_start=collar_start, open_collar_bps=collar_bps, buy_timeout_s=buy_timeout, day_brake_pct=day_brake,
+        open_collar_start=collar_start, open_collar_end=collar_end, open_collar_bps=collar_bps, buy_timeout_s=buy_timeout, day_brake_pct=day_brake,
         groww_gtt_stops=_bool(env("GROWW_GTT_STOPS"), False),
         groww_ddpi_confirmed=_bool(env("GROWW_DDPI_CONFIRMED"), False),
         groww_sell_t1=_bool(env("GROWW_SELL_T1"), False),

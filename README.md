@@ -224,10 +224,10 @@ alerts "only T1 shares; not sold until they settle". Paper and practice accounts
   alerts you. GTT stop-losses stay unless you add `--cancel-gtt` (or tick the box). While `state/HALT` exists every
   order path refuses, no Groww token is used, the watch idles and the CLI exits 1 (`kill-switch`, `ui`, `watch` and
   offline commands aside). Only `kill-switch --release` removes it; `kill-switch --status` says whether it is set.
-- **Opening collar.** No buy before `OPEN_COLLAR_START` (09:17 IST). A live buy's limit is the lower of the
-  `MAX_SLIPPAGE_PCT` cap and today's opening price + `OPEN_COLLAR_BPS` (30 bps), rounded down to the tick (with no
-  opening price from Groww or Yahoo the buy is refused); a buy still unfilled after `BUY_TIMEOUT_S` (120 s) is
-  cancelled. Practice buys keep only the time rule (09:00 to 09:17 on trading days).
+- **Opening collar.** No buy before `OPEN_COLLAR_START` (09:17 IST). Until `OPEN_COLLAR_END` (09:45) a live buy's
+  limit is the lower of the `MAX_SLIPPAGE_PCT` cap and today's opening price + `OPEN_COLLAR_BPS` (30 bps), rounded
+  down to the tick (with no opening price from Groww or Yahoo the buy is refused); after 09:45 the `MAX_SLIPPAGE_PCT`
+  cap alone applies. A buy still unfilled after `BUY_TIMEOUT_S` (120 s) is cancelled. Practice buys keep only the time rule (09:00 to 09:17 on trading days).
 - **Corporate actions.** NSE's corporate-actions list (30 days ahead, once a trading day) flags holdings with a split,
   bonus, consolidation, demerger or special dividend of 2% or more within 7 days, in the morning email and the
   portfolio card. The GTT is cancelled from 15:00 on the session before the ex-date and re-created at the adjusted
@@ -643,7 +643,7 @@ treated as missing (no filtering).
 | `GROWW_LIVE_ORDERS` | `false` (default) = paper fills with real holdings/prices. `true` = real orders. |
 | `MAX_SLIPPAGE_PCT` | Live limit price distance from the LTP, in percent (default `0.5`, max 5). |
 | `GROWW_GTT_STOPS` | `false` (default). `true` = keep a GTT stop-loss at Groww per live holding (needs `GROWW_LIVE_ORDERS=true`). |
-| `OPEN_COLLAR_START`, `OPEN_COLLAR_BPS`, `BUY_TIMEOUT_S` | Opening collar: no buys before `09:17` IST; live buy limit at most the opening price + `30` bps; unfilled live buys cancelled after `120` s. |
+| `OPEN_COLLAR_START`, `OPEN_COLLAR_END`, `OPEN_COLLAR_BPS`, `BUY_TIMEOUT_S` | Opening collar: no buys before `09:17` IST; until `09:45` a live buy limit is at most the opening price + `30` bps; unfilled live buys cancelled after `120` s. |
 | `DAY_BRAKE_PCT` | `3.5` (default): live account down this much from the previous close stops buys and rebalancing for the session. |
 | `GROWW_DDPI_CONFIRMED` | `false` (default). Your own confirmation that DDPI is active in the Groww app; while false, live sells alert once a day that they may be rejected. |
 | `GROWW_SELL_T1` | `false` (default) = live sells use free demat shares only. `true` = also T1 shares (BTST: short-delivery / auction risk). |

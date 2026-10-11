@@ -134,6 +134,36 @@ def test_the_buy_limit_is_the_lower_of_the_cap_and_the_opening_price_plus_30_bps
     assert created(sess)[0]["price"] == limit_price(1000.0, "buy", 0.5, 0.05) == 1004.95   # the existing cap
 
 
+def test_the_price_cap_applies_only_from_0917_to_0945(settings):
+    assert not collar.price_cap_active(settings, at(9, 16))
+    assert collar.price_cap_active(settings, at(9, 17)) and collar.price_cap_active(settings, at(9, 44))
+    assert not collar.price_cap_active(settings, at(9, 45)) and not collar.price_cap_active(settings, at(13, 0))
+    settings.open_collar_end = "10:00"
+    assert collar.price_cap_active(settings, at(9, 50))
+
+
+@pytest.mark.parametrize("hh, mm, capped", [(9, 20, True), (9, 44, True), (9, 45, False), (11, 0, False)])
+def test_inside_the_window_the_opening_price_caps_the_buy_after_it_only_the_slippage_cap(settings, hh, mm, capped):
+    sess = FakeGroww(routes(quote=ok({"ohlc": {"open": 990.0}})), filled_after=1)
+    b = broker(sess, collar_bps=30, collar_active=lambda: collar.price_cap_active(settings, at(hh, mm)))
+    o = b.submit_order("RELIANCE", "buy", qty=3)
+    if capped:
+        assert created(sess)[0]["price"] == 992.95 and o["opening_price"] == 990.0
+    else:
+        assert created(sess)[0]["price"] == limit_price(1000.0, "buy", 0.5, 0.05) and "opening_price" not in o
+        assert not any("/live-data/quote" in u for _, u, _ in sess.calls)          # no opening price needed
+
+
+def test_make_groww_wires_the_window(settings, monkeypatch):
+    settings.market, settings.broker, settings.groww_access_token = "in", "groww", "tok"
+    settings.groww_live_orders = True
+    b = runner.make_groww(settings)
+    monkeypatch.setattr(collar, "_now", lambda: at(9, 30))
+    assert b.collar_active()
+    monkeypatch.setattr(collar, "_now", lambda: at(10, 0))
+    assert not b.collar_active()
+
+
 def test_the_opening_price_falls_back_to_yahoo_and_with_none_the_buy_is_refused():
     sess = FakeGroww(routes(), filled_after=1)      # no quote route: Groww's quote fails
     broker(sess, collar_bps=30, open_price_fn=lambda s: 995.0).submit_order("RELIANCE", "buy", qty=3)
@@ -212,7 +242,9 @@ def test_settings(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     s = load_settings(None)
     assert (s.open_collar_start, s.open_collar_bps, s.buy_timeout_s, s.day_brake_pct) == ("09:17", 30.0, 120, 3.5)
+    assert s.open_collar_end == "09:45"
     for k, v in (("OPEN_COLLAR_START", "9:00"), ("OPEN_COLLAR_START", "noon"), ("OPEN_COLLAR_BPS", "0"),
+                 ("OPEN_COLLAR_END", "09:10"), ("OPEN_COLLAR_END", "16:00"),
                  ("BUY_TIMEOUT_S", "5"), ("DAY_BRAKE_PCT", "x")):
         monkeypatch.setenv(k, v)
         with pytest.raises(SystemExit):
