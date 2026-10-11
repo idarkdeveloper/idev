@@ -263,8 +263,10 @@ class FilterBook:
             raise ValueError(f"{LABEL[part]}: unreadable answer")
         return parsed
 
-    def tick(self, client: Any, now: datetime) -> dict[str, int]:
-        """For the watch loop: fetch what is due, store it, never raise. Returns {part: symbols stored}."""
+    def tick(self, client: Any, now: datetime, deadline: float | None = None) -> dict[str, int]:
+        """For the watch loop: fetch what is due, store it, never raise. Returns {part: symbols stored}. ``deadline``
+        (time.monotonic) stops between lists when the tick's network budget is spent; the rest wait for a later tick."""
+        import time
         out: dict[str, int] = {}
         if client is None or not hasattr(client, "_get"):
             return out
@@ -273,6 +275,8 @@ class FilterBook:
             return out
         errors: dict[str, str] = {}
         for part in parts:
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             try:
                 parsed = self.fetch(client, part)
                 self.store(part, parsed, now.astimezone(IST).date(), now)

@@ -331,11 +331,6 @@ class Watcher:
                 n = book_for(s).tick(self._data, now, self.holidays, timeout=20.0)
                 if n:
                     out["price_bands"] = n
-            if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:
-                from .indian_filters import filters_for   # ASM/GSM, board meetings, pledges: once per trading day
-                got = filters_for(s, calendar=self.holidays).tick(self._data, now)
-                if got:
-                    out["indian_filters"] = got
             if getattr(s, "flows_breadth", False) and getattr(s, "market", "in") == "in":
                 from .breadth import BreadthStore, archive_bars_fn, nifty500_members
                 from .flows import FlowStore
@@ -348,6 +343,11 @@ class Watcher:
                                                        archive_bars_fn(s.state_dir), self.holidays, deadline=deadline)
                     if b:
                         out["breadth"] = b["date"]
+            if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:   # last: the lowest priority read
+                from .indian_filters import filters_for   # ASM/GSM, board meetings, pledges: once per trading day
+                got = filters_for(s, calendar=self.holidays).tick(self._data, now, deadline=deadline)
+                if got:
+                    out["indian_filters"] = got
             if time.monotonic() >= deadline:
                 out["budget_used_up"] = True
         except Exception:  # noqa: BLE001 - market data never stops the watch

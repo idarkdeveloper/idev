@@ -1361,7 +1361,7 @@
   }
   $("tk-stop").addEventListener("change", () => { tkStopTouched = true; showStopValue(); });
   // A practice buy the Indian-market filters hold back (ASM/GSM, results due, pledges) asks once more; the agent never would.
-  async function practiceOrder(body){
+  async function placePracticeOrder(body){
     try { return await api("/api/order", body); }
     catch(e){
       if(!(e.data && e.data.filter_warning) || !confirm(e.message + "\n\nThis is the practice account: no real order is placed.")) throw e;
@@ -1382,7 +1382,7 @@
       }
     }
     if(!confirm(`Paper ${side} ${sym} ${qty ? qty + " shares" : "for " + money(Number(amt))}?`)) return;
-    try { const j = await practiceOrder(body); toast(`Filled ${j.order.qty} ${sym} @ ${money(j.order.filled_avg_price,2)}, charges ${money(j.order.fees||0,2)}`); $("tk-qty").value=""; $("tk-amount").value=""; tkStopTouched = false; $("tk-stop").value = "trailing"; $("tk-stop-value").value = ""; showStopValue(); await refresh(); }
+    try { const j = await placePracticeOrder(body); toast(`Filled ${j.order.qty} ${sym} @ ${money(j.order.filled_avg_price,2)}, charges ${money(j.order.fees||0,2)}`); $("tk-qty").value=""; $("tk-amount").value=""; tkStopTouched = false; $("tk-stop").value = "trailing"; $("tk-stop-value").value = ""; showStopValue(); await refresh(); }
     catch(e){ toast(e.message); }
   });
   $("tk-size").addEventListener("click", async () => {
@@ -1605,7 +1605,7 @@
     if(b.dataset.order !== undefined){
       const r = S.recommendations.find(x => String(x.index) === b.dataset.order);
       if(!confirm(`Paper ${r.action} ${r.ticker} for ${money(r.suggested_notional_usd)}?`)) return;
-      try { const j = await practiceOrder({symbol:r.ticker, side:r.action, notional:r.suggested_notional_usd}); toast(`Filled ${j.order.qty} ${r.ticker} @ ${money(j.order.filled_avg_price,2)}`); await refresh(); } catch(e){ toast(e.message); }
+      try { const j = await placePracticeOrder({symbol:r.ticker, side:r.action, notional:r.suggested_notional_usd}); toast(`Filled ${j.order.qty} ${r.ticker} @ ${money(j.order.filled_avg_price,2)}`); await refresh(); } catch(e){ toast(e.message); }
     } else if(b.dataset.dismiss !== undefined){
       try { await api("/api/dismiss", {index:Number(b.dataset.dismiss)}); await refresh(); } catch(e){ toast(e.message); }
     }
