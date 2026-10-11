@@ -302,6 +302,7 @@ def test_agent_live_sell_cancels_gtt(settings, tmp_path):
     st = State(settings.state_dir / "state.json")
     st.data["gtt_stops"] = {"RELIANCE": {"smart_order_id": "gtt_91a7f4", "trigger": 2400.0, "limit": 2388.0,
                                          "qty": 8, "status": "ACTIVE"}}
+    st.save()   # the GTT sync after a fill works on state.json as it is on disk (live.locked_gtt_sync)
     # holdings reads: account(), the free-share check, then the GTT sync after the fill,
     # by which time Groww reports no RELIANCE holding any more
     sess.routes[("GET", "/holdings/user")] = Seq(HOLDINGS, HOLDINGS, ok({"holdings": []}))
@@ -313,7 +314,7 @@ def test_agent_live_sell_cancels_gtt(settings, tmp_path):
     assert out["ok"] and out["order"]["status"] == "filled"
     assert st.data["live_orders"][0]["source"] == "agent"
     assert any(c[1].endswith("/order-advance/cancel/CASH/GTT/gtt_91a7f4") for c in sess.calls)
-    assert "RELIANCE" not in st.data["gtt_stops"]
+    assert "RELIANCE" not in State(settings.state_dir / "state.json").data["gtt_stops"]
 
 
 def test_agent_live_rejection_is_notified(settings):

@@ -60,9 +60,37 @@ class State:
         else:
             self.data = {"seen": {}, "runs": [], "recommendations": []}
 
-    def save(self) -> None:
+    def save(self, fresh_keys: Iterable[str] = ()) -> None:
+        """Write the whole file. ``fresh_keys`` are taken from the file on disk first (as they are there now), so a
+        copy loaded long ago never overwrites what another writer keeps under those keys (the GTT records)."""
         with STATE_LOCK:
+            keys = list(fresh_keys)
+            if keys:
+                disk = self._disk()
+                for k in keys:
+                    if k in disk:
+                        self.data[k] = disk[k]
+                    else:
+                        self.data.pop(k, None)
             atomic_write(self.path, json.dumps(self.data, indent=2))
+
+    def save_only(self, keys: Iterable[str]) -> None:
+        """Write just ``keys`` from this copy into the file as it is on disk now; everything else stays as on disk."""
+        with STATE_LOCK:
+            disk = self._disk() or {"seen": {}, "runs": [], "recommendations": []}
+            for k in keys:
+                if k in self.data:
+                    disk[k] = self.data[k]
+                else:
+                    disk.pop(k, None)
+            atomic_write(self.path, json.dumps(disk, indent=2))
+
+    def _disk(self) -> dict[str, Any]:
+        try:
+            d = json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+        return d if isinstance(d, dict) else {}
 
     def new_trades(self, trades: Iterable[DisclosedTrade]) -> list[DisclosedTrade]:
         return [t for t in trades if t.key not in self.data["seen"]]

@@ -88,7 +88,8 @@ def test_engage_writes_halt_cancels_only_open_agent_orders_keeps_gtts_deletes_to
     assert not (live.state_dir / "groww_token.json").exists() and rep["token"] == "cached Groww token deleted"  # 4
     assert notes.sent[0][0] == "[HALT] kill switch engaged" and rep["alerted"] == ["telegram", "email"]  # 5
     body = notes.sent[0][1]
-    assert "GTT stop-losses left active (2)" in body and "kill-switch --release" in body
+    assert "GTT stop-losses left active (1)" in body and "kill-switch --release" in body
+    assert "1 GTT(s) not placed by the agent or without a reference were left" in body   # the user's own, once
     assert not any("order/create" in u or "order/modify" in u or "order-advance/create" in u for _, u, _ in sess.calls)
 
 
@@ -333,3 +334,4 @@ def test_open_orders_and_gtts_the_switch_cannot_attribute_are_reported(live):
     assert "1 open order(s) not placed by the agent or without a reference were left: check the Groww app" in text
     assert "1 GTT(s) not placed by the agent or without a reference were left: check the Groww app" in text
     assert "No open agent orders" not in text
+    assert text.count("SBIN qty 2 trigger 700") == 1                          # listed once

@@ -310,7 +310,7 @@ class Watcher:
 
     def sync_live(self) -> dict[str, Any] | None:
         """Live Groww only: re-check open orders and keep GTT stop-losses in line."""
-        from .live import is_live_broker, refresh_open_orders, sync_gtt_stops
+        from .live import GTT_KEYS, is_live_broker, locked_gtt_sync, refresh_open_orders
 
         if not is_live_broker(self._broker) or self._groww_paused:
             return None
@@ -320,10 +320,13 @@ class Watcher:
             out["orders"] = refresh_open_orders(self._broker, st, self._notifier)
         except Exception as e:  # noqa: BLE001
             out["orders_error"] = str(e)
+        st.save(fresh_keys=GTT_KEYS)
         prices = self._prices
         bars_fn = (lambda sym: prices.history(sym, "1y")) if prices is not None else None
-        out["gtt"] = sync_gtt_stops(self.settings, self._broker, st, bars_fn=bars_fn, notifier=self._notifier)
-        st.save()
+        try:
+            out["gtt"] = locked_gtt_sync(self.settings, self._broker, bars_fn=bars_fn, notifier=self._notifier)
+        except TimeoutError as e:   # another process is syncing: the next tick tries again
+            out["gtt"] = [{"action": "error", "error": str(e)}]
         return out
 
     def ensure_broker(self) -> Any | None:

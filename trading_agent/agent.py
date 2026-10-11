@@ -450,10 +450,10 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                     record_order_error(ctx.state, symbol, side.lower(), str(e), ctx.notifier, source="agent")
                 return json.dumps({"error": str(e)})
             if order.get("live"):
-                from .live import record_order, sync_gtt_stops
+                from .live import locked_gtt_sync, record_order
                 record_order(ctx.state, order, ctx.notifier, source="agent")
                 if order.get("side") == "sell" and order.get("status") == "filled":
-                    sync_gtt_stops(ctx.settings, ctx.broker, ctx.state, notifier=ctx.notifier)
+                    locked_gtt_sync(ctx.settings, ctx.broker, notifier=ctx.notifier)
             ctx.result.orders.append(order)
             return json.dumps({"ok": order.get("status") != "failed", "order": order}, default=str)
 

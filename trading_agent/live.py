@@ -14,8 +14,11 @@ the GTT manager additionally needs GROWW_GTT_STOPS=true.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Any, Callable
+import threading
+from contextlib import contextmanager
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Callable, Iterator
 
 from .risk import atr, trailing_stop
 from .state import State
@@ -28,8 +31,18 @@ ORDER_FIELDS = ("id", "groww_order_id", "order_reference_id", "symbol", "side", 
                 "status", "placed_at", "checked_at", "error", "source")
 
 
+# The keys of state.json the GTT manager owns. Only a locked sync writes them (``locked_gtt_sync``); every other
+# writer keeps them as they are on disk (State.save(fresh_keys=GTT_KEYS)).
+GTT_KEYS = ("gtt_stops", "gtt_history", "gtt_suspended", "gtt_corp_done")
+_GTT_LOCK = threading.Lock()
+
+
+def _clock() -> datetime:
+    return datetime.now(IST)
+
+
 def _now() -> str:
-    return datetime.now(IST).isoformat(timespec="seconds")
+    return _clock().isoformat(timespec="seconds")
 
 
 def is_live_broker(broker: Any) -> bool:
@@ -43,6 +56,9 @@ def record_order(state: State, order: dict[str, Any], notifier: Any | None = Non
                  *, source: str | None = None) -> dict[str, Any]:
     """Upsert a live order into state (by groww_order_id or reference) and alert on failure."""
     row = {k: order.get(k) for k in ORDER_FIELDS if order.get(k) is not None}
+    if (row.get("status") == "failed" and str(row.get("order_status") or "").upper() == "CANCELLED"
+            and float(row.get("filled_quantity") or 0) > 0):
+        row["status"] = "partial"   # cancelled after part of it filled: shares were bought, not a failure
     if source and "source" not in row:
         row["source"] = source
     orders = state.data.setdefault("live_orders", [])
@@ -114,7 +130,7 @@ class GttStopManager:
         # corp: a corp_actions.ActionBook. Over a split / bonus / large special dividend the GTT is cancelled the
         # session before the ex-date and re-created at the adjusted level once Groww shows the new quantity.
         self.corp = corp
-        self.now_fn = now_fn or (lambda: datetime.now(IST))
+        self.now_fn = now_fn or _clock
         self.bars_fn = bars_fn or (lambda sym: [])
         self.notifier = notifier
         self.enabled = enabled
@@ -213,6 +229,12 @@ class GttStopManager:
             else:
                 high = max(x for x in (price, p.avg_entry_price) if x)
             trigger, limit = self.broker.gtt_stop_prices(sym, self._stop_for(sym, high))
+            if (rec is None or not rec.get("smart_order_id")) and trigger >= price and high > price \
+                    and self._after_corp_action(sym, now):
+                # Groww's average lags a split or bonus: place the first GTT from the price, not the stale average.
+                # (A holding simply under water keeps the old rule: its stop is already breached, so no GTT.)
+                high = price
+                trigger, limit = self.broker.gtt_stop_prices(sym, self._stop_for(sym, high))
             if rec is None or not rec.get("smart_order_id"):
                 if trigger >= price:
                     actions.append({"symbol": sym, "action": "skip", "reason": f"stop {trigger:.2f} at/above price {price:.2f}"})
@@ -235,7 +257,7 @@ class GttStopManager:
                 continue  # never move a stop down; nothing changed
             if new_trigger >= price:   # it would fire at once and leave a limit sell nobody can fill: never sent
                 actions.append(self._error(sym, "modify", ValueError(
-                    f"trigger {new_trigger:.2f} is at or above the price {price:.2f}; not sent")))
+                    f"trigger {new_trigger:.2f} is at or above the price {price:.2f}; not sent"), once=True))
                 continue
             try:
                 out = self.broker.modify_gtt_stop(rec["smart_order_id"], qty, new_trigger, new_limit)
@@ -271,13 +293,26 @@ class GttStopManager:
         self.stops.pop(sym, None)
         return {"symbol": sym, "action": "cancel", "status": status, "reason": reason}
 
-    def _error(self, sym: str, what: str, e: Exception) -> dict[str, Any]:
+    def _after_corp_action(self, sym: str, now: datetime) -> bool:
+        """A split / bonus / special dividend was handled for ``sym`` in the last 10 days (gtt_corp_done)."""
+        since = (now.astimezone(IST).date() - timedelta(days=10)).isoformat()
+        return any(k.startswith(f"{sym}:") and k.split(":", 1)[1] >= since for k in self.corp_done)
+
+    def _error(self, sym: str, what: str, e: Exception, *, once: bool = False) -> dict[str, Any]:
+        """Log and alert a failed GTT step. ``once``: alert at most once a day per symbol and step (a condition that
+        repeats on every sync, such as a refused modify)."""
         msg = f"{type(e).__name__}: {e}"
         log.warning("GTT %s for %s failed: %s", what, sym, msg)
         if self.notifier is not None:
+            subject, body = f"[GTT {what.upper()} FAILED] {sym}", f"Could not {what} the stop-loss GTT for {sym}: {msg}"
             try:
-                self.notifier.send(f"[GTT {what.upper()} FAILED] {sym}",
-                                   f"Could not {what} the stop-loss GTT for {sym}: {msg}")
+                if once:
+                    from .live_alerts import alert_once
+                    notifier = self.notifier
+                    alert_once(self.state.path.parent / "live_alerts.json", f"gtt-{what}-{sym}",
+                               lambda s, b: notifier.send(s, b), subject, body)
+                else:
+                    self.notifier.send(subject, body)
             except Exception:  # noqa: BLE001
                 pass
         if sym in self.stops:
@@ -311,3 +346,25 @@ def sync_gtt_stops(settings: Any, broker: Any, state: State, *, bars_fn: Callabl
     except Exception as e:  # noqa: BLE001
         log.warning("GTT sync failed: %s", e)
         return [{"action": "error", "error": str(e)}]
+
+
+@contextmanager
+def gtt_lock(state_dir: Path) -> Iterator[None]:
+    """One GTT sync at a time, in this process and across processes (the watch service, the dashboard, the CLI)."""
+    from .news import _file_lock
+    with _GTT_LOCK, _file_lock(Path(state_dir) / "state.json.gtt.lock", wait=90.0, stale=300.0, what="GTT sync"):
+        yield
+
+
+def locked_gtt_sync(settings: Any, broker: Any, *, bars_fn: Callable | None = None,
+                    notifier: Any | None = None) -> list[dict[str, Any]] | None:
+    """A GTT sync on state.json as it is on disk now, under the GTT lock; only the GTT keys are written back. Every
+    caller (the watch, the end of an agent run, a filled live sell, ``gtt --sync``) uses this, so a copy of the
+    state loaded minutes earlier can never re-run a corporate-action step or erase a record another sync made."""
+    if not gtt_enabled(settings, broker):
+        return None
+    with gtt_lock(settings.state_dir):
+        st = State(Path(settings.state_dir) / "state.json")
+        actions = sync_gtt_stops(settings, broker, st, bars_fn=bars_fn, notifier=notifier)
+        st.save_only(GTT_KEYS)
+    return actions
