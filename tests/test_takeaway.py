@@ -46,7 +46,7 @@ def test_the_python_port_says_what_the_page_says(tmp_path):
     f = tmp_path / "cases.json"
     f.write_text(json.dumps(CASES))
     harness = Path(__file__).parent / "takeaway_harness.js"
-    js = json.loads(subprocess.run(["node", str(harness), str(f)], capture_output=True, text=True, check=True,
+    js = json.loads(subprocess.run(["node", str(harness), str(f)], capture_output=True, text=True, encoding="utf-8", check=True,
                                    env={**os.environ, "TZ": "Asia/Kolkata"}).stdout)
     py = [lookup_takeaway(c["r"], c["now"], c["ctx"]) for c in CASES]
     for j, p in zip(js, py):
