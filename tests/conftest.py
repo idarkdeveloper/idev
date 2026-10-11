@@ -35,6 +35,17 @@ def groww_window_open_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def collar_clock_mid_session(monkeypatch):
+    """The opening collar (no buys before 09:17 IST) reads the clock; unless a test sets its own, it is Tuesday
+    11:00 IST, so a test placing a buy never depends on the time of day it runs at."""
+    from datetime import datetime
+
+    import trading_agent.collar as collar
+    from trading_agent.timezones import IST
+    monkeypatch.setattr(collar, "_now", lambda: datetime(2026, 6, 9, 11, 0, tzinfo=IST))
+
+
+@pytest.fixture(autouse=True)
 def no_real_clock_check(monkeypatch):
     """The integration check's "Server clock" step runs timedatectl; a CI runner has it, a container may not, so the
     step count would depend on the machine. Unless a test passes its own runner, the clock is "not checked" (skipped)."""

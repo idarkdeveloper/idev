@@ -8,6 +8,7 @@ import logging
 import sys
 import time
 from importlib import resources
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -471,8 +472,9 @@ def cmd_gtt(args: argparse.Namespace) -> int:
             print("Refusing: GROWW_GTT_STOPS is not true.")
             return 1
         prices = free_prices(settings)
+        from .live import corp_book
         mgr = GttStopManager(make_groww(settings, prices), st, notifier=make_notifier(settings),
-                             bars_fn=lambda sym: prices.history(sym, "1y"))
+                             bars_fn=lambda sym: prices.history(sym, "1y"), corp=corp_book(settings))
         for a in mgr.sync():
             print("  ", a)
         st.save()
@@ -483,6 +485,46 @@ def cmd_gtt(args: argparse.Namespace) -> int:
         print(f"{sym:<12} qty {r.get('qty')}  trigger {r.get('trigger')}  limit {r.get('limit')}  "
               f"{r.get('status')}  {r.get('smart_order_id')}" + (f"  last error: {r['last_error']}" if r.get("last_error") else ""))
     return 0
+
+
+def cmd_kill_switch(args: argparse.Namespace) -> int:
+    """Stop all trading (state/HALT), or with --release allow it again."""
+    from . import killswitch
+    from .runner import make_groww, make_notifier
+    settings = _settings(args)
+    if args.release:
+        if killswitch.release(settings, by="cli", notifier=make_notifier(settings)):
+            print("HALT released: order paths, the watch and the CLI work again.")
+        else:
+            print("Not halted: nothing to release.")
+        return 0
+    if args.status:
+        print(killswitch.reason(settings.state_dir) or "Not halted.")
+        return 0
+    report = killswitch.engage(settings, by="cli", cancel_gtt=args.cancel_gtt,
+                               broker_fn=lambda: make_groww(settings, halt_ok=True), notifier=make_notifier(settings))
+    print(killswitch.summary(report))
+    return 0
+
+
+# Under HALT the CLI refuses everything (exit 1) except the switch itself, the dashboard (its order routes refuse),
+# the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
+# reach Groww.
+HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
+                "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
+                "market-data"}
+
+
+def _halt_refusal(args: argparse.Namespace) -> str | None:
+    if args.command in HALT_ALLOWED:
+        return None
+    from . import killswitch
+    try:
+        state_dir = _settings(args).state_dir
+    except (SystemExit, Exception):  # noqa: BLE001 - settings that do not load: the default place
+        import os
+        state_dir = Path(os.environ.get("STATE_DIR") or "state")
+    return killswitch.reason(state_dir, f"run `{args.command}`")
 
 
 def cmd_history(args: argparse.Namespace) -> int:
@@ -1012,6 +1054,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--ip", action="store_true",
                     help="only print this machine's public IP and whether it matches GROWW_ALLOWED_IP (no credentials)")
     sp.set_defaults(func=cmd_groww_check)
+    sp = sub.add_parser("kill-switch", help="stop ALL trading now (state/HALT); --release allows it again")
+    sp.add_argument("--cancel-gtt", action="store_true",
+                    help="also cancel the agent's GTT stop-losses at Groww (by default they stay and keep protecting)")
+    sp.add_argument("--release", action="store_true", help="remove state/HALT so trading can resume")
+    sp.add_argument("--status", action="store_true", help="only say whether trading is halted")
+    sp.set_defaults(func=cmd_kill_switch)
     sp = sub.add_parser("gtt", help="show Groww GTT stop-losses; --sync updates them (live only)")
     sp.add_argument("--sync", action="store_true")
     sp.set_defaults(func=cmd_gtt)
@@ -1141,6 +1189,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(levelname)s %(name)s: %(message)s")
+    halted = _halt_refusal(args)
+    if halted:
+        print(halted, file=sys.stderr)
+        return 1
     try:
         return args.func(args)
     except GrowwTokenUnavailable as e:  # any command: a clear line instead of a traceback

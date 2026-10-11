@@ -60,6 +60,11 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
                                                   "text/javascript; charset=utf-8")}
+# Dashboard POST routes that trade, reach Groww or start jobs: refused (403) while the kill switch is set.
+HALT_REFUSED_POSTS = {"/api/integration/run", "/api/check", "/api/order", "/api/practice/copy-groww",
+                      "/api/practice/sell", "/api/practice/reset-to-groww", "/api/close", "/api/groww-test",
+                      "/api/groww/refresh", "/api/reset"}
+
 EDITABLE_ENV_KEYS = {
     "watch_investor": "WATCH_INVESTOR",  # one name (older form); watch_investors below is the list
     "watch_investors": "INVESTORS",
@@ -560,7 +565,18 @@ class App:
             "jobs": [j.to_dict() for j in self.jobs[-5:]],
             "protection": self.protection(positions, gtt),
             "live_orders": self._live_orders_on(),   # the one effective flag: the strip and the protection column both use it
+            "halt": self._halt(),   # the kill switch: the strip turns red and every trading button is refused
+            "day_brake": self._day_brake(),   # live account down DAY_BRAKE_PCT today: no new buys this session
         }
+
+    def _day_brake(self) -> dict[str, Any] | None:
+        from . import day_brake
+        return day_brake.active(self.settings.state_dir) if self._live_orders_on() else None
+
+    def _halt(self) -> dict[str, Any] | None:
+        from . import killswitch
+        rec = killswitch.status(self.settings.state_dir)   # the Demo page shows its practice strip whatever this says
+        return None if rec is None else {**rec, "text": killswitch.reason(self.settings.state_dir)}
 
     # -- safety and freshness ---------------------------------------------------
     def _live_orders_on(self) -> bool:
@@ -1004,9 +1020,29 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
+    def kill_switch(self, confirm: Any, cancel_gtt: bool = False) -> dict[str, Any]:
+        """The dashboard's kill switch: the same five steps as ``kill-switch``; the word HALT must be typed."""
+        from . import killswitch
+        from .runner import make_groww
+        self._on_live_page("The kill switch stops the real agent")
+        if confirm != "HALT":
+            raise ValueError("Type HALT (in capitals) to stop all trading.")
+        report = killswitch.engage(self.settings, by="dashboard", cancel_gtt=bool(cancel_gtt),
+                                   broker_fn=lambda: make_groww(self.settings, halt_ok=True),
+                                   stop_watch=lambda: self.watcher.stop() if self.watcher else None,
+                                   notifier=make_notifier(self.settings))
+        return {"ok": True, "report": report, "summary": killswitch.summary(report),
+                "halt": killswitch.status(self.settings.state_dir)}
+
+    def halted(self, what: str) -> None:
+        """Raise killswitch.Halted (403) while the kill switch is set."""
+        from . import killswitch
+        killswitch.refuse(self.settings.state_dir, what)
+
     def set_watch(self, on: bool, every: int | None = None, auto_exit: bool | None = None) -> dict[str, Any]:
         self._on_live_page("The watch controls the real agent")
         if on:
+            self.halted("start the watch")
             want_exit = self.settings.auto_trade if auto_exit is None else bool(auto_exit)
             if (self.watcher is None or (every and every != self.watcher.every)
                     or want_exit != self.watcher.auto_exit):
@@ -1683,6 +1719,14 @@ class App:
             out["filter_flags"] = {k: v for k, v in flags.items() if v}
         except Exception:  # noqa: BLE001
             out["filter_flags"] = {}
+        try:   # splits, bonuses, large special dividends within 7 days (the GTT pauses over the ex-date)
+            from .corp_actions import book_for as corp_book_for
+            cb = corp_book_for(self.settings)
+            ca = {str(h.get("symbol")): cb.flags(str(h.get("symbol")), price=h.get("price")) for h in out.get("holdings") or []}
+            out["corp_actions"] = {k: v for k, v in ca.items() if v}
+            out["corp_actions_note"] = cb.note()
+        except Exception:  # noqa: BLE001
+            out["corp_actions"], out["corp_actions_note"] = {}, None
         self._my_portfolio, self._my_portfolio_at = out, time.time()
         return out
 
@@ -2187,7 +2231,11 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         def _post(self, app: App, path: str) -> None:
             try:
                 body = self._body()
-                if path == "/api/integration/run":
+                if path in HALT_REFUSED_POSTS:
+                    app.halted(f"use {path}")
+                if path == "/api/kill-switch":
+                    self._json(app.kill_switch(body.get("confirm"), body.get("cancel_gtt") is True))
+                elif path == "/api/integration/run":
                     self._json(app.run_integration(), HTTPStatus.ACCEPTED)
                 elif path == "/api/check":
                     job = app.start_check(force=bool(body.get("force")), dry_run=bool(body.get("dry_run")))

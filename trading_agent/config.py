@@ -33,6 +33,17 @@ def _bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _number(name: str, value: str | None, default: float, lo: float, hi: float) -> float:
+    """A number setting between lo and hi (inclusive); SystemExit with a plain message otherwise."""
+    try:
+        x = float(value) if value not in (None, "") else float(default)
+    except ValueError:
+        raise SystemExit(f"{name} must be a number, e.g. {default:g}") from None
+    if not lo <= x <= hi:
+        raise SystemExit(f"{name} must be between {lo:g} and {hi:g}, got {x:g}")
+    return x
+
+
 MAX_INVESTORS = 10
 DIGEST_WRITERS = ("rules", "auto", "ollama", "claude", "none")
 
@@ -191,6 +202,12 @@ class Settings:
     state_dir: Path = field(default_factory=lambda: Path("state"))
     # Live-order safety (Groww)
     max_slippage_pct: float = 0.5  # limit price = LTP +/- this percent
+    # Opening collar: no buys before this IST time; buy limit = min(the MAX_SLIPPAGE cap, today's opening price + this
+    # many basis points); a buy still unfilled after BUY_TIMEOUT_S seconds is cancelled.
+    open_collar_start: str = "09:17"
+    open_collar_bps: float = 30.0
+    buy_timeout_s: int = 120
+    day_brake_pct: float = 3.5  # live account down this much from the previous close: no new buys for the session
     groww_gtt_stops: bool = False  # keep a GTT stop-loss at Groww per live holding
     groww_ddpi_confirmed: bool = False  # you confirmed DDPI is active in the Groww app (sells need it)
     groww_sell_t1: bool = False  # live sells may include T1 shares (BTST: short-delivery / auction risk)
@@ -330,6 +347,15 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         raise SystemExit("MAX_SLIPPAGE_PCT must be a number (percent), e.g. 0.5") from None
     if not 0 < slippage <= 5:
         raise SystemExit(f"MAX_SLIPPAGE_PCT must be between 0 and 5 percent, got {slippage}")
+    try:
+        collar_start = parse_hhmm(env("OPEN_COLLAR_START") or "09:17")
+    except ValueError:
+        raise SystemExit("OPEN_COLLAR_START must be a time as HH:MM, e.g. 09:17") from None
+    if not "09:15" <= collar_start <= "15:00":
+        raise SystemExit(f"OPEN_COLLAR_START must be between 09:15 and 15:00 IST, got {collar_start}")
+    collar_bps = _number("OPEN_COLLAR_BPS", env("OPEN_COLLAR_BPS"), 30.0, 1.0, 200.0)
+    buy_timeout = int(_number("BUY_TIMEOUT_S", env("BUY_TIMEOUT_S"), 120, 10, 900))
+    day_brake = _number("DAY_BRAKE_PCT", env("DAY_BRAKE_PCT"), 3.5, 0.5, 20.0)
     news_tagger = (env("NEWS_TAGGER") or "auto").lower()
     if news_tagger not in {"auto", "ollama", "claude", "none"}:
         raise SystemExit(f"NEWS_TAGGER must be auto, ollama, claude or none, got {news_tagger!r}")
@@ -391,6 +417,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         notify_webhook_url=env("NOTIFY_WEBHOOK_URL") or None,
         state_dir=Path(env("STATE_DIR") or "state"),
         max_slippage_pct=slippage,
+        open_collar_start=collar_start, open_collar_bps=collar_bps, buy_timeout_s=buy_timeout, day_brake_pct=day_brake,
         groww_gtt_stops=_bool(env("GROWW_GTT_STOPS"), False),
         groww_ddpi_confirmed=_bool(env("GROWW_DDPI_CONFIRMED"), False),
         groww_sell_t1=_bool(env("GROWW_SELL_T1"), False),

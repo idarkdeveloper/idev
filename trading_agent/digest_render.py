@@ -237,6 +237,7 @@ def _flags(i: dict[str, Any]) -> str:
              "results due" if " due " in low or low.endswith("due") else
              "ASM/GSM" if "surveillance list" in low else
              "pledge" if low.startswith("promoter pledge") else
+             "corp. action" if low.startswith("corporate action") else
              "big drop" if low.startswith("fell") else None)
         if f and f not in out:
             out.append(f)

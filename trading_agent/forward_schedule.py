@@ -256,6 +256,10 @@ def run_forward_due(settings: Any, prices: Any, holidays: Any, notifier: Any = N
     from .forward import ForwardTest, format_forward, forward_exists, format_rebuild
     from .screen import load_universe, run_screen
 
+    from . import killswitch
+    halted = killswitch.reason(settings.state_dir, "run the forward test")
+    if halted:
+        return halted
     today = today or datetime.now(IST).date()
     prefix = ""
     if not forward_exists(settings.state_dir, settings.forward_universe):

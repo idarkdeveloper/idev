@@ -107,9 +107,14 @@ class GttStopManager:
     """One GTT stop-loss per live holding, kept in ``state.json`` under ``gtt_stops``."""
 
     def __init__(self, broker: Any, state: State, *, bars_fn: Callable[[str], list] | None = None,
-                 notifier: Any | None = None, enabled: bool = True):
+                 notifier: Any | None = None, enabled: bool = True, corp: Any | None = None,
+                 now_fn: Callable[[], datetime] | None = None):
         self.broker = broker
         self.state = state
+        # corp: a corp_actions.ActionBook. Over a split / bonus / large special dividend the GTT is cancelled the
+        # session before the ex-date and re-created at the adjusted level once Groww shows the new quantity.
+        self.corp = corp
+        self.now_fn = now_fn or (lambda: datetime.now(IST))
         self.bars_fn = bars_fn or (lambda sym: [])
         self.notifier = notifier
         self.enabled = enabled
@@ -117,6 +122,11 @@ class GttStopManager:
     @property
     def stops(self) -> dict[str, dict[str, Any]]:
         return self.state.data.setdefault("gtt_stops", {})
+
+    @property
+    def suspended(self) -> dict[str, dict[str, Any]]:
+        """Holdings whose GTT is paused over a corporate action: {symbol: {ex_date, ratio, expected_qty, ...}}."""
+        return self.state.data.setdefault("gtt_suspended", {})
 
     def _require(self) -> None:
         if not is_live_broker(self.broker):
@@ -140,6 +150,9 @@ class GttStopManager:
 
         for sym in [s for s in self.stops if s not in held]:
             actions.append(self.cancel(sym, reason="holding sold"))
+        for sym in [s for s in self.suspended if s not in held]:
+            self.suspended.pop(sym, None)
+        now = self.now_fn()
 
         for sym, p in held.items():
             qty = int(p.free_qty)
@@ -157,7 +170,36 @@ class GttStopManager:
                 if not rec:
                     actions.append({"symbol": sym, "action": "skip", "reason": "not exchange-traded"})
                 continue
-            high = max(x for x in (rec.get("high_water") if rec else None, price, p.avg_entry_price) if x)
+            adjusted: float | None = None
+            if self.corp is not None:
+                step, info = self.corp.gtt_step(sym, now, qty, self.suspended.get(sym),
+                                                gtt_qty=rec.get("qty") if rec else None, price=price)
+                if step == "suspend" and info is not None:
+                    info["high_water"] = (rec or {}).get("high_water") or max(x for x in (price, p.avg_entry_price) if x)
+                    self.suspended[sym] = info
+                    why = f"corporate action: {info['label']}, ex-date {info['ex_date']}"
+                    if rec and rec.get("smart_order_id"):
+                        actions.append(self.cancel(sym, reason=why))
+                        if sym in self.stops:   # the cancel failed: try again next sync, still "suspend" then
+                            self.suspended.pop(sym, None)
+                    else:
+                        actions.append({"symbol": sym, "action": "suspend", "reason": why})
+                    continue
+                if step == "wait":
+                    actions.append({"symbol": sym, "action": "wait", "reason": f"corporate action {info['label'] if info else ''}: "
+                                    f"waiting for Groww to show {info.get('expected_qty') if info else '?'} shares"})
+                    continue
+                if step == "resume" and info is not None:
+                    self.suspended.pop(sym, None)
+                    base = info.get("high_water")
+                    if base:
+                        adjusted = base / float(info["ratio"]) if info.get("ratio") else base - float(info.get("dividend") or 0)
+                    actions.append({"symbol": sym, "action": "resume", "reason": f"corporate action {info['label']} done",
+                                    "high_water": None if adjusted is None else round(adjusted, 2)})
+            if adjusted is not None:   # after a corporate action Groww's average price may not be adjusted yet
+                high = max(x for x in (adjusted, price) if x)
+            else:
+                high = max(x for x in (rec.get("high_water") if rec else None, price, p.avg_entry_price) if x)
             trigger, limit = self.broker.gtt_stop_prices(sym, self._stop_for(sym, high))
             if rec is None or not rec.get("smart_order_id"):
                 if trigger >= price:
@@ -231,13 +273,25 @@ def gtt_enabled(settings: Any, broker: Any) -> bool:
     return bool(getattr(settings, "groww_gtt_stops", False)) and is_live_broker(broker)
 
 
+def corp_book(settings: Any) -> Any | None:
+    """The corporate-action book for Indian accounts (None elsewhere, or if it cannot be opened)."""
+    if str(getattr(settings, "market", "in") or "in") != "in":
+        return None
+    try:
+        from .corp_actions import book_for
+        return book_for(settings)
+    except Exception as e:  # noqa: BLE001 - never stops the GTT sync
+        log.warning("corporate actions unavailable to the GTT manager: %s", e)
+        return None
+
+
 def sync_gtt_stops(settings: Any, broker: Any, state: State, *, bars_fn: Callable | None = None,
                    notifier: Any | None = None) -> list[dict[str, Any]] | None:
     """Run a GTT sync if (and only if) live orders and GROWW_GTT_STOPS are both on."""
     if not gtt_enabled(settings, broker):
         return None
     try:
-        return GttStopManager(broker, state, bars_fn=bars_fn, notifier=notifier).sync()
+        return GttStopManager(broker, state, bars_fn=bars_fn, notifier=notifier, corp=corp_book(settings)).sync()
     except Exception as e:  # noqa: BLE001
         log.warning("GTT sync failed: %s", e)
         return [{"action": "error", "error": str(e)}]

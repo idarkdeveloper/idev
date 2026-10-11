@@ -626,8 +626,20 @@ class GrowwBroker:
                  ip_cache_s: float = 600.0, clock: Callable[[], float] = time.time,
                  sell_t1: bool = False, ddpi_confirmed: bool = False,
                  alert_fn: Callable[[str, str, str], Any] | None = None,
-                 buy_gate: Callable[[], str | None] | None = None):
+                 buy_gate: Callable[[], str | None] | None = None,
+                 halt_fn: Callable[[str], str | None] | None = None,
+                 collar_bps: float | None = None, open_price_fn: Callable[[str], float | None] | None = None,
+                 buy_timeout_s: float | None = None):
         self.token = access_token
+        # halt_fn(what) returns the refusal while the kill switch (state/HALT) is set: every call that places or
+        # changes an order refuses then; cancelling never does (the switch itself cancels).
+        self.halt_fn = halt_fn
+        # Opening collar (collar.py): with collar_bps set, a buy's limit is capped at today's opening price + that many
+        # basis points (open_price_fn: the fallback when Groww's quote has none); with buy_timeout_s set, a buy still
+        # open that long after placement is cancelled.
+        self.collar_bps = collar_bps
+        self.open_price_fn = open_price_fn
+        self.buy_timeout_s = buy_timeout_s
         # buy_gate() returns a reason while buys must be refused (the pre-market check failed); sells are never gated.
         self.buy_gate = buy_gate
         # Live sells use demat_free_quantity only; T1 shares count only with sell_t1 (BTST risk).
@@ -713,7 +725,12 @@ class GrowwBroker:
     def _include_t1(self) -> bool:
         return self.sell_t1 or not self.live_orders
 
-    def _require_live(self, what: str) -> None:
+    def _require_live(self, what: str, *, cancel: bool = False) -> None:
+        if not cancel and self.halt_fn is not None:
+            halted = self.halt_fn(what)
+            if halted:
+                from .killswitch import Halted
+                raise Halted(halted)
         if not self.live_orders:
             raise LiveOrdersDisabled(
                 f"Groww live orders are disabled; refusing to {what} "
@@ -814,6 +831,23 @@ class GrowwBroker:
                     except Exception:  # noqa: BLE001
                         pass
         return out
+
+    def opening_price(self, symbol: str) -> float | None:
+        """Today's opening price (the pre-open auction's price): Groww's quote, else ``open_price_fn``. Read-only."""
+        from .collar import opening_from_quote
+        symbol = symbol.upper()
+        try:
+            got = opening_from_quote(self._req("GET", "live-data/quote", params={
+                "exchange": self.exchange, "segment": SEGMENT, "trading_symbol": symbol}))
+        except Exception as e:  # noqa: BLE001 - plan without Live Data, outage: the fallback
+            log.info("Groww quote for %s unavailable (%s)", symbol, e)
+            got = None
+        if got is None and self.open_price_fn is not None:
+            try:
+                got = self.open_price_fn(symbol)
+            except Exception:  # noqa: BLE001
+                got = None
+        return got
 
     def latest_price(self, symbol: str) -> float:
         symbol = symbol.upper().replace(f"{self.exchange}_", "")
@@ -927,6 +961,15 @@ class GrowwBroker:
                                  "(pledged, locked and unsettled shares are excluded)")
         tick = self.tick_size(symbol)
         price = limit_price(ltp, side, self.max_slippage_pct, tick) if order_type == "LIMIT" else 0
+        opening = None
+        if side == "buy" and self.collar_bps is not None:
+            if order_type != "LIMIT":
+                raise PermissionError("opening collar: live buys are limit orders only")
+            opening = self.opening_price(symbol)
+            if opening is None:
+                raise PermissionError(f"opening collar: no opening price for {symbol} from Groww or Yahoo; buy refused")
+            from .collar import collar_limit
+            price = collar_limit(price, opening, self.collar_bps, tick)
         ref = reference_id or make_reference_id()
         if not valid_reference_id(ref):
             raise ValueError("order_reference_id must be 8-20 alphanumerics with at most two hyphens")
@@ -957,14 +1000,47 @@ class GrowwBroker:
             "placed_at": datetime.now(IST).isoformat(timespec="seconds"),
             "broker": "groww", "live": True, "exchange": self.exchange, "product": self.product,
         }
+        if opening is not None:
+            order["opening_price"] = opening
+        placed = self.clock()
         if confirm and order["groww_order_id"]:
             order.update(self.confirm_order(order["groww_order_id"]))
+        if confirm and side == "buy" and self.buy_timeout_s and order["groww_order_id"] and order["status"] == "open":
+            order.update(self._cancel_if_unfilled(order["groww_order_id"], qty, placed + float(self.buy_timeout_s)))
         if side == "sell" and order["status"] == "failed" and (
                 is_authorisation_problem(order.get("remark")) or is_authorisation_problem(payload.get("remark"))):
             order["remark"] = AUTH_MESSAGE
             order["authorisation_error"] = True
             self.alert_authorisation(symbol, str(payload.get("remark") or ""))
         return order
+
+    def _cancel_if_unfilled(self, groww_order_id: str, qty: int, deadline: float) -> dict[str, Any]:
+        """Wait for a buy to fill until ``deadline`` (clock seconds); still open then: cancel it. Returns the fields to
+        merge into the order: the final status, what filled, and why it was cancelled."""
+        while self.clock() < deadline:
+            self.sleep(min(5.0, max(0.0, deadline - self.clock())))
+            try:
+                st = self.order_status(groww_order_id)
+            except Exception:  # noqa: BLE001 - keep waiting; the deadline still cancels it
+                continue
+            if classify_status(st.get("order_status")) != "open":
+                return self.confirm_order(groww_order_id, tries=1)
+        out: dict[str, Any] = {}
+        try:
+            self.cancel_order(groww_order_id)
+        except Exception as e:  # noqa: BLE001 - it may have filled meanwhile; the status read below says
+            out["cancel_error"] = f"{type(e).__name__}: {e}"
+        out.update(self.confirm_order(groww_order_id, tries=3))
+        filled = float(out.get("filled_quantity") or 0)
+        out["cancelled_unfilled"] = True
+        out["remark"] = (f"unfilled after {self.buy_timeout_s:g} s: "
+                         + (f"cancel failed ({out['cancel_error']}), filled {filled:g} of {qty}" if out.get("cancel_error")
+                            else f"cancelled (filled {filled:g} of {qty})"))
+        if out.get("cancel_error") and classify_status(out.get("order_status")) == "open":
+            self._alert(f"cancel-{groww_order_id}", "[ORDER STILL OPEN] buy could not be cancelled",
+                        f"Groww order {groww_order_id} was not filled within {self.buy_timeout_s:g} s and the cancel "
+                        f"failed ({out['cancel_error']}). Cancel it in the Groww app.")
+        return out
 
     def _place(self, body: dict[str, Any]) -> dict[str, Any]:
         """POST order/create; on a network failure look the order up by its reference
@@ -996,7 +1072,7 @@ class GrowwBroker:
         return list(rows)
 
     def cancel_order(self, groww_order_id: str) -> dict[str, Any]:
-        self._require_live("cancel an order")
+        self._require_live("cancel an order", cancel=True)
         return self._req("POST", "order/cancel", json={"segment": SEGMENT, "groww_order_id": groww_order_id})
 
     # -- write: GTT smart orders (stop-loss) -----------------------------------
@@ -1044,8 +1120,15 @@ class GrowwBroker:
         return self._req("PUT", f"order-advance/modify/{smart_order_id}", json=body)
 
     def cancel_gtt(self, smart_order_id: str) -> dict[str, Any]:
-        self._require_live("cancel a GTT order")
+        self._require_live("cancel a GTT order", cancel=True)
         return self._req("POST", f"order-advance/cancel/{SEGMENT}/GTT/{smart_order_id}")
+
+    def gtt_list(self) -> list[dict[str, Any]]:
+        """The account's GTT smart orders (read-only)."""
+        payload = self._req("GET", "order-advance/list", params={"smart_order_type": "GTT", "segment": SEGMENT})
+        rows = (payload.get("order_list") or payload.get("orders") or payload.get("data")
+                or payload.get("smart_orders") or []) if isinstance(payload, dict) else payload
+        return [r for r in rows if isinstance(r, dict)]
 
     def get_gtt(self, smart_order_id: str) -> dict[str, Any]:
         return self._req("GET", f"order-advance/status/{SEGMENT}/GTT/internal/{smart_order_id}")

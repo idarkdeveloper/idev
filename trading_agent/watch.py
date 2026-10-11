@@ -15,6 +15,7 @@ import time
 from datetime import datetime, time as dtime, timedelta, timezone, tzinfo
 from typing import Any, Callable
 
+from . import killswitch
 from .config import Settings
 from .groww import GrowwTokenUnavailable, warn_token_block_once
 from .risk import check_stops
@@ -103,6 +104,7 @@ class Watcher:
         self._broker = broker
         self._notifier = notifier
         self._stop = threading.Event()
+        self._halt_logged = False
         self._thread: threading.Thread | None = None
         self.ticks = 0
         self._alive_at = -1e9
@@ -238,6 +240,17 @@ class Watcher:
         prices = self._prices
         bars_fn = (lambda sym: prices.history(sym, "1y")) if prices is not None else (lambda sym: [])
         hits = check_stops(positions, bars_fn)
+        if hits and getattr(self.settings, "market", "in") == "in":   # no stop over a split / bonus ex-date
+            try:
+                from .corp_actions import book_for as corp_book_for
+                book = corp_book_for(self.settings, calendar=self.holidays)
+                suspended = State(self.settings.state_dir / "state.json").data.get("gtt_suspended") or {}
+                practice = getattr(self._broker, "name", "").startswith("local-paper")
+                now = datetime.now(self.tz)
+                hits = [h for h in hits if not book.held_back(h["symbol"], now, suspended.get(h["symbol"]),
+                                                              account="paper_broker" if practice else None)]
+            except Exception as e:  # noqa: BLE001
+                log.warning("corporate-action check for stops unavailable: %s", e)
         if not hits:
             return []
         state_path = self.settings.state_dir / "state.json"
@@ -279,6 +292,21 @@ class Watcher:
                              + (" - paper SOLD" if h.get("order") else "") for h in fresh)
             self._notifier.send(f"[STOP] {len(fresh)} position(s) hit their stop", body)
         return fresh
+
+    def check_day_brake(self, now: datetime) -> dict[str, Any] | None:
+        """Live Groww only: the account down DAY_BRAKE_PCT from the previous close -> no buys for the session."""
+        from .live import is_live_broker
+        if not is_live_broker(self._broker) or self._groww_paused:
+            return None
+        from . import day_brake
+        from .live_alerts import make_alert_fn
+        notifier = self._notifier
+
+        def send(subject: str, body: str) -> None:
+            if notifier is not None:
+                notifier.send(subject, body)
+        return day_brake.evaluate(self.settings, self._broker, day_brake.prev_close_fn(self._prices, now.date()), now,
+                                  calendar=self.holidays, alert=make_alert_fn(self.settings.state_dir, send))
 
     def sync_live(self) -> dict[str, Any] | None:
         """Live Groww only: re-check open orders and keep GTT stop-losses in line."""
@@ -348,6 +376,16 @@ class Watcher:
                 got = filters_for(s, calendar=self.holidays).tick(self._data, now, deadline=deadline)
                 if got:
                     out["indian_filters"] = got
+            if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:   # once a year (and monthly refresh)
+                from .clearing import ClearingHolidays
+                n_days = ClearingHolidays(s.state_dir).tick(self._data, now)
+                if n_days is not None:
+                    out["clearing_holidays"] = n_days
+            if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:   # splits, bonuses: once a trading day
+                from .corp_actions import book_for as corp_book_for
+                n_rows = corp_book_for(s, calendar=self.holidays).tick(self._data, now)
+                if n_rows is not None:
+                    out["corp_actions"] = n_rows
             if time.monotonic() >= deadline:
                 out["budget_used_up"] = True
         except Exception:  # noqa: BLE001 - market data never stops the watch
@@ -399,6 +437,17 @@ class Watcher:
 
     def tick(self, force: bool = False) -> dict[str, Any]:
         now = datetime.now(self.tz)
+        halted = killswitch.reason(getattr(self.settings, "state_dir", None), "run the watch")
+        if halted:   # kill switch: nothing runs (no emails, no data, no Groww); the loop stays alive and idles
+            if not self._halt_logged:
+                log.warning("%s", halted)
+                self._halt_logged = True
+            info_h: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "halted": halted, "skipped": True}
+            self.last_tick = info_h
+            return info_h
+        if self._halt_logged:
+            log.info("HALT released: the watch runs again")
+            self._halt_logged = False
         info: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "in_window": self.market_window_open(now)}
         if self._digest is not None:  # on its own schedule, whatever the market window; returns at once
             try:
@@ -406,6 +455,18 @@ class Watcher:
             except Exception:  # noqa: BLE001 - the emails never stop the watch
                 log.exception("daily email check failed")
         info["market_data"] = self.poll_market_data(now)
+        if getattr(self.settings, "market", "in") == "in":   # from 08:30 on an ex-date: rescale the paper accounts
+            try:
+                from .corp_actions import normalise_all
+                done = normalise_all(self.settings, now)
+                if done:
+                    info["normalised"] = done
+                    if self._notifier is not None:
+                        self._notifier.send(f"[CORPORATE ACTION] {len(done)} practice position(s) adjusted",
+                                            "\n".join(f"{d['symbol']} ({d['account']}): {d['label']}, qty {d['qty_from']:g} -> "
+                                                      f"{d['qty_to']:g}, buy price {d['avg_from']:g} -> {d['avg_to']:g}" for d in done))
+            except Exception:  # noqa: BLE001 - never stops the watch
+                log.exception("corporate-action normaliser failed")
         if self._forward is not None:  # once a trading day after the close; returns at once (its own worker thread)
             try:
                 info["forward"] = self._forward.tick(now)
@@ -441,6 +502,10 @@ class Watcher:
         if alerts_only:
             info["alerts_only"] = "Groww is unavailable: stop and order checks are paused"
             info["new_deals_unanalysed"] = self.poll_deals_blocked()
+        if not alerts_only:
+            braked = self.check_day_brake(now)
+            if braked:
+                info["day_brake"] = braked
         try:
             if self._check_fn is not None and not alerts_only and not self._groww_paused:
                 result = self._check_fn()

@@ -60,7 +60,7 @@
     <div class="ws-navgroup"><span class="ws-navhead">Deals &amp; orders</span><a href="#deals">Disclosed deals</a><a href="#orders">Order history</a><a href="#runs">Recent runs</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Research</span><a href="#lookup">Look up a stock</a><a href="#track-record">Claude's track record</a><a href="#screen">Factor screen</a><a href="#signal-lab">Signal lab</a><a href="#backtest">Backtest</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Tools</span><a href="#size">Position size</a><a href="#costs">Trade cost</a></div>
-    <div class="ws-navgroup"><span class="ws-navhead">Health</span><a href="#health">Data sources</a><a href="#groww-logins">Groww logins</a></div>
+    <div class="ws-navgroup"><span class="ws-navhead">Health</span><a href="#kill-switch">Kill switch</a><a href="#health">Data sources</a><a href="#groww-logins">Groww logins</a></div>
   </nav>
   <div class="ws-content">
   <div class="mode-banner demo" id="demo-banner" hidden><span id="demo-title"></span> <span class="sub" id="demo-sub"></span>
@@ -270,6 +270,19 @@
 
   <!-- ===================== Health ===================== -->
   <section class="ws-panel" id="ws-health" data-ws="health" role="tabpanel" aria-labelledby="wst-health">
+    <section class="card ks-card" data-anchor="kill-switch" aria-labelledby="ks-title">
+      <div class="cardhead"><h2 id="ks-title">Kill switch</h2><span class="sub" id="ks-sub" aria-live="polite">loading…</span></div>
+      <div class="cardbody">
+        <div id="ks-halted" class="ks-halted" role="alert" hidden></div>
+        <div id="ks-form">
+          <p class="sub">Stops all trading at once: writes <code>state/HALT</code>, stops the watch, cancels the agent's open orders at Groww, deletes the saved Groww token and alerts you by Telegram and email. GTT stop-losses stay (they keep protecting your holdings) unless you tick the box. Only <code>python -m trading_agent kill-switch --release</code> on the server undoes it.</p>
+          <div class="ks-row"><label for="ks-word">Type HALT to confirm</label><input id="ks-word" autocomplete="off" spellcheck="false" autocapitalize="characters" inputmode="text"></div>
+          <label class="ks-gtt"><input type="checkbox" id="ks-gtt"> Also cancel the agent's GTT stop-losses</label>
+          <button type="button" class="danger" id="ks-go" disabled>Stop all trading</button>
+        </div>
+        <pre class="ks-report" id="ks-report" hidden></pre>
+      </div>
+    </section>
     <section class="card" data-anchor="health" aria-labelledby="hl-title">
       <div class="cardhead"><h2 id="hl-title">Data health</h2><span class="sub" id="hl-sub" aria-live="polite">loading…</span>
         <button type="button" class="small" id="hl-refresh" style="margin-left:auto">Refresh</button></div>
@@ -453,7 +466,7 @@
   const WS_OF = {overview: "overview", portfolio: "overview", recs: "overview", practice: "overview", forward: "overview",
                  deals: "deals", orders: "deals", runs: "deals",
                  research: "research", lookup: "research", "track-record": "research", screen: "research", "signal-lab": "research", backtest: "research",
-                 tools: "tools", size: "tools", costs: "tools", health: "health", "groww-logins": "health"};
+                 tools: "tools", size: "tools", costs: "tools", health: "health", "groww-logins": "health", "kill-switch": "health"};
   const ANCHORS = Object.keys(WS_OF);
   const store = {get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }, set(k, v){ try { localStorage.setItem(k, v); } catch(e){} }};
   let layout = store.get("liveLayout") === "sections" ? "sections" : "tabs";
@@ -590,9 +603,27 @@
       badge.title = c.failing ? `${c.failing} data source${c.failing === 1 ? "" : "s"} failing` : "";
       $("wst-health").setAttribute("aria-label", c.failing ? `Health, ${c.failing} failing` : "Health");
       paintGrowwLogins(h.groww);
+      paintHalt(h.halt);
     } catch(e){ $("hl-sub").textContent = "Couldn't load: " + e.message; }
   }
   $("hl-refresh").addEventListener("click", loadHealth);
+  // ---- Kill switch: the word HALT must be typed; release only on the server (kill-switch --release) ----
+  function paintHalt(h){
+    $("ks-halted").hidden = !h; $("ks-form").hidden = !!h;
+    $("ks-sub").textContent = h ? "HALTED: nothing trades" : "trading allowed";
+    if(h) $("ks-halted").textContent = h.text || "HALT is set.";
+  }
+  $("ks-word").addEventListener("input", () => { $("ks-go").disabled = $("ks-word").value !== "HALT"; });
+  $("ks-go").addEventListener("click", async () => {
+    if($("ks-word").value !== "HALT") return;
+    $("ks-go").disabled = true;
+    try {
+      const r = await api("/api/kill-switch", {confirm: $("ks-word").value, cancel_gtt: $("ks-gtt").checked});
+      $("ks-report").textContent = r.summary; $("ks-report").hidden = false;
+      $("ks-word").value = ""; toast("Trading halted");
+    } catch(e){ toast(e.message); $("ks-go").disabled = $("ks-word").value !== "HALT"; }
+    loadHealth(); refresh();
+  });
   async function loadIntegration(){
     try { const j = await api("/api/integration"); paintIntegration(j); if(j.running && !integPoll) integPoll = setInterval(loadIntegration, 3000); if(!j.running && integPoll){ clearInterval(integPoll); integPoll = null; } }
     catch(e){ paintIntegration({line: {level: "idle", text: "Integration unavailable", title: e.message}}); }
@@ -724,7 +755,7 @@
 
   function render(keepPositions){   // keepPositions: leave the positions table alone (a stop editor is open in it)
     const s = S.settings, a = S.account, c = S.connections, w = S.watch || {};
-    SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: S.live_orders === true}));
+    SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: S.live_orders === true, halt: S.halt, brake: S.day_brake}));
     $("subtitle").title = s.market === "in" ? "Groww · NSE bulk & block deals" : "Alpaca · QuiverQuant disclosures";
     const inv = investorsOf(s);
     $("investor").textContent = inv.length === 1 ? inv[0] : `${inv.length} investors`;
@@ -1094,6 +1125,7 @@
       const until = m.blocked_until ? new Date(m.blocked_until).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false}) : null;
       $("mp-sub").textContent = `Saved holdings from ${new Date(m.saved_at).toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false})} IST${m.age_trading_days > 1 ? ` — ${m.age_trading_days} trading days old; buys or sells since then are missing` : ""} · ${until ? "Groww unavailable until " + until + " IST" : m.reason} · prices from Yahoo (delayed)${m.source_note ? " · " + m.source_note : ""}`;
     } else $("mp-sub").textContent = `${m.holdings.length} holdings · read-only from Groww · ${when(m.at)}`;
+    if(m.corp_actions_note) $("mp-sub").textContent += " · " + m.corp_actions_note;
     const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
     stats.innerHTML = stat("Invested", inr(m.invested), "what you paid, all holdings")
       + stat("Value now", inr(m.value), m.unpriced.length ? `excludes ${m.unpriced.map(esc).join(", ")} (no market price)` : "at current prices")
@@ -1102,7 +1134,7 @@
     const total = m.holdings.reduce((t, h) => t + (h.value || 0), 0);
     const sorted = m.holdings.slice().sort((x, y) => (y.value || 0) - (x.value || 0));   // biggest first, as on Groww
     if(!keepRows) rows.innerHTML = sorted.length ? sorted.map(h => { const dm = dayMove(h); return `<tr data-open-stock="${esc(h.symbol)}">
-        <td class="stock-cell"><div class="sym-line"><a href="#" data-lookup="${esc(h.symbol)}" class="sym" title="${esc(h.name || h.symbol)}">${esc(h.symbol)}</a>${h.kind === "bond" ? ` <span class="pill warn mini" title="bond${h.maturity ? " maturing " + esc(h.maturity) : ""}">Bond</span>` : ""}${h.exchange === "BSE" ? ' <span class="pill mini">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill mini" title="NSE daily price band">Band ${esc(MP.bands[h.symbol])}</span>` : ""}${((MP.filter_flags || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Review flag from the Indian-market filters; the agent never sells on it">${esc(f)}</span>`).join("")}</div>
+        <td class="stock-cell"><div class="sym-line"><a href="#" data-lookup="${esc(h.symbol)}" class="sym" title="${esc(h.name || h.symbol)}">${esc(h.symbol)}</a>${h.kind === "bond" ? ` <span class="pill warn mini" title="bond${h.maturity ? " maturing " + esc(h.maturity) : ""}">Bond</span>` : ""}${h.exchange === "BSE" ? ' <span class="pill mini">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill mini" title="NSE daily price band">Band ${esc(MP.bands[h.symbol])}</span>` : ""}${((MP.filter_flags || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Review flag from the Indian-market filters; the agent never sells on it">${esc(f)}</span>`).join("")}${((MP.corp_actions || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Corporate action within 7 days: the GTT stop-loss is paused over the ex-date and re-set at the adjusted level">${esc(f)}</span>`).join("")}</div>
           <div class="sub l2">${esc(h.qty)} × ${inr(h.avg_price, 2)}${total && h.value != null ? ` · ${(h.value / total * 100).toFixed(1)}%` : ""}${h.sellable_qty < h.qty ? ` · ${h.sellable_qty} free to sell` : ""}</div>${h.price != null && MODE === "demo" ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
         <td class="spark-col">${sparkSvg(h.symbol)}</td>
         <td class="num nowrap">${h.price != null ? inr(h.price, 2) : '<span class="sub">no price</span>'}</td>

@@ -317,6 +317,8 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
                              lambda d: d.get("n") if isinstance(d.get("n"), int) else None, nse_off))
     rows.append(_bands(sd, now, cal, nse_off))
     rows.append(_filters_row(settings, sd, now, cal, nse_off))
+    rows.append(_corp_row(settings, sd, now, cal, runs, nse_off))
+    rows.append(_clearing_row(settings, sd, now, runs, nse_off))
 
     # news
     ok, n, err, err_at = _run(runs, "news")
@@ -334,7 +336,10 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
 
     rows.sort(key=lambda r: (STATUS_ORDER[r["status"]], r["name"]))
     counts = {k: sum(1 for r in rows if r["status"] == k) for k in STATUS_ORDER}
+    from . import killswitch
+    halt = killswitch.status(sd)
     return {"at": now.isoformat(timespec="seconds"), "sources": rows, "counts": counts, "groww": groww,
+            "halt": None if halt is None else {**halt, "text": killswitch.reason(sd)},
             "note": "Read from what the agent records on this machine; nothing here asks a data source again."}
 
 
@@ -363,6 +368,41 @@ def _bands(sd: Path, now: datetime, cal: Any, nse_off: str | None) -> dict[str, 
                 error="every try today failed" if spent else None, error_at=now if spent else None, now=now,
                 schedule="once each trading day from the open; retries 5, 15 then 60 min apart, 6 a day",
                 detail=f"list of {_day_text(fetched)}" if fetched else "no list stored yet")
+
+
+def _clearing_row(settings: Any, sd: Path, now: datetime, runs: dict[str, Any], nse_off: str | None) -> dict[str, Any]:
+    """cache/nse_clearing_holidays.json: the year's clearing holidays (T-1 sale proceeds are not counted on them)."""
+    data = _dict(_read_json(sd / "cache" / "nse_clearing_holidays.json"))
+    ok, _n, err, err_at = _run(runs, "clearing")
+    have = data.get("year") == now.year and isinstance(data.get("days"), dict)
+    return _row("clearing", "NSE clearing holidays", [AGENT, DASH],
+                configured=str(getattr(settings, "market", "in") or "in") == "in",
+                last_ok=ok or _parse(data.get("fetched_at")), rows=len(data["days"]) if have else None, late=not have,
+                due_text=f"no list for {now.year} yet", error=err, error_at=err_at, failing=bool(nse_off), backoff=nse_off,
+                schedule="once a year through the NSE client (again after 30 days); retried hourly after a failure",
+                detail="until the list is known every day counts as a clearing holiday: the previous day's sale "
+                       "proceeds are not used for buys", now=now)
+
+
+def _corp_row(settings: Any, sd: Path, now: datetime, cal: Any, runs: dict[str, Any], nse_off: str | None) -> dict[str, Any]:
+    """corporate_actions.json: NSE's corporate actions, 30 days ahead, once each trading day."""
+    data = _dict(_read_json(sd / "corporate_actions.json"))
+    india = str(getattr(settings, "market", "in") or "in") == "in"
+    ok, _n, err, err_at = _run(runs, "corp_actions")
+    due = latest_at(now, dtime(9, 0), cal).date()
+    try:
+        listed = date.fromisoformat(str(data.get("date")))
+    except ValueError:
+        listed = None
+    rows = data.get("rows")
+    return _row("corp_actions", "Corporate actions (NSE): splits, bonuses, special dividends", [AGENT, MORNING, DASH],
+                configured=india, last_ok=ok or _parse(data.get("fetched_at")),
+                rows=len(rows) if isinstance(rows, list) else None, late=listed is None or listed < due,
+                due_text=f"no list for {_day_text(due)} yet (expected by 09:00)", error=err, error_at=err_at,
+                failing=bool(nse_off), backoff=nse_off,
+                schedule="once each trading day, 30 days ahead, through the NSE client; retries 5, 15 then 60 min apart",
+                detail="missing or older than 2 trading days: holdings are flagged \"corporate actions unknown\" and GTT "
+                       "stops are left as they are (never cancelled blindly)", now=now)
 
 
 def _filters_row(settings: Any, sd: Path, now: datetime, cal: Any, nse_off: str | None) -> dict[str, Any]:
