@@ -52,9 +52,10 @@ def test_global_markets_in_the_evening_is_the_morning_table(mail):
     glob = section(mail["text"], "GLOBAL MARKETS")
     head = next(x for x in glob.split("\n") if x.strip().startswith("Index"))
     assert head.split() == ["Index", "Close", "1d", "5d", "20d", "Trend"]
-    html = mail["html"]
-    g = html[html.index("Global markets"):html.index("Commodities corner")]
-    assert all(f">{h}<" in g for h in ("Index", "1d", "5d", "20d", "Trend")) and "<table" in g
+    html = mail["html"]   # the close report: global markets and commodities in one table (Last, 1d coloured, 5d muted)
+    g = html[html.index(">Global and commodities<"):html.index("never a forecast")]
+    assert all(f">{h}<" in g for h in ("Last", "1d", "5d")) and ">S&amp;P 500<" in g and ">Gold<" in g
+    assert "In the news: Nikkei slips as exporters fall (ET)" in g
 
 
 def test_portfolio_columns_are_named_and_value_is_quantity_times_price(s, mail):  # noqa: F811
@@ -66,9 +67,9 @@ def test_portfolio_columns_are_named_and_value_is_quantity_times_price(s, mail):
     row = next(x for x in port.split("\n") if x.strip().startswith("AAA"))
     assert "₹1,100" in row                                   # 10 shares x ₹110
     h = mail["html"]
-    start = h.index(">Your Groww portfolio<")
+    start = h.index(">Your Groww portfolio today<")
     phone = h[start:h.index(">Practice account<", start)]
-    assert re.findall(r"<th[^>]*>([^<]*)</th>", phone) == ["Stock", "Price", "Today", "P&amp;L %"]
+    assert re.findall(r"<th[^>]*>([^<]*)</th>", phone) == ["Stock", "Today", "Total"]          # the close report's columns
     s.digest_writer = "rules"
     stale = build_digest("evening", evening_ctx(s, now=lambda: SAT))
     port = section(stale["text"], "YOUR GROWW PORTFOLIO")
@@ -89,9 +90,9 @@ def test_levels_and_momentum_matrix_replaces_the_loose_lines(mail):
     assert nifty.count("not a forecast") == 1 and nifty.index("Time above 21 EMA") < nifty.index("not a forecast")
     for gone in ("Watch levels:", "Pivot points from", "Daily candle:", "Daily RSI(14) is", "4-hour candles:"):
         assert gone not in text
-    html = mail["html"]
-    m = html[html.rindex("<table", 0, html.index(">Metric<")):html.index("Global markets")]
-    assert m.count("<th") == 2 and "Trend strength" in m          # phone: two columns, the reading under the value
+    html = mail["html"]   # the close report shows the levels and momentum as a 2×2 grid between the two charts
+    grid = html[html.index('src="cid:nifty15"'):html.index('src="cid:nifty4h"')]
+    assert all(f">{x}<" in grid for x in ("Watch levels", "Pivots", "ADX (14)", "RSI (14)")) and ">Metric<" not in html
 
 
 def test_matrix_says_when_daily_and_four_hour_disagree(monkeypatch):
@@ -109,7 +110,7 @@ def test_the_header_has_one_subtitle_and_no_trading_today_appears_once(s):  # no
     lines = text.split("\n")
     assert lines[0].startswith("Close: your portfolio") and lines[2] == "Snapshot: Fri 9 Oct close (no trading today)"
     assert text.lower().count("no trading today") == 1 and "figures are from the last close" not in text
-    assert mail["html"].count("Snapshot: Fri 9 Oct close") == 1
+    assert mail["html"].count("No trading today — figures from the Fri 9 Oct close.") == 1 and mail["html"].lower().count("no trading today") == 1
     live = build_digest("evening", evening_ctx(s))["text"]
     assert "Snapshot:" not in live
 
