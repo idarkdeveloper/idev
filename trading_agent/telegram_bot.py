@@ -49,15 +49,29 @@ POLL_TIMEOUT_S = 25
 LIMIT = 4000               # Telegram allows 4096 characters per message
 BACKOFF_S = (5, 15, 60)
 
-HELP = ("<b>Commands</b> (practice account only; nothing here places a live order)\n"
-        "/lookup SYMBOL: price, momentum, 200-day average, stop, news and what it means\n"
-        "/size SYMBOL [risk% max%]: shares, cost, stop and charges (practice account)\n"
+HELP = ("<b>Commands</b> (practice account only; nothing here places a live order). "
+        "Use the company's name or its NSE code: <i>tata steel</i> or <i>TATASTEEL</i>.\n"
+        "/lookup NAME: price, momentum, 200-day average, stop, news and what it means\n"
+        "/size NAME [risk% max%]: shares, cost, stop and charges (practice account)\n"
         "/portfolio: the practice account and your Groww holdings\n"
         "/stops: practice stops and the GTT stop-losses at Groww\n"
         "/brief: the morning brief now\n"
         "/status: live orders, kill switch, day brake\n"
-        "/buy SYMBOL QTY or /buy SYMBOL ₹AMOUNT: a PRACTICE buy, after you confirm\n"
-        "/sell SYMBOL QTY: a PRACTICE sell, after you confirm")
+        "/buy NAME QTY or /buy NAME ₹AMOUNT: a PRACTICE buy, after you confirm\n"
+        "/sell NAME QTY: a PRACTICE sell, after you confirm")
+
+# shown by Telegram when you type "/" (setMyCommands, sent when the poller starts)
+COMMANDS = [{"command": "lookup", "description": "Look up a company: price, trend, stop, news (name or code)"},
+            {"command": "size", "description": "Position size: NAME [risk% max%]"},
+            {"command": "buy", "description": "PRACTICE buy: NAME QTY or NAME ₹AMOUNT (you confirm)"},
+            {"command": "sell", "description": "PRACTICE sell: NAME QTY (you confirm)"},
+            {"command": "portfolio", "description": "Practice account and Groww holdings"},
+            {"command": "stops", "description": "Practice stops and GTT stop-losses"},
+            {"command": "brief", "description": "The morning brief now"},
+            {"command": "status", "description": "Live orders, kill switch, day brake"},
+            {"command": "help", "description": "What the bot can do"}]
+NAMED = ("lookup", "size", "buy", "sell")   # commands that take a company name or code
+MAX_CHOICES = 5
 
 
 def e(v: Any) -> str:
@@ -80,6 +94,16 @@ def inr(v: Any, d: int = 0) -> str:
 
 def pct(v: Any, d: int = 1) -> str:
     return "n/a" if v is None else f"{'+' if v >= 0 else ''}{v * 100:.{d}f}%"
+
+
+def short_name(name: str | None) -> str:
+    return re.sub(r"\s+(Limited|Ltd\.?)$", "", str(name or "").strip(), flags=re.I)
+
+
+def label(symbol: str, name: str | None) -> str:
+    """'Tata Steel (TATASTEEL)', escaped; just the code when the name is unknown."""
+    n = short_name(name)
+    return f"{e(n)} ({e(symbol)})" if n and n.upper() != symbol.upper() else e(symbol)
 
 
 class TelegramError(RuntimeError):
@@ -137,7 +161,8 @@ class CommandBot:
         self.clock = clock
         self.chat = str(settings.telegram_chat_id or "").strip()
         self.path = Path(settings.state_dir) / STATE_FILE
-        self.pending: dict[str, dict[str, Any]] = {}
+        self.pending: dict[str, dict[str, Any]] = {}   # order confirmations, by nonce
+        self.picks: dict[str, dict[str, Any]] = {}     # "Did you mean…" choices, by nonce
         self._rate: deque[float] = deque()
         self._rate_warned = 0.0
 
@@ -200,17 +225,129 @@ class CommandBot:
         parts = text.split()
         cmd = parts[0][1:].split("@", 1)[0].lower()
         args = parts[1:]
-        fn = {"help": self.cmd_help, "start": self.cmd_help, "status": self.cmd_status, "lookup": self.cmd_lookup,
-              "size": self.cmd_size, "portfolio": self.cmd_portfolio, "brief": self.cmd_brief, "stops": self.cmd_stops,
-              "buy": lambda a: self.cmd_order("buy", a), "sell": lambda a: self.cmd_order("sell", a)}.get(cmd)
-        if fn is None:
+        plain = {"help": self.cmd_help, "start": self.cmd_help, "status": self.cmd_status,
+                 "portfolio": self.cmd_portfolio, "brief": self.cmd_brief, "stops": self.cmd_stops}
+        if cmd not in plain and cmd not in NAMED:
             self.reply(f"Unknown command /{e(cmd)}. /help lists them.")
             return
+        self._guard(cmd, lambda: plain[cmd](args) if cmd in plain else self._named(cmd, args))
+
+    def _guard(self, cmd: str, fn: Callable[[], Any]) -> None:
         try:
-            fn(args)
+            fn()
         except Exception as ex:  # noqa: BLE001 - every command answers, even when it fails
             log.warning("telegram /%s failed: %s", cmd, redact(ex, self.api.token))
             self.reply(f"/{e(cmd)} failed: {e(type(ex).__name__)}: {e(redact(ex, self.api.token))[:300]}")
+
+    # -- company names -----------------------------------------------------------------------------------
+    USAGE = {"lookup": "/lookup NAME (a company name or NSE code)",
+             "size": "/size NAME [risk% max%], e.g. /size tata steel 1 10",
+             "buy": "/buy NAME QTY or /buy NAME ₹AMOUNT (practice account only)",
+             "sell": "/sell NAME QTY (practice account only)"}
+
+    def _split(self, cmd: str, args: list[str]) -> tuple[str, list[str]] | str:
+        """(the company words, the numbers after them), or the usage text. Names of any length: the numbers are
+        read from the end (/size: up to two; /buy and /sell: the last word)."""
+        args = list(args)
+        if cmd == "lookup":
+            rest: list[str] = []
+        elif cmd == "size":
+            rest = []
+            while args and len(rest) < 2 and re.fullmatch(r"\d+(?:\.\d+)?%?", args[-1]):
+                rest.insert(0, args.pop())
+        else:
+            if len(args) < 2:
+                return self.USAGE[cmd]
+            rest = [args.pop()]
+        if not args:
+            return self.USAGE[cmd]
+        return " ".join(args), rest
+
+    def _names(self) -> Any | None:
+        try:
+            return getattr(self.practice, "names", None)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _table(self) -> dict[str, str]:
+        n = self._names()
+        try:
+            return n._nse_names() if n is not None else {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def name_of(self, symbol: str) -> str | None:
+        return self._table().get(symbol.upper())
+
+    def _named(self, cmd: str, args: list[str]) -> None:
+        got = self._split(cmd, args)
+        if isinstance(got, str):
+            self.reply(f"Usage: {e(got)}")
+            return
+        text, rest = got
+        if cmd in ("buy", "sell") and not re.fullmatch(r"(?:₹|rs\.?|inr)?\d+(?:\.\d+)?", rest[-1].replace(",", ""), re.I):
+            self.reply(f"Usage: {e(self.USAGE[cmd])}")   # a bad quantity is caught before any company is chosen
+            return
+        target = self._pick(cmd, text, rest)
+        if target is not None:
+            self._run(cmd, rest, target)
+
+    def _pick(self, cmd: str, text: str, rest: list[str]) -> tuple[str, str | None] | None:
+        """The one company ``text`` means, or None after asking which (several match) or suggesting names (none)."""
+        table = self._table()
+        names = self._names()
+        raw = text.strip()
+        if not table or names is None:   # no name list (offline): the dashboard's own resolve
+            return self.practice.resolve(raw)
+        if raw.upper() in table:
+            return raw.upper(), table[raw.upper()]
+        hits = names.search(raw, limit=8)
+        if hits:
+            top = hits[0]["score"]
+            if top >= 60 and sum(1 for h in hits if h["score"] == top) == 1:
+                return hits[0]["symbol"], hits[0]["name"]
+            self._offer(cmd, rest, [(h["symbol"], h["name"]) for h in hits[:MAX_CHOICES]],
+                        f"“{e(raw)}” matches several companies. Which one?")
+            return None
+        close = self._closest(raw, table)
+        if close:
+            self._offer(cmd, rest, close, f"No company is called “{e(raw)}”. Did you mean:")
+        else:
+            self.reply(f"No NSE company matches “{e(raw)}”. Try the company's name or its NSE code.")
+        return None
+
+    @staticmethod
+    def _closest(raw: str, table: dict[str, str]) -> list[tuple[str, str]]:
+        import difflib
+
+        from .instruments import CompanyNames
+        q = CompanyNames._norm(raw)
+        by_name: dict[str, str] = {}
+        for sym, name in table.items():
+            by_name.setdefault(CompanyNames._norm(name), sym)
+        out: list[tuple[str, str]] = []
+        for n in difflib.get_close_matches(q, list(by_name), n=MAX_CHOICES, cutoff=0.6):
+            out.append((by_name[n], table[by_name[n]]))
+        for sym in difflib.get_close_matches(raw.upper().replace(" ", ""), list(table), n=MAX_CHOICES, cutoff=0.75):
+            if all(sym != o[0] for o in out):
+                out.append((sym, table[sym]))
+        return out[:MAX_CHOICES]
+
+    def _offer(self, cmd: str, rest: list[str], choices: list[tuple[str, str]], text: str) -> None:
+        nonce = secrets.token_urlsafe(9)
+        self.picks = {k: v for k, v in self.picks.items() if self.clock() - v["at"] < CONFIRM_TTL_S}
+        self.picks[nonce] = {"chat": self.chat, "cmd": cmd, "rest": rest, "choices": choices, "at": self.clock()}
+        rows = [[{"text": f"{short_name(n)} ({sym})"[:60], "callback_data": f"pk:{nonce}:{i}"}]
+                for i, (sym, n) in enumerate(choices)]
+        self.reply(f"{text}\n(for /{e(cmd)}{(' ' + e(' '.join(rest))) if rest else ''})", {"inline_keyboard": rows})
+
+    def _run(self, cmd: str, rest: list[str], target: tuple[str, str | None]) -> None:
+        if cmd == "lookup":
+            self.cmd_lookup(target)
+        elif cmd == "size":
+            self.cmd_size(target, rest)
+        else:
+            self.cmd_order(cmd, target, rest)
 
     def _allow(self) -> bool:
         now = self.clock()
@@ -244,19 +381,11 @@ class CommandBot:
                  e(day_brake.reason(s.state_dir) or "Day brake: off.")]
         self.reply("\n".join(lines))
 
-    def _resolve(self, args: list[str], usage: str) -> tuple[str, str | None] | None:
-        if not args:
-            self.reply(f"Usage: {e(usage)}")
-            return None
-        return self.practice.resolve(" ".join(args))
-
-    def cmd_lookup(self, args: list[str]) -> None:
+    def cmd_lookup(self, target: tuple[str, str | None]) -> None:
         from .takeaway import lookup_takeaway
-        got = self._resolve(args, "/lookup SYMBOL or company name")
-        if got is None:
-            return
         app = self.practice
-        r = app.lookup(got[0])
+        r = app.lookup(target[0])
+        r["name"] = r.get("name") or target[1]
         try:
             r["news"] = app.news_for_ticker(r["ticker"])
         except Exception:  # noqa: BLE001
@@ -264,7 +393,7 @@ class CommandBot:
         m = r.get("momentum") or {}
         hist = r.get("history") or []
         ma200 = next((h.get("ma200") for h in reversed(hist) if h.get("ma200")), None)
-        lines = [f"<b>{e(r['ticker'])}</b>{(' · ' + e(r['name'])) if r.get('name') else ''}",
+        lines = [f"<b>{label(r['ticker'], r.get('name'))}</b>",
                  f"Price {inr(r.get('price'), 2)}" if r.get("price") else "Price unavailable"]
         if m.get("error"):
             lines.append(f"Momentum unavailable: {e(m['error'])}")
@@ -293,27 +422,20 @@ class CommandBot:
             lines.append("<b>What this means</b>\n" + e(note))
         self.reply("\n".join(lines))
 
-    def cmd_size(self, args: list[str]) -> None:
-        if not args:
-            self.reply("Usage: /size SYMBOL [risk% max%]")
-            return
-        nums = [a.rstrip("%") for a in args[1:3]]
-        try:
-            risk = float(nums[0]) if nums else 1.0
-            cap = float(nums[1]) if len(nums) > 1 else 10.0
-        except ValueError:
-            self.reply("Usage: /size SYMBOL [risk% max%], e.g. /size TCS 1 10")
-            return
+    def cmd_size(self, target: tuple[str, str | None], rest: list[str]) -> None:
+        nums = [a.rstrip("%") for a in rest[:2]]
+        risk = float(nums[0]) if nums else 1.0
+        cap = float(nums[1]) if len(nums) > 1 else 10.0
         if not (0 < risk <= 5 and 0 < cap <= 100):
             self.reply("Risk must be above 0 and at most 5%; the cap above 0 and at most 100%.")
             return
-        ticker, _ = self.practice.resolve(args[0])
+        ticker, name = target
         q = self.practice.size_quote(ticker, risk_pct=risk, max_pct=cap)
         if not q.get("qty"):
-            self.reply(f"{e(ticker)}: no position size ({e(q.get('reason') or 'too small for one share')}).")
+            self.reply(f"{label(ticker, name)}: no position size ({e(q.get('reason') or 'too small for one share')}).")
             return
         rt = q.get("round_trip_cost") or {}
-        lines = [f"<b>{e(q['ticker'])}</b> · practice account {inr(q.get('equity'))}",
+        lines = [f"<b>{label(ticker, name or q.get('name'))}</b> · practice account {inr(q.get('equity'))}",
                  f"{q['qty']} shares × {inr(q['price'], 2)} = {inr(q['notional'])} (risk {risk:g}%, cap {cap:g}%)",
                  f"Stop {inr(q['stop'], 2)} ({e(q.get('basis') or '')})"]
         if rt:
@@ -334,7 +456,8 @@ class CommandBot:
         for p in sorted(pb.positions(), key=lambda p: p.symbol)[:25]:
             px = p.current_price
             pl = (px / p.avg_entry_price - 1) if px and p.avg_entry_price else None
-            lines.append(f"• {e(p.symbol)} {p.qty:g} @ {inr(p.avg_entry_price, 2)} → {inr(px, 2) if px else 'n/a'} ({pct(pl)})")
+            lines.append(f"• {label(p.symbol, self.name_of(p.symbol))} {p.qty:g} @ {inr(p.avg_entry_price, 2)} → "
+                         f"{inr(px, 2) if px else 'n/a'} ({pct(pl)})")
         g = self._groww_portfolio()
         if g.get("linked") is False:
             lines.append("Groww: not linked.")
@@ -342,7 +465,9 @@ class CommandBot:
             when = g.get("reason") if g.get("source") == "saved" else "live"
             lines.append(f"<b>Groww</b> ({e(when)}) · value {inr(g.get('value'))} · P/L {inr(g.get('pl'))} ({pct(g.get('pl_pct'))})")
             for h in sorted(g["holdings"], key=lambda h: -(h.get("value") or 0))[:15]:
-                lines.append(f"• {e(h.get('symbol'))} {h.get('qty')} @ {inr(h.get('avg_price'), 2)} → {inr(h.get('price'), 2) if h.get('price') else 'n/a'}")
+                sym = str(h.get("symbol") or "")
+                lines.append(f"• {label(sym, h.get('name') or self.name_of(sym))} {h.get('qty')} @ {inr(h.get('avg_price'), 2)} → "
+                             f"{inr(h.get('price'), 2) if h.get('price') else 'n/a'}")
         elif g.get("error"):
             lines.append(f"Groww: unavailable ({e(str(g['error'])[:200])}).")
         self.reply("\n".join(lines))
@@ -360,19 +485,20 @@ class CommandBot:
                 except Exception:  # noqa: BLE001
                     bars = []
             st = position_stop(p, bars)
+            who = label(p.symbol, self.name_of(p.symbol))
             if st["level"] is None:
-                lines.append(f"• {e(p.symbol)}: no stop-loss")
+                lines.append(f"• {who}: no stop-loss")
             elif p.current_price:
-                lines.append(f"• {e(p.symbol)}: {e(st['label'])} stop {inr(st['level'], 2)}, "
+                lines.append(f"• {who}: {e(st['label'])} stop {inr(st['level'], 2)}, "
                              f"{(1 - st['level'] / p.current_price) * 100:.1f}% below {inr(p.current_price, 2)}")
             else:
-                lines.append(f"• {e(p.symbol)}: {e(st['label'])} stop {inr(st['level'], 2)}")
+                lines.append(f"• {who}: {e(st['label'])} stop {inr(st['level'], 2)}")
         if len(lines) == 1:
             lines.append("No practice positions.")
         gtt = State(Path(self.settings.state_dir) / "state.json").data.get("gtt_stops") or {}
         if gtt:
             lines.append("<b>GTT stop-losses at Groww</b>")
-            lines += [f"• {e(sym)} qty {e(r.get('qty'))} trigger {inr(r.get('trigger'), 2)} ({e(r.get('status') or '')})"
+            lines += [f"• {label(sym, self.name_of(sym))} qty {e(r.get('qty'))} trigger {inr(r.get('trigger'), 2)} ({e(r.get('status') or '')})"
                       for sym, r in sorted(gtt.items())[:25]]
         self.reply("\n".join(lines))
 
@@ -384,21 +510,17 @@ class CommandBot:
         self.reply(b["html"], b.get("button"))
 
     # -- practice orders -------------------------------------------------------------------------------
-    def cmd_order(self, side: str, args: list[str]) -> None:
+    def cmd_order(self, side: str, target: tuple[str, str | None], rest: list[str]) -> None:
         from . import killswitch
-        usage = "/buy SYMBOL QTY or /buy SYMBOL ₹AMOUNT" if side == "buy" else "/sell SYMBOL QTY"
-        if len(args) < 2:
-            self.reply(f"Usage: {e(usage)} (practice account only)")
-            return
         halted = killswitch.reason(self.settings.state_dir, f"place a practice {side}")
         if halted:
             self.reply(e(halted))
             return
-        raw = args[-1].replace(",", "")
+        raw = rest[-1].replace(",", "") if rest else ""
         amount = qty = None
         m = re.fullmatch(r"(?:₹|rs\.?|inr)?(\d+(?:\.\d+)?)", raw, re.I)
         if m is None:
-            self.reply(f"Usage: {e(usage)}")
+            self.reply(f"Usage: {e(self.USAGE[side])}")
             return
         if raw[0].isdigit():
             qty = float(m.group(1))
@@ -408,21 +530,22 @@ class CommandBot:
         elif side == "buy":
             amount = float(m.group(1))
         else:
-            self.reply("Sell a number of shares: /sell SYMBOL QTY.")
+            self.reply("Sell a number of shares: /sell NAME QTY.")
             return
-        ticker, name = self.practice.resolve(" ".join(args[:-1]))
+        ticker, name = target
+        who = label(ticker, name)
         try:
             price = float(self.practice.practice_broker.latest_price(ticker))
         except Exception as ex:  # noqa: BLE001
-            self.reply(f"{e(ticker)}: no price ({e(type(ex).__name__)}). Nothing placed.")
+            self.reply(f"{who}: no price ({e(type(ex).__name__)}). Nothing placed.")
             return
         est_qty = qty if qty is not None else float(int((amount or 0) // price))
         nonce = secrets.token_urlsafe(9)
         self.pending = {k: v for k, v in self.pending.items() if self.clock() - v["at"] < CONFIRM_TTL_S}
-        self.pending[nonce] = {"chat": self.chat, "side": side, "symbol": ticker, "qty": qty, "amount": amount,
-                               "at": self.clock()}
-        what = f"{int(est_qty)} × {e(ticker)}{(' (' + e(name) + ')') if name else ''}"
-        text = (f"<b>PRACTICE {side.upper()}</b> {what} at about {inr(price, 2)} = {inr(est_qty * price)} plus charges.\n"
+        self.pending[nonce] = {"chat": self.chat, "side": side, "symbol": ticker, "name": name, "qty": qty,
+                               "amount": amount, "at": self.clock()}
+        text = (f"<b>PRACTICE {side.upper()}</b> {int(est_qty)} × {who} at about {inr(price, 2)} = {inr(est_qty * price)} "
+                f"plus charges.\nCompany: <b>{who}</b>. Is that the one you meant?\n"
                 "Practice money only. Confirm within 2 minutes.")
         self.reply(text, {"inline_keyboard": [[{"text": "Confirm", "callback_data": f"ok:{nonce}"},
                                                {"text": "Cancel", "callback_data": f"no:{nonce}"}]]})
@@ -437,6 +560,9 @@ class CommandBot:
             return
         data = str(cq.get("data") or "")
         verb, _, nonce = data.partition(":")
+        if verb == "pk":
+            self._picked(cid, msg, nonce)
+            return
         p = self.pending.pop(nonce, None)   # one-time: a second tap finds nothing
         if p is None or p.get("chat") != chat:
             self._answer(cid, "Nothing to confirm (already done, cancelled or unknown).")
@@ -444,14 +570,33 @@ class CommandBot:
         self._clear_buttons(msg)
         if self.clock() - p["at"] >= CONFIRM_TTL_S:
             self._answer(cid, "Expired: nothing placed.")
-            self.reply(f"Expired: the practice {e(p['side'])} of {e(p['symbol'])} was not placed.")
+            self.reply(f"Expired: the practice {e(p['side'])} of {label(p['symbol'], p.get('name'))} was not placed.")
             return
         if verb != "ok":
             self._answer(cid, "Cancelled.")
-            self.reply(f"Cancelled: practice {e(p['side'])} of {e(p['symbol'])}.")
+            self.reply(f"Cancelled: practice {e(p['side'])} of {label(p['symbol'], p.get('name'))}.")
             return
         self._answer(cid, "Placing the practice order…")
         self.reply(self.place(p))
+
+    def _picked(self, cid: Any, msg: dict[str, Any], data: str) -> None:
+        """A "Did you mean…" button: run the same command for the chosen company (one-time, 2 minutes)."""
+        nonce, _, idx = data.partition(":")
+        p = self.picks.pop(nonce, None)
+        if p is None or p.get("chat") != self.chat:
+            self._answer(cid, "Nothing to choose (already chosen or unknown).")
+            return
+        self._clear_buttons(msg)
+        if self.clock() - p["at"] >= CONFIRM_TTL_S:
+            self._answer(cid, "Expired: send the command again.")
+            return
+        try:
+            sym, name = p["choices"][int(idx)]
+        except (ValueError, IndexError):
+            self._answer(cid, "Unknown choice.")
+            return
+        self._answer(cid, f"{short_name(name)} ({sym})"[:60])
+        self._guard(p["cmd"], lambda: self._run(p["cmd"], p["rest"], (sym, name)))
 
     def place(self, p: dict[str, Any]) -> str:
         """The confirmed order, through the dashboard's practice path. Returns the reply text."""
@@ -466,8 +611,8 @@ class CommandBot:
             return f"Held back by the Indian-market filters (no override from Telegram): {e(ex)}"
         except (PermissionError, ValueError, LookupError, Busy) as ex:
             return f"Refused: {e(ex)}"
-        return (f"<b>Practice {e(o['side']).upper()}</b> {o['qty']:g} × {e(o['symbol'])} at {inr(o['filled_avg_price'], 2)} = "
-                f"{inr(o['notional'])}, charges {inr(o.get('fees'), 2)}.")
+        return (f"<b>Practice {e(o['side']).upper()}</b> {o['qty']:g} × {label(o['symbol'], p.get('name'))} at "
+                f"{inr(o['filled_avg_price'], 2)} = {inr(o['notional'])}, charges {inr(o.get('fees'), 2)}.")
 
     def _answer(self, cid: Any, text: str) -> None:
         if cid:
@@ -485,10 +630,20 @@ class CommandBot:
                 log.info("telegram: could not remove the buttons: %s", ex)
 
     # -- the loop ----------------------------------------------------------------------------------------
+    def register_commands(self) -> bool:
+        """setMyCommands: Telegram then lists the commands with their descriptions when you type "/". Never raises."""
+        try:
+            self.api.call("setMyCommands", {"commands": COMMANDS})
+            return True
+        except TelegramError as ex:
+            log.info("telegram: could not register the command list: %s", ex)
+            return False
+
     def run(self, stop: threading.Event) -> None:
         owner = f"{socket.gethostname()}:{os.getpid()}:{threading.get_ident()}"
         fails = 0
         warned_lease = False
+        registered = False
         while not stop.is_set():
             if not take_lease(self.settings.state_dir, owner):
                 if not warned_lease:
@@ -496,6 +651,8 @@ class CommandBot:
                     warned_lease = True
                 stop.wait(30)
                 continue
+            if not registered:
+                registered = self.register_commands()
             try:
                 self.poll_once()
                 fails = 0
