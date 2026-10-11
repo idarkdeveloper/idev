@@ -95,7 +95,7 @@ def score_universe(stats_by_symbol: dict[str, dict[str, Any]], *, min_turnover: 
 def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20, workers: int = 8,
                min_turnover: float = 1e7, require_above_200dma: bool = True,
                fundamentals: Any | None = None, quality: float = 0.0, value: float = 0.0,
-               bands: Any | None = None) -> dict[str, Any]:
+               bands: Any | None = None, filters: Any | None = None) -> dict[str, Any]:
     """``prices.history(symbol, '2y')`` per constituent, in parallel; returns ranked rows.
 
     With a ``fundamentals`` provider and a ``quality`` and/or ``value`` weight, the
@@ -129,6 +129,17 @@ def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20
             if rule["skip"] and r["eligible"]:
                 r["eligible"], r["band_skipped"] = False, True
                 band_skipped += 1
+    filter_skipped = 0
+    filters_applied = filters is not None and bool(getattr(filters, "active", lambda: True)())
+    if filters is not None:   # indian_filters.FilterBook: ASM/GSM, results blackout, promoter pledges (buys only)
+        for r in rows:
+            c = filters.check(r["symbol"])
+            r["filter_flags"] = c["flags"]
+            if c["block"]:
+                r["filter_note"] = "; ".join(c["reasons"])
+                if r["eligible"]:
+                    r["eligible"], r["filter_skipped"] = False, True
+                    filter_skipped += 1
     overlay = None
     if fundamentals is not None and (quality or value):
         from .fundamentals import apply_fundamentals, fetch_all
@@ -141,7 +152,8 @@ def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20
     return {"universe_size": len(members), "scored": len(rows), "eligible": len(eligible),
             "errors": sum(1 for s in stats.values() if "error" in s),
             "top": eligible[:top], "all": rows, "fundamentals": overlay, "band_skipped": band_skipped,
-            "bands_applied": bands_applied}
+            "bands_applied": bands_applied, "filter_skipped": filter_skipped, "filters_applied": filters_applied,
+            "filters_note": filters.note() if filters is not None else None}
 
 
 def format_screen(result: dict[str, Any], top: int = 20) -> str:

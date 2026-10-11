@@ -367,7 +367,8 @@ def cmd_forward(args: argparse.Namespace) -> int:
         members = load_universe(ft.universe)
         print(f"Ranking {len(members)} {ft.universe} members for this month's rebalance…")
         from .bands import book_for
-        return run_screen(members, prices, top=ft.data["top"], bands=book_for(settings))
+        from .indian_filters import filters_for
+        return run_screen(members, prices, top=ft.data["top"], bands=book_for(settings), filters=filters_for(settings))
 
     print(format_forward(ft.run(screen, force_rebalance=args.rebalance)))
     return 0
@@ -640,6 +641,7 @@ def cmd_screen(args: argparse.Namespace) -> int:
     from .runner import free_prices
     from .screen import format_screen, load_universe, run_screen
     from .bands import book_for
+    from .indian_filters import filters_for
 
     settings = _settings(args)
     members = load_universe(args.universe)
@@ -652,7 +654,7 @@ def cmd_screen(args: argparse.Namespace) -> int:
     result = run_screen(members, free_prices(settings), top=args.top, workers=args.workers,
                         require_above_200dma=not args.no_trend_filter, fundamentals=fundamentals,
                         quality=1.0 if args.quality else 0.0, value=1.0 if args.value else 0.0,
-                        bands=book_for(settings))
+                        bands=book_for(settings), filters=filters_for(settings))
     print(format_screen(result, top=args.top))
     if args.json:
         result.pop("all", None)

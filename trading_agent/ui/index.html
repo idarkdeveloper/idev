@@ -310,6 +310,9 @@
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-bse" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-bse" style="color:var(--ink)">Also read BSE bulk and block deals</label><div class="sub">Many mid and small-cap deals happen only on BSE. Public data, no login; NSE is always read.</div></div></div>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-flows" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-flows" style="color:var(--ink)">Show FII/DII flows and market breadth in the morning email</label><div class="sub">Public NSE files, fetched after 19:00 IST. Information only; nothing trades on it.</div></div></div>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-bands" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-bands" style="color:var(--ink)">Skip stocks with a 2% or 5% price band when buying</label><div class="sub">Liquidity can vanish in a fall. Sells and stop-losses are never blocked.</div></div></div>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-asm" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-asm" style="color:var(--ink)">Never buy stocks on NSE's ASM or GSM surveillance lists</label><div class="sub">Holdings that enter a list are flagged for review, never sold.</div></div></div>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-results" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-results" style="color:var(--ink)">No new buy when results are due within 5 trading days</label><div class="sub">From NSE's board-meeting calendar. Holdings show "Results due".</div></div></div>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-pledge" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-pledge" style="color:var(--ink)">No buy when promoter pledges are above 20% or rose more than 5 points</label><div class="sub">From NSE's pledge filings, counted from the next trading day when filed after 15:00. When a list cannot be read, that filter blocks nothing and says so.</div></div></div>
     </div>
     <div class="group"><span class="group-title">Screener page</span>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-tv" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-tv" style="color:var(--ink)">Add TradingView columns to the screener (unofficial)</label><div class="sub" id="f-tv-note">Off by default. Turning it on lets the screener ask TradingView's public scanner for a few extra columns (its summary, sector, industry, EPS growth). TradingView has no official API for this and its terms restrict automated access, so you are choosing to use an unofficial endpoint. One request per list, at most every 15 minutes; if it ever refuses or fails it is left alone for 24 hours. No login, no cookies. Display only: it never feeds the agent, the emails or Claude, and it is never called from the server.</div></div></div>
@@ -1099,7 +1102,7 @@
     const total = m.holdings.reduce((t, h) => t + (h.value || 0), 0);
     const sorted = m.holdings.slice().sort((x, y) => (y.value || 0) - (x.value || 0));   // biggest first, as on Groww
     if(!keepRows) rows.innerHTML = sorted.length ? sorted.map(h => { const dm = dayMove(h); return `<tr data-open-stock="${esc(h.symbol)}">
-        <td class="stock-cell"><div class="sym-line"><a href="#" data-lookup="${esc(h.symbol)}" class="sym" title="${esc(h.name || h.symbol)}">${esc(h.symbol)}</a>${h.kind === "bond" ? ` <span class="pill warn mini" title="bond${h.maturity ? " maturing " + esc(h.maturity) : ""}">Bond</span>` : ""}${h.exchange === "BSE" ? ' <span class="pill mini">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill mini" title="NSE daily price band">Band ${esc(MP.bands[h.symbol])}</span>` : ""}</div>
+        <td class="stock-cell"><div class="sym-line"><a href="#" data-lookup="${esc(h.symbol)}" class="sym" title="${esc(h.name || h.symbol)}">${esc(h.symbol)}</a>${h.kind === "bond" ? ` <span class="pill warn mini" title="bond${h.maturity ? " maturing " + esc(h.maturity) : ""}">Bond</span>` : ""}${h.exchange === "BSE" ? ' <span class="pill mini">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill mini" title="NSE daily price band">Band ${esc(MP.bands[h.symbol])}</span>` : ""}${((MP.filter_flags || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Review flag from the Indian-market filters; the agent never sells on it">${esc(f)}</span>`).join("")}</div>
           <div class="sub l2">${esc(h.qty)} × ${inr(h.avg_price, 2)}${total && h.value != null ? ` · ${(h.value / total * 100).toFixed(1)}%` : ""}${h.sellable_qty < h.qty ? ` · ${h.sellable_qty} free to sell` : ""}</div>${h.price != null && MODE === "demo" ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
         <td class="spark-col">${sparkSvg(h.symbol)}</td>
         <td class="num nowrap">${h.price != null ? inr(h.price, 2) : '<span class="sub">no price</span>'}</td>
@@ -1357,6 +1360,14 @@
     $("tk-stop-value").placeholder = t === "fixed" ? "Stop price" : "e.g. 8";
   }
   $("tk-stop").addEventListener("change", () => { tkStopTouched = true; showStopValue(); });
+  // A practice buy the Indian-market filters hold back (ASM/GSM, results due, pledges) asks once more; the agent never would.
+  async function practiceOrder(body){
+    try { return await api("/api/order", body); }
+    catch(e){
+      if(!(e.data && e.data.filter_warning) || !confirm(e.message + "\n\nThis is the practice account: no real order is placed.")) throw e;
+      return await api("/api/order", {...body, override_filters: true});
+    }
+  }
   $("tk-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const sym = $("tk-symbol").value.trim().toUpperCase(), qty = $("tk-qty").value, amt = $("tk-amount").value;
@@ -1371,7 +1382,7 @@
       }
     }
     if(!confirm(`Paper ${side} ${sym} ${qty ? qty + " shares" : "for " + money(Number(amt))}?`)) return;
-    try { const j = await api("/api/order", body); toast(`Filled ${j.order.qty} ${sym} @ ${money(j.order.filled_avg_price,2)}, charges ${money(j.order.fees||0,2)}`); $("tk-qty").value=""; $("tk-amount").value=""; tkStopTouched = false; $("tk-stop").value = "trailing"; $("tk-stop-value").value = ""; showStopValue(); await refresh(); }
+    try { const j = await practiceOrder(body); toast(`Filled ${j.order.qty} ${sym} @ ${money(j.order.filled_avg_price,2)}, charges ${money(j.order.fees||0,2)}`); $("tk-qty").value=""; $("tk-amount").value=""; tkStopTouched = false; $("tk-stop").value = "trailing"; $("tk-stop-value").value = ""; showStopValue(); await refresh(); }
     catch(e){ toast(e.message); }
   });
   $("tk-size").addEventListener("click", async () => {
@@ -1594,7 +1605,7 @@
     if(b.dataset.order !== undefined){
       const r = S.recommendations.find(x => String(x.index) === b.dataset.order);
       if(!confirm(`Paper ${r.action} ${r.ticker} for ${money(r.suggested_notional_usd)}?`)) return;
-      try { const j = await api("/api/order", {symbol:r.ticker, side:r.action, notional:r.suggested_notional_usd}); toast(`Filled ${j.order.qty} ${r.ticker} @ ${money(j.order.filled_avg_price,2)}`); await refresh(); } catch(e){ toast(e.message); }
+      try { const j = await practiceOrder({symbol:r.ticker, side:r.action, notional:r.suggested_notional_usd}); toast(`Filled ${j.order.qty} ${r.ticker} @ ${money(j.order.filled_avg_price,2)}`); await refresh(); } catch(e){ toast(e.message); }
     } else if(b.dataset.dismiss !== undefined){
       try { await api("/api/dismiss", {index:Number(b.dataset.dismiss)}); await refresh(); } catch(e){ toast(e.message); }
     }
@@ -1610,7 +1621,7 @@
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
     $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
-    $("f-gtt").checked = !!s.groww_gtt_stops; $("f-ddpi").checked = !!s.groww_ddpi_confirmed; $("f-t1").checked = !!s.groww_sell_t1; $("f-bse").checked = s.bse_deals !== false; $("f-flows").checked = s.flows_breadth !== false; $("f-bands").checked = s.price_band_filter !== false; $("f-tv").checked = !!s.tradingview_screener; $("f-tv").disabled = s.tradingview_allowed === false; if(s.tradingview_allowed === false) $("f-tv-note").textContent = "Not available here: this copy is set as the server (TA_ROLE=server), which never calls TradingView.";
+    $("f-gtt").checked = !!s.groww_gtt_stops; $("f-ddpi").checked = !!s.groww_ddpi_confirmed; $("f-t1").checked = !!s.groww_sell_t1; $("f-bse").checked = s.bse_deals !== false; $("f-flows").checked = s.flows_breadth !== false; $("f-bands").checked = s.price_band_filter !== false; $("f-asm").checked = s.asm_gsm_filter !== false; $("f-results").checked = s.results_blackout_filter !== false; $("f-pledge").checked = s.pledge_filter !== false; $("f-tv").checked = !!s.tradingview_screener; $("f-tv").disabled = s.tradingview_allowed === false; if(s.tradingview_allowed === false) $("f-tv-note").textContent = "Not available here: this copy is set as the server (TA_ROLE=server), which never calls TradingView.";
     $("f-dg-writer").value = s.digest_writer || "claude";
     $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on; $("f-dg-bul").checked = s.digest_bulletin !== false; $("f-dg-chart").checked = s.digest_charts !== false; $("f-integ").checked = s.integration_check !== false; $("f-integ-claude").checked = !!s.integration_claude;
     $("f-dg-am-t").value = s.digest_morning || "09:00"; $("f-dg-pm-t").value = s.digest_evening || "15:45";
@@ -1641,7 +1652,7 @@
   $("btn-close").addEventListener("click", () => $("dlg").close());
   $("settings-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
-    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.groww_ddpi_confirmed = $("f-ddpi").checked; body.groww_sell_t1 = $("f-t1").checked; body.bse_deals = $("f-bse").checked; body.flows_breadth = $("f-flows").checked; body.price_band_filter = $("f-bands").checked; if(!$("f-tv").disabled) body.tradingview_screener = $("f-tv").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked; body.telegram_alerts = $("f-tg-on").checked; body.integration_check = $("f-integ").checked; body.integration_claude = $("f-integ-claude").checked; if($("f-tg-token").value.trim()) body.telegram_bot_token = $("f-tg-token").value.trim().toLowerCase() === "clear" ? "" : $("f-tg-token").value.trim(); if($("f-tg-chat").value.trim()) body.telegram_chat_id = $("f-tg-chat").value.trim().toLowerCase() === "clear" ? "" : $("f-tg-chat").value.trim(); if($("f-hb").value.trim()) body.heartbeat_url = $("f-hb").value.trim().toLowerCase() === "clear" ? "" : $("f-hb").value.trim();
+    const f = new FormData(ev.target); const body = Object.fromEntries(f.entries()); body.auto_trade = body.auto_trade === "true"; body.watch_investors = String(body.watch_investors || "").split(/\r?\n/).map(x => x.trim()).filter(Boolean).join(",");  /* one name per line in the box, one comma list on the wire */ body.groww_gtt_stops = $("f-gtt").checked; body.groww_ddpi_confirmed = $("f-ddpi").checked; body.groww_sell_t1 = $("f-t1").checked; body.bse_deals = $("f-bse").checked; body.flows_breadth = $("f-flows").checked; body.price_band_filter = $("f-bands").checked; body.asm_gsm_filter = $("f-asm").checked; body.results_blackout_filter = $("f-results").checked; body.pledge_filter = $("f-pledge").checked; if(!$("f-tv").disabled) body.tradingview_screener = $("f-tv").checked; body.digest_morning_on = $("f-dg-am").checked; body.digest_evening_on = $("f-dg-pm").checked; body.digest_bulletin = $("f-dg-bul").checked; body.digest_charts = $("f-dg-chart").checked; body.telegram_alerts = $("f-tg-on").checked; body.integration_check = $("f-integ").checked; body.integration_claude = $("f-integ-claude").checked; if($("f-tg-token").value.trim()) body.telegram_bot_token = $("f-tg-token").value.trim().toLowerCase() === "clear" ? "" : $("f-tg-token").value.trim(); if($("f-tg-chat").value.trim()) body.telegram_chat_id = $("f-tg-chat").value.trim().toLowerCase() === "clear" ? "" : $("f-tg-chat").value.trim(); if($("f-hb").value.trim()) body.heartbeat_url = $("f-hb").value.trim().toLowerCase() === "clear" ? "" : $("f-hb").value.trim();
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);

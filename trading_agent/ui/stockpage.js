@@ -82,6 +82,9 @@
     if(r.band_skip) add("band", "Price band", "fail", r.band_note || `${r.band || "Narrow"} band: the agent skips it`);
     else if(r.band) add("band", "Price band", "pass", `${r.band} NSE price band`);
     else add("band", "Price band", "pass", "No narrow NSE price band");
+    if(r.filter_block) add("filters", "ASM/GSM, results, pledges", "fail", (r.filter_reasons || []).join("; ") + ": the agent does not buy it");
+    else if(r.filters_note) add("filters", "ASM/GSM, results, pledges", "warn", r.filters_note);
+    else if(r.filter_flags) add("filters", "ASM/GSM, results, pledges", "pass", r.filter_flags.length ? r.filter_flags.join("; ") : "Not on a surveillance list, no results due, no pledge flag");
     const anns = (r.announcements || []).filter(a => { const d = age(a.at); return d == null || d <= 60; });
     const find = (re) => anns.find(a => re.test((a.category || "") + " " + (a.text || "")));
     const res = find(/financial result|outcome of board meeting/i), tw = find(/trading window/i), bm = find(/board meeting/i);
@@ -151,6 +154,7 @@
         <div class="sp-code row" style="gap:8px"><span class="sp-codetxt">${esc(st.ticker)} · ${st.exchange}</span>
           <span class="seg sp-exch" role="group" aria-label="Exchange">${exch}</span>
           ${r && r.band ? `<span class="pill ${r.band_skip ? "bad" : ""}" title="${esc(r.band_note || "NSE daily price band")}" style="font-size:11px">Band ${esc(bandText(r.band))}</span>` : ""}
+          ${(r && r.filter_flags || []).map(f => `<span class="pill ${r.filter_block ? "bad" : "warn"}" title="${esc((r.filter_reasons || []).join("; ") || "Indian-market filter flag")}" style="font-size:11px">${esc(f)}</span>`).join("")}
           ${r && r.momentum ? `<span class="pill ${r.momentum.verdict === "strong" ? "ok" : r.momentum.verdict === "weak" ? "bad" : ""}">${esc(r.momentum.verdict || "n/a")} momentum</span>` : ""}</div>
         <div class="sp-price row" style="gap:10px;align-items:baseline"><span class="sp-px">${rupees(last)}</span>
           <span class="sp-chg ${cls}">${chg != null ? `${signedRupees(chg)} (${signedPercent(chgPct)})` : (st.stock || st.stockError ? "" : "…")}</span>

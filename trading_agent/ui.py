@@ -67,6 +67,9 @@ EDITABLE_ENV_KEYS = {
     "bse_deals": "BSE_DEALS",  # also read BSE bulk/block deals beside NSE's
     "flows_breadth": "FLOWS_BREADTH",  # FII/DII flows and market breadth lines in the morning email
     "price_band_filter": "PRICE_BAND_FILTER",  # skip 2% and 5% price-band stocks for buys
+    "asm_gsm_filter": "ASM_GSM_FILTER",  # never buy stocks on NSE's ASM / GSM surveillance lists
+    "results_blackout_filter": "RESULTS_BLACKOUT_FILTER",  # no new buy with results due within 5 trading days
+    "pledge_filter": "PLEDGE_FILTER",  # no buy when promoter pledges are high or rising
     "tradingview_screener": "TRADINGVIEW_SCREENER",  # screener page: extra TradingView columns (unofficial, display only)
     "auto_trade": "AUTO_TRADE",
     "notify_email_to": "NOTIFY_EMAIL_TO",
@@ -117,6 +120,11 @@ def _inr(v: float, d: int = 0) -> str:
 
 class Busy(Exception):
     """Another request is already doing this (answered 409)."""
+
+
+class FilterWarning(Exception):
+    """A practice buy the Indian-market filters would hold back (ASM/GSM, results due, pledges): HTTP 409 with
+    ``filter_warning``; the page may send it again with ``override_filters`` (practice only, never a real order)."""
 
 
 class NeedsConfirmation(Exception):
@@ -342,6 +350,7 @@ class App:
         with self._lazy_lock:
             if self._screener is None:
                 from .bands import book_for
+                from .indian_filters import filters_for
                 from .fundamentals import YahooFundamentals
                 from .screen import load_universe
                 from .screener import ScreenerService
@@ -351,7 +360,8 @@ class App:
                                         role=lambda: self.settings.ta_role)
                 funds = YahooFundamentals(st.state_dir / "cache", cache_ttl=24 * 3600)
                 self._screener = ScreenerService(prices=self.prices, fundamentals=funds, load_universe=load_universe,
-                                                 bands=lambda: book_for(self.settings), tv=tv, names=self._screener_names)
+                                                 bands=lambda: book_for(self.settings), tv=tv, names=self._screener_names,
+                                                 filters=lambda: filters_for(self.settings))
             return self._screener
 
     def _screener_names(self, symbols: list[str]) -> dict[str, str]:
@@ -518,6 +528,7 @@ class App:
                 "paper_starting_cash": s.paper_starting_cash,
                 "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,
                 "flows_breadth": s.flows_breadth, "price_band_filter": s.price_band_filter,
+                "asm_gsm_filter": s.asm_gsm_filter, "results_blackout_filter": s.results_blackout_filter, "pledge_filter": s.pledge_filter,
                 "tradingview_screener": s.tradingview_screener, "tradingview_allowed": s.ta_role != "server",
                 "groww_ddpi_confirmed": s.groww_ddpi_confirmed, "groww_sell_t1": s.groww_sell_t1,
                 "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
@@ -758,6 +769,14 @@ class App:
         from .bands import book_for
         rule = book_for(self.settings).rule(ticker)
         out["band"], out["band_note"], out["band_skip"] = (rule["label"] if isinstance(rule["band"], int) else None), rule["reason"], rule["skip"]
+        try:   # ASM/GSM, results due, pledges: a buy check here, a review flag on a holding (never a sell)
+            from .indian_filters import filters_for
+            fb = filters_for(self.settings)
+            c = fb.check(ticker)
+            out["filter_flags"], out["filter_block"], out["filter_reasons"] = c["flags"], c["block"], c["reasons"]
+            out["filters_note"] = fb.note()
+        except Exception:  # noqa: BLE001 - a nicety on the stock page
+            pass
         return out
 
     def holding(self, ticker: str) -> dict[str, Any] | None:
@@ -962,6 +981,7 @@ class App:
             self.busy, self.running = True, job
 
         def run() -> None:
+            from .indian_filters import filters_for
             try:
                 members = load_universe(universe)
                 funds = None
@@ -970,7 +990,7 @@ class App:
                     funds = YahooFundamentals(self.settings.state_dir / "cache")
                 result = run_screen(members, self.prices, top=top, fundamentals=funds,
                                     quality=1.0 if quality else 0.0, value=1.0 if value else 0.0,
-                                    bands=book_for(self.settings))
+                                    bands=book_for(self.settings), filters=filters_for(self.settings))
                 result.pop("all", None)
                 self.last_screen = {"at": _now(), "universe": universe.upper(), **result}
                 job.ok, job.message = True, f"{result['eligible']} eligible of {result['scored']} scored in {universe.upper()}"
@@ -1024,7 +1044,7 @@ class App:
 
     def paper_order(self, symbol: str, side: str, notional: float | None = None,
                     qty: float | None = None, stop_type: str | None = None,
-                    stop_value: float | None = None) -> dict[str, Any]:
+                    stop_value: float | None = None, override_filters: bool = False) -> dict[str, Any]:
         if self.demo_trades is None and self._parent is None:
             raise PermissionError("practice orders are placed on the Demo page")
         if not self.paper_only:
@@ -1043,6 +1063,11 @@ class App:
             blocked = book_for(self.settings).refuse_buy(symbol)
             if blocked:
                 raise ValueError(blocked)
+            if not override_filters:   # a warning the user can override: this is the practice account
+                from .indian_filters import filters_for
+                held = filters_for(self.settings).refuse_buy(symbol)
+                if held:
+                    raise FilterWarning(held + ". The agent would not buy it; place the practice buy anyway?")
             self._check_topup_percent_stop(symbol, stop, qty, notional)
         broker = cast(LocalPaperBroker, self.broker)  # paper_only (checked above): the simulator, which takes a stop
         if qty not in (None, "", 0, "0"):
@@ -1426,7 +1451,7 @@ class App:
                          "heartbeat_url": parse_heartbeat_url}[key]
                 value = parse(value) or ""
                 ops.append(lambda k=key, v=value: setattr(st, k, v or None))
-            elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "tradingview_screener", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
+            elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "asm_gsm_filter", "results_blackout_filter", "pledge_filter", "tradingview_screener", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
                          "telegram_alerts", "integration_check", "integration_claude"):
                 value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
@@ -1651,6 +1676,13 @@ class App:
             out["bands"] = self._bands_for([str(h.get("symbol")) for h in out.get("holdings") or []])
         except Exception:  # noqa: BLE001 - the pill is a nicety
             out["bands"] = {}
+        try:   # ASM/GSM, "Results due <date>", pledge warnings: review flags, never a sell
+            from .indian_filters import filters_for
+            fb = filters_for(self.settings)
+            flags = {str(h.get("symbol")): fb.holding_flags(str(h.get("symbol"))) for h in out.get("holdings") or []}
+            out["filter_flags"] = {k: v for k, v in flags.items() if v}
+        except Exception:  # noqa: BLE001
+            out["filter_flags"] = {}
         self._my_portfolio, self._my_portfolio_at = out, time.time()
         return out
 
@@ -1817,7 +1849,7 @@ def _check_type(key: str, value: Any) -> None:
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "tradingview_screener", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
+    elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "asm_gsm_filter", "results_blackout_filter", "pledge_filter", "tradingview_screener", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
                  "telegram_alerts", "integration_check", "integration_claude"):
         _bool_setting(key, value)
     elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url", "forward_start", "allowed_hosts"):
@@ -2163,7 +2195,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 elif path == "/api/order":
                     order = app.paper_order(body.get("symbol", ""), body.get("side", "buy"),
                                             body.get("notional"), body.get("qty"),
-                                            body.get("stop_type"), body.get("stop_value"))
+                                            body.get("stop_type"), body.get("stop_value"),
+                                            override_filters=body.get("override_filters") is True)
                     self._json({"ok": True, "order": order})
                 elif path == "/api/stop":
                     self._json({"ok": True, "stop": app.set_stop(str(body.get("symbol", "")), body.get("type") or "",
@@ -2222,6 +2255,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json({"error": str(e)}, HTTPStatus.FORBIDDEN)
             except Busy as e:
                 self._json({"error": str(e)}, HTTPStatus.CONFLICT)
+            except FilterWarning as e:
+                self._json({"error": str(e), "filter_warning": True}, HTTPStatus.CONFLICT)
             except NeedsConfirmation as e:
                 self._json({"error": str(e), "needs_confirm": True, "copied_on": e.copied_on}, HTTPStatus.CONFLICT)
             except (KeyError, ValueError, LookupError, json.JSONDecodeError) as e:

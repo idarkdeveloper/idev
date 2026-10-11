@@ -215,6 +215,9 @@ class Settings:
     # Market data (flows.py, breadth.py, bands.py): FII/DII flows + breadth lines in the morning email; price-band filter.
     flows_breadth: bool = True
     price_band_filter: bool = True
+    asm_gsm_filter: bool = True          # India: never buy stocks on NSE's ASM or GSM lists
+    results_blackout_filter: bool = True  # India: no new buy when results are due within 5 trading days
+    pledge_filter: bool = True            # India: no buy when promoter pledges > 20% or rose > 5 points
     # Daily emails (digest.py): a morning "today" brief and an evening "close" report, sent by the watch service.
     digest_enabled: bool = True  # still needs an email or webhook channel
     digest_morning_on: bool = True
@@ -404,6 +407,9 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         bse_host=bse_host,
         flows_breadth=_bool(env("FLOWS_BREADTH"), True),
         price_band_filter=_bool(env("PRICE_BAND_FILTER"), True),
+        asm_gsm_filter=_bool(env("ASM_GSM_FILTER"), True),
+        results_blackout_filter=_bool(env("RESULTS_BLACKOUT_FILTER"), True),
+        pledge_filter=_bool(env("PLEDGE_FILTER"), True),
         digest_enabled=_bool(env("DIGEST_ENABLED"), True),
         digest_morning_on=_bool(env("DIGEST_MORNING_ON"), True),
         digest_evening_on=_bool(env("DIGEST_EVENING_ON"), True),

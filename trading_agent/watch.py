@@ -316,7 +316,8 @@ class Watcher:
         return self._broker
 
     def poll_market_data(self, now: datetime) -> dict[str, Any]:
-        """Once-a-day public NSE reads: price bands (before 09:00), FII/DII flows and breadth (after 19:00). Each has its
+        """Once-a-day public NSE reads: price bands and the Indian-market filter lists (ASM/GSM, board meetings, pledges)
+        from the morning, FII/DII flows and breadth (after 19:00). Each has its
         own once-per-day guard in state and never raises; a quiet tick costs a few small file reads."""
         out: dict[str, Any] = {}
         if self._data is None or not hasattr(self._data, "session"):
@@ -330,6 +331,11 @@ class Watcher:
                 n = book_for(s).tick(self._data, now, self.holidays, timeout=20.0)
                 if n:
                     out["price_bands"] = n
+            if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:
+                from .indian_filters import filters_for   # ASM/GSM, board meetings, pledges: once per trading day
+                got = filters_for(s, calendar=self.holidays).tick(self._data, now)
+                if got:
+                    out["indian_filters"] = got
             if getattr(s, "flows_breadth", False) and getattr(s, "market", "in") == "in":
                 from .breadth import BreadthStore, archive_bars_fn, nifty500_members
                 from .flows import FlowStore

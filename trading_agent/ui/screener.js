@@ -35,6 +35,8 @@
     {key: "avg_turnover_cr", label: "Avg turnover (₹ cr/day)", short: "Turnover ₹cr", type: "num", dec: 2, x: true, tip: "Average daily traded value over 60 days"},
     {key: "mom_score", label: "Momentum score", short: "Mom. score", type: "num", dec: 2, x: true, tip: "The factor screen's composite score across this list"},
     {key: "mom_eligible", label: "Passes factor screen", short: "Factor screen", type: "bool", x: true, tip: "Above its 200-day average and liquid enough, as the factor screen requires"},
+    {key: "filter_flags", label: "Buy filters", short: "Filters", type: "text", def: true, tip: "NSE ASM/GSM surveillance, results due within 5 trading days, promoter pledges"},
+    {key: "filter_block", label: "Held back from buys", type: "bool", hide: true, tip: "On an ASM/GSM list, results due within 5 trading days, or high or rising promoter pledges: never bought"},
     {key: "tv_summary_label", label: "Summary (TV)", type: "text", group: "tv", def: true, tip: "from TradingView, unofficial"},
     {key: "tv_sector", label: "Sector (TV)", type: "text", group: "tv", x: true, tip: "from TradingView, unofficial"},
     {key: "tv_industry", label: "Industry (TV)", type: "text", group: "tv", x: true, tip: "from TradingView, unofficial"},
@@ -129,6 +131,8 @@
      filters: [f("rel_volume", ">", 2)], sort: {key: "rel_volume", dir: "desc"}},
     {id: "followed", label: "Followed investors' buys", note: "Bought by a followed investor in a disclosed deal in the last 30 days",
      universe: "DEALS", filters: [f("deal", "=", true)], sort: {key: "chg_1d", dir: "desc"}},
+    {id: "unflagged", label: "Exclude flagged", note: "Not on an ASM/GSM list, no results within 5 trading days, no high or rising promoter pledges",
+     filters: [f("filter_block", "=", false)], sort: {key: "market_cap_cr", dir: "desc"}},
   ];
   const presetById = (id) => PRESETS.find(p => p.id === id) || null;
 
@@ -312,6 +316,7 @@
     const bits = [];
     if(d && (d.pending > 0 || d.loading)) bits.push(d.loading && !(d.rows || []).length ? "Loading the stock list…" : `${d.pending} stock${d.pending === 1 ? "" : "s"} still being fetched; the table fills in as they arrive.`);
     if(d && d.error && d.rows && d.rows.length) bits.push(d.error);
+    if(d && d.filters_note) bits.push(String(d.filters_note).charAt(0).toUpperCase() + String(d.filters_note).slice(1) + ".");
     if(d && d.tv && d.tv.state === "refused_server") bits.push("TradingView columns are never used on the server.");
     if(d && d.tv && d.tv.state === "backoff") bits.push("TradingView columns paused until " + new Date(d.tv.until).toLocaleString("en-IN", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) + " (TradingView said no or did not answer).");
     $("sc-status").textContent = bits.join(" ");

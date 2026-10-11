@@ -279,6 +279,8 @@ def run_forward_due(settings: Any, prices: Any, holidays: Any, notifier: Any = N
 
     def screen() -> dict[str, Any]:
         from .bands import book_for   # registered change: 2% / 5% band stocks are not picked (date kept in the forward state)
-        return run_screen(load_universe(ft.universe), prices, top=ft.data["top"], bands=book_for(settings))
+        from .indian_filters import filters_for   # registered change: ASM/GSM, results blackout, pledges (date kept too)
+        return run_screen(load_universe(ft.universe), prices, top=ft.data["top"], bands=book_for(settings),
+                          filters=filters_for(settings))
 
     return prefix + format_forward(ft.run(screen))
