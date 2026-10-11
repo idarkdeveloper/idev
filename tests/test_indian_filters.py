@@ -6,7 +6,6 @@ import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import pytest
 
 from trading_agent import indian_filters as fi
 from trading_agent.agent import AgentContext, RunResult, build_tools
