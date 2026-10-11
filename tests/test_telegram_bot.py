@@ -40,12 +40,13 @@ class FakeAPI:
         return [p["text"] for p in self.sent()]
 
 
-def msg(text, chat=CHAT, uid=1):
-    return {"update_id": uid, "message": {"message_id": uid, "chat": {"id": int(chat)}, "text": text}}
+def msg(text, chat=CHAT, uid=1, sender=None):
+    return {"update_id": uid, "message": {"message_id": uid, "chat": {"id": int(chat)},
+                                          "from": {"id": int(sender or chat)}, "text": text}}
 
 
-def tap(data, chat=CHAT, uid=50, message_id=1):
-    return {"update_id": uid, "callback_query": {"id": f"cb{uid}", "data": data,
+def tap(data, chat=CHAT, uid=50, message_id=1, sender=None):
+    return {"update_id": uid, "callback_query": {"id": f"cb{uid}", "data": data, "from": {"id": int(sender or chat)},
                                                  "message": {"message_id": message_id, "chat": {"id": int(chat)}}}}
 
 
@@ -94,7 +95,7 @@ def test_another_chat_is_ignored_and_logged_without_its_text(s, app, caplog):
     api = FakeAPI([msg("/buy RELIANCE 5 secret-text", chat="999")])
     with caplog.at_level(logging.INFO):
         assert bot(s, app, api).poll_once() == 1
-    assert api.sent() == [] and "another chat (999)" in caplog.text and "secret-text" not in caplog.text
+    assert api.sent() == [] and "another chat or sender (999)" in caplog.text and "secret-text" not in caplog.text
 
 
 def test_the_offset_is_saved_so_a_restart_never_replays_a_command(s, app):
@@ -407,3 +408,52 @@ def test_a_failing_round_is_recorded_and_backed_off(s, app):
     data = json.loads((s.state_dir / "telegram_commands.json").read_text())
     assert data["last_error"] == "TelegramError: getUpdates: Bad Gateway"
     assert health.read_runs(s.state_dir)["telegram_commands"]["error"]
+
+
+# --------------------------------------------------------------------------- #
+# follow-up: only you, never a group; the practice account never builds the live broker
+# --------------------------------------------------------------------------- #
+def test_only_the_chat_owner_is_obeyed_never_another_sender(s, app):
+    api = FakeAPI([msg("/portfolio", sender="777")])
+    b = bot(s, app, api)
+    b.poll_once()
+    assert api.sent() == []
+    api.batches.append([msg("/buy RELIANCE 2", uid=2)])
+    b.poll_once()
+    ok, _ = nonce_of(api)
+    api.batches.append([tap(ok, sender="777")])                              # someone else presses Confirm
+    b.poll_once()
+    assert app.demo.practice_broker.positions() == [] and ok.split(":")[1] in b.pending
+
+
+def test_commands_are_never_taken_from_a_group_or_channel(s):
+    for chat in ("-1001234567890", "-42", "@mychannel", "0"):
+        s.telegram_chat_id = chat
+        assert not telegram_bot.commands_configured(s) and telegram_bot.start(s) is None
+    s.telegram_chat_id = CHAT
+    assert telegram_bot.commands_configured(s)
+
+
+def test_the_practice_account_never_builds_the_live_broker(s, monkeypatch):
+    import trading_agent.runner as runner
+    import trading_agent.ui as ui
+    s.broker, s.groww_live_orders, s.groww_access_token = "groww", True, "tok"
+
+    built = []
+
+    def no_live(*a, **k):
+        built.append(1)   # recorded, not raised: the old code swallowed any error from building it
+        raise RuntimeError("the live broker was built")
+    monkeypatch.setattr(ui, "make_broker", no_live)
+    monkeypatch.setattr(runner, "make_groww", lambda settings, *a, **k: (_ for _ in ()).throw(AssertionError(
+        "a live-capable client")) if settings.groww_live_orders else _ReadOnly())
+    app = App(s, dotenv=None, prices=Prices())
+    pb = app.demo.practice_broker
+    assert isinstance(pb, LocalPaperBroker) and app._broker is None and built == []
+
+
+class _ReadOnly:
+    name, live_orders = "groww", False
+
+    def latest_price(self, symbol):
+        return 100.0

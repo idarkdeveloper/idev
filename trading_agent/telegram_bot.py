@@ -185,8 +185,9 @@ class CommandBot:
             return
         msg = u.get("message") or {}
         chat = str((msg.get("chat") or {}).get("id") or "")
-        if not chat or chat != self.chat:
-            log.info("telegram: ignored an update from another chat (%s)", chat or "unknown")
+        sender = str((msg.get("from") or {}).get("id") or "")
+        if not chat or chat != self.chat or sender != self.chat:   # a private chat: the sender is the chat
+            log.info("telegram: ignored an update from another chat or sender (%s)", chat or "unknown")
             return
         text = str(msg.get("text") or "").strip()
         if not text.startswith("/"):
@@ -429,9 +430,10 @@ class CommandBot:
     def on_callback(self, cq: dict[str, Any]) -> None:
         msg = cq.get("message") or {}
         chat = str((msg.get("chat") or {}).get("id") or "")
+        sender = str((cq.get("from") or {}).get("id") or "")
         cid = cq.get("id")
-        if not chat or chat != self.chat:
-            log.info("telegram: ignored a button press from another chat (%s)", chat or "unknown")
+        if not chat or chat != self.chat or sender != self.chat:   # only you can confirm, never another group member
+            log.info("telegram: ignored a button press from another chat or sender (%s)", chat or "unknown")
             return
         data = str(cq.get("data") or "")
         verb, _, nonce = data.partition(":")
@@ -506,14 +508,25 @@ class CommandBot:
                 fails += 1
 
 
+def private_chat(chat_id: Any) -> bool:
+    """A private chat with one person: a positive numeric id (groups and channels are negative, or @names)."""
+    return bool(re.fullmatch(r"[1-9]\d*", str(chat_id or "").strip()))
+
+
 def commands_configured(settings: Any) -> bool:
-    return bool(getattr(settings, "telegram_commands", False) and settings.telegram_bot_token and settings.telegram_chat_id)
+    """TELEGRAM_COMMANDS=true with a bot token and a PRIVATE chat id: commands are never taken from a group or a
+    channel, where other members could run them or confirm an order."""
+    return bool(getattr(settings, "telegram_commands", False) and settings.telegram_bot_token
+                and private_chat(settings.telegram_chat_id))
 
 
 def start(settings: Any, app_fn: Callable[[], Any] | None = None) -> threading.Event | None:
     """Start the poller thread when TELEGRAM_COMMANDS=true (and a bot token and chat id are set). Returns the Event
     that stops it, or None when it is off."""
     if not commands_configured(settings):
+        if getattr(settings, "telegram_commands", False) and settings.telegram_chat_id and not private_chat(settings.telegram_chat_id):
+            log.warning("TELEGRAM_COMMANDS is on but TELEGRAM_CHAT_ID is a group or channel: commands stay off "
+                        "(they are only taken from your private chat with the bot)")
         return None
 
     def make_app() -> Any:
