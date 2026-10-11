@@ -48,6 +48,7 @@ REFERER = {"asm": "https://www.nseindia.com/reports/asm", "gsm": "https://www.ns
            "results": "https://www.nseindia.com/companies-listing/corporate-filings-board-meetings",
            "pledge": "https://www.nseindia.com/companies-listing/corporate-filings-pledged-data"}
 BLACKOUT_TRADING_DAYS = 5
+RESULTS_AHEAD_DAYS = 14   # board meetings are fetched for this many calendar days ahead (covers 5 trading days and holidays)
 PLEDGE_MAX_PCT = 20.0
 PLEDGE_MAX_RISE_PP = 5.0
 MAX_AGE_TRADING_DAYS = 2
@@ -142,16 +143,50 @@ def _pct(v: Any) -> float | None:
     return x if 0 <= x <= 100 else None
 
 
-def parse_pledges(payload: Any) -> dict[str, dict[str, Any]]:
-    """symbol -> {"pct": pledged % of the promoter holding, "filed": dissemination time} from NSE's pledged data."""
+_NAME_NOISE = re.compile(r"\b(the|limited|ltd|ltd\.|pvt|private|co|company|corporation|corp|inc)\b")
+
+
+def norm_name(name: Any) -> str:
+    """A company name reduced for matching: 'The Tata Power Company Ltd.' -> 'tata power'."""
+    s = str(name or "").lower().replace("&", " and ")
+    s = re.sub(r"[^a-z0-9 ]+", " ", s)
+    return re.sub(r"\s+", " ", _NAME_NOISE.sub(" ", s)).strip()
+
+
+def name_index(names: dict[str, str]) -> dict[str, str]:
+    """normalised company name -> NSE symbol, from {symbol: company name} (NSE's equity list). A name that two
+    symbols share is left out rather than guessed."""
+    out: dict[str, str] = {}
+    seen: set[str] = set()
+    for sym, name in names.items():
+        key = norm_name(name)
+        if not key:
+            continue
+        if key in seen:
+            out.pop(key, None)
+            continue
+        seen.add(key)
+        out[key] = sym.upper()
+    return out
+
+
+def parse_pledges(payload: Any, names: Any = None) -> dict[str, dict[str, Any]]:
+    """symbol -> {"pct": pledged % of the promoter holding, "filed": dissemination time} from NSE's pledged data.
+    NSE's rows name the company (``comName``) and carry no symbol: ``names`` ({symbol: company name}, or a callable
+    giving it, called only when a row has no symbol) maps it back through ``name_index``."""
     from .filing_time import parse_ts
     out: dict[str, dict[str, Any]] = {}
+    index: dict[str, str] | None = None
     for r in _rows(payload, "data"):
         sym = _sym(r)
+        if not sym:
+            if index is None:
+                index = name_index(names() if callable(names) else (names or {}))
+            sym = index.get(norm_name(_pick(r, "comName", "companyName", "name")), "")
         pct = _pct(_pick(r, "percPromoterShares", "perPromoterShares", "pledgedPctOfPromoter", "promoterPledgePct"))
         if not sym or pct is None:
             continue
-        filed = parse_ts(_pick(r, "broadcastDt", "disclosureDate", "date", "filingDate"))
+        filed = parse_ts(_pick(r, "broadcastDt", "disclosureDate", "disclosureToDate", "date", "filingDate"))
         out[sym] = {"pct": round(pct, 2), "filed": filed.isoformat() if filed is not None else None}
     return out
 
@@ -255,15 +290,22 @@ class FilterBook:
             return []
         return missing
 
-    def fetch(self, client: Any, part: str) -> Any:
-        """One list through the NSE client (breaker, back-off and cookies included). Raises on failure."""
+    def fetch(self, client: Any, part: str, now: datetime | None = None, names: Any = None) -> Any:
+        """One list through the NSE client (breaker, back-off and cookies included). Raises on failure, and on an
+        answer with no usable rows (these lists are never empty in practice: an empty one means NSE changed or refused).
+        Board meetings are asked for by meeting date, today to two weeks on: without dates NSE sends only its latest 20
+        notices. ``names`` is a callable giving {symbol: company name} for the pledge rows, which name no symbol."""
         path, params = PATHS[part]
-        parsed = PARSERS[part](client._get(path, params=params, referer=REFERER[part]))
-        if part in ("asm", "gsm") and not isinstance(parsed, dict):
-            raise ValueError(f"{LABEL[part]}: unreadable answer")
+        if part == "results":
+            day = (now or self.now_fn()).astimezone(IST).date()
+            params = {**(params or {}), "from_date": f"{day:%d-%m-%Y}", "to_date": f"{day + timedelta(days=RESULTS_AHEAD_DAYS):%d-%m-%Y}"}
+        payload = client._get(path, params=params, referer=REFERER[part])
+        parsed: Any = parse_pledges(payload, names) if part == "pledge" else PARSERS[part](payload)
+        if not isinstance(parsed, dict) or not parsed:
+            raise ValueError(f"{LABEL[part]}: NSE answered with no usable rows")
         return parsed
 
-    def tick(self, client: Any, now: datetime, deadline: float | None = None) -> dict[str, int]:
+    def tick(self, client: Any, now: datetime, deadline: float | None = None, names: Any = None) -> dict[str, int]:
         """For the watch loop: fetch what is due, store it, never raise. Returns {part: symbols stored}. ``deadline``
         (time.monotonic) stops between lists when the tick's network budget is spent; the rest wait for a later tick."""
         import time
@@ -278,7 +320,7 @@ class FilterBook:
             if deadline is not None and time.monotonic() >= deadline:
                 break
             try:
-                parsed = self.fetch(client, part)
+                parsed = self.fetch(client, part, now, names if names is not None else self._names)
                 self.store(part, parsed, now.astimezone(IST).date(), now)
                 out[part] = len(parsed)
             except Exception as e:  # noqa: BLE001 - a missing list only means that filter blocks nothing
@@ -287,6 +329,11 @@ class FilterBook:
         if errors:
             self._note_try(now.astimezone(IST).date().isoformat(), now, errors)
         return out
+
+    def _names(self) -> dict[str, str]:
+        """{symbol: company name} from NSE's equity list (EQUITY_L.csv, cached a day beside the other caches)."""
+        from .instruments import CompanyNames
+        return CompanyNames(self.path.parent / "cache")._nse_names()
 
     def _warn_once(self, msg: str, day: date | None = None) -> None:
         key = f"{day}:{msg[:50]}"
