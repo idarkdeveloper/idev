@@ -388,6 +388,14 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                         get_momentum, get_global_context, get_announcements, get_news,
                         suggest_position_size, send_recommendation]
 
+    def _alert_fn(ctx: AgentContext) -> Any:
+        from .live_alerts import make_alert_fn
+
+        def send(subject: str, body: str) -> None:
+            if ctx.notifier is not None:
+                ctx.notifier.send(subject, body)
+        return make_alert_fn(ctx.settings.state_dir, send)
+
     if ctx.settings.auto_trade:
         @beta_tool
         def place_paper_order(symbol: str, side: str, notional_usd: float) -> str:
@@ -395,7 +403,7 @@ def build_tools(ctx: AgentContext) -> list[Any]:
             confidence, and never more than 10% of equity per order. The order goes to the
             configured brokerage (paper simulator unless live orders were explicitly enabled;
             live Groww orders are DAY limit orders within MAX_SLIPPAGE_PCT of the last price;
-            buys are refused before 09:17 IST, capped at today's opening price + 30 bps and
+            buys are refused before 09:17 IST, capped at today's opening price + 30 bps until 09:45 and
             cancelled if unfilled after 120 s). Sells only use free (unpledged, unlocked) shares.
 
             Args:
@@ -404,9 +412,14 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                 notional_usd: Amount to trade in the account currency (INR or USD).
             """
             live = ctx.live_money
-            if live:
-                from .day_brake import reason as brake
-                braked = brake(ctx.settings.state_dir)   # no new buys and no rebalancing (sells) for the session
+            if live and side.lower() == "buy":   # the day brake, checked now too (the watch may not be running)
+                from . import day_brake
+                from .groww_hours import default_calendar
+                from .runner import free_prices
+                n = day_brake._now()
+                day_brake.evaluate(ctx.settings, ctx.broker, day_brake.prev_close_fn(free_prices(ctx.settings), n.date()),
+                                   n, calendar=default_calendar(ctx.settings), alert=_alert_fn(ctx))
+                braked = day_brake.reason(ctx.settings.state_dir, n)   # buys only: a sell can always exit
                 if braked:
                     return json.dumps({"error": braked})
             if side.lower() == "buy":

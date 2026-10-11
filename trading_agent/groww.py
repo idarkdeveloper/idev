@@ -629,7 +629,7 @@ class GrowwBroker:
                  buy_gate: Callable[[], str | None] | None = None,
                  halt_fn: Callable[[str], str | None] | None = None,
                  collar_bps: float | None = None, open_price_fn: Callable[[str], float | None] | None = None,
-                 buy_timeout_s: float | None = None):
+                 buy_timeout_s: float | None = None, collar_active: Callable[[], bool] | None = None):
         self.token = access_token
         # halt_fn(what) returns the refusal while the kill switch (state/HALT) is set: every call that places or
         # changes an order refuses then; cancelling never does (the switch itself cancels).
@@ -640,6 +640,7 @@ class GrowwBroker:
         self.collar_bps = collar_bps
         self.open_price_fn = open_price_fn
         self.buy_timeout_s = buy_timeout_s
+        self.collar_active = collar_active   # () -> whether the price cap applies now (None: always)
         # buy_gate() returns a reason while buys must be refused (the pre-market check failed); sells are never gated.
         self.buy_gate = buy_gate
         # Live sells use demat_free_quantity only; T1 shares count only with sell_t1 (BTST risk).
@@ -962,7 +963,7 @@ class GrowwBroker:
         tick = self.tick_size(symbol)
         price = limit_price(ltp, side, self.max_slippage_pct, tick) if order_type == "LIMIT" else 0
         opening = None
-        if side == "buy" and self.collar_bps is not None:
+        if side == "buy" and self.collar_bps is not None and (self.collar_active is None or self.collar_active()):
             if order_type != "LIMIT":
                 raise PermissionError("opening collar: live buys are limit orders only")
             opening = self.opening_price(symbol)
@@ -1033,6 +1034,8 @@ class GrowwBroker:
         out.update(self.confirm_order(groww_order_id, tries=3))
         filled = float(out.get("filled_quantity") or 0)
         out["cancelled_unfilled"] = True
+        if filled > 0 and classify_status(out.get("order_status")) != "open":
+            out["status"] = "partial"   # bought some: not a failure (no failure alert; the agent sees ok)
         out["remark"] = (f"unfilled after {self.buy_timeout_s:g} s: "
                          + (f"cancel failed ({out['cancel_error']}), filled {filled:g} of {qty}" if out.get("cancel_error")
                             else f"cancelled (filled {filled:g} of {qty})"))

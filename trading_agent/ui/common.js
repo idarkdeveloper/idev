@@ -474,8 +474,10 @@ window.TA = (function(){
       if(mode === "demo") return {kind: "practice", icon: "flask", text: "PRACTICE · practice money only · no real orders possible"};
       if(o.halt) return {kind: "halted", icon: "shieldoff",
         text: `HALTED · kill switch set${o.halt.at ? " " + closeText(o.halt.at) : ""} · nothing trades · release: python -m trading_agent kill-switch --release`};
+      if(o.brake && o.brake.unknown) return {kind: "brake", icon: "alert",
+        text: "LIVE · DAY BRAKE UNKNOWN · previous closes missing, today's fall cannot be measured · no new buys until it can"};
       if(o.brake) return {kind: "brake", icon: "alert",
-        text: `LIVE · DAY BRAKE · account ${o.brake.fall_pct != null ? "down " + Number(o.brake.fall_pct).toFixed(1) + "% " : "down "}today · no new buys or rebalancing until the next session · GTT stops still act`};
+        text: `LIVE · DAY BRAKE · account ${o.brake.fall_pct != null ? "down " + Number(o.brake.fall_pct).toFixed(1) + "% " : "down "}today · no new buys until the next session · sells and GTT stops still act`};
       if(o.liveOrders === "unknown") return {kind: "unknown", icon: "alert", text: "LIVE · your real Groww account · live-orders setting unknown (could not read the server state)"};
       if(o.liveOrders === true) return {kind: "liveon", icon: "alert", text: "LIVE · real Groww account · live orders ON (agent/watch can trade)"};
       if(o.liveOrders === false) return {kind: "live", icon: "lock", text: "LIVE · your real Groww account · read-only on this page · live orders OFF"};

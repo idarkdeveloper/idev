@@ -297,3 +297,82 @@ def test_the_health_row(tmp_path, settings):
     settings.market = "us"
     row = {r["id"]: r for r in health.report(settings, t(FRI, 11))["sources"]}["corp_actions"]
     assert row["status"] == "off"
+
+
+# --------------------------------------------------------------------------- #
+# review fixes: one action is handled once; a stale Groww average never lifts the stop above the market
+# --------------------------------------------------------------------------- #
+def _suspended_bonus(tmp_path):
+    book = stored_book(tmp_path)
+    st = State(tmp_path / "state.json")
+    st.data["gtt_stops"] = {"SURYAROSNI": {"smart_order_id": "S0", "trigger": 850.0, "limit": 845.0, "qty": 10,
+                                           "high_water": 1000.0}}
+    g = FakeLive()
+    clock = [t(FRI, 15, 5)]
+    mgr = GttStopManager(g, st, corp=book, now_fn=lambda: clock[0])
+    g.pos = [Position("SURYAROSNI", 10, 700.0, current_price=980.0)]
+    mgr.sync()
+    return st, g, clock, mgr
+
+
+def test_after_the_resume_the_ex_date_never_suspends_again(tmp_path):
+    st, g, clock, mgr = _suspended_bonus(tmp_path)
+    g.pos = [Position("SURYAROSNI", 20, 350.0, current_price=495.0)]
+    for h, m in ((10, 0), (10, 1), (11, 0), (15, 10), (15, 29)):          # many syncs on the ex-date
+        clock[0] = t(EX, h, m)
+        mgr.sync()
+    assert [c[0] for c in g.calls] == ["cancel", "create"]                  # one cancel, one re-create: no churn
+    rec = st.data["gtt_stops"]["SURYAROSNI"]
+    assert rec["qty"] == 20 and rec["high_water"] == 500.0 and st.data["gtt_suspended"] == {}
+    clock[0] = t(date(2026, 10, 20), 10)                                    # the day after
+    mgr.sync()
+    assert st.data["gtt_stops"]["SURYAROSNI"]["high_water"] == 500.0         # not divided a second time
+    assert [c[0] for c in g.calls] == ["cancel", "create"]
+
+
+def test_a_special_dividend_is_handled_once(tmp_path):
+    book = stored_book(tmp_path)
+    st = State(tmp_path / "state.json")
+    st.data["gtt_stops"] = {"INDOBORAX": {"smart_order_id": "S0", "trigger": 1300.0, "limit": 1290.0, "qty": 5,
+                                          "high_water": 1550.0}}
+    g = FakeLive()
+    clock = [t(FRI, 15, 5)]
+    mgr = GttStopManager(g, st, corp=book, now_fn=lambda: clock[0])
+    g.pos = [Position("INDOBORAX", 5, 1200.0, current_price=1500.0)]
+    mgr.sync()
+    g.pos = [Position("INDOBORAX", 5, 1200.0, current_price=1460.0)]
+    for h in (9, 10, 11, 12, 13, 14):
+        clock[0] = t(EX, h)
+        mgr.sync()
+    assert [c[0] for c in g.calls] == ["cancel", "create"]
+    assert st.data["gtt_stops"]["INDOBORAX"]["high_water"] == 1510.0        # 1550 - 40, once
+
+
+def test_a_stale_groww_average_never_puts_the_stop_above_the_market(tmp_path):
+    st, g, clock, mgr = _suspended_bonus(tmp_path)
+    clock[0] = t(date(2026, 10, 20), 9, 30)                                 # the day after: resume whatever Groww shows
+    g.pos = [Position("SURYAROSNI", 10, 1100.0, current_price=600.0)]        # Groww: old quantity, old average
+    mgr.sync()
+    clock[0] = t(date(2026, 10, 20), 9, 31)
+    mgr.sync()
+    for op, *rest in g.calls[1:]:
+        trigger = rest[-1]
+        assert trigger < 600.0, (op, trigger)                               # never at or above the price
+    assert st.data["gtt_stops"]["SURYAROSNI"]["high_water"] < 1000.0
+
+
+def test_a_modify_at_or_above_the_price_is_refused_and_alerted(tmp_path):
+    st = State(tmp_path / "state.json")
+    st.data["gtt_stops"] = {"AAA": {"smart_order_id": "S0", "trigger": 80.0, "limit": 79.0, "qty": 10,
+                                    "high_water": 100.0}}
+    g = FakeLive()
+    sent = []
+
+    class Notes:
+        def send(self, subject, body):
+            sent.append(subject)
+    mgr = GttStopManager(g, st, notifier=Notes(), bars_fn=lambda s: [])
+    g.pos = [Position("AAA", 12, 100.0, current_price=79.5)]                # price under the old trigger, qty changed
+    acts = mgr.sync()
+    assert g.calls == [] and acts[0]["action"] == "error" and "at or above the price" in acts[0]["error"]
+    assert sent == ["[GTT MODIFY FAILED] AAA"]

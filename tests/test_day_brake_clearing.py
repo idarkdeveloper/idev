@@ -58,7 +58,7 @@ def test_measure_values_the_account_against_the_previous_close():
     pos = [Position("A", 10, 90.0, current_price=95.0), Position("B", 5, 50.0, current_price=40.0),
            Position("C", 3, 10.0, current_price=11.0)]                  # C: no previous close -> counts flat
     m = day_brake.measure(pos, 1000.0, {"A": 100.0, "B": 50.0}.get)
-    assert m == {"value": 2183.0, "prev_value": 2283.0, "fall_pct": 4.38}
+    assert m == {"value": 2183.0, "prev_value": 2283.0, "fall_pct": 4.38, "covered_pct": 97.2}
     assert day_brake.prev_close_fn(Prices({"A": 100.0}), MON)("A") == 100.0      # the last bar BEFORE today
 
 
@@ -79,7 +79,7 @@ def test_the_brake_trips_once_alerts_once_and_lifts_next_session(settings):
     acct.pos = [Position("A", 10, 90.0, current_price=99.0)]                                    # recovered: still on
     assert day_brake.evaluate(settings, acct, prev, t(MON, 14), alert=alert)["fall_pct"] == 3.5
     assert len(alerts) == 1
-    assert "no new buys or rebalancing" in day_brake.reason(settings.state_dir, t(MON, 15))
+    assert "no new buys until the next session (sells and" in day_brake.reason(settings.state_dir, t(MON, 15))
     assert day_brake.reason(settings.state_dir, t(TUE, 9, 20)) is None                          # next session
 
 
@@ -92,7 +92,7 @@ def test_the_brake_is_only_read_in_market_hours_and_never_raises(settings):
     assert day_brake.evaluate(settings, Broken([], 0), {"A": 100.0}.get, t(MON, 11)) is None
 
 
-def test_under_the_brake_live_buys_are_refused_and_the_agent_does_not_rebalance(settings, monkeypatch):
+def test_under_the_brake_live_buys_are_refused(settings, monkeypatch):
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     settings.auto_trade = True
     monkeypatch.setattr(day_brake, "_now", lambda: t(MON, 11))
@@ -104,10 +104,10 @@ def test_under_the_brake_live_buys_are_refused_and_the_agent_does_not_rebalance(
                        notifier=None, state=State(settings.state_dir / "state.json"),
                        result=RunResult(investor="x", new_trades=[]))
     tool = next(t for t in build_tools(ctx) if t.name == "place_paper_order")
-    for side in ("buy", "sell"):
-        out = json.loads(tool.call({"symbol": "RELIANCE", "side": side, "notional_usd": 1000}))
-        assert "day brake" in out["error"]
-    assert sess.calls == []
+    monkeypatch.setattr(day_brake, "evaluate", lambda *a, **k: None)   # the recorded brake alone refuses the buy
+    out = json.loads(tool.call({"symbol": "RELIANCE", "side": "buy", "notional_usd": 1000}))
+    assert "day brake" in out["error"]
+    assert not any(m != "GET" for m, _, _ in sess.calls)
 
 
 def test_the_brake_record_is_read_by_date(settings, monkeypatch):
@@ -132,7 +132,7 @@ def test_the_watch_checks_the_live_account(settings):
 def test_the_strip_shows_the_brake():
     ui = Path(__file__).resolve().parents[1] / "trading_agent" / "ui"
     js = (ui / "common.js").read_text(encoding="utf-8")
-    assert 'kind: "brake"' in js and "GTT stops still act" in js
+    assert 'kind: "brake"' in js and "GTT stops still act" in js and "DAY BRAKE UNKNOWN" in js
     assert "brake: S.day_brake" in (ui / "index.html").read_text(encoding="utf-8")
 
 
@@ -229,3 +229,40 @@ def test_the_health_row(settings):
     clearing.ClearingHolidays(settings.state_dir).tick(FakeNSE(CLEAR), t(MON, 8))
     row = {r["id"]: r for r in health.report(settings, t(MON, 11))["sources"]}["clearing"]
     assert row["status"] == "ok" and row["rows"] == 20
+
+
+# --------------------------------------------------------------------------- #
+# review fixes: checked at order time too, unknown blocks buys, sells pass
+# --------------------------------------------------------------------------- #
+def test_missing_previous_closes_make_the_brake_unknown_and_block_buys(settings):
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    alerts = []
+    acct = FakeAccount([Position("A", 10, 90.0, current_price=90.0), Position("B", 100, 50.0, current_price=50.0)], 0.0)
+    rec = day_brake.evaluate(settings, acct, {"A": 100.0}.get, t(MON, 11), alert=lambda k, s, b: alerts.append(k))
+    assert rec["unknown"] and alerts == ["day-brake-unknown"]                  # B (5,000 of 5,900) has no close
+    assert "cannot be measured" in day_brake.reason(settings.state_dir, t(MON, 11, 1))
+    rec = day_brake.evaluate(settings, acct, {"A": 100.0, "B": 50.0}.get, t(MON, 11, 5))
+    assert rec is None and day_brake.reason(settings.state_dir, t(MON, 11, 6)) is None   # measurable again: cleared
+
+
+def test_the_agent_checks_the_brake_itself_blocks_buys_and_lets_sells_through(settings, monkeypatch):
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    settings.auto_trade = True
+    monkeypatch.setattr(day_brake, "_now", lambda: t(MON, 11))
+    monkeypatch.setattr(runner, "free_prices", lambda s: Prices({"RELIANCE": 1000.0}))
+    holdings = ok({"holdings": [{"trading_symbol": "RELIANCE", "quantity": 10, "average_price": 900.0,
+                                 "demat_free_quantity": 10}]})
+    sess = FakeSession({("GET", "/holdings/user"): holdings, ("GET", "/margins/detail/user"): ok({"clear_cash": 0.0}),
+                        ("GET", "/live-data/ltp"): ok({"NSE_RELIANCE": 900.0}),           # down 10%: no watch running
+                        ("POST", "/order/create"): ok({"groww_order_id": "G9", "order_status": "EXECUTED"}),
+                        ("GET", "/order/status/G9"): ok({"order_status": "EXECUTED", "filled_quantity": 1}),
+                        ("GET", "/order/detail/G9"): ok({"average_fill_price": 896.0, "filled_quantity": 1})})
+    ctx = AgentContext(settings=settings, broker=GrowwBroker("tok", session=sess, live_orders=True, sleep=lambda s: None),
+                       data=None, notifier=None, state=State(settings.state_dir / "state.json"),
+                       result=RunResult(investor="x", new_trades=[]))
+    tool = next(t for t in build_tools(ctx) if t.name == "place_paper_order")
+    out = json.loads(tool.call({"symbol": "RELIANCE", "side": "buy", "notional_usd": 800}))
+    assert "day brake" in out["error"] and day_brake.active(settings.state_dir, t(MON, 11))["fall_pct"] == 10.0
+    assert not any("/order/create" in u for _, u, _ in sess.calls)
+    out = json.loads(tool.call({"symbol": "RELIANCE", "side": "sell", "notional_usd": 900}))
+    assert out["ok"] and out["order"]["side"] == "sell"                                # a sell still exits

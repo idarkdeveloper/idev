@@ -124,6 +124,11 @@ class GttStopManager:
         return self.state.data.setdefault("gtt_stops", {})
 
     @property
+    def corp_done(self) -> dict[str, str]:
+        """Corporate actions already handled: {"SYMBOL:ex_date": when the GTT was resumed}."""
+        return self.state.data.setdefault("gtt_corp_done", {})
+
+    @property
     def suspended(self) -> dict[str, dict[str, Any]]:
         """Holdings whose GTT is paused over a corporate action: {symbol: {ex_date, ratio, expected_qty, ...}}."""
         return self.state.data.setdefault("gtt_suspended", {})
@@ -173,7 +178,8 @@ class GttStopManager:
             adjusted: float | None = None
             if self.corp is not None:
                 step, info = self.corp.gtt_step(sym, now, qty, self.suspended.get(sym),
-                                                gtt_qty=rec.get("qty") if rec else None, price=price)
+                                                gtt_qty=rec.get("qty") if rec else None, price=price,
+                                                done=self.corp_done, gtt_created=(rec or {}).get("created_at"))
                 if step == "suspend" and info is not None:
                     info["high_water"] = (rec or {}).get("high_water") or max(x for x in (price, p.avg_entry_price) if x)
                     self.suspended[sym] = info
@@ -191,6 +197,8 @@ class GttStopManager:
                     continue
                 if step == "resume" and info is not None:
                     self.suspended.pop(sym, None)
+                    self.corp_done[f"{sym}:{info['ex_date']}"] = _now()
+                    self.state.data["gtt_corp_done"] = dict(list(self.corp_done.items())[-200:])
                     base = info.get("high_water")
                     if base:
                         adjusted = base / float(info["ratio"]) if info.get("ratio") else base - float(info.get("dividend") or 0)
@@ -198,8 +206,12 @@ class GttStopManager:
                                     "high_water": None if adjusted is None else round(adjusted, 2)})
             if adjusted is not None:   # after a corporate action Groww's average price may not be adjusted yet
                 high = max(x for x in (adjusted, price) if x)
+            elif rec and rec.get("high_water"):
+                # the buy price already counted when the GTT was created; reading it again could lift the stop over
+                # the market when Groww's average lags a split or bonus
+                high = max(x for x in (rec["high_water"], price) if x)
             else:
-                high = max(x for x in (rec.get("high_water") if rec else None, price, p.avg_entry_price) if x)
+                high = max(x for x in (price, p.avg_entry_price) if x)
             trigger, limit = self.broker.gtt_stop_prices(sym, self._stop_for(sym, high))
             if rec is None or not rec.get("smart_order_id"):
                 if trigger >= price:
@@ -212,7 +224,7 @@ class GttStopManager:
                     continue
                 self.stops[sym] = {"smart_order_id": out.get("smart_order_id"), "reference_id": out.get("reference_id"),
                                    "trigger": trigger, "limit": limit, "qty": qty, "high_water": high,
-                                   "status": out.get("status") or "ACTIVE", "updated_at": _now()}
+                                   "status": out.get("status") or "ACTIVE", "updated_at": _now(), "created_at": _now()}
                 actions.append({"symbol": sym, "action": "create", "trigger": trigger, "limit": limit, "qty": qty})
                 continue
 
@@ -221,6 +233,10 @@ class GttStopManager:
             new_trigger, new_limit = (trigger, limit) if trigger > old else (old, float(rec.get("limit") or limit))
             if new_trigger == old and qty == rec.get("qty"):
                 continue  # never move a stop down; nothing changed
+            if new_trigger >= price:   # it would fire at once and leave a limit sell nobody can fill: never sent
+                actions.append(self._error(sym, "modify", ValueError(
+                    f"trigger {new_trigger:.2f} is at or above the price {price:.2f}; not sent")))
+                continue
             try:
                 out = self.broker.modify_gtt_stop(rec["smart_order_id"], qty, new_trigger, new_limit)
             except Exception as e:  # noqa: BLE001

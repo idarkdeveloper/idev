@@ -2,9 +2,11 @@
 
 * Time: no live buy before OPEN_COLLAR_START (09:17 IST). Practice buys, for realism, are refused from 09:00 (the
   pre-open) to OPEN_COLLAR_START on trading days; outside those minutes they work as before (evenings included).
-* Price (live buys): limit = min(the existing MAX_SLIPPAGE_PCT cap above LTP, today's opening price + OPEN_COLLAR_BPS
-  basis points), rounded down to the tick. Today's opening price is the price NSE's pre-open call auction discovered;
-  it comes from Groww's quote, else from today's Yahoo bar. With neither, the buy is refused (never priced blind).
+* Price (live buys, from OPEN_COLLAR_START to OPEN_COLLAR_END, 09:17 to 09:45 IST): limit = min(the existing
+  MAX_SLIPPAGE_PCT cap above LTP, today's opening price + OPEN_COLLAR_BPS basis points), rounded down to the tick.
+  After OPEN_COLLAR_END only the MAX_SLIPPAGE_PCT cap applies. Today's opening price is the price NSE's pre-open
+  call auction discovered; it comes from Groww's quote, else from today's Yahoo bar. With neither, the buy is refused
+  (never priced blind).
 * Time out (live buys): a buy still open BUY_TIMEOUT_S (120 s) after it was placed is cancelled; a partial fill keeps
   what filled (GrowwBroker.submit_order does this).
 
@@ -28,6 +30,16 @@ def _now() -> datetime:
 
 def start_time(settings: Any) -> dtime:
     return dtime.fromisoformat(str(getattr(settings, "open_collar_start", "09:17") or "09:17"))
+
+
+def end_time(settings: Any) -> dtime:
+    return dtime.fromisoformat(str(getattr(settings, "open_collar_end", "09:45") or "09:45"))
+
+
+def price_cap_active(settings: Any, now: datetime | None = None) -> bool:
+    """True from OPEN_COLLAR_START up to (not including) OPEN_COLLAR_END: buys are capped at the opening price."""
+    t = (now or _now()).astimezone(IST).time()
+    return start_time(settings) <= t < end_time(settings)
 
 
 def live_buy_block(settings: Any, now: datetime | None = None) -> str | None:

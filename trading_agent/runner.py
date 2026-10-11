@@ -88,7 +88,7 @@ def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool =
     set. Raises GrowwTokenUnavailable while Groww's token endpoint is cooling down after a refusal, and while halted
     (``halt_ok``: the kill switch's own client, which only lists and cancels)."""
     from . import killswitch
-    from .collar import yahoo_opening
+    from .collar import price_cap_active, yahoo_opening
     from .groww import GrowwBroker, InstrumentTicks
 
     ticks = InstrumentTicks(settings.state_dir / "cache") if settings.groww_live_orders else None
@@ -104,6 +104,7 @@ def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool =
                        collar_bps=settings.open_collar_bps if settings.groww_live_orders else None,
                        open_price_fn=lambda sym: yahoo_opening(price_fn, sym),
                        buy_timeout_s=settings.buy_timeout_s if settings.groww_live_orders else None,
+                       collar_active=lambda: price_cap_active(settings),
                        tick_size_fn=(lambda sym: ticks.tick_size(sym, settings.groww_exchange)) if ticks else None)
 
 

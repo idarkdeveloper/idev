@@ -265,10 +265,12 @@ class ActionBook:
 
     # -- the GTT guard (live) --------------------------------------------------------------------------
     def gtt_step(self, symbol: str, now: datetime, qty: int, suspended: dict[str, Any] | None,
-                 gtt_qty: int | None = None, price: float | None = None) -> tuple[str, dict[str, Any] | None]:
+                 gtt_qty: int | None = None, price: float | None = None, done: Any = (),
+                 gtt_created: str | None = None) -> tuple[str, dict[str, Any] | None]:
         """What the GTT manager does for one holding: ("normal", None), ("suspend", record to keep), ("wait", the
         suspension) or ("resume", the suspension). ``gtt_qty`` is the quantity of the GTT now at Groww (the
-        quantity before the action)."""
+        quantity before the action). An action is handled once: ``done`` holds the "SYMBOL:ex_date" keys already
+        resumed, and a GTT created on or after the ex-date (``gtt_created``, ISO) is already at the new level."""
         now = now.astimezone(IST)
         today = now.date()
         if suspended:
@@ -286,6 +288,8 @@ class ActionBook:
                 continue
             ex = date.fromisoformat(str(r["ex_date"]))
             if today > ex or ex - today > timedelta(days=10):
+                continue
+            if f"{symbol.upper()}:{r['ex_date']}" in done or (gtt_created and str(gtt_created)[:10] >= r["ex_date"]):
                 continue
             if today == ex or (today == session_before(ex, self.calendar) and now.time() >= SUSPEND_FROM):
                 before = int(gtt_qty if gtt_qty else qty)
