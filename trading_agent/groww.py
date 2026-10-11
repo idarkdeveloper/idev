@@ -626,8 +626,12 @@ class GrowwBroker:
                  ip_cache_s: float = 600.0, clock: Callable[[], float] = time.time,
                  sell_t1: bool = False, ddpi_confirmed: bool = False,
                  alert_fn: Callable[[str, str, str], Any] | None = None,
-                 buy_gate: Callable[[], str | None] | None = None):
+                 buy_gate: Callable[[], str | None] | None = None,
+                 halt_fn: Callable[[str], str | None] | None = None):
         self.token = access_token
+        # halt_fn(what) returns the refusal while the kill switch (state/HALT) is set: every call that places or
+        # changes an order refuses then; cancelling never does (the switch itself cancels).
+        self.halt_fn = halt_fn
         # buy_gate() returns a reason while buys must be refused (the pre-market check failed); sells are never gated.
         self.buy_gate = buy_gate
         # Live sells use demat_free_quantity only; T1 shares count only with sell_t1 (BTST risk).
@@ -713,7 +717,12 @@ class GrowwBroker:
     def _include_t1(self) -> bool:
         return self.sell_t1 or not self.live_orders
 
-    def _require_live(self, what: str) -> None:
+    def _require_live(self, what: str, *, cancel: bool = False) -> None:
+        if not cancel and self.halt_fn is not None:
+            halted = self.halt_fn(what)
+            if halted:
+                from .killswitch import Halted
+                raise Halted(halted)
         if not self.live_orders:
             raise LiveOrdersDisabled(
                 f"Groww live orders are disabled; refusing to {what} "
@@ -996,7 +1005,7 @@ class GrowwBroker:
         return list(rows)
 
     def cancel_order(self, groww_order_id: str) -> dict[str, Any]:
-        self._require_live("cancel an order")
+        self._require_live("cancel an order", cancel=True)
         return self._req("POST", "order/cancel", json={"segment": SEGMENT, "groww_order_id": groww_order_id})
 
     # -- write: GTT smart orders (stop-loss) -----------------------------------
@@ -1044,8 +1053,15 @@ class GrowwBroker:
         return self._req("PUT", f"order-advance/modify/{smart_order_id}", json=body)
 
     def cancel_gtt(self, smart_order_id: str) -> dict[str, Any]:
-        self._require_live("cancel a GTT order")
+        self._require_live("cancel a GTT order", cancel=True)
         return self._req("POST", f"order-advance/cancel/{SEGMENT}/GTT/{smart_order_id}")
+
+    def gtt_list(self) -> list[dict[str, Any]]:
+        """The account's GTT smart orders (read-only)."""
+        payload = self._req("GET", "order-advance/list", params={"smart_order_type": "GTT", "segment": SEGMENT})
+        rows = (payload.get("order_list") or payload.get("orders") or payload.get("data")
+                or payload.get("smart_orders") or []) if isinstance(payload, dict) else payload
+        return [r for r in rows if isinstance(r, dict)]
 
     def get_gtt(self, smart_order_id: str) -> dict[str, Any]:
         return self._req("GET", f"order-advance/status/{SEGMENT}/GTT/internal/{smart_order_id}")

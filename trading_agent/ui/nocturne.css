@@ -365,6 +365,9 @@ header { position: relative; z-index: 30; }   /* the header's menus open over th
 .modestrip .ico { color: var(--strip-live-bd); }
 .modestrip.liveon .ico { color: var(--strip-liveon-bd); } .modestrip.practice .ico { color: var(--strip-practice-bd); } .modestrip.replay .ico { color: var(--strip-replay-bd); }
 .modestrip.liveon { border-left-width: 10px; }
+.modestrip.halted, .modestrip.brake { background: var(--strip-liveon-bg); color: var(--strip-liveon-fg); border-color: var(--strip-liveon-bd); border-left-width: 10px; }
+.modestrip.halted .ico, .modestrip.brake .ico { color: var(--strip-liveon-bd); }
+.modestrip.halted { font-weight: 700; }
 [data-anchor] { scroll-margin-top: 56px; }
 @media (max-width: 900px) { .modestrip { padding-inline: 16px; font-size: 12.5px; } }
 
@@ -896,3 +899,11 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .gl-last { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
 .gl-last li { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, .7fr) minmax(0, 1fr); gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--color-rule); }
 #ws-health > .card + .card { margin-top: 16px; }
+
+/* ---- Kill switch card (Health tab). Tokens only; fits 360 px. ---- */
+.ks-card .ks-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0; }
+.ks-card .ks-row input { min-width: 0; flex: 1 1 140px; max-width: 220px; font-family: var(--mono); }
+.ks-card .ks-gtt { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; }
+.ks-card .ks-halted { padding: 10px 12px; border-left: 6px solid var(--strip-liveon-bd); background: var(--strip-liveon-bg);
+  color: var(--strip-liveon-fg); font-weight: 600; overflow-wrap: anywhere; }
+.ks-card .ks-report { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; font-size: 12.5px; }

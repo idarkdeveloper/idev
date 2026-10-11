@@ -211,8 +211,10 @@ class LocalPaperBroker:
     def __init__(self, path: Path, starting_cash: float = 80_000.0,
                  price_fn: Any | None = None, currency: str = "USD",
                  whole_shares: bool = False, cost_model: Any | None = None,
-                 now_fn: Any | None = None, shared: bool = False):
+                 now_fn: Any | None = None, shared: bool = False, order_gate: Any | None = None):
         self.path = Path(path)
+        # order_gate(side) -> the reason an order is refused right now (kill switch, opening collar), or None
+        self.order_gate = order_gate
         # shared=True: another process (a separate ``watch``) may use this same file, so every change is made under a
         # lock file after re-reading the file. Only the practice account is shared; others skip the cost.
         self.shared = shared
@@ -487,6 +489,9 @@ class LocalPaperBroker:
         refuse_bse_only(symbol, side)
         if (notional is None) == (qty is None):
             raise ValueError("pass exactly one of notional or qty")
+        refused = self.order_gate(side) if self.order_gate is not None else None
+        if refused:
+            raise PermissionError(refused)
         if price is None:
             price = self.latest_price(symbol)
         if qty is None:

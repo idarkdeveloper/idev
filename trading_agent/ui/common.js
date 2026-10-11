@@ -465,12 +465,17 @@ window.TA = (function(){
     const day = (iso, withYear) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); return m ? `${Number(m[3])} ${MONTHS[Number(m[2]) - 1]}${withYear ? " " + m[1] : ""}` : ""; };
 
     // The strip under the header. mode: "live" | "demo" | "replay"; o.liveOrders: true | false | undefined (not loaded yet);
-    // o.date: the replay clock date (ISO).
+    // o.date: the replay clock date (ISO); o.halt: the kill switch record (wins over everything on the Live page);
+    // o.brake: today's day-brake record.
     function modeStrip(mode, o){
       o = o || {};
       if(mode === "replay") return {kind: "replay", icon: "rewind",
         text: o.date ? `REPLAY · past data up to ${day(o.date, true)} · practice money` : "REPLAY · past data only · practice money"};
       if(mode === "demo") return {kind: "practice", icon: "flask", text: "PRACTICE · practice money only · no real orders possible"};
+      if(o.halt) return {kind: "halted", icon: "shieldoff",
+        text: `HALTED · kill switch set${o.halt.at ? " " + closeText(o.halt.at) : ""} · nothing trades · release: python -m trading_agent kill-switch --release`};
+      if(o.brake) return {kind: "brake", icon: "alert",
+        text: `LIVE · DAY BRAKE · account ${o.brake.fall_pct != null ? "down " + Number(o.brake.fall_pct).toFixed(1) + "% " : "down "}today · no new buys or rebalancing until the next session · GTT stops still act`};
       if(o.liveOrders === "unknown") return {kind: "unknown", icon: "alert", text: "LIVE · your real Groww account · live-orders setting unknown (could not read the server state)"};
       if(o.liveOrders === true) return {kind: "liveon", icon: "alert", text: "LIVE · real Groww account · live orders ON (agent/watch can trade)"};
       if(o.liveOrders === false) return {kind: "live", icon: "lock", text: "LIVE · your real Groww account · read-only on this page · live orders OFF"};

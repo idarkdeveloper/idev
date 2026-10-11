@@ -29,6 +29,7 @@ from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from . import killswitch
 from .broker import LocalPaperBroker
 from .factor_backtest import INDEX_FUNDS
 from .timezones import IST
@@ -109,7 +110,8 @@ class ForwardTest:
         self.broker = LocalPaperBroker(self.dir / f"{self.universe.lower()}_broker.json",
                                        starting_cash=self.data["capital"], price_fn=price_fn,
                                        currency="INR", whole_shares=True, cost_model=cost_model,
-                                       now_fn=lambda: self.now().astimezone(timezone.utc).isoformat(timespec="seconds"))
+                                       now_fn=lambda: self.now().astimezone(timezone.utc).isoformat(timespec="seconds"),
+                                       order_gate=lambda side: killswitch.reason(state_dir, f"place a forward-test {side}"))
 
     # -- state ------------------------------------------------------------------
     @property

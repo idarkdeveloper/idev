@@ -15,6 +15,7 @@ import time
 from datetime import datetime, time as dtime, timedelta, timezone, tzinfo
 from typing import Any, Callable
 
+from . import killswitch
 from .config import Settings
 from .groww import GrowwTokenUnavailable, warn_token_block_once
 from .risk import check_stops
@@ -103,6 +104,7 @@ class Watcher:
         self._broker = broker
         self._notifier = notifier
         self._stop = threading.Event()
+        self._halt_logged = False
         self._thread: threading.Thread | None = None
         self.ticks = 0
         self._alive_at = -1e9
@@ -399,6 +401,17 @@ class Watcher:
 
     def tick(self, force: bool = False) -> dict[str, Any]:
         now = datetime.now(self.tz)
+        halted = killswitch.reason(getattr(self.settings, "state_dir", None), "run the watch")
+        if halted:   # kill switch: nothing runs (no emails, no data, no Groww); the loop stays alive and idles
+            if not self._halt_logged:
+                log.warning("%s", halted)
+                self._halt_logged = True
+            info_h: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "halted": halted, "skipped": True}
+            self.last_tick = info_h
+            return info_h
+        if self._halt_logged:
+            log.info("HALT released: the watch runs again")
+            self._halt_logged = False
         info: dict[str, Any] = {"at": now.isoformat(timespec="seconds"), "in_window": self.market_window_open(now)}
         if self._digest is not None:  # on its own schedule, whatever the market window; returns at once
             try:

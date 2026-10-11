@@ -76,6 +76,9 @@ class PracticeStopChecker:
             return []
         if not self.market_open(now):
             return []
+        from . import killswitch
+        if killswitch.status(self.state_path.parent) is not None:   # kill switch: no practice stop sells either
+            return []
         broker = self._broker_fn()
         fills: list[dict[str, Any]] = []
         for p in broker.positions():

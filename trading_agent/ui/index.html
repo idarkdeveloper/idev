@@ -60,7 +60,7 @@
     <div class="ws-navgroup"><span class="ws-navhead">Deals &amp; orders</span><a href="#deals">Disclosed deals</a><a href="#orders">Order history</a><a href="#runs">Recent runs</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Research</span><a href="#lookup">Look up a stock</a><a href="#track-record">Claude's track record</a><a href="#screen">Factor screen</a><a href="#signal-lab">Signal lab</a><a href="#backtest">Backtest</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Tools</span><a href="#size">Position size</a><a href="#costs">Trade cost</a></div>
-    <div class="ws-navgroup"><span class="ws-navhead">Health</span><a href="#health">Data sources</a><a href="#groww-logins">Groww logins</a></div>
+    <div class="ws-navgroup"><span class="ws-navhead">Health</span><a href="#kill-switch">Kill switch</a><a href="#health">Data sources</a><a href="#groww-logins">Groww logins</a></div>
   </nav>
   <div class="ws-content">
   <div class="mode-banner demo" id="demo-banner" hidden><span id="demo-title"></span> <span class="sub" id="demo-sub"></span>
@@ -270,6 +270,19 @@
 
   <!-- ===================== Health ===================== -->
   <section class="ws-panel" id="ws-health" data-ws="health" role="tabpanel" aria-labelledby="wst-health">
+    <section class="card ks-card" data-anchor="kill-switch" aria-labelledby="ks-title">
+      <div class="cardhead"><h2 id="ks-title">Kill switch</h2><span class="sub" id="ks-sub" aria-live="polite">loading…</span></div>
+      <div class="cardbody">
+        <div id="ks-halted" class="ks-halted" role="alert" hidden></div>
+        <div id="ks-form">
+          <p class="sub">Stops all trading at once: writes <code>state/HALT</code>, stops the watch, cancels the agent's open orders at Groww, deletes the saved Groww token and alerts you by Telegram and email. GTT stop-losses stay (they keep protecting your holdings) unless you tick the box. Only <code>python -m trading_agent kill-switch --release</code> on the server undoes it.</p>
+          <div class="ks-row"><label for="ks-word">Type HALT to confirm</label><input id="ks-word" autocomplete="off" spellcheck="false" autocapitalize="characters" inputmode="text"></div>
+          <label class="ks-gtt"><input type="checkbox" id="ks-gtt"> Also cancel the agent's GTT stop-losses</label>
+          <button type="button" class="danger" id="ks-go" disabled>Stop all trading</button>
+        </div>
+        <pre class="ks-report" id="ks-report" hidden></pre>
+      </div>
+    </section>
     <section class="card" data-anchor="health" aria-labelledby="hl-title">
       <div class="cardhead"><h2 id="hl-title">Data health</h2><span class="sub" id="hl-sub" aria-live="polite">loading…</span>
         <button type="button" class="small" id="hl-refresh" style="margin-left:auto">Refresh</button></div>
@@ -453,7 +466,7 @@
   const WS_OF = {overview: "overview", portfolio: "overview", recs: "overview", practice: "overview", forward: "overview",
                  deals: "deals", orders: "deals", runs: "deals",
                  research: "research", lookup: "research", "track-record": "research", screen: "research", "signal-lab": "research", backtest: "research",
-                 tools: "tools", size: "tools", costs: "tools", health: "health", "groww-logins": "health"};
+                 tools: "tools", size: "tools", costs: "tools", health: "health", "groww-logins": "health", "kill-switch": "health"};
   const ANCHORS = Object.keys(WS_OF);
   const store = {get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }, set(k, v){ try { localStorage.setItem(k, v); } catch(e){} }};
   let layout = store.get("liveLayout") === "sections" ? "sections" : "tabs";
@@ -590,9 +603,27 @@
       badge.title = c.failing ? `${c.failing} data source${c.failing === 1 ? "" : "s"} failing` : "";
       $("wst-health").setAttribute("aria-label", c.failing ? `Health, ${c.failing} failing` : "Health");
       paintGrowwLogins(h.groww);
+      paintHalt(h.halt);
     } catch(e){ $("hl-sub").textContent = "Couldn't load: " + e.message; }
   }
   $("hl-refresh").addEventListener("click", loadHealth);
+  // ---- Kill switch: the word HALT must be typed; release only on the server (kill-switch --release) ----
+  function paintHalt(h){
+    $("ks-halted").hidden = !h; $("ks-form").hidden = !!h;
+    $("ks-sub").textContent = h ? "HALTED: nothing trades" : "trading allowed";
+    if(h) $("ks-halted").textContent = h.text || "HALT is set.";
+  }
+  $("ks-word").addEventListener("input", () => { $("ks-go").disabled = $("ks-word").value !== "HALT"; });
+  $("ks-go").addEventListener("click", async () => {
+    if($("ks-word").value !== "HALT") return;
+    $("ks-go").disabled = true;
+    try {
+      const r = await api("/api/kill-switch", {confirm: $("ks-word").value, cancel_gtt: $("ks-gtt").checked});
+      $("ks-report").textContent = r.summary; $("ks-report").hidden = false;
+      $("ks-word").value = ""; toast("Trading halted");
+    } catch(e){ toast(e.message); $("ks-go").disabled = $("ks-word").value !== "HALT"; }
+    loadHealth(); refresh();
+  });
   async function loadIntegration(){
     try { const j = await api("/api/integration"); paintIntegration(j); if(j.running && !integPoll) integPoll = setInterval(loadIntegration, 3000); if(!j.running && integPoll){ clearInterval(integPoll); integPoll = null; } }
     catch(e){ paintIntegration({line: {level: "idle", text: "Integration unavailable", title: e.message}}); }
@@ -724,7 +755,7 @@
 
   function render(keepPositions){   // keepPositions: leave the positions table alone (a stop editor is open in it)
     const s = S.settings, a = S.account, c = S.connections, w = S.watch || {};
-    SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: S.live_orders === true}));
+    SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: S.live_orders === true, halt: S.halt, brake: S.day_brake}));
     $("subtitle").title = s.market === "in" ? "Groww · NSE bulk & block deals" : "Alpaca · QuiverQuant disclosures";
     const inv = investorsOf(s);
     $("investor").textContent = inv.length === 1 ? inv[0] : `${inv.length} investors`;

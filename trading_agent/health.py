@@ -334,7 +334,10 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
 
     rows.sort(key=lambda r: (STATUS_ORDER[r["status"]], r["name"]))
     counts = {k: sum(1 for r in rows if r["status"] == k) for k in STATUS_ORDER}
+    from . import killswitch
+    halt = killswitch.status(sd)
     return {"at": now.isoformat(timespec="seconds"), "sources": rows, "counts": counts, "groww": groww,
+            "halt": None if halt is None else {**halt, "text": killswitch.reason(sd)},
             "note": "Read from what the agent records on this machine; nothing here asks a data source again."}
 
 

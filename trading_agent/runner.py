@@ -36,6 +36,9 @@ def login_host(settings: Settings) -> str:
 def token_block(settings: Settings) -> Any | None:
     """The GrowwTokenUnavailable that asking for a token would raise right now (no network), else None.
     None when an env token is set, or a valid cached token exists, or no key is configured."""
+    halted = _halted_token_error(settings)
+    if halted is not None:
+        return halted
     key = settings.groww_api_key
     if settings.groww_access_token or not key:
         return None
@@ -45,8 +48,16 @@ def token_block(settings: Settings) -> Any | None:
     return cache.block_error(key)
 
 
+def _halted_token_error(settings: Settings) -> GrowwTokenUnavailable | None:
+    """While the kill switch is set no Groww token is used or requested (callers already treat a missing token as
+    'Groww unavailable': prices fall back to the free source, the watch runs nothing)."""
+    from . import killswitch
+    text = killswitch.reason(settings.state_dir, "use Groww")
+    return GrowwTokenUnavailable(text) if text else None
+
+
 def resolve_groww_token(settings: Settings, *, fresh: bool = False, session: Any | None = None,
-                        force: bool = False) -> str:
+                        force: bool = False, halt_ok: bool = False) -> str:
     """GROWW_ACCESS_TOKEN wins; otherwise reuse the cached generated token until it
     expires (06:00 IST), and only then generate a new one (Groww allows 150 a day).
 
@@ -54,6 +65,9 @@ def resolve_groww_token(settings: Settings, *, fresh: bool = False, session: Any
     (``force`` ignores the cool-down)."""
     from .groww import cached_access_token, totp_now
 
+    halted = None if halt_ok else _halted_token_error(settings)
+    if halted is not None:
+        raise halted
     if settings.groww_access_token and not fresh:
         return settings.groww_access_token
     key = settings.groww_api_key
@@ -68,25 +82,38 @@ def resolve_groww_token(settings: Settings, *, fresh: bool = False, session: Any
                      "GROWW_API_SECRET / GROWW_TOTP_SECRET is set.")
 
 
-def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool = False) -> Any:
-    """The real Groww client. Order calls inside it refuse unless GROWW_LIVE_ORDERS=true.
-    Raises GrowwTokenUnavailable while Groww's token endpoint is cooling down after a refusal."""
+def make_groww(settings: Settings, price_fn: Any | None = None, *, force: bool = False, halt_ok: bool = False) -> Any:
+    """The real Groww client. Order calls inside it refuse unless GROWW_LIVE_ORDERS=true, and while the kill switch is
+    set. Raises GrowwTokenUnavailable while Groww's token endpoint is cooling down after a refusal, and while halted
+    (``halt_ok``: the kill switch's own client, which only lists and cancels)."""
+    from . import killswitch
     from .groww import GrowwBroker, InstrumentTicks
 
     ticks = InstrumentTicks(settings.state_dir / "cache") if settings.groww_live_orders else None
     session = groww_session(settings)
-    return GrowwBroker(resolve_groww_token(settings, session=session, force=force), live_orders=settings.groww_live_orders,
+    return GrowwBroker(resolve_groww_token(settings, session=session, force=force, halt_ok=halt_ok),
+                       live_orders=settings.groww_live_orders,
                        exchange=settings.groww_exchange, price_fallback=price_fn,
                        max_slippage_pct=settings.max_slippage_pct, session=session,
                        allowed_ip=settings.groww_allowed_ip,
                        sell_t1=settings.groww_sell_t1, ddpi_confirmed=settings.groww_ddpi_confirmed,
                        alert_fn=live_alert_fn(settings), buy_gate=lambda: _buy_block(settings),
+                       halt_fn=lambda what: killswitch.reason(settings.state_dir, what),
                        tick_size_fn=(lambda sym: ticks.tick_size(sym, settings.groww_exchange)) if ticks else None)
 
 
 def _buy_block(settings: Settings) -> str | None:
     from .integration import buy_block
     return buy_block(settings)
+
+
+def practice_gate(settings: Settings) -> Any:
+    """order_gate(side) for the practice account: the reason an order is refused right now, or None."""
+    from . import killswitch
+
+    def gate(side: str) -> str | None:
+        return killswitch.reason(settings.state_dir, f"place a practice {side}")
+    return gate
 
 
 def live_alert_fn(settings: Settings) -> Any:
@@ -156,7 +183,7 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
         def make() -> LocalPaperBroker:
             return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash,
                                     price_fn=groww_or_free, currency="INR", whole_shares=True,
-                                    cost_model=cost_model_for("in"), shared=True)
+                                    cost_model=cost_model_for("in"), shared=True, order_gate=practice_gate(settings))
         sim = make()
         if sim.is_untouched_mirror:
             # Older versions copied the Groww holdings in on the first run. A copy nobody has
@@ -168,7 +195,7 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
         return sim
     return LocalPaperBroker(sim_path, starting_cash=settings.paper_starting_cash, price_fn=price_fn,
                             currency=settings.currency, whole_shares=settings.market == "in",
-                            cost_model=cost_model_for(settings.market), shared=True)
+                            cost_model=cost_model_for(settings.market), shared=True, order_gate=practice_gate(settings))
 
 
 def make_broker(settings: Settings, price_fn: Any | None = None) -> Broker:
@@ -469,7 +496,11 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     * ``dry_run`` stops before calling Claude.
     * ``baseline`` records every current trade as seen without calling Claude: used when
       the saved state was lost, so a month of old deals isn't re-sent as new.
+
+    Raises killswitch.Halted while the kill switch is set (nothing is fetched or run).
     """
+    from . import killswitch
+    killswitch.refuse(settings.state_dir, "run the agent check")
     state = State(settings.state_dir / "state.json")
     broker = broker or make_broker(settings)
     notifier = notifier or make_notifier(settings)
