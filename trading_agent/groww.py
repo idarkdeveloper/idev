@@ -1005,7 +1005,7 @@ class GrowwBroker:
         placed = self.clock()
         if confirm and order["groww_order_id"]:
             order.update(self.confirm_order(order["groww_order_id"]))
-        if (side == "buy" and self.buy_timeout_s and order["groww_order_id"] and order["status"] == "open"):
+        if confirm and side == "buy" and self.buy_timeout_s and order["groww_order_id"] and order["status"] == "open":
             order.update(self._cancel_if_unfilled(order["groww_order_id"], qty, placed + float(self.buy_timeout_s)))
         if side == "sell" and order["status"] == "failed" and (
                 is_authorisation_problem(order.get("remark")) or is_authorisation_problem(payload.get("remark"))):
