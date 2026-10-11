@@ -2076,7 +2076,9 @@ def test_news_items_are_cards_with_a_muted_line_then_the_linked_headline(s):
             "deals": digest.unavailable("x")}
     mail = digest_render.render(data)
     html = mail["html"]
-    assert ">Headline</th>" not in html and "TCS · negative · The Economic Times · 9 Oct" in html
+    import re
+    assert ">Headline</th>" not in html and re.search(r">NEGATIVE</span> <b[^>]*>TCS</b> · The Economic Times · 9 Oct<", html)
+    assert html.index(">NEGATIVE<") < html.index(">POSITIVE<")                                   # negative first, then positive
     assert '<a href="https://example.com/a?x=1&amp;y=2"' in html and "&lt;b&gt;billing&lt;/b&gt;" in html and "javascript:" not in html
     assert "Headline" in mail["text"] and "The Economic Times" in mail["text"]                  # the text part keeps its table
 

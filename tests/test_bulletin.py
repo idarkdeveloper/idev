@@ -476,7 +476,9 @@ def test_evening_email_has_the_bulletin_sections_in_order(s):
     assert pos == sorted(pos), TITLES
     assert [i["cid"] for i in mail["images"]] == ["nifty15", "nifty4h"] and all(i["content"][:4] == b"\x89PNG" for i in mail["images"])
     html = mail["html"]
-    assert html.index("Nifty opened") < html.index('src="cid:nifty15"') < html.index('src="cid:nifty4h"') < html.index(">Metric<")
+    # the new close report: headline line, 15-minute chart, the 2×2 levels and momentum grid, 4-hour chart, then the markets table
+    assert (html.index("Nifty 50 closed at") < html.index('src="cid:nifty15"') < html.index(">Watch levels<") < html.index(">RSI (14)<")
+            < html.index('src="cid:nifty4h"') < html.index(">Global and commodities<") < html.index("never a forecast"))
     assert 'src="cid:nifty4h"' in html and html.count("<img") == 2 and "alt=" in html
     assert "[Chart: Nifty 50 15-minute candles" in text and "[Chart: Nifty 50 4-hour candles" in text
     # headline, chart 1, chart 2, then one levels-and-momentum table, then the not-a-forecast line
