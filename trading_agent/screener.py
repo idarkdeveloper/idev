@@ -52,6 +52,9 @@ def _pct(v: float | None) -> float | None:
     return None if v is None else round(v * 100.0, 2)
 
 
+SPARK_DAYS = 60   # closing prices sent per stock for the page's 30-day sparkline and 60-day chart
+
+
 def compute_metrics(bars: list[dict[str, Any]]) -> dict[str, Any]:
     """The screener's price figures from daily bars (oldest first: date, close, adj_close, volume), or {"error"}.
 
@@ -84,6 +87,7 @@ def compute_metrics(bars: list[dict[str, Any]]) -> dict[str, Any]:
         "pct_from_high": _pct(stats.get("pct_from_52w_high")), "above_200": stats.get("above_200dma"),
         "rsi": None if rsi_last is None else round(rsi_last, 1),
         "atr_pct": round(a / last * 100.0, 2) if a is not None and last else None,
+        "spark": [round(c, 2) for c in closes[-SPARK_DAYS:]],
     }
 
 
@@ -214,7 +218,7 @@ class ScreenerService:
                 "rsi": met.get("rsi"), "atr_pct": met.get("atr_pct"), "avg_turnover_cr": met.get("avg_turnover_cr"),
                 "mom_score": round(sc["score"], 2) if sc else None, "mom_eligible": bool(sc["eligible"]) if sc else None,
                 "band": band, "held": sym in held, "deal": sym in deals, "deal_who": deals.get(sym, []),
-                "as_of": met.get("as_of"), "ready": bool(met) and bool(fun),
+                "as_of": met.get("as_of"), "ready": bool(met) and bool(fun), "spark": met.get("spark"),
                 "error": met.get("error") if "error" in met else None,
             }
             tv = tv_snap.get(sym)

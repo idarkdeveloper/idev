@@ -45,8 +45,9 @@ def test_script_parses():
 
 # ---------- markup ----------
 def test_page_has_the_pickers_filters_table_and_export():
-    for needle in ('id="sc-universe"', 'id="sc-preset"', 'id="sc-q"', 'id="sc-chips"', 'id="af-form"', 'id="sc-cols"',
-                   'id="sc-export"', 'id="sc-save"', 'id="sc-head"', 'id="sc-rows"', 'id="sc-count"', 'id="sc-fresh"', 'id="sc-status"',
+    for needle in ('id="sc-universe"', 'id="sc-presets"', 'id="sc-q"', 'id="sc-chips"', 'id="sc-addbtn"', 'id="sc-pop"', 'id="sc-density"',
+                   'id="sc-allcols"', 'id="sc-export"', 'id="sc-save"', 'id="sc-head"', 'id="sc-rows"', 'id="sc-count"', 'id="sc-fresh"',
+                   'id="sc-status"', 'id="sc-drawer"', 'aria-controls="sc-pop"',
                    'name="viewport" content="width=device-width, initial-scale=1"', "<title>Screener"):
         assert needle in HTML, needle
     assert HTML.index("/static/common.js") < HTML.index("/static/palette.js") < HTML.index("/static/screener.js")
@@ -102,7 +103,7 @@ def test_script_only_reads_the_screener_endpoint_and_cannot_send_an_order():
                    "sendBeacon", "groww", "Groww", "GROWW", "live_orders", "liveOrders", "paper_order", "confirm("):
         assert needle not in code, needle
     assert re.findall(r"""["'`](/api/[^"'`?]*)""", code) == ["/api/screener"]
-    assert "api(" in code and "TA.palette.landingUrl(" in code     # a row opens Look up through the shared landing address
+    assert "api(" in code and "TA.palette.landingUrl(" in code     # the details drawer links to Look up through the shared landing address
 
 
 def test_no_colour_literals_in_the_screener_page_code():

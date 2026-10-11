@@ -506,3 +506,10 @@ def test_the_page_is_read_only_the_endpoint_has_no_post(settings):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_rows_carry_the_last_60_closes_for_the_sparkline_and_drawer_chart():
+    closes = [100 + i * 0.5 for i in range(300)]
+    m = sc.compute_metrics(bars_from(closes))
+    assert len(m["spark"]) == sc.SPARK_DAYS == 60 and m["spark"][-1] == round(closes[-1], 2) and m["spark"][0] == round(closes[-60], 2)
+    assert len(sc.compute_metrics(bars_from([100, 101, 102]))["spark"]) == 3       # a short history sends what there is

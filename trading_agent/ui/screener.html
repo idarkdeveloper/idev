@@ -11,7 +11,7 @@
 </head>
 <body data-mode="screener">
 <header>
-  <div class="wrap row">
+  <div class="wrap row sc-wrap">
     <div class="brand">
       <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 17 9 11 13 15 21 7"></polyline><polyline points="15 7 21 7 21 13"></polyline></svg></div>
       <div><div class="brand-name">Trading Agent</div><div class="sub">Screener: filter and sort stocks</div></div>
@@ -20,39 +20,51 @@
     <div class="row controls"><button type="button" id="btn-palette" class="pal-btn" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title="Search stocks and commands (Ctrl+K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Search</span><kbd class="pal-kbd" aria-hidden="true">Ctrl K</kbd></button><div class="theme-switch" role="group" aria-labelledby="theme-label"><span class="theme-label" id="theme-label">Theme</span><div class="seg"><button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button></div></div></div>
   </div>
 </header>
-<main>
-  <section class="card" id="sc-card">
-    <div class="cardhead"><h2>Stock screener</h2><span class="sub" id="sc-count" aria-live="polite"></span></div>
-    <div class="cardbody sc-controls">
-      <div class="sc-pickers">
-        <div class="field"><label for="sc-universe">Stocks</label><select id="sc-universe"></select></div>
-        <div class="field"><label for="sc-preset">Preset</label><select id="sc-preset"></select></div>
-        <div class="field sc-search"><label for="sc-q">Search names</label><input id="sc-q" type="search" autocomplete="off" placeholder="Company name or ticker"></div>
+<main class="sc-main">
+  <section class="card sc-card" id="sc-card" aria-labelledby="sc-title">
+    <div class="sc-top">
+      <h2 id="sc-title">Stock screener</h2>
+      <span class="sub" id="sc-count" aria-live="polite"></span>
+      <div class="sc-top-actions">
+        <div class="sc-density" role="group" aria-label="Row density" id="sc-density">
+          <button type="button" data-density="comfortable" aria-pressed="true" title="Comfortable rows"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><line x1="2" y1="3.5" x2="14" y2="3.5"></line><line x1="2" y1="8" x2="14" y2="8"></line><line x1="2" y1="12.5" x2="14" y2="12.5"></line></svg><span class="sr-only">Comfortable</span></button>
+          <button type="button" data-density="compact" aria-pressed="false" title="Compact rows"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><line x1="2" y1="2.5" x2="14" y2="2.5"></line><line x1="2" y1="6" x2="14" y2="6"></line><line x1="2" y1="9.5" x2="14" y2="9.5"></line><line x1="2" y1="13" x2="14" y2="13"></line></svg><span class="sr-only">Compact</span></button>
+        </div>
+        <button type="button" class="sc-btn" id="sc-allcols" aria-pressed="false">All columns</button>
+        <button type="button" class="sc-btn" id="sc-export" disabled>Export CSV</button>
       </div>
-      <div class="sub" id="sc-presetnote"></div>
-      <div class="sc-chips" id="sc-chips" aria-label="Active filters"></div>
-      <form class="sc-addfilter" id="af-form" aria-label="Add a filter">
-        <div class="field"><label for="af-col">Filter on</label><select id="af-col"></select></div>
-        <div class="field"><label for="af-op">Is</label><select id="af-op"></select></div>
-        <div class="field" id="af-val-wrap"><label for="af-val">Value</label><input id="af-val" autocomplete="off"></div>
-        <div class="field" id="af-bool-wrap" hidden><label for="af-bool">Value</label><select id="af-bool"><option value="yes">Yes</option><option value="no">No</option></select></div>
-        <div class="field" id="af-val2-wrap" hidden><label for="af-val2">And</label><input id="af-val2" inputmode="decimal" autocomplete="off"></div>
-        <div class="field sc-addbtn"><button type="submit" class="primary small">Add filter</button></div>
-        <datalist id="af-sectors"></datalist>
-      </form>
-      <div class="row sc-actions">
-        <details class="sc-colmenu"><summary>Columns</summary><div class="sc-cols" id="sc-cols"></div><button type="button" class="small" id="sc-colreset">Default columns</button></details>
-        <button type="button" class="small" id="sc-export" disabled>Export CSV</button>
-        <button type="button" class="small" id="sc-reset">Reset</button>
-        <span class="sc-savebox"><input id="sc-savename" maxlength="40" aria-label="Name for a preset of the current view" placeholder="Preset name"><button type="button" class="small" id="sc-save">Save preset</button><button type="button" class="small" id="sc-delpreset" hidden>Delete preset</button></span>
-      </div>
-      <div class="sub" id="sc-fresh"></div>
-      <div class="sub" id="sc-status" aria-live="polite"></div>
     </div>
-    <div class="scroll sc-scroll"><table class="sc-table"><thead id="sc-head"></thead><tbody id="sc-rows"></tbody></table></div>
-    <div class="cardbody"><div class="sub">Click a stock to open it in Look up on the Live page. Returns include dividends. A figure Yahoo has not given shows n/a and never matches a filter. This page is read-only: nothing here places an order.</div></div>
+    <div class="sc-presetbar" role="group" aria-label="Presets"><span class="sc-eyebrow">Presets</span><div class="sc-presets" id="sc-presets"></div></div>
+    <div class="sc-filterbar">
+      <select id="sc-universe" aria-label="Stocks"></select>
+      <input id="sc-q" type="search" autocomplete="off" placeholder="Search name or ticker" aria-label="Search name or ticker">
+      <span class="sc-vrule" aria-hidden="true"></span>
+      <div class="sc-chips" id="sc-chips" aria-label="Active filters"></div>
+      <button type="button" class="sc-addbtn" id="sc-addbtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="sc-pop">+ Add filter</button>
+      <button type="button" class="sc-link" id="sc-clear" hidden>Clear all</button>
+      <span class="sc-savebox"><button type="button" class="sc-link" id="sc-save">Save view</button><span id="sc-savewrap" hidden><input id="sc-savename" maxlength="40" aria-label="Name for this view" placeholder="Name this view"><button type="button" class="sc-btn" id="sc-saveok">Save</button></span></span>
+    </div>
+    <div class="sc-note sub" id="sc-presetnote" aria-live="polite"></div>
+    <div class="scroll sc-scroll"><table class="sc-table" id="sc-table"><thead id="sc-head"></thead><tbody id="sc-rows"></tbody></table></div>
+    <div class="sc-foot sub"><span id="sc-fresh"></span><span id="sc-status" aria-live="polite"></span><span>Click a row for details. Returns include dividends. A figure Yahoo has not given shows n/a and never matches a filter. This page is read-only: nothing here places an order.</span></div>
   </section>
 </main>
+
+<div class="sc-pop-backdrop" id="sc-pop-backdrop" hidden></div>
+<form class="sc-pop" id="sc-pop" role="dialog" aria-label="Add a filter" hidden>
+  <div class="field"><label for="af-col">Filter on</label><select id="af-col"></select></div>
+  <div id="af-num">
+    <div class="sc-ops" id="af-ops" role="group" aria-label="Comparison"></div>
+    <div class="sc-popvals"><input id="af-val" autocomplete="off" aria-label="Value"><span class="sub" id="af-and" hidden>and</span><input id="af-val2" inputmode="decimal" autocomplete="off" aria-label="Second value" placeholder="number" hidden><span class="sub" id="af-unit"></span></div>
+  </div>
+  <div class="sc-ops" id="af-bool" role="group" aria-label="Value" hidden><button type="button" data-bool="yes" aria-pressed="true">Yes</button><button type="button" data-bool="no" aria-pressed="false">No</button></div>
+  <datalist id="af-sectors"></datalist>
+  <div class="sc-popact"><button type="button" class="sc-btn" id="af-cancel">Cancel</button><button type="submit" class="sc-btn sc-accent">Add filter</button></div>
+</form>
+
+<div class="sc-scrim" id="sc-scrim" hidden></div>
+<aside class="sc-drawer" id="sc-drawer" role="dialog" aria-modal="true" aria-labelledby="dr-symbol" hidden></aside>
+
 <div class="toast" id="toast" role="status"></div>
 <script src="/static/common.js"></script>
 <script src="/static/palette.js"></script>
