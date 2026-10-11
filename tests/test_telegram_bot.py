@@ -66,8 +66,30 @@ def s(settings):
     return settings
 
 
+EQUITY_CSV = """SYMBOL,NAME OF COMPANY, SERIES, FACE VALUE
+RELIANCE,Reliance Industries Limited,EQ,10
+TCS,Tata Consultancy Services Limited,EQ,1
+INFY,Infosys Limited,EQ,5
+TATASTEEL,Tata Steel Limited,EQ,1
+TATAMOTORS,Tata Motors Limited,EQ,2
+HDFCBANK,HDFC Bank Limited,EQ,1
+HDFCLIFE,HDFC Life Insurance Company Limited,EQ,10
+HDFCAMC,HDFC Asset Management Company Limited,EQ,5
+COALINDIA,Coal India Limited,EQ,10
+EVIL,<b>Evil & Co</b> <a href='x'> Limited,EQ,1
+"""
+
+
+def seed_names(state_dir):
+    """The NSE equity list as the dashboard caches it, so names resolve with no network."""
+    cache = state_dir / "cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    (cache / "nse_equity_list.csv").write_text(EQUITY_CSV, encoding="utf-8")
+
+
 @pytest.fixture
 def app(s, monkeypatch):
+    seed_names(s.state_dir)
     from trading_agent.runner import make_practice_broker
     # the real practice account (its HALT / collar / day-brake gate included), priced by the fake: no network
     a = App(s, broker=make_practice_broker(s, price_fn=Prices()), dotenv=None, prices=Prices())
@@ -123,7 +145,7 @@ def test_help_status_and_an_unknown_command(s, app):
     api = FakeAPI([msg("/help"), msg("/status", uid=2), msg("/frobnicate", uid=3)])
     bot(s, app, api).poll_once()
     help_, status, unknown = api.texts()
-    assert "/buy SYMBOL QTY" in help_ and "nothing here places a live order" in help_
+    assert "/buy NAME QTY" in help_ and "nothing here places a live order" in help_
     assert "live orders OFF" in status and "Kill switch: not halted." in status and "Day brake: off." in status
     assert unknown == "Unknown command /frobnicate. /help lists them."
 
@@ -135,12 +157,13 @@ def test_a_confirmed_buy_is_placed_in_the_practice_account_once(s, app):
     api = FakeAPI([msg("/buy RELIANCE 5")])
     b = bot(s, app, api)
     b.poll_once()
-    assert "PRACTICE BUY</b> 5 × RELIANCE at about ₹100.00 = ₹500" in api.texts()[0]
+    assert "PRACTICE BUY</b> 5 × Reliance Industries (RELIANCE) at about ₹100.00 = ₹500" in api.texts()[0]
+    assert "Company: <b>Reliance Industries (RELIANCE)</b>. Is that the one you meant?" in api.texts()[0]
     ok, _ = nonce_of(api)
     assert app.demo.practice_broker.positions() == []                        # nothing placed by the command itself
     api.batches.append([tap(ok)])
     b.poll_once()
-    assert "<b>Practice BUY</b> 5 × RELIANCE at ₹100.00" in api.texts()[-1]
+    assert "<b>Practice BUY</b> 5 × Reliance Industries (RELIANCE) at ₹100.00" in api.texts()[-1]
     assert [(p.symbol, p.qty) for p in app.demo.practice_broker.positions()] == [("RELIANCE", 5.0)]
     assert ("editMessageReplyMarkup", {"chat_id": CHAT, "message_id": 1, "reply_markup": {"inline_keyboard": []}}) in api.calls
     api.batches.append([tap(ok, uid=51)])                                    # the second tap
@@ -164,8 +187,8 @@ def test_an_amount_buy_and_a_sell(s, app):
     assert [(p.symbol, p.qty) for p in app.demo.practice_broker.positions()] == [("TCS", 6.0)]
     api.batches.append([msg("/sell TCS ₹500", uid=62), msg("/buy TCS 1.5", uid=63), msg("/buy", uid=64)])
     b.poll_once()
-    assert api.texts()[-3:] == ["Sell a number of shares: /sell SYMBOL QTY.", "The quantity must be a whole number of shares.",
-                                "Usage: /buy SYMBOL QTY or /buy SYMBOL ₹AMOUNT (practice account only)"]
+    assert api.texts()[-3:] == ["Sell a number of shares: /sell NAME QTY.", "The quantity must be a whole number of shares.",
+                                "Usage: /buy NAME QTY or /buy NAME ₹AMOUNT (practice account only)"]
 
 
 def test_cancel_expiry_wrong_nonce_and_another_chats_tap_place_nothing(s, app):
@@ -178,13 +201,13 @@ def test_cancel_expiry_wrong_nonce_and_another_chats_tap_place_nothing(s, app):
     assert app.demo.practice_broker.positions() == []
     api.batches.append([tap(no, uid=53)])
     b.poll_once()
-    assert api.texts()[-1] == "Cancelled: practice buy of RELIANCE."
+    assert api.texts()[-1] == "Cancelled: practice buy of Reliance Industries (RELIANCE)."
     api.batches.append([msg("/buy INFY 2", uid=54)])
     b.poll_once()
     b.t[0] += CONFIRM_TTL_S + 1
     api.batches.append([tap(nonce_of(api)[0], uid=55)])
     b.poll_once()
-    assert api.texts()[-1] == "Expired: the practice buy of INFY was not placed."
+    assert api.texts()[-1] == "Expired: the practice buy of Infosys (INFY) was not placed."
     assert app.demo.practice_broker.positions() == []
 
 
@@ -248,13 +271,14 @@ def test_there_is_no_path_to_a_live_order_even_with_live_orders_on(s, monkeypatc
     monkeypatch.setattr(runner, "make_groww", lambda *a, **k: live)
     monkeypatch.setattr(App, "resolve", lambda self, text: (text.strip().upper(), None))
     monkeypatch.setattr(App, "holidays", property(lambda self: None))
+    seed_names(s.state_dir)
     app = App(s, broker=live, dotenv=None, prices=Prices())
     api = FakeAPI([msg("/buy RELIANCE 3")])
     b = bot(s, app, api)
     b.poll_once()
     api.batches.append([tap(nonce_of(api)[0])])
     b.poll_once()
-    assert live.writes == [] and "<b>Practice BUY</b> 3 × RELIANCE" in api.texts()[-1]
+    assert live.writes == [] and "<b>Practice BUY</b> 3 × Reliance Industries (RELIANCE)" in api.texts()[-1]
     assert isinstance(app.demo.broker, LocalPaperBroker) and app.demo.settings.groww_live_orders is False
     assert [(p.symbol, p.qty) for p in app.demo.practice_broker.positions()] == [("RELIANCE", 3.0)]
     status = api.texts()
@@ -264,11 +288,10 @@ def test_there_is_no_path_to_a_live_order_even_with_live_orders_on(s, monkeypatc
 
 
 def test_hostile_names_are_escaped(s, app, monkeypatch):
-    monkeypatch.setattr(App, "resolve", lambda self, text: ("EVIL", "<b>Evil & Co</b> <a href='x'>"))
-    api = FakeAPI([msg("/buy evil 1"), msg("/buy <script> 1", uid=2)])
+    api = FakeAPI([msg("/buy EVIL 1"), msg("/buy <script> 1", uid=2)])
     bot(s, app, api).poll_once()
     first = api.texts()[0]
-    assert "(&lt;b&gt;Evil &amp; Co&lt;/b&gt; &lt;a href='x'&gt;)" in first and "<b>Evil" not in first
+    assert "&lt;b&gt;Evil &amp; Co&lt;/b&gt; &lt;a href='x'&gt; (EVIL)" in first and "<b>Evil" not in first
     assert "<script>" not in "".join(api.texts())
 
 
@@ -323,7 +346,7 @@ def test_lookup_size_portfolio_and_stops(s):
     api = FakeAPI([msg("/lookup abc"), msg("/size abc 1 5", uid=2), msg("/portfolio", uid=3), msg("/stops", uid=4)])
     bot(s, fa, api).poll_once()
     look, size, port, stops = api.texts()
-    assert "<b>ABC</b> · Abc &lt;Industries&gt; Limited" in look and "Momentum: 1m +2.0% · 3m +8.0% · 6m +20.0%" in look
+    assert "<b>Abc &lt;Industries&gt; (ABC)</b>" in look and "Momentum: 1m +2.0% · 3m +8.0% · 6m +20.0%" in look
     assert "200-day average ₹95.50 (above it)" in look and "Suggested stop: ₹93.50" in look
     assert "Abc wins &lt;big&gt; order (Mint &amp; Co)" in look and "<b>What this means</b>" in look
     assert "Bottom line" in look and "Filters: Results due 15 Oct" in look
@@ -457,3 +480,97 @@ class _ReadOnly:
 
     def latest_price(self, symbol):
         return 100.0
+
+
+# --------------------------------------------------------------------------- #
+# company names everywhere
+# --------------------------------------------------------------------------- #
+def test_names_of_any_length_with_the_numbers_after_them(s, app, monkeypatch):
+    seen = []
+    real = App.size_quote
+
+    def spy(self, ticker, equity=None, risk_pct=1.0, max_pct=10.0):
+        seen.append((ticker, risk_pct, max_pct))
+        return real(self, ticker, equity, risk_pct, max_pct)
+    monkeypatch.setattr(App, "size_quote", spy)
+    api = FakeAPI([msg("/size tata steel 1 10"), msg("/size coal india", uid=2), msg("/buy tata steel 5", uid=3)])
+    b = bot(s, app, api)
+    b.poll_once()
+    assert seen == [("TATASTEEL", 1.0, 10.0), ("COALINDIA", 1.0, 10.0)]
+    size1, size2, confirm = api.texts()
+    assert size1.startswith("<b>Tata Steel (TATASTEEL)</b>") and "(risk 1%, cap 10%)" in size1
+    assert size2.startswith("<b>Coal India (COALINDIA)</b>")
+    assert "5 × Tata Steel (TATASTEEL)" in confirm
+    api.batches.append([tap(nonce_of(api)[0]), msg("/sell tata steel 2", uid=4)])
+    b.poll_once()
+    api.batches.append([tap(nonce_of(api)[0], uid=51)])
+    b.poll_once()
+    assert [(p.symbol, p.qty) for p in app.demo.practice_broker.positions()] == [("TATASTEEL", 3.0)]
+    api.batches.append([msg("/portfolio", uid=5), msg("/stops", uid=6)])
+    b.poll_once()
+    port, stops = api.texts()[-2:]
+    assert "• Tata Steel (TATASTEEL) 3 @ ₹100.00" in port and "• Tata Steel (TATASTEEL): trailing stop" in stops
+
+
+def test_an_ambiguous_name_asks_which_company_and_runs_the_command_for_the_choice(s, app):
+    api = FakeAPI([msg("/buy hdfc 2")])
+    b = bot(s, app, api)
+    b.poll_once()
+    ask = api.sent()[-1]
+    assert ask["text"].startswith("“hdfc” matches several companies. Which one?") and "(for /buy 2)" in ask["text"]
+    rows = ask["reply_markup"]["inline_keyboard"]
+    assert [r[0]["text"] for r in rows] == ["HDFC Bank (HDFCBANK)", "HDFC Life Insurance Company (HDFCLIFE)",
+                                            "HDFC Asset Management Company (HDFCAMC)"]
+    life = rows[1][0]["callback_data"]
+    api.batches.append([tap(life, sender="777")])                             # not you: ignored
+    b.poll_once()
+    assert app.demo.practice_broker.positions() == [] and len(b.picks) == 1
+    api.batches.append([tap(life, uid=52)])
+    b.poll_once()
+    assert "2 × HDFC Life Insurance Company (HDFCLIFE)" in api.texts()[-1]   # the same /buy, for the chosen one
+    api.batches.append([tap(life, uid=53)])                                   # a second tap on the choice
+    b.poll_once()
+    assert ("answerCallbackQuery", {"callback_query_id": "cb53", "text": "Nothing to choose (already chosen or unknown)."}) in api.calls
+    api.batches.append([tap(nonce_of(api)[0], uid=54)])
+    b.poll_once()
+    assert [(p.symbol, p.qty) for p in app.demo.practice_broker.positions()] == [("HDFCLIFE", 2.0)]
+
+
+def test_a_choice_expires_after_two_minutes(s, app):
+    api = FakeAPI([msg("/size hdfc 1 5")])
+    b = bot(s, app, api)
+    b.poll_once()
+    pick = api.sent()[-1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    b.t[0] += CONFIRM_TTL_S + 1
+    api.batches.append([tap(pick)])
+    b.poll_once()
+    assert ("answerCallbackQuery", {"callback_query_id": "cb50", "text": "Expired: send the command again."}) in api.calls
+    assert len(api.sent()) == 1
+
+
+def test_no_match_suggests_the_closest_names(s, app):
+    api = FakeAPI([msg("/lookup relianse industries"), msg("/buy qqqqzzzz 1", uid=2), msg("/buy tata steel five", uid=3)])
+    bot(s, app, api).poll_once()
+    sugg, none, bad = api.sent()
+    assert sugg["text"].startswith("No company is called “relianse industries”. Did you mean:")
+    assert sugg["reply_markup"]["inline_keyboard"][0][0]["text"] == "Reliance Industries (RELIANCE)"
+    assert none["text"] == "No NSE company matches “qqqqzzzz”. Try the company's name or its NSE code."
+    assert bad["text"].startswith("Usage: /buy NAME QTY") and "reply_markup" not in bad   # caught before any choice
+
+
+def test_the_command_list_is_registered_when_the_poller_starts(s, app):
+    import threading
+    stop = threading.Event()
+
+    class Once(FakeAPI):
+        def call(self, method, payload, timeout=10.0):
+            out = super().call(method, payload, timeout)
+            if method == "getUpdates":
+                stop.set()
+            return out
+    api = Once()
+    bot(s, app, api).run(stop)
+    assert api.calls[0] == ("setMyCommands", {"commands": telegram_bot.COMMANDS})
+    assert {c["command"] for c in telegram_bot.COMMANDS} == {"lookup", "size", "buy", "sell", "portfolio", "stops",
+                                                              "brief", "status", "help"}
+    assert all(c["command"].islower() and len(c["description"]) <= 256 for c in telegram_bot.COMMANDS)
