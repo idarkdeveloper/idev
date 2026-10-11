@@ -234,7 +234,9 @@ alerts "only T1 shares; not sold until they settle". Paper and practice accounts
   level once Groww shows the new quantity (or the day after). From 08:30 on the ex-date the practice and forward-test
   accounts are rescaled. With the list missing the holdings say "corporate actions unknown" and GTTs are left alone.
 - **Day brake.** Live account down `DAY_BRAKE_PCT` (3.5%) from the previous close during the session: no new buys
-  and no rebalancing until the next session; GTT stops still act; one alert; the mode strip says so.
+  until the next session; sells and GTT stops still act; one alert; the mode strip says so. Checked by the watch each
+  tick and by the agent before every live buy. With previous closes missing for most of the holdings the fall cannot
+  be measured: buys are refused (one alert) until it can.
 - **Clearing holidays.** On an NSE clearing holiday the previous trading day's sale proceeds are not counted as cash
   for a buy (live and practice). Until the year's list is known every day counts as one.
 
@@ -644,7 +646,7 @@ treated as missing (no filtering).
 | `MAX_SLIPPAGE_PCT` | Live limit price distance from the LTP, in percent (default `0.5`, max 5). |
 | `GROWW_GTT_STOPS` | `false` (default). `true` = keep a GTT stop-loss at Groww per live holding (needs `GROWW_LIVE_ORDERS=true`). |
 | `OPEN_COLLAR_START`, `OPEN_COLLAR_END`, `OPEN_COLLAR_BPS`, `BUY_TIMEOUT_S` | Opening collar: no buys before `09:17` IST; until `09:45` a live buy limit is at most the opening price + `30` bps; unfilled live buys cancelled after `120` s. |
-| `DAY_BRAKE_PCT` | `3.5` (default): live account down this much from the previous close stops buys and rebalancing for the session. |
+| `DAY_BRAKE_PCT` | `3.5` (default): live account down this much from the previous close stops new buys for the session. |
 | `GROWW_DDPI_CONFIRMED` | `false` (default). Your own confirmation that DDPI is active in the Groww app; while false, live sells alert once a day that they may be rejected. |
 | `GROWW_SELL_T1` | `false` (default) = live sells use free demat shares only. `true` = also T1 shares (BTST: short-delivery / auction risk). |
 | *(prices)* | Yahoo Finance is used automatically when Groww Live Data is unavailable or no broker is linked. |

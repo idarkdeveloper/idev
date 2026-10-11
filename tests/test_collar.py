@@ -254,3 +254,22 @@ def test_settings(monkeypatch, tmp_path):
     assert load_settings(None).open_collar_start == "09:20"
 
 
+
+
+def test_a_partly_filled_buy_cancelled_at_120_s_is_partial_not_failed(settings):
+    from trading_agent.live import record_order
+    from trading_agent.state import State
+    sess = FakeGroww(routes(quote=ok({"ohlc": {"open": 990.0}}), extra={
+        ("GET", "/order/detail/GMK1"): ok({"average_fill_price": 992.9, "filled_quantity": 1})}), partial=1)
+    o = broker(sess, collar_bps=30, buy_timeout_s=120).submit_order("RELIANCE", "buy", qty=3)
+    assert o["status"] == "partial" and o["filled_quantity"] == 1
+    sent = []
+
+    class Notes:
+        def send(self, subject, body):
+            sent.append(subject)
+    st = State(settings.state_dir / "state.json")
+    assert record_order(st, o, Notes())["status"] == "partial" and sent == []     # no "did not go through" alert
+    o2 = broker(FakeGroww(routes(quote=ok({"ohlc": {"open": 990.0}}))), collar_bps=30, buy_timeout_s=120) \
+        .submit_order("RELIANCE", "buy", qty=3)
+    assert o2["status"] == "failed"                                                # nothing filled: still failed

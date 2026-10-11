@@ -316,3 +316,20 @@ def test_the_page_has_the_button_and_the_strip_knows_the_halt():
     assert 'api("/api/kill-switch", {confirm:' in page and "halt: S.halt" in page
     js = (ui / "common.js").read_text(encoding="utf-8")
     assert 'kind: "halted"' in js and "kill-switch --release" in js
+
+
+def test_open_orders_and_gtts_the_switch_cannot_attribute_are_reported(live):
+    routes = groww_routes()
+    routes[("GET", "/order/list")] = ok({"order_list": [
+        {"groww_order_id": "G7", "order_status": "OPEN", "transaction_type": "BUY", "quantity": 2,
+         "trading_symbol": "SBIN"}]})                                        # no reference at all
+    routes[("GET", "/order-advance/list")] = ok({"order_list": [
+        {"smart_order_id": "S7", "status": "ACTIVE", "trading_symbol": "SBIN", "quantity": 2, "trigger_price": "700"}]})
+    sess = FakeSession(routes)
+    rep = killswitch.engage(live, by="cli", cancel_gtt=True,
+                            broker_fn=lambda: GrowwBroker("tok", session=sess, live_orders=True), now=AT)
+    assert sess.writes() == []                                                # never cancelled: not provably ours
+    text = killswitch.summary(rep)
+    assert "1 open order(s) not placed by the agent or without a reference were left: check the Groww app" in text
+    assert "1 GTT(s) not placed by the agent or without a reference were left: check the Groww app" in text
+    assert "No open agent orders" not in text

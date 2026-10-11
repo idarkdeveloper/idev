@@ -1034,6 +1034,8 @@ class GrowwBroker:
         out.update(self.confirm_order(groww_order_id, tries=3))
         filled = float(out.get("filled_quantity") or 0)
         out["cancelled_unfilled"] = True
+        if filled > 0 and classify_status(out.get("order_status")) != "open":
+            out["status"] = "partial"   # bought some: not a failure (no failure alert; the agent sees ok)
         out["remark"] = (f"unfilled after {self.buy_timeout_s:g} s: "
                          + (f"cancel failed ({out['cancel_error']}), filled {filled:g} of {qty}" if out.get("cancel_error")
                             else f"cancelled (filled {filled:g} of {qty})"))

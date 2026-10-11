@@ -152,8 +152,8 @@ def _stop_watch(stop_watch: Callable[[], Any] | None) -> str:
 
 
 def _cancel_at_groww(settings: Any, broker_fn: Callable[[], Any] | None, cancel_gtt: bool) -> dict[str, Any]:
-    out: dict[str, Any] = {"orders_cancelled": [], "orders_failed": [], "gtts": [], "gtts_cancelled": [],
-                           "gtts_failed": []}
+    out: dict[str, Any] = {"orders_cancelled": [], "orders_failed": [], "orders_other": [], "gtts": [],
+                           "gtts_cancelled": [], "gtts_failed": [], "gtts_other": []}
     if not (getattr(settings, "use_groww", False) and getattr(settings, "groww_live_orders", False)):
         out["groww"] = "live orders are off: no agent order can be open at Groww, nothing to cancel"
         return out
@@ -178,9 +178,12 @@ def _cancel_at_groww(settings: Any, broker_fn: Callable[[], Any] | None, cancel_
     for r in rows:
         ref = str(r.get("order_reference_id") or "")
         oid = r.get("groww_order_id")
-        if not oid or not ref.startswith(AGENT_PREFIXES) or classify_status(r.get("order_status")) != "open":
+        if classify_status(r.get("order_status")) != "open":
             continue
-        line = f"{r.get('transaction_type')} {r.get('quantity')} {r.get('trading_symbol')} (id {oid}, ref {ref})"
+        line = f"{r.get('transaction_type')} {r.get('quantity')} {r.get('trading_symbol')} (id {oid}, ref {ref or 'none'})"
+        if not oid or not ref.startswith(AGENT_PREFIXES):   # placed in the app, or no reference: never cancelled here
+            out["orders_other"].append(line)
+            continue
         try:
             broker.cancel_order(oid)
             out["orders_cancelled"].append(line)
@@ -197,7 +200,10 @@ def _cancel_at_groww(settings: Any, broker_fn: Callable[[], Any] | None, cancel_
         ref = str(g.get("reference_id") or "")
         line = f"{g.get('trading_symbol')} qty {g.get('quantity')} trigger {g.get('trigger_price')} (id {gid})"
         out["gtts"].append(line)
-        if not cancel_gtt or not gid or not ref.startswith(AGENT_PREFIXES):
+        if not gid or not ref.startswith(AGENT_PREFIXES):
+            out["gtts_other"].append(line)
+            continue
+        if not cancel_gtt:
             continue
         try:
             broker.cancel_gtt(gid)
@@ -259,9 +265,15 @@ def summary(report: dict[str, Any]) -> str:
     for key, label in (("orders_cancelled", "Cancelled order"), ("orders_failed", "NOT cancelled"),
                        ("gtts_cancelled", "Cancelled GTT"), ("gtts_failed", "GTT NOT cancelled")):
         lines += [f"{label}: {x}" for x in report.get(key) or []]
+    if report.get("orders_other"):
+        lines.append(f"{len(report['orders_other'])} open order(s) not placed by the agent or without a reference were "
+                     "left: check the Groww app: " + "; ".join(report["orders_other"]))
+    if report.get("gtts_other"):
+        lines.append(f"{len(report['gtts_other'])} GTT(s) not placed by the agent or without a reference were left: "
+                     "check the Groww app: " + "; ".join(report["gtts_other"]))
     if not report.get("groww"):
-        if not report.get("orders_cancelled") and not report.get("orders_failed"):
-            lines.append("No open agent orders at Groww.")
+        if not report.get("orders_cancelled") and not report.get("orders_failed") and not report.get("orders_other"):
+            lines.append("No open orders at Groww.")
         kept = [g for g in report.get("gtts") or [] if g not in (report.get("gtts_cancelled") or [])]
         if kept:
             lines.append(f"GTT stop-losses left active ({len(kept)}): " + "; ".join(kept))

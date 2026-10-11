@@ -571,7 +571,12 @@ class App:
 
     def _day_brake(self) -> dict[str, Any] | None:
         from . import day_brake
-        return day_brake.active(self.settings.state_dir) if self._live_orders_on() else None
+        if not self._live_orders_on():
+            return None
+        rec = day_brake.active(self.settings.state_dir)
+        if rec is None and (unk := day_brake.unknown(self.settings.state_dir)) is not None:
+            rec = {**unk, "unknown": True}
+        return rec
 
     def _halt(self) -> dict[str, Any] | None:
         from . import killswitch
