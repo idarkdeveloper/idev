@@ -302,7 +302,7 @@ def test_agent_live_sell_cancels_gtt(settings, tmp_path):
     st = State(settings.state_dir / "state.json")
     st.data["gtt_stops"] = {"RELIANCE": {"smart_order_id": "gtt_91a7f4", "trigger": 2400.0, "limit": 2388.0,
                                          "qty": 8, "status": "ACTIVE"}}
-    st.save()   # the GTT sync after a fill works on state.json as it is on disk (live.locked_gtt_sync)
+    st.save(fresh_keys=())   # the GTT sync after a fill works on state.json as it is on disk (live.locked_gtt_sync)
     # holdings reads: account(), the free-share check, then the GTT sync after the fill,
     # by which time Groww reports no RELIANCE holding any more
     sess.routes[("GET", "/holdings/user")] = Seq(HOLDINGS, HOLDINGS, ok({"holdings": []}))

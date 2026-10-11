@@ -14,14 +14,12 @@ the GTT manager additionally needs GROWW_GTT_STOPS=true.
 from __future__ import annotations
 
 import logging
-import threading
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 from .risk import atr, trailing_stop
-from .state import State
+from .state import GTT_KEYS, State, gtt_lock, touch_gtt_lock  # noqa: F401  (GTT_KEYS, gtt_lock: re-exported)
 from .timezones import IST
 
 log = logging.getLogger(__name__)
@@ -31,10 +29,6 @@ ORDER_FIELDS = ("id", "groww_order_id", "order_reference_id", "symbol", "side", 
                 "status", "placed_at", "checked_at", "error", "source")
 
 
-# The keys of state.json the GTT manager owns. Only a locked sync writes them (``locked_gtt_sync``); every other
-# writer keeps them as they are on disk (State.save(fresh_keys=GTT_KEYS)).
-GTT_KEYS = ("gtt_stops", "gtt_history", "gtt_suspended", "gtt_corp_done")
-_GTT_LOCK = threading.Lock()
 
 
 def _clock() -> datetime:
@@ -124,13 +118,14 @@ class GttStopManager:
 
     def __init__(self, broker: Any, state: State, *, bars_fn: Callable[[str], list] | None = None,
                  notifier: Any | None = None, enabled: bool = True, corp: Any | None = None,
-                 now_fn: Callable[[], datetime] | None = None):
+                 now_fn: Callable[[], datetime] | None = None, progress: Callable[[], Any] | None = None):
         self.broker = broker
         self.state = state
         # corp: a corp_actions.ActionBook. Over a split / bonus / large special dividend the GTT is cancelled the
         # session before the ex-date and re-created at the adjusted level once Groww shows the new quantity.
         self.corp = corp
         self.now_fn = now_fn or _clock
+        self.progress = progress   # called once per holding: keeps the GTT lock file fresh during a long sync
         self.bars_fn = bars_fn or (lambda sym: [])
         self.notifier = notifier
         self.enabled = enabled
@@ -176,6 +171,8 @@ class GttStopManager:
         now = self.now_fn()
 
         for sym, p in held.items():
+            if self.progress is not None:
+                self.progress()
             qty = int(p.free_qty)
             rec = self.stops.get(sym)
             price = p.current_price
@@ -337,23 +334,16 @@ def corp_book(settings: Any) -> Any | None:
 
 
 def sync_gtt_stops(settings: Any, broker: Any, state: State, *, bars_fn: Callable | None = None,
-                   notifier: Any | None = None) -> list[dict[str, Any]] | None:
+                   notifier: Any | None = None, progress: Callable[[], Any] | None = None) -> list[dict[str, Any]] | None:
     """Run a GTT sync if (and only if) live orders and GROWW_GTT_STOPS are both on."""
     if not gtt_enabled(settings, broker):
         return None
     try:
-        return GttStopManager(broker, state, bars_fn=bars_fn, notifier=notifier, corp=corp_book(settings)).sync()
+        return GttStopManager(broker, state, bars_fn=bars_fn, notifier=notifier, corp=corp_book(settings),
+                              progress=progress).sync()
     except Exception as e:  # noqa: BLE001
         log.warning("GTT sync failed: %s", e)
         return [{"action": "error", "error": str(e)}]
-
-
-@contextmanager
-def gtt_lock(state_dir: Path) -> Iterator[None]:
-    """One GTT sync at a time, in this process and across processes (the watch service, the dashboard, the CLI)."""
-    from .news import _file_lock
-    with _GTT_LOCK, _file_lock(Path(state_dir) / "state.json.gtt.lock", wait=90.0, stale=300.0, what="GTT sync"):
-        yield
 
 
 def locked_gtt_sync(settings: Any, broker: Any, *, bars_fn: Callable | None = None,
@@ -365,6 +355,7 @@ def locked_gtt_sync(settings: Any, broker: Any, *, bars_fn: Callable | None = No
         return None
     with gtt_lock(settings.state_dir):
         st = State(Path(settings.state_dir) / "state.json")
-        actions = sync_gtt_stops(settings, broker, st, bars_fn=bars_fn, notifier=notifier)
+        actions = sync_gtt_stops(settings, broker, st, bars_fn=bars_fn, notifier=notifier,
+                                 progress=lambda: touch_gtt_lock(settings.state_dir))
         st.save_only(GTT_KEYS)
     return actions

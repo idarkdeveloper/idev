@@ -96,7 +96,7 @@ def test_engage_writes_halt_cancels_only_open_agent_orders_keeps_gtts_deletes_to
 def test_cancel_gtt_cancels_only_the_agents_gtts_and_forgets_them(live):
     st = State(live.state_dir / "state.json")
     st.data["gtt_stops"] = {"RELIANCE": {"smart_order_id": "S1", "trigger": 2700.0, "qty": 3}}
-    st.save()
+    st.save(fresh_keys=())
     sess = FakeSession(groww_routes())
     rep = killswitch.engage(live, by="cli", cancel_gtt=True,
                             broker_fn=lambda: GrowwBroker("tok", session=sess, live_orders=True), now=AT)
@@ -335,3 +335,25 @@ def test_open_orders_and_gtts_the_switch_cannot_attribute_are_reported(live):
     assert "1 GTT(s) not placed by the agent or without a reference were left: check the Groww app" in text
     assert "No open agent orders" not in text
     assert text.count("SBIN qty 2 trigger 700") == 1                          # listed once
+
+
+def test_a_busy_gtt_lock_never_stops_the_switch_before_the_token_and_the_alert(live, monkeypatch):
+    import contextlib
+
+    import trading_agent.live as live_mod
+    (live.state_dir / "groww_token.json").write_text("{}")
+    st = State(live.state_dir / "state.json")
+    st.data["gtt_stops"] = {"RELIANCE": {"smart_order_id": "S1", "trigger": 2700.0, "qty": 3}}
+    st.save(fresh_keys=())
+
+    @contextlib.contextmanager
+    def busy(state_dir, wait=None):
+        raise TimeoutError("GTT sync is locked")
+        yield
+    monkeypatch.setattr(live_mod, "gtt_lock", busy)
+    notes = Notes()
+    rep = killswitch.engage(live, by="cli", cancel_gtt=True, notifier=notes, now=AT,
+                            broker_fn=lambda: GrowwBroker("tok", session=FakeSession(groww_routes()), live_orders=True))
+    assert rep["gtts_cancelled"] and "GTT records not updated" in rep["gtts_state_error"]
+    assert not (live.state_dir / "groww_token.json").exists() and notes.sent             # steps 4 and 5 ran
+    assert "GTT records not updated" in notes.sent[0][1]

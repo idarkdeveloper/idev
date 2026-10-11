@@ -212,7 +212,11 @@ def _cancel_at_groww(settings: Any, broker_fn: Callable[[], Any] | None, cancel_
         except Exception as e:  # noqa: BLE001
             out["gtts_failed"].append(f"{line}: {type(e).__name__}: {e}")
     if gone:
-        _forget_gtts(settings, gone)
+        try:
+            _forget_gtts(settings, gone)
+        except Exception as e:  # noqa: BLE001 - a busy GTT lock never stops the switch before steps 4 and 5
+            out["gtts_state_error"] = (f"GTT records not updated ({type(e).__name__}: {e}); the next GTT sync after "
+                                       "the release finds these GTTs cancelled at Groww")
     return out
 
 
@@ -221,7 +225,7 @@ def _forget_gtts(settings: Any, ids: set[str]) -> None:
     creates fresh ones instead of modifying cancelled ids."""
     from .live import GTT_KEYS, gtt_lock
     from .state import State
-    with gtt_lock(settings.state_dir):
+    with gtt_lock(settings.state_dir, wait=15.0):   # the switch never waits long: steps 4 and 5 must follow
         st = State(Path(settings.state_dir) / "state.json")
         stops = st.data.get("gtt_stops") or {}
         hist = st.data.setdefault("gtt_history", [])
@@ -281,6 +285,8 @@ def summary(report: dict[str, Any]) -> str:
             lines.append(f"GTT stop-losses left active ({len(kept)}): " + "; ".join(kept))
     if report.get("gtts_error"):
         lines.append(report["gtts_error"] + ".")
+    if report.get("gtts_state_error"):
+        lines.append(report["gtts_state_error"] + ".")
     lines.append(f"Token: {report.get('token')}.")
     lines.append(f"Release with: {RELEASE_HINT}")
     return "\n".join(lines)
