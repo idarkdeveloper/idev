@@ -1714,6 +1714,14 @@ class App:
             out["filter_flags"] = {k: v for k, v in flags.items() if v}
         except Exception:  # noqa: BLE001
             out["filter_flags"] = {}
+        try:   # splits, bonuses, large special dividends within 7 days (the GTT pauses over the ex-date)
+            from .corp_actions import book_for as corp_book_for
+            cb = corp_book_for(self.settings)
+            ca = {str(h.get("symbol")): cb.flags(str(h.get("symbol")), price=h.get("price")) for h in out.get("holdings") or []}
+            out["corp_actions"] = {k: v for k, v in ca.items() if v}
+            out["corp_actions_note"] = cb.note()
+        except Exception:  # noqa: BLE001
+            out["corp_actions"], out["corp_actions_note"] = {}, None
         self._my_portfolio, self._my_portfolio_at = out, time.time()
         return out
 

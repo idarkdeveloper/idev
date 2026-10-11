@@ -80,9 +80,19 @@ class PracticeStopChecker:
         if killswitch.status(self.state_path.parent) is not None:   # kill switch: no practice stop sells either
             return []
         broker = self._broker_fn()
+        book = None
+        try:   # over a split / bonus ex-date: rescale first (from 08:30), and no stop until that is done
+            from .corp_actions import ActionBook
+            book = ActionBook(self.state_path.parent, calendar=self.holidays)
+            book.normalise_practice(broker, now)
+        except Exception as e:  # noqa: BLE001
+            log.warning("corporate-action normaliser unavailable: %s", e)
+        n = (now or datetime.now(self.tz))
         fills: list[dict[str, Any]] = []
         for p in broker.positions():
             if p.current_price is None:
+                continue
+            if book is not None and book.held_back(p.symbol, n, None, account="paper_broker"):
                 continue
             bars: list[dict[str, Any]] = []
             if (p.stop_type or "trailing") == "trailing" and self._bars_fn is not None:

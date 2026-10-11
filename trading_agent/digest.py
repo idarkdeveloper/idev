@@ -442,6 +442,15 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
         fbook: Any = filters_for(ctx.settings)
     except Exception:  # noqa: BLE001
         fbook = None
+    cbook: Any = None
+    if getattr(ctx.settings, "market", "in") == "in":
+        try:   # splits, bonuses, large special dividends within 7 days: the GTT is paused over the ex-date
+            from .corp_actions import book_for as corp_book_for
+            cbook = corp_book_for(ctx.settings)
+            if not cbook.known(ctx.now()):
+                notes.append(cbook.note(ctx.now()))
+        except Exception:  # noqa: BLE001
+            cbook = None
     for h in g_rows:
         if h.get("kind") == "bond" or h.get("price") is None:
             no_price += 1
@@ -544,6 +553,11 @@ def _watch(ctx: DigestContext, today: date) -> dict[str, Any]:
                     notes.append(f"Results dates: unavailable ({ann_err[0]})")
         if fbook is not None:
             reasons += filter_reasons(fbook, sym, reasons)
+        if cbook is not None:
+            try:
+                reasons += cbook.reasons(sym, now, price)
+            except Exception:  # noqa: BLE001
+                pass
         if reasons:
             items.append({"symbol": sym, "name": clean_text(h.get("name") or "", 80), "source": h["source"],
                           "price": round(price, 2), "reasons": reasons, "loss_pct": round((price / h["avg"] - 1) * 100, 2),

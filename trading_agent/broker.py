@@ -557,6 +557,47 @@ class LocalPaperBroker:
             pos["stop"] = {"type": stop["type"], "value": stop.get("value")}
             self._save()
 
+    def rescale_position(self, symbol: str, *, ratio: float | None = None, dividend: float | None = None,
+                         before: str) -> dict[str, Any] | None:
+        """Corporate-action normaliser: a position held from before ``before`` (the ex-date, ISO) gets quantity x ratio
+        (whole shares rounded down) and buy price, high-water mark and a fixed stop / ratio; a special dividend lowers
+        the high-water mark by the cash paid instead. None when there is no such position."""
+        from .timezones import IST
+        sym = symbol.upper()
+        with self._txn():
+            pos = self._state["positions"].get(sym)
+            if pos is None:
+                return None
+            since = pos.get("copied_at") or pos.get("opened_at")
+            try:
+                held_from = datetime.fromisoformat(str(since)).astimezone(IST).date().isoformat()
+            except (TypeError, ValueError):
+                held_from = None
+            if held_from is not None and held_from >= before:
+                return None   # bought on or after the ex-date: already at the new price
+            old_qty, old_avg = pos["qty"], pos["avg_entry_price"]
+            if ratio:
+                r = float(ratio)
+                qty = old_qty * r
+                pos["qty"] = float(math.floor(qty + 1e-9)) if self.whole_shares else qty
+                pos["avg_entry_price"] = old_avg / r
+                if pos.get("high_water"):
+                    pos["high_water"] = pos["high_water"] / r
+                if pos.get("copied_qty"):
+                    pos["copied_qty"] = pos["copied_qty"] * r
+                stop = pos.get("stop") or {}
+                if stop.get("type") == "fixed" and stop.get("value"):
+                    pos["stop"] = {"type": "fixed", "value": round(float(stop["value"]) / r, 2)}
+                if sym in self._state.get("prices", {}):
+                    self._state["prices"][sym] = self._state["prices"][sym] / r
+            elif dividend and pos.get("high_water"):
+                pos["high_water"] = max(0.01, pos["high_water"] - float(dividend))
+            else:
+                return None
+            self._save()
+            return {"qty_from": old_qty, "qty_to": pos["qty"], "avg_from": round(old_avg, 4),
+                    "avg_to": round(pos["avg_entry_price"], 4)}
+
     def set_held_over_year(self, symbol: str, flag: bool) -> None:
         """Remember that the shares of an open position were held more than a year (for the tax estimate)."""
         with self._txn():

@@ -240,6 +240,17 @@ class Watcher:
         prices = self._prices
         bars_fn = (lambda sym: prices.history(sym, "1y")) if prices is not None else (lambda sym: [])
         hits = check_stops(positions, bars_fn)
+        if hits and getattr(self.settings, "market", "in") == "in":   # no stop over a split / bonus ex-date
+            try:
+                from .corp_actions import book_for as corp_book_for
+                book = corp_book_for(self.settings, calendar=self.holidays)
+                suspended = State(self.settings.state_dir / "state.json").data.get("gtt_suspended") or {}
+                practice = getattr(self._broker, "name", "").startswith("local-paper")
+                now = datetime.now(self.tz)
+                hits = [h for h in hits if not book.held_back(h["symbol"], now, suspended.get(h["symbol"]),
+                                                              account="paper_broker" if practice else None)]
+            except Exception as e:  # noqa: BLE001
+                log.warning("corporate-action check for stops unavailable: %s", e)
         if not hits:
             return []
         state_path = self.settings.state_dir / "state.json"
@@ -350,6 +361,11 @@ class Watcher:
                 got = filters_for(s, calendar=self.holidays).tick(self._data, now, deadline=deadline)
                 if got:
                     out["indian_filters"] = got
+            if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:   # splits, bonuses: once a trading day
+                from .corp_actions import book_for as corp_book_for
+                n_rows = corp_book_for(s, calendar=self.holidays).tick(self._data, now)
+                if n_rows is not None:
+                    out["corp_actions"] = n_rows
             if time.monotonic() >= deadline:
                 out["budget_used_up"] = True
         except Exception:  # noqa: BLE001 - market data never stops the watch
@@ -419,6 +435,18 @@ class Watcher:
             except Exception:  # noqa: BLE001 - the emails never stop the watch
                 log.exception("daily email check failed")
         info["market_data"] = self.poll_market_data(now)
+        if getattr(self.settings, "market", "in") == "in":   # from 08:30 on an ex-date: rescale the paper accounts
+            try:
+                from .corp_actions import normalise_all
+                done = normalise_all(self.settings, now)
+                if done:
+                    info["normalised"] = done
+                    if self._notifier is not None:
+                        self._notifier.send(f"[CORPORATE ACTION] {len(done)} practice position(s) adjusted",
+                                            "\n".join(f"{d['symbol']} ({d['account']}): {d['label']}, qty {d['qty_from']:g} -> "
+                                                      f"{d['qty_to']:g}, buy price {d['avg_from']:g} -> {d['avg_to']:g}" for d in done))
+            except Exception:  # noqa: BLE001 - never stops the watch
+                log.exception("corporate-action normaliser failed")
         if self._forward is not None:  # once a trading day after the close; returns at once (its own worker thread)
             try:
                 info["forward"] = self._forward.tick(now)

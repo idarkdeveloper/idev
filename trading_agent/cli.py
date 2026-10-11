@@ -472,8 +472,9 @@ def cmd_gtt(args: argparse.Namespace) -> int:
             print("Refusing: GROWW_GTT_STOPS is not true.")
             return 1
         prices = free_prices(settings)
+        from .live import corp_book
         mgr = GttStopManager(make_groww(settings, prices), st, notifier=make_notifier(settings),
-                             bars_fn=lambda sym: prices.history(sym, "1y"))
+                             bars_fn=lambda sym: prices.history(sym, "1y"), corp=corp_book(settings))
         for a in mgr.sync():
             print("  ", a)
         st.save()
