@@ -668,13 +668,21 @@ def test_practice_card_sits_right_under_my_groww_portfolio():
     assert "Copy into practice account" in html and "Reset to my Groww portfolio" in html and "window.confirm" not in html
 
 
-def test_portfolio_and_lookup_are_full_width_rows_above_the_columns():
-    html = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "index.html").read_text(encoding="utf-8")
-    mp, lk, cols = html.index('id="mp-card"'), html.index('data-anchor="lookup"'), html.index('<section class="cols">')
-    assert mp < lk < cols
-    assert html.index('data-anchor="size"') > cols and html.index('data-anchor="costs"') > cols   # these stay in the aside
-    css = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "nocturne.css").read_text(encoding="utf-8")
+def test_portfolio_and_stock_page_split_60_40_from_1200px():
+    """Portfolio (left) and the stock page (right, with Position size and Trade cost under it) share the top of the dashboard."""
+    ui = Path(__file__).resolve().parents[1] / "trading_agent" / "ui"
+    html = (ui / "index.html").read_text(encoding="utf-8")
+    split, left, right = html.index('class="topsplit"'), html.index('class="split-left"'), html.index('class="split-right"')
+    mp, cols = html.index('id="mp-card"'), html.index('<section class="cols">')
+    lk, size, costs = html.index('data-anchor="lookup"'), html.index('data-anchor="size"'), html.index('data-anchor="costs"')
+    assert split < left < mp < cols < right < lk < size < costs < html.index("<footer>")
+    assert html.index('id="recs"') < right                                 # Recommendations stay under the portfolio
+    css = (ui / "nocturne.css").read_text(encoding="utf-8")
     assert "main { max-width: 1600px;" in css
+    top = css[css.index("Top of the dashboard"):]
+    assert "@media (min-width: 1200px)" in top and "grid-template-columns: minmax(0, 3fr) minmax(0, 2fr)" in top
+    assert "position: sticky" in top[:top.index("Stock page")] and "#mp-card .prot-cell" in top   # sticky right column, compact portfolio
+    assert "@media (max-width: 1199px)" in top and "display: contents" in top                      # below 1200 it is one column again
 
 
 def test_tiles_and_recommendation_buttons_depend_on_mode():

@@ -145,6 +145,35 @@ def _norm_announcement(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _pct(row: dict[str, Any], *keys: str) -> float | None:
+    for k in keys:
+        v = row.get(k)
+        if v in (None, "", "-"):
+            continue
+        try:
+            f = float(str(v).replace(",", "").replace("%", "").strip())
+        except ValueError:
+            continue
+        if 0 <= f <= 100:
+            return round(f, 2)
+    return None
+
+
+def _norm_shareholding(row: dict[str, Any]) -> dict[str, Any] | None:
+    """One quarter of NSE's shareholding summary -> {date, promoters, public, fii, dii} in percent. NSE's summary row
+    carries the promoter and public shares; the foreign / domestic institution split is read when the row has it and is
+    None otherwise (never estimated). A row without a date or without any share is dropped."""
+    when = str(row.get("date") or row.get("asOnDate") or row.get("recordDate") or "").strip()
+    if not when:
+        return None
+    out = {"date": when,
+           "promoters": _pct(row, "pr_and_prgrp", "promoter", "promoters"),
+           "public": _pct(row, "public_val", "public"),
+           "fii": _pct(row, "fii", "fpi", "foreignInstitutions"),
+           "dii": _pct(row, "dii", "domesticInstitutions")}
+    return out if any(out[k] is not None for k in ("promoters", "public", "fii", "dii")) else None
+
+
 def _norm_insider(row: dict[str, Any]) -> DisclosedTrade:
     ttype = str(row.get("tdpTransactionType") or row.get("transactionType") or "").strip()
     transaction = {"BUY": "Purchase", "SELL": "Sale"}.get(ttype.upper(), ttype or "Trade")
@@ -454,6 +483,24 @@ class NSEClient:
         out = [_norm_announcement(r) for r in rows]
         out.sort(key=lambda a: a["at"], reverse=True)
         return out[:limit]
+
+    def shareholding(self, symbol: str, quarters: int = 5) -> list[dict[str, Any]]:
+        """Shareholding pattern, newest quarter first (at most ``quarters``), from NSE's corporate shareholding endpoint
+        through this client (so the breaker and back-off apply). Raises on any failure: the caller says "unavailable"."""
+        sym = check_ticker(symbol)
+        data = self._get("api/corporate-share-holdings-master", params={"index": "equities", "symbol": sym},
+                         referer=f"{self.base_url}/companies-listing/corporate-filings-shareholding-pattern")
+        rows = data if isinstance(data, list) else (data or {}).get("data", [])
+        out = [n for n in (_norm_shareholding(r) for r in rows if isinstance(r, dict)) if n]
+        if not out:
+            raise LookupError(f"NSE has no shareholding pattern for {sym}")
+        def key(q: dict[str, Any]) -> Any:
+            try:
+                return datetime.strptime(q["date"].title(), "%d-%b-%Y")
+            except ValueError:
+                return datetime.min
+        out.sort(key=key, reverse=True)
+        return out[:quarters]
 
     def announcement_history(self, symbol: str, max_age_s: float = 86400.0) -> list[dict[str, Any]]:
         """Every NSE announcement for one company, newest first (back to 2004 for old listings).

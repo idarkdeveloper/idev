@@ -545,14 +545,17 @@ window.TA = (function(){
       if(h !== null && /^\d+$/.test(h) && HORIZONS.includes(Number(h))) out.h = Number(h);
       const a = String(hash || "").replace(/^#/, "");
       if(a && (known.anchors || []).includes(a)) out.anchor = a;
+      const stk = q.get("stock");   // the stock page's ticker: plain NSE-style codes only
+      if(stk !== null && /^[A-Za-z0-9&.\-]{1,20}$/.test(stk)) out.stock = stk.toUpperCase();
       return out;
     }
-    // st: {investor: [names] | undefined (leave out), h: number | undefined, anchor: string | undefined}
+    // st: {investor: [names] | undefined (leave out), h: number | undefined, stock: ticker | undefined, anchor: string | undefined}
     function buildUrl(pathname, st){
       st = st || {};
       const q = [];
       if(st.investor !== undefined) q.push("investor=" + (st.investor.length ? st.investor.map(slug).join(",") : "all"));
       if(st.h && HORIZONS.includes(Number(st.h))) q.push("h=" + Number(st.h));
+      if(st.stock && /^[A-Za-z0-9&.\-]{1,20}$/.test(st.stock)) q.push("stock=" + encodeURIComponent(st.stock));
       return (pathname || "/") + (q.length ? "?" + q.join("&") : "") + (st.anchor ? "#" + st.anchor : "");
     }
     // The section to name in the URL: the one whose box holds the line `line` px below the viewport top ("" when none does).
@@ -567,15 +570,18 @@ window.TA = (function(){
   // Candles + volume + EMA/BB lines in the main pane, RSI and MACD in their own panes, a hover legend, range and
   // indicator chips (remembered in localStorage). Colours are the nocturne.css tokens, resolved to rgb() through a probe
   // element because the tokens use color-mix() which the library's canvas colour parser cannot read. ----
-  const STOCK_RANGES = ["1M", "3M", "6M", "1Y", "2Y", "5Y"];
+  const STOCK_RANGES = ["1D", "1W", "1M", "3M", "6M", "1Y", "5Y", "ALL"];
+  const RANGE_LABEL = {ALL: "All"};
+  const INTRADAY_RANGES = ["1D", "1W"];
   const STOCK_TOGGLES = [["ema", "EMA"], ["bb", "BB"], ["rsi", "RSI"], ["macd", "MACD"], ["vol", "Volume"]];
   const STOCK_KEY = "lkChart";
-  const stockDefaults = () => ({range: "1Y", on: {ema: true, bb: false, rsi: true, macd: false, vol: true}});
+  const stockDefaults = () => ({range: "1Y", mode: "line", on: {ema: true, bb: false, rsi: true, macd: false, vol: true}});
   function stockPrefs(){
     const p = stockDefaults();
     try {
       const v = JSON.parse(localStorage.getItem(STOCK_KEY) || "null");
       if(v && STOCK_RANGES.includes(v.range)) p.range = v.range;
+      if(v && (v.mode === "line" || v.mode === "candle")) p.mode = v.mode;
       if(v && v.on) STOCK_TOGGLES.forEach(([k]) => { if(typeof v.on[k] === "boolean") p.on[k] = v.on[k]; });
     } catch(e){}
     return p;
@@ -621,10 +627,16 @@ window.TA = (function(){
 
   const fmtVol = (v) => v == null ? "n/a" : v >= 1e7 ? (v / 1e7).toFixed(2) + " Cr" : v >= 1e5 ? (v / 1e5).toFixed(2) + " L"
     : Math.round(v).toLocaleString("en-IN");
-  const timeKey = (t) => typeof t === "string" ? t
+  const timeKey = (t) => typeof t === "string" ? t : typeof t === "number" ? t
     : t && typeof t === "object" && t.year ? `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}` : null;
 
-  // stockChart(host, {ticker, fetchCandles(range) -> Promise<payload>, isCurrent() -> bool, fallback(message)})
+  // The label for a bar's time: a date string as is; intraday bars carry epoch seconds already shifted to IST, drawn as UTC.
+  const barTime = (t) => typeof t === "number"
+    ? new Date(t * 1000).toLocaleString("en-IN", {timeZone: "UTC", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false})
+    : String(t);
+  // stockChart(host, {ticker, fetchCandles(range, exchange) -> Promise<payload>, isCurrent() -> bool, fallback(message),
+  //   exchange, exchangeChips (default true; the stock page draws the switch itself and calls setExchange)})
+  // Ranges 1D .. All; a Line / Candles switch (line is the default); the indicator chips only in candle mode.
   // Builds the controls, legend and chart inside ``host``; returns {destroy()}. Throws if the library is missing so the
   // caller can draw the old line chart instead; async failures call ``fallback``.
   function stockChart(host, cfg){
@@ -634,17 +646,30 @@ window.TA = (function(){
     let chart = null, data = null, dead = false, seq = 0, colors = null, ro = null, mo = null, mq = null;
     let series = {}, byDate = new Map(), legendFor = null, savedRange = null;
     let exchange = cfg.exchange === "BSE" ? "BSE" : "NSE";
-    host.innerHTML = `<div class="ck-controls"><div class="ck-chips" role="group" aria-label="Exchange">${["NSE", "BSE"].map(x =>
-        `<button type="button" class="ck-chip" data-exch="${x}" aria-pressed="false">${x}</button>`).join("")}</div><div class="ck-chips" role="group" aria-label="Chart range">${STOCK_RANGES.map(r =>
-        `<button type="button" class="ck-chip" data-range="${r}" aria-pressed="false">${r}</button>`).join("")}</div>
-      <div class="ck-chips" role="group" aria-label="Indicators">${STOCK_TOGGLES.map(([k, l]) =>
-        `<button type="button" class="ck-chip" data-tog="${k}" aria-pressed="false">${l}</button>`).join("")}</div></div>
+    const exchChips = cfg.exchangeChips !== false;
+    host.innerHTML = `<div class="ck-controls">${exchChips ? `<div class="ck-chips" role="group" aria-label="Exchange">${["NSE", "BSE"].map(x =>
+        `<button type="button" class="ck-chip" data-exch="${x}" aria-pressed="false">${x}</button>`).join("")}</div>` : ""}<div class="ck-chips" role="group" aria-label="Chart range">${STOCK_RANGES.map(r =>
+        `<button type="button" class="ck-chip" data-range="${r}" aria-pressed="false">${RANGE_LABEL[r] || r}</button>`).join("")}</div>
+      <div class="ck-chips" role="group" aria-label="Chart type">${[["line", "Line"], ["candle", "Candles"]].map(([k, l]) =>
+        `<button type="button" class="ck-chip" data-mode="${k}" aria-pressed="false">${l}</button>`).join("")}</div></div>
+      <div class="ck-controls ck-inds" role="group" aria-label="Indicators">${STOCK_TOGGLES.map(([k, l]) =>
+        `<button type="button" class="ck-chip" data-tog="${k}" aria-pressed="false">${l}</button>`).join("")}</div>
       <div class="ck-legend" aria-live="off"></div><div class="ck-box"></div><div class="ck-note sub"></div>`;
     const box = host.querySelector(".ck-box"), legend = host.querySelector(".ck-legend"), note = host.querySelector(".ck-note");
 
+    // What is drawn: line mode shows no indicators and no volume; intraday bars have no indicators (they need daily history).
+    const eff = () => {
+      const c = prefs.mode === "candle", ind = c && !(data && data.intraday), o = prefs.on;
+      return {ema: ind && o.ema, bb: ind && o.bb, rsi: ind && o.rsi, macd: ind && o.macd, vol: c && o.vol};
+    };
     function paintChips(){
       host.querySelectorAll("[data-range]").forEach(b => b.setAttribute("aria-pressed", b.dataset.range === prefs.range ? "true" : "false"));
-      host.querySelectorAll("[data-tog]").forEach(b => b.setAttribute("aria-pressed", prefs.on[b.dataset.tog] ? "true" : "false"));
+      host.querySelectorAll("[data-mode]").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === prefs.mode ? "true" : "false"));
+      host.querySelectorAll("[data-tog]").forEach(b => {
+        b.setAttribute("aria-pressed", prefs.on[b.dataset.tog] ? "true" : "false");
+        b.hidden = !!(data && data.intraday && b.dataset.tog !== "vol");
+      });
+      const inds = host.querySelector(".ck-inds"); if(inds) inds.hidden = prefs.mode !== "candle";
       host.querySelectorAll("[data-exch]").forEach(b => b.setAttribute("aria-pressed", b.dataset.exch === exchange ? "true" : "false"));
     }
     const heights = () => {
@@ -653,7 +678,8 @@ window.TA = (function(){
     };
     const totalHeight = () => {
       const h = heights();
-      return h.main + (prefs.on.rsi ? h.rsi + 1 : 0) + (prefs.on.macd ? h.macd + 1 : 0) + 26;
+      const on = eff();
+      return h.main + (on.rsi ? h.rsi + 1 : 0) + (on.macd ? h.macd + 1 : 0) + 26;
     };
     function layoutPanes(){
       if(!chart) return;
@@ -662,10 +688,17 @@ window.TA = (function(){
       // Panes share the plot height by stretch factor, so the factors are the wanted heights (main 260 : RSI 70 : MACD 80).
       let i = 1;
       if(panes[0]) panes[0].setStretchFactor(h.main);
-      if(prefs.on.rsi && panes[i]) panes[i++].setStretchFactor(h.rsi);
-      if(prefs.on.macd && panes[i]) panes[i++].setStretchFactor(h.macd);
+      const on = eff();
+      if(on.rsi && panes[i]) panes[i++].setStretchFactor(h.rsi);
+      if(on.macd && panes[i]) panes[i++].setStretchFactor(h.macd);
     }
 
+    // A line is drawn in the profit colour when the range ends above where it began (1D: above the previous close).
+    function trendUp(){
+      if(!data || !data.bars || !data.bars.length) return true;
+      const ref = data.intraday && data.range === "1D" && data.prev_close != null ? data.prev_close : data.bars[0].close;
+      return data.bars[data.bars.length - 1].close >= ref;
+    }
     function applyColors(){
       if(!chart) return;
       colors = stockColors();
@@ -679,6 +712,8 @@ window.TA = (function(){
       });
       const s = series;
       if(s.candle) s.candle.applyOptions({upColor: k.up, downColor: k.down, wickUpColor: k.up, wickDownColor: k.down});
+      if(s.main && s.main !== s.candle) s.main.applyOptions({color: trendUp() ? k.up : k.down});
+      if(s.prevLine) s.prevLine.applyOptions({color: k.text});
       if(s.vol && data) s.vol.setData(data.bars.map(b => ({time: b.time, value: b.volume, color: b.close >= b.open ? k.volUp : k.volDown})));
       if(s.ema20) s.ema20.applyOptions({color: k.teal});
       if(s.ema50) s.ema50.applyOptions({color: k.amber});
@@ -706,33 +741,42 @@ window.TA = (function(){
       teardown();
       if(!keepRange) savedRange = null;
       if(dead || !data || !data.bars || !data.bars.length) return;
-      const k = colors = stockColors(), on = prefs.on;
+      const k = colors = stockColors(), on = eff(), candle = prefs.mode === "candle";
       const fmt = (v) => money(v, 2);
       chart = LW.createChart(box, {
         width: Math.max(box.clientWidth, 100), height: totalHeight(),
         layout: {fontFamily: getComputedStyle(document.body).fontFamily, fontSize: 11, attributionLogo: true},
         handleScroll: {mouseWheel: false, vertTouchDrag: false}, handleScale: {mouseWheel: true, pinch: true, axisPressedMouseMove: true},
-        timeScale: {timeVisible: false, rightOffset: 2, fixLeftEdge: true, fixRightEdge: true},   // no empty space beside the bars
+        timeScale: {timeVisible: !!data.intraday, secondsVisible: false, rightOffset: 2, fixLeftEdge: true, fixRightEdge: true},   // no empty space beside the bars
         crosshair: {mode: 0}
       });
       const line = (opts, pane) => chart.addSeries(LW.LineSeries, Object.assign({lineWidth: 1, lastValueVisible: false,
         priceLineVisible: false, crosshairMarkerVisible: false}, opts), pane);
       // the price scale also covers your cost and stop, so those lines are never off-screen
-      const keep = [data.position && data.position.cost, data.position && data.position.stop].filter(v => v != null);
-      series.candle = chart.addSeries(LW.CandlestickSeries, {borderVisible: false, priceLineVisible: false,
-        priceFormat: {type: "custom", formatter: fmt, minMove: 0.01},
+      const keep = [data.position && data.position.cost, data.position && data.position.stop, data.intraday ? data.prev_close : null].filter(v => v != null);
+      const scale = {priceFormat: {type: "custom", formatter: fmt, minMove: 0.01},
         autoscaleInfoProvider: (base) => {
           const r = base();
           if(!r || !r.priceRange || !keep.length) return r;
           return Object.assign({}, r, {priceRange: {minValue: Math.min(r.priceRange.minValue, ...keep),
                                                     maxValue: Math.max(r.priceRange.maxValue, ...keep)}});
-        }}, 0);
-      series.candle.setData(data.bars.map(b => ({time: b.time, open: b.open, high: b.high, low: b.low, close: b.close})));
+        }};
+      if(candle){
+        series.candle = chart.addSeries(LW.CandlestickSeries, Object.assign({borderVisible: false, priceLineVisible: false}, scale), 0);
+        series.candle.setData(data.bars.map(b => ({time: b.time, open: b.open, high: b.high, low: b.low, close: b.close})));
+        series.main = series.candle;
+      } else {
+        series.main = chart.addSeries(LW.LineSeries, Object.assign({lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+          crosshairMarkerVisible: true}, scale), 0);
+        series.main.setData(data.bars.map(b => ({time: b.time, value: b.close})));
+      }
+      if(data.intraday && data.prev_close != null) series.prevLine = series.main.createPriceLine({price: data.prev_close, lineWidth: 1,
+        lineStyle: 2, axisLabelVisible: true, title: "Prev close", color: k.text});
       if(on.vol){
         series.vol = chart.addSeries(LW.HistogramSeries, {priceFormat: {type: "volume"}, priceScaleId: "vol",
           lastValueVisible: false, priceLineVisible: false}, 0);
         chart.priceScale("vol").applyOptions({scaleMargins: {top: 0.8, bottom: 0}});
-        series.candle.priceScale().applyOptions({scaleMargins: {top: 0.06, bottom: 0.22}});
+        series.main.priceScale().applyOptions({scaleMargins: {top: 0.06, bottom: 0.22}});
       }
       const setLine = (name, pts, opts) => { series[name] = line(opts, 0); series[name].setData(pts || []); };
       if(on.ema){ setLine("ema20", data.ema20, {}); setLine("ema50", data.ema50, {}); setLine("ma200", data.ma200, {lineWidth: 2}); }
@@ -740,9 +784,9 @@ window.TA = (function(){
         setLine("bbU", data.bb_upper, {}); setLine("bbM", data.bb_mid, {lineStyle: 2}); setLine("bbL", data.bb_lower, {});
       }
       const pos = data.position;
-      if(pos && pos.cost != null) series.costLine = series.candle.createPriceLine({price: pos.cost, lineWidth: 1, lineStyle: 2,
+      if(pos && pos.cost != null) series.costLine = series.main.createPriceLine({price: pos.cost, lineWidth: 1, lineStyle: 2,
         axisLabelVisible: true, title: "Your cost", color: k.ink});
-      if(pos && pos.stop != null) series.stopLine = series.candle.createPriceLine({price: pos.stop, lineWidth: 1, lineStyle: 2,
+      if(pos && pos.stop != null) series.stopLine = series.main.createPriceLine({price: pos.stop, lineWidth: 1, lineStyle: 2,
         axisLabelVisible: true, title: "Stop", color: k.down});
       let pane = 1;
       if(on.rsi){
@@ -778,10 +822,12 @@ window.TA = (function(){
       legendFor = key;
       if(!data || !data.bars || !data.bars.length){ legend.textContent = ""; return; }
       let i = key != null && byDate.has(key) ? byDate.get(key) : data.bars.length - 1;
-      const b = data.bars[i], prev = i > 0 ? data.bars[i - 1].close : null, on = prefs.on;
+      const on = eff(), candle = prefs.mode === "candle";
+      const b = data.bars[i], prev = data.intraday && data.range === "1D" && data.prev_close != null ? data.prev_close : (i > 0 ? data.bars[i - 1].close : null);
       const chg = prev ? (b.close - prev) / prev : null, cls = chg == null ? "" : chg >= 0 ? "ck-up" : "ck-down";
-      const p = [`<span class="ck-exch">${esc(data.exchange || exchange)}</span> <b>${esc(b.time)}</b>`, `O ${esc(money(b.open, 2))}`, `H ${esc(money(b.high, 2))}`, `L ${esc(money(b.low, 2))}`,
-        `C ${esc(money(b.close, 2))}`];
+      const p = [`<span class="ck-exch">${esc(data.exchange || exchange)}</span> <b>${esc(barTime(b.time))}</b>`];
+      if(candle) p.push(`O ${esc(money(b.open, 2))}`, `H ${esc(money(b.high, 2))}`, `L ${esc(money(b.low, 2))}`);
+      p.push(`${candle ? "C" : "Price"} ${esc(money(b.close, 2))}`);
       if(chg != null) p.push(`<span class="${cls}">${chg >= 0 ? "+" : "−"}${Math.abs(chg * 100).toFixed(2)}%</span>`);
       if(on.vol) p.push(`Vol ${esc(fmtVol(b.volume))}`);
       const add = (label, arr, d, color) => { const v = valueAt(arr, b.time); if(v != null) p.push(`<span style="color:${color || "inherit"}">${label} ${esc(Number(v).toFixed(d))}</span>`); };
@@ -797,20 +843,26 @@ window.TA = (function(){
       const mine = ++seq;
       note.textContent = "Loading chart…";
       let payload;
+      const soft = INTRADAY_RANGES.includes(prefs.range);   // an intraday gap (market shut, Yahoo quiet) keeps the controls
+      const failed = (why) => {
+        if(!soft){ cfg.fallback(why); return; }
+        teardown(); data = null; legend.textContent = ""; note.textContent = "Intraday prices unavailable (" + why + "). Pick another range.";
+      };
       try { payload = await cfg.fetchCandles(prefs.range, exchange); }
-      catch(e){ if(mine === seq && !dead && cfg.isCurrent()) cfg.fallback(e.message || "chart data unavailable"); return; }
+      catch(e){ if(mine === seq && !dead && cfg.isCurrent()) failed(e.message || "chart data unavailable"); return; }
       if(mine !== seq || dead || !cfg.isCurrent()) return;   // a newer range or another stock was asked for meanwhile
-      if(!payload || payload.error || !payload.bars || !payload.bars.length){ cfg.fallback((payload && payload.error) || "no price history"); return; }
-      data = payload; note.textContent = "";
+      if(!payload || payload.error || !payload.bars || !payload.bars.length){ failed((payload && payload.error) || "no price history"); return; }
+      data = payload; note.textContent = ""; paintChips();
       try { build(false); } catch(e){ cfg.fallback(e.message || "chart failed"); }
     }
 
     host.addEventListener("click", (ev) => {
-      const t = ev.target.closest && ev.target.closest("button[data-range], button[data-tog], button[data-exch]");
+      const t = ev.target.closest && ev.target.closest("button[data-range], button[data-tog], button[data-exch], button[data-mode]");
       if(!t || dead) return;
       ev.preventDefault();
       if(t.dataset.exch){ if(t.dataset.exch === exchange) return; exchange = t.dataset.exch; paintChips(); load(); return; }
       if(t.dataset.range){ if(t.dataset.range === prefs.range) return; prefs.range = t.dataset.range; paintChips(); saveStockPrefs(prefs); load(); return; }
+      if(t.dataset.mode){ if(t.dataset.mode === prefs.mode) return; prefs.mode = t.dataset.mode; paintChips(); saveStockPrefs(prefs); try { build(true); } catch(e){ cfg.fallback(e.message || "chart failed"); } return; }
       prefs.on[t.dataset.tog] = !prefs.on[t.dataset.tog]; paintChips(); saveStockPrefs(prefs);
       try { build(true); } catch(e){ cfg.fallback(e.message || "chart failed"); }
     });
@@ -834,6 +886,8 @@ window.TA = (function(){
         if(mq){ if(mq.removeEventListener) mq.removeEventListener("change", onScheme); else if(mq.removeListener) mq.removeListener(onScheme); }
         teardown();
       },
+      setExchange(x){ x = x === "BSE" ? "BSE" : "NSE"; if(dead || x === exchange) return; exchange = x; paintChips(); load(); },
+      get exchange(){ return exchange; },
       get chart(){ return chart; }
     };
   }

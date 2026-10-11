@@ -65,6 +65,7 @@
 
   <section class="tiles" id="tiles"></section>
 
+  <div class="topsplit"><div class="split-left">
   <div class="card" id="mp-card" data-anchor="portfolio">
     <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
       <button type="button" class="small primary" id="mp-copy" style="margin-left:auto" hidden>Copy into practice account</button>
@@ -77,14 +78,6 @@
     <div class="cardbody" id="mp-body" style="padding-top:0;border-top:none"><div class="stats" id="mp-stats"></div></div>
     <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th class="prot-cell" id="mp-prot-th">Protection</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
   </div>
-  <div class="card" data-anchor="lookup">
-    <div class="cardhead"><h2>Look up a stock</h2></div>
-    <form class="cardbody" id="lk-form">
-      <div class="row"><input id="lk-ticker" autocomplete="off" placeholder="Ticker or company name, e.g. Tata Steel" style="flex:1 1 160px"><button type="submit" class="small">Check</button></div>
-      <div id="lk-result" class="sub">Momentum, latest price and NSE announcements.</div>
-    </form>
-  </div>
-
   <section class="cols">
     <div class="main">
       <div class="card" id="pp-card" hidden data-anchor="practice">
@@ -199,30 +192,40 @@
       </div>
     </div>
     <aside class="side">
-      <div class="card" data-anchor="size">
-        <div class="cardhead"><h2>Position size</h2></div>
-        <form class="cardbody" id="sz-form">
-          <div class="row"><input id="sz-ticker" name="ticker" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 140px" required><button type="submit" class="small">Size it</button></div>
-          <div class="grid2" style="gap:10px">
-            <div class="field"><label for="sz-risk">Risk per trade (% of equity)</label><input id="sz-risk" name="risk_pct" type="number" value="1" min="0.1" max="5" step="0.1"></div>
-            <div class="field"><label for="sz-max">Max position (% of equity)</label><input id="sz-max" name="max_pct" type="number" value="10" min="1" max="50" step="1"></div>
-          </div>
-          <div id="sz-result" class="sub">Shares so that a 2× ATR move costs your chosen risk, plus a stop level.</div>
-        </form>
-      </div>
-      <div class="card" data-anchor="costs">
-        <div class="cardhead"><h2>Trade cost</h2></div>
-        <form class="cardbody" id="cs-form">
-          <div class="row"><input id="cs-amount" name="amount" type="number" min="1" step="any" value="25000" style="flex:1 1 140px" aria-label="Trade amount"><button type="submit" class="small">Calculate</button></div>
-          <div id="cs-result" class="sub">Brokerage, STT, exchange, SEBI, stamp duty, GST and DP charge for a buy and later sell.</div>
-        </form>
-      </div>
       <div class="side-group">
         <div class="row" style="align-items:baseline;gap:10px"><h2>Recommendations</h2><span class="sub">from Claude, newest first</span></div>
         <div id="recs" style="display:flex;flex-direction:column;gap:16px"></div>
       </div>
     </aside>
   </section>
+  </div>
+  <div class="split-right">
+  <div class="card" data-anchor="lookup" id="lk-card">
+    <div class="cardhead"><h2>Look up a stock</h2></div>
+    <form class="cardbody" id="lk-form">
+      <div class="row"><input id="lk-ticker" autocomplete="off" placeholder="Ticker or company name, e.g. Tata Steel" style="flex:1 1 160px"><button type="submit" class="small">Check</button></div>
+    </form>
+    <div class="cardbody" id="lk-result"><div class="sub">Price, chart, fundamentals, financials, shareholding, momentum and NSE announcements.</div></div>
+  </div>
+  <div class="card" data-anchor="size">
+    <div class="cardhead"><h2>Position size</h2></div>
+    <form class="cardbody" id="sz-form">
+      <div class="row"><input id="sz-ticker" name="ticker" autocomplete="off" placeholder="Ticker or company name" style="flex:1 1 140px" required><button type="submit" class="small">Size it</button></div>
+      <div class="grid2" style="gap:10px">
+        <div class="field"><label for="sz-risk">Risk per trade (% of equity)</label><input id="sz-risk" name="risk_pct" type="number" value="1" min="0.1" max="5" step="0.1"></div>
+        <div class="field"><label for="sz-max">Max position (% of equity)</label><input id="sz-max" name="max_pct" type="number" value="10" min="1" max="50" step="1"></div>
+      </div>
+      <div id="sz-result" class="sub">Shares so that a 2× ATR move costs your chosen risk, plus a stop level.</div>
+    </form>
+  </div>
+  <div class="card" data-anchor="costs">
+    <div class="cardhead"><h2>Trade cost</h2></div>
+    <form class="cardbody" id="cs-form">
+      <div class="row"><input id="cs-amount" name="amount" type="number" min="1" step="any" value="25000" style="flex:1 1 140px" aria-label="Trade amount"><button type="submit" class="small">Calculate</button></div>
+      <div id="cs-result" class="sub">Brokerage, STT, exchange, SEBI, stamp duty, GST and DP charge for a buy and later sell.</div>
+    </form>
+  </div>
+  </div></div>
   <footer>Paper trading only. Bulk-deal client names can be brokers acting for someone else. Not financial advice.</footer>
 </main>
 
@@ -296,11 +299,13 @@
     <iframe id="dg-frame" title="Email preview" sandbox="" style="width:100%;height:60vh;border:1px solid var(--color-divider)"></iframe>
   </div>
 </dialog>
+<dialog id="sp-drawer" class="sp-drawer" aria-label="Stock page"><div class="sp-drawer-head"><span class="sp-drawer-title">Stock page</span><button type="button" class="small" id="sp-drawer-close">Close</button></div><div class="sp-drawer-body" id="sp-drawer-body"></div></dialog>
 <div class="suggest" id="suggest" role="listbox" aria-label="Matching companies"></div>
 <div class="toast" id="toast"></div>
 
 <script src="/static/common.js"></script>
 <script src="/static/palette.js"></script>
+<script src="/static/stockpage.js"></script>
 <script src="/static/lightweight-charts.js"></script>
 <script>
 (function(){
@@ -381,8 +386,8 @@
   // The query string wins over localStorage on load; unknown values are ignored (see TA.safety.parseUrl).
   const ANCHORS = ["portfolio", "practice", "deals", "orders", "screen", "forward", "signal-lab", "backtest", "track-record", "runs", "lookup", "size", "costs"];
   const here = () => (typeof location !== "undefined" ? location : null);
-  let urlH = null, curAnchor = "", urlApplied = false, spyTimer = null;
-  { const l = here(); if(l){ const u = SAFE.parseUrl(l.search, l.hash, {investors: [], anchors: ANCHORS}); urlH = u.h || null; curAnchor = u.anchor || ""; } }
+  let urlH = null, curAnchor = "", urlApplied = false, spyTimer = null, curStock = "", urlStock = "";
+  { const l = here(); if(l){ const u = SAFE.parseUrl(l.search, l.hash, {investors: [], anchors: ANCHORS}); urlH = u.h || null; curAnchor = u.anchor || ""; urlStock = u.stock || ""; curStock = urlStock; } }
   function syncUrl(){
     const l = here();
     if(!l || !S || typeof history === "undefined" || !history.replaceState) return;
@@ -391,7 +396,8 @@
       if(inv.length > 1) st.investor = activeSel(inv);
       if(urlH) st.h = urlH;
       if(curAnchor) st.anchor = curAnchor;
-      history.replaceState(null, "", SAFE.buildUrl(l.pathname, st));
+      if(curStock) st.stock = curStock;
+      history.replaceState(history.state, "", SAFE.buildUrl(l.pathname, st));
     } catch(e){}
   }
   function applyUrlOnce(){   // first state answer: the investor filter from the URL (names are only known now)
@@ -402,7 +408,7 @@
     if(u.investor !== undefined){ dealSel = u.investor.slice(); saveDealSel(); }
   }
   function restoreAnchor(){
-    if(!curAnchor) return;
+    if(!curAnchor || urlStock) return;
     setTimeout(() => { try { const e = document.querySelector(`[data-anchor="${curAnchor}"]`); if(e && e.scrollIntoView) e.scrollIntoView(); } catch(err){} }, 150);
   }
   function spy(){   // name the section under the top of the page in the URL
@@ -419,6 +425,7 @@
 
   // ---- stop protection per real holding, and the freshness chip ----
   const protFor = (sym) => { const P = S && S.protection; return P ? ((P.by_symbol || {})[String(sym).toUpperCase()] || P.default) : null; };
+  const protTitle = (sym) => { const p = protFor(sym); return p ? [p.text, p.warning].filter(Boolean).join(" · ") : ""; };
   const protHtml = (sym) => { const p = protFor(sym); return p ? SAFE.protectionHtml(p) : '<span class="sub">checking…</span>'; };
   async function loadFreshness(){
     try { SAFE.paintChip(SAFE.freshnessChip(await api("/api/freshness"))); }
@@ -805,7 +812,7 @@
       + stat("Return", spct(m.pl_pct), "vs what you paid", tone(m.pl_pct));
     if(!keepRows) rows.innerHTML = m.holdings.length ? m.holdings.map(h => `<tr>
         <td><div style="font-weight:600"><a href="#" data-lookup="${esc(h.symbol)}" style="text-decoration:none">${esc(h.symbol)}</a>${h.kind === "bond" ? ' <span class="pill warn" style="font-size:10px;padding:1px 6px">Bond</span>' : ""}${h.exchange === "BSE" ? ' <span class="pill" style="font-size:10px;padding:1px 6px">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill" title="NSE daily price band" style="font-size:10px;padding:1px 6px">Band ${esc(MP.bands[h.symbol])}</span>` : ""}</div>
-          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}${h.kind === "bond" ? ` · bond${h.maturity ? " maturing " + esc(h.maturity) : ""}` : ""}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}${MODE === "demo" ? "" : `<div class="prot-line">${protHtml(h.symbol)}</div>`}${h.price != null ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
+          ${h.name ? `<div class="sub" style="font-size:12px">${esc(h.name)}${h.kind === "bond" ? ` · bond${h.maturity ? " maturing " + esc(h.maturity) : ""}` : ""}</div>` : ""}${h.sellable_qty < h.qty ? `<div class="sub" style="font-size:12px">${h.sellable_qty} free to sell</div>` : ""}${MODE === "demo" ? "" : `<div class="prot-line" title="${esc(protTitle(h.symbol))}">${protHtml(h.symbol)}</div>`}${h.price != null ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
         <td class="num">${h.qty}</td><td class="num">${inr(h.avg_price, 2)}</td>
         <td class="num">${h.price != null ? inr(h.price, 2) : '<span class="sub">no price</span>'}</td>
         <td class="num">${inr(h.invested)}</td><td class="num">${inr(h.value)}</td>
@@ -1104,79 +1111,50 @@
 
   attachSuggest(["lk-ticker", "sz-ticker", "tk-symbol"], (input, s) => { if(input.id === "lk-ticker") lookup(s); else input.focus(); });
 
-  // ---- "What this means" for a looked-up stock and for a position size ----
-  const SENT = {positive: ["ok", "▲ Positive"], negative: ["bad", "▼ Negative"], neutral: ["", "● Neutral"]};
-  const safeUrl = (u) => /^https?:\/\//i.test(String(u || "")) ? u : "";
-  const istStamp = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) + " IST"; };
-  function newsHtml(n){
-    if(!n || n.demo) return "";
-    const items = n.items || [];
-    const rows = items.map(i => { const s = SENT[i.sentiment], href = safeUrl(i.link);
-      const chip = s ? `<span class="pill ${s[0]}" title="${esc((i.event || "").replace(/_/g, " "))}, ${esc(i.confidence || "")} confidence">${s[1]}</span> ` : "";
-      return `<div class="ann"><div class="meta">${esc(istStamp(i.published))} · ${esc(i.source)}${i.event ? " · " + esc(i.event.replace(/_/g, " ")) : ""}</div><div>${chip}${href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}</div></div>`; }).join("");
-    const errs = (n.errors || []).length ? `<div class="sub" style="font-size:12px">Some sources failed: ${esc(n.errors.join("; "))}</div>` : "";
-    const note = !items.length ? "" : n.tagger === "none" ? "Headlines are not labelled: start Ollama or set NEWS_TAGGER (see the README)."
-      : TA.newsNeedsLabels(n) ? (n.tagger && n.tagger !== "pending" ? `Labelling with ${n.tagger}\u2026` : "Labelling headlines\u2026")
-      : "Labels come from a language model and can be wrong.";
-    return `<h3 style="margin-top:6px">News, last 7 days</h3>${rows || `<div class="sub">none found</div>`}${errs}${note ? `<div class="sub" style="font-size:12px">${esc(note)}</div>` : ""}`;
+  // ---- the stock page (stockpage.js) in the Look up card; on a phone it opens as a slide-over drawer ----
+  // Wide (>= 1200 px) it sits beside the portfolio and loads in place, so a click on a ticker keeps your scroll position.
+  let spInline = null, spDrawer = null, drawerPushed = false;
+  const phoneNow = () => typeof matchMedia === "function" && matchMedia("(max-width: 700px)").matches;
+  const wideNow = () => typeof matchMedia === "function" && matchMedia("(min-width: 1200px)").matches;
+  const growwHolding = (s) => { const h = MP && MP.holdings && MP.holdings.find(x => x.symbol === s); return h ? {qty: h.qty, avg_price: h.avg_price} : null; };
+  // The Practice buy / Practice sell buttons never place anything: they open the practice order form pre-filled (here on the
+  // Demo page, or on the Demo page by address from this one) and the order is only sent when you confirm it there.
+  function practiceOrder(op, symbol){
+    const t = TA.palette.routeStockOp(op, symbol, MODE, palHost);
+    if(!t) return;
+    closeDrawer();
+    if(t.via === "host") palHost[t.op](t.symbol); else location.assign(t.url);
   }
-  const takeawayHtml = (r) => { const t = lookupTakeaway(r, undefined, {regime: S && S.regime, screen: S && S.screen}); return t ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${t}</div>` : ""; };
-  let lookupSeq = 0, stockCtl = null;
-
-  // Labels land a few seconds after the headlines: ask again every 5 s (at most 2 minutes) and update in place.
-  function pollNews(r, seq, startedAt){
-    if(TA.newsPollNext(r.news, startedAt, Date.now(), seq === lookupSeq && !!$("lk-news")) !== "poll") return;
-    setTimeout(async () => {
-      if(seq !== lookupSeq || !$("lk-news")) return;
-      try {
-        const n = await api("/api/news?ticker=" + encodeURIComponent(r.ticker));
-        if(seq !== lookupSeq || !$("lk-news")) return;
-        r.news = n; $("lk-news").innerHTML = newsHtml(n); $("lk-take").innerHTML = takeawayHtml(r);
-      } catch(e){ return; }
-      pollNews(r, seq, startedAt);
-    }, TA.NEWS_POLL_MS);
+  const stockOpts = (extra) => Object.assign({mode: MODE, context: () => ({regime: S && S.regime, screen: S && S.screen}), holding: growwHolding,
+    onPractice: practiceOrder, onLoaded: (r) => { $("lk-ticker").value = r.ticker; curStock = String(r.ticker).split(".")[0]; syncUrl(); }}, extra || {});
+  function lookup(t){
+    t = String(t || "").trim();
+    if(!t) return Promise.resolve();
+    $("lk-ticker").value = t;
+    if(phoneNow()) return openDrawer(t);
+    if(!spInline) spInline = TA.stockPage($("lk-result"), "", stockOpts());
+    const pane = $("lk-result").closest(".split-right"); if(pane) pane.scrollTop = 0;
+    return spInline.load(t);
   }
-  async function lookup(t){
-    const seq = ++lookupSeq;
-    if(stockCtl){ stockCtl.destroy(); stockCtl = null; }   // chart.remove() before the card is redrawn
-    $("lk-ticker").value = t; $("lk-result").innerHTML = `<span class="sub">Looking up ${esc(t)}…</span>`;
-    try {
-      const r = await api("/api/lookup?ticker=" + encodeURIComponent(t));
-      const m = r.momentum || {}; const v = m.verdict || "n/a";
-      const cls = v==="strong"?"ok":v==="weak"?"bad":"";
-      $("lk-ticker").value = r.ticker;
-      $("lk-result").innerHTML = `<div class="lk-grid"><div class="lk-head">${r.name ? `<div style="font-weight:600">${esc(r.name)}</div>` : ""}${r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(r.ticker)}</div>` : ""}<div class="row" style="gap:8px"><span style="font-size:17px;font-weight:700">${esc(r.ticker)}</span>${r.price!=null?`<span class="ck-exch" title="Price from this exchange (Yahoo, delayed)">${/\.BO$/i.test(r.ticker) ? "BSE" : "NSE"}</span><span class="mono">${money(r.price,2)}</span>`:""}<span class="pill ${cls}">${esc(v)} momentum</span></div><div id="lk-quote">${quoteHtml(null, r)}</div>${r.band_note ? `<div class="sub" style="font-size:12px">${esc(r.band_note)}</div>` : ""}
-        <div class="sub">${esc(r.momentum_summary)}</div>
-        <div id="lk-take">${takeawayHtml(r)}</div>
-        </div><div class="chart lk-chart" id="lk-chart"></div>
-        <div class="lk-more"><div><h3 style="margin-top:6px">NSE announcements</h3>${r.announcements && r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file?`<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text||a.category)}</a>`:esc(a.text||a.category)}</div></div>`).join("") : `<div class="sub">${esc(r.announcements_error||"none found")}</div>`}</div><div id="lk-news"><div class="sub" style="margin-top:6px">Loading news…</div></div></div></div></div>`;
-      api("/api/news?ticker=" + encodeURIComponent(r.ticker)).then(n => {
-        if(seq !== lookupSeq || !$("lk-news")) return;  // the user looked up another stock meanwhile
-        r.news = n; $("lk-news").innerHTML = newsHtml(n); $("lk-take").innerHTML = takeawayHtml(r);
-        pollNews(r, seq, Date.now());
-      }).catch(e => { if(seq === lookupSeq && $("lk-news")) $("lk-news").innerHTML = `<div class="sub">News unavailable: ${esc(e.message)}</div>`; });
-      // Quote figures load on their own request so a slow Yahoo call never holds up the chart.
-      api("/api/quote?ticker=" + encodeURIComponent(r.ticker)).then(q => { if(seq === lookupSeq && $("lk-quote")) $("lk-quote").innerHTML = quoteHtml(q, r); })
-        .catch(e => { if(seq === lookupSeq && $("lk-quote")) $("lk-quote").innerHTML = quoteHtml({error: e.message, source: "Yahoo Finance"}, r); });
-      const hist = r.history || [], pos = r.position, refs = [];
-      if(pos){ refs.push({y: pos.avg_entry_price, label: "Your cost"}); if(pos.stop != null) refs.push({y: pos.stop, label: "Stop", color: C.neg}); }
-      // The old SVG line chart stays as the fallback when the library is missing or the candle data fails.
-      const drawLine = (why) => {
-        if(seq !== lookupSeq || !$("lk-chart")) return;
-        if(stockCtl){ stockCtl.destroy(); stockCtl = null; }
-        $("lk-chart").innerHTML = "";
-        lineChart($("lk-chart"), {x: hist.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, refs,
-          yFmt: v => sym() + Math.round(v).toLocaleString("en-IN"), label: `${r.ticker} price, last year`,
-          empty: r.history_error ? "Price history unavailable: " + r.history_error : "No price history.",
-          series: [{name: "Price", color: C.s1, values: hist.map(p => p.c)}, {name: "200-day average", color: C.ctx, width: 1.5, values: hist.map(p => p.ma200)}]});
-      };
-      try {
-        stockCtl = TA.stockChart($("lk-chart"), {ticker: r.ticker, isCurrent: () => seq === lookupSeq, fallback: drawLine,
-          exchange: /\.BO$/i.test(r.ticker) ? "BSE" : "NSE",
-          fetchCandles: (range, exch) => api("/api/candles?ticker=" + encodeURIComponent(r.ticker) + "&range=" + encodeURIComponent(range) + "&exchange=" + encodeURIComponent(exch || "NSE"))});
-      } catch(e){ drawLine(e.message); }
-    } catch(e){ $("lk-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
+  const drawer = $("sp-drawer");
+  function openDrawer(t){
+    if(!spDrawer) spDrawer = TA.stockPage($("sp-drawer-body"), "", stockOpts({onOpen: (s) => spDrawer.load(s)}));
+    if(!drawer.open){
+      if(typeof drawer.showModal === "function") drawer.showModal(); else drawer.setAttribute("open", "");
+      try { history.pushState({sp: 1}, "", location.href); drawerPushed = true; } catch(e){}
+    }
+    $("sp-drawer-body").scrollTop = 0;
+    return spDrawer.load(t);
   }
+  function closeDrawer(){ if(drawer.open){ if(typeof drawer.close === "function") drawer.close(); else drawer.removeAttribute("open"); } }
+  drawer.addEventListener("close", () => {
+    if(drawer.open) return;   // a late close event from an earlier close, after the drawer was opened again
+    curStock = ""; syncUrl();
+    if(drawerPushed){ drawerPushed = false; try { if(history.state && history.state.sp) history.back(); } catch(e){} }   // the entry we pushed
+  });
+  drawer.addEventListener("click", (ev) => { if(ev.target === drawer) closeDrawer(); });   // a tap on the dimmed area
+  $("sp-drawer-close").addEventListener("click", closeDrawer);
+  window.addEventListener("popstate", () => { drawerPushed = false; closeDrawer(); });   // the back button closes the drawer
   async function loadScorecard(){
     $("scd-run").disabled = true; $("scd-result").innerHTML = `<div class="sub">Scoring recommendations against the index…</div>`;
     try {
@@ -1213,7 +1191,7 @@
   });
   document.addEventListener("input", (ev) => { if(ev.target && ev.target.id === "se-value" && stopEdit) stopEdit.value = ev.target.value; });
   document.addEventListener("click", async (ev) => {
-    const l = ev.target.closest("a[data-lookup]"); if(l){ ev.preventDefault(); lookup(l.dataset.lookup); $("lk-form").scrollIntoView({behavior:"smooth", block:"center"}); return; }
+    const l = ev.target.closest("a[data-lookup]"); if(l){ ev.preventDefault(); lookup(l.dataset.lookup); if(!wideNow() && !phoneNow()) $("lk-form").scrollIntoView({behavior:"smooth", block:"center"}); return; }   // wide: it loads beside the portfolio, no scroll
     const b = ev.target.closest("button"); if(!b) return;
     if(b.dataset.dealFilter !== undefined){
       const n = b.dataset.dealFilter, inv = investorsOf(S.settings);
@@ -1327,8 +1305,8 @@
     mode: MODE,
     sections: palSections,
     goSection: (id) => { const e = document.querySelector(`[data-anchor="${id}"]`); if(e && e.scrollIntoView) e.scrollIntoView({behavior: "smooth", block: "start"}); },
-    lookup: (s) => { lookup(s); palCentre($("lk-form")); },
-    chart: (s) => { lookup(s).then(() => palCentre($("lk-chart") || $("lk-form"))); },
+    lookup: (s) => { lookup(s); if(!wideNow() && !phoneNow()) palCentre($("lk-form")); },
+    chart: (s) => { lookup(s).then(() => { if(!wideNow() && !phoneNow()) palCentre($("lk-result") || $("lk-form")); }); },
     size: (s) => { $("sz-ticker").value = s; palCentre($("sz-form")); if($("sz-form").requestSubmit) $("sz-form").requestSubmit(); },
     refresh: async () => { await Promise.all([refresh(), loadMyPortfolio(false), loadFreshness(), loadIntegration()]); },
   };
@@ -1340,16 +1318,24 @@
       toast(`Practice buy form filled for ${s}. Enter an amount or shares, then press Place paper order.`);
     };
   }
+  palHost.sell = MODE === "demo" ? (s) => {   // fills the same practice order form on the sell side; nothing is placed until you submit it
+    $("tk-symbol").value = s; $("tk-qty").value = ""; $("tk-amount").value = "";
+    const b = document.querySelector('#tk-form [data-side="sell"]'); if(b) b.click();
+    palCentre($("tk-form")); $("tk-qty").focus();
+    toast(`Practice sell form filled for ${s}. Enter shares, then press Place paper order.`);
+  } : undefined;
+  if(!palHost.sell) delete palHost.sell;
   TA.palette.install(palHost);
   { const l = here(), want = l && TA.palette.landing(l.search);   // arrived from the palette on another page
     if(want){
       try { history.replaceState(null, "", l.pathname); } catch(e){}   // the address has done its job; a reload will not redo it
-      if(want.op === "buy"){ if(palHost.buy) palHost.buy(want.symbol); }
+      if(want.op === "buy" || want.op === "sell"){ if(palHost[want.op]) palHost[want.op](want.symbol); }
       else palHost[want.op](want.symbol);
     } }
 
   refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); });
   loadMyPortfolio(false);
+  if(urlStock) lookup(urlStock);   // ?stock=SYM: the stock page opens on it
   setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 120000);
   setInterval(() => { if(!document.hidden) refresh(); }, 60000);   // a hidden tab does not poll
   loadFreshness(); loadIntegration();

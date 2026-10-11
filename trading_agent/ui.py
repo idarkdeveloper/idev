@@ -47,6 +47,8 @@ log = logging.getLogger(__name__)
 
 DEALS_TTL_SECONDS = 600
 CANDLES_TTL_SECONDS = 300
+INTRADAY_TTL_SECONDS = 90          # 1D / 1W bars: a fresh read every minute or two in market hours
+MEMBERS_TTL_SECONDS = 12 * 3600    # the NSE index constituent lists behind industry peers and similar stocks
 # The only static files besides the page: Inter, served locally so the page needs no network.
 FONT_FILES = {"/fonts/inter-latin.woff2", "/fonts/inter-latin-ext.woff2"}
 STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-8"),
@@ -54,6 +56,7 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8"),
                 "/static/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
                 "/static/screener.js": ("screener.js", "text/javascript; charset=utf-8"),
+                "/static/stockpage.js": ("stockpage.js", "text/javascript; charset=utf-8"),
                 # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
                                                   "text/javascript; charset=utf-8")}
@@ -166,9 +169,11 @@ class App:
         self._deals_at = time.time() if demo_trades else 0.0
         self._deals_error: str | None = None
         self._candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        self._members_cache: tuple[float, list[dict[str, str]]] | None = None
         from .fundamentals import YahooFundamentals
         from .quote import QuoteService
         self.quote_service = QuoteService(YahooFundamentals(None))  # P/E, market cap, 52-week range; 30 min per ticker
+        self.stock_service = self._make_stock_service()  # GET /api/stock: the stock page's figures, 5 min per ticker
         self._bar_seen: str | None = None  # newest price-bar date a lookup used (shown in the freshness chip)
         self.jobs: list[Job] = []
         self.lock = threading.Lock()
@@ -763,39 +768,121 @@ class App:
                 "stop": round(st_["level"], 2) if st_["level"] is not None else None,
                 "stop_type": st_["type"], "stop_label": st_["label"]}
 
+    def _ohlc(self, symbol: str, span: str = "5y") -> tuple[list[dict[str, Any]] | None, str | None]:
+        """Daily OHLC bars for a Yahoo symbol and the error text when there are none. The series is cached per symbol and
+        span for a few minutes and sliced by the caller."""
+        key = symbol if span == "5y" else f"{symbol}|{span}"
+        now = time.time()
+        with self.lock:
+            hit = self._candle_cache.get(key)
+        if hit is not None and now - hit[0] < CANDLES_TTL_SECONDS:
+            return hit[1], None
+        bars: list[dict[str, Any]] | None = None
+        error = None
+        try:
+            bars = self.prices.history_ohlc(symbol, span)
+        except Exception as e:  # noqa: BLE001
+            error = str(e) or "price history unavailable"
+        if bars:
+            with self.lock:
+                self._candle_cache[key] = (now, bars)
+        return bars, error
+
     def candles(self, ticker: str, range_key: str, exchange: str = "NSE") -> dict[str, Any]:
-        """Daily candles plus indicators for the lookup chart, from the same price source the lookup uses. Read-only;
-        the full 5-year series is cached per ticker for a few minutes and sliced to the range. ``exchange`` picks the
-        NSE (default) or BSE price series; a code that is already exchange-qualified (".BO") keeps its own."""
-        from .candles import build_candles
+        """Candles plus indicators for the lookup chart, from the same price source the lookup uses. Read-only. Daily
+        ranges slice a cached 5-year series (All uses the full history); 1D is the latest session in 5-minute bars and
+        1W the last five sessions in 30-minute bars, with IST-shifted times. ``exchange`` picks the NSE (default) or BSE
+        price series; a code that is already exchange-qualified (".BO") keeps its own."""
+        from .candles import ALL, INTRADAY, build_candles, build_intraday
         ticker = self.resolve(ticker)[0].upper()
         base = ticker.split(".")[0]
         if ticker.endswith(".BO"):
             exchange = "BSE"
         symbol = f"{base}.BO" if exchange == "BSE" else ticker
-        now = time.time()
-        with self.lock:
-            hit = self._candle_cache.get(symbol)
-        error = None
-        bars: list[dict[str, Any]] | None
-        if hit is not None and now - hit[0] < CANDLES_TTL_SECONDS:
-            bars = hit[1]
-        else:
-            bars = None
-            try:
-                bars = self.prices.history_ohlc(symbol, "5y")
-            except Exception as e:  # noqa: BLE001
-                error = str(e) or "price history unavailable"
-            if bars:
-                with self.lock:
-                    self._candle_cache[symbol] = (now, bars)
         held = self.holding(ticker)
-        out = build_candles(ticker, range_key, bars or [],
-                            {"cost": held["avg_entry_price"], "stop": held["stop"]} if held else None)
+        position = {"cost": held["avg_entry_price"], "stop": held["stop"]} if held else None
+        error: str | None = None
+        if range_key in INTRADAY:
+            interval, span = INTRADAY[range_key]
+            try:
+                ibars = self.prices.history_intraday(symbol, interval, span, ttl=INTRADAY_TTL_SECONDS)
+            except Exception as e:  # noqa: BLE001
+                ibars, error = [], str(e) or "intraday price history unavailable"
+            out = build_intraday(ticker, range_key, ibars or [], position)
+            if out["prev_close"] is None and out["bars"]:   # one session fetched: the previous close from the daily bars
+                daily, _ = self._ohlc(symbol)
+                before = [b for b in (daily or []) if str(b["date"])[:10] < str(out["session"])]
+                if before:
+                    out["prev_close"] = round(float(before[-1]["close"]), 2)
+        else:
+            bars, error = self._ohlc(symbol, "max" if range_key == ALL else "5y")
+            out = build_candles(ticker, range_key, bars or [], position)
         out["exchange"] = exchange
         if error and not out["bars"]:
             out["error"] = error
         return out
+
+    # -- the stock page -----------------------------------------------------------
+    def _make_stock_service(self) -> Any:
+        from .fundamentals import YahooFundamentals
+        from .stockpage import YAHOO_MODULES, StockService, StockSources
+        funds = YahooFundamentals(self.settings.state_dir / "cache", cache_ttl=24 * 3600)   # peek() reads what the screener saved
+
+        def offline() -> bool:
+            return self.demo_trades is not None and self._parent is None
+
+        def modules(ysym: str) -> dict[str, Any]:
+            if offline():
+                raise LookupError("the offline sample does not use market data")
+            return cast(dict[str, Any], funds.fetch_modules(ysym, YAHOO_MODULES))
+
+        def shareholding(sym: str) -> list[dict[str, Any]]:
+            d = None if offline() else self.data
+            if d is None or not hasattr(d, "shareholding"):
+                raise LookupError("NSE shareholding is not available from this data source")
+            return cast(list[dict[str, Any]], d.shareholding(sym))
+
+        def daily_bars(base: str, exch: str) -> list[dict[str, Any]]:
+            if offline():
+                return []
+            return self._ohlc(f"{base}.BO" if exch == "BSE" else base)[0] or []
+
+        def universe() -> list[dict[str, str]]:
+            return [] if offline() else self._index_members()
+
+        def price_pair(sym: str) -> tuple[float, float] | None:
+            bars = self.prices.history_ohlc(sym, "1mo")
+            return (float(bars[-1]["close"]), float(bars[-2]["close"])) if len(bars) >= 2 else None
+
+        def face_value(sym: str) -> float | None:
+            n = None if offline() else self.names
+            return n.face_value(sym) if n is not None else None
+
+        def band(sym: str) -> Any:
+            from .bands import book_for
+            return book_for(self.settings).band(sym)
+        return StockService(StockSources(modules=modules, shareholding=shareholding, daily_bars=daily_bars, universe=universe,
+                                         peer_pe=lambda sym: (funds.peek(sym) or {}).get("pe"), price_pair=price_pair,
+                                         face_value=face_value, band=band))
+
+    def _index_members(self) -> list[dict[str, str]]:
+        """Members of the NIFTY 500 with their NSE industry (the largest list, so it holds the other index lists), kept for
+        12 hours. Shared with the Demo child."""
+        if self._parent is not None:
+            return self._parent._index_members()
+        with self._lazy_lock:
+            hit = self._members_cache
+            if hit is not None and time.time() - hit[0] < MEMBERS_TTL_SECONDS:
+                return hit[1]
+        from .screen import load_universe
+        members = load_universe("NIFTY500")
+        with self._lazy_lock:
+            self._members_cache = (time.time(), members)
+        return members
+
+    def stock(self, ticker: str, exchange: str = "NSE") -> dict[str, Any]:
+        """GET /api/stock: price block, fundamentals, financials, profile, shareholding, technicals and similar stocks."""
+        return cast(dict[str, Any], self.stock_service.get(self.resolve(ticker)[0], exchange))
 
     def quote(self, ticker: str) -> dict[str, Any]:
         """Quote-panel figures for a ticker. Separate from lookup() so a slow Yahoo call never delays the chart."""
@@ -1874,7 +1961,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if not ticker or not re.fullmatch(r"[A-Z0-9&.^=-]{1,25}", ticker):
                     self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
                 elif range_key is None:
-                    self._json({"error": "range must be one of 1M, 3M, 6M, 1Y, 2Y, 5Y"}, HTTPStatus.BAD_REQUEST)
+                    self._json({"error": "range must be one of 1D, 1W, 1M, 3M, 6M, 1Y, 2Y, 5Y, All"}, HTTPStatus.BAD_REQUEST)
                 elif (q.get("exchange") or ["NSE"])[0].upper() not in ("NSE", "BSE"):
                     self._json({"error": "exchange must be NSE or BSE"}, HTTPStatus.BAD_REQUEST)
                 else:
@@ -1886,6 +1973,17 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
                 else:
                     self._json(app.quote(ticker))
+            elif path == "/api/stock":
+                from urllib.parse import parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                ticker = (q.get("ticker") or [""])[0].strip().upper()
+                exch = (q.get("exchange") or ["NSE"])[0].upper()
+                if not ticker or not re.fullmatch(r"[A-Z0-9&.^=-]{1,25}", ticker):
+                    self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
+                elif exch not in ("NSE", "BSE"):
+                    self._json({"error": "exchange must be NSE or BSE"}, HTTPStatus.BAD_REQUEST)
+                else:
+                    self._json(app.stock(ticker, exch))
             elif path == "/api/news":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()

@@ -39,6 +39,7 @@ class CompanyNames:
         self.max_age_s = max_age_s
         self._nse: dict[str, str] | None = None
         self._groww: dict[str, dict[str, str]] | None = None
+        self._face: dict[str, float] | None = None
 
     def _text(self, url: str, name: str) -> str:
         path = self.cache_dir / name
@@ -61,6 +62,25 @@ class CompanyNames:
                 log.warning("NSE equity list unavailable: %s", e)
                 self._nse = {}
         return self._nse
+
+    def face_value(self, symbol: str) -> float | None:
+        """Face value (rupees per share) from NSE's equity list (its FACE VALUE column), or None when the list is
+        unavailable or has no usable number for the symbol."""
+        if getattr(self, "_face", None) is None:
+            face: dict[str, float] = {}
+            try:
+                for r in csv.DictReader(io.StringIO(self._text(NSE_EQUITY_URL, "nse_equity_list.csv"))):
+                    row = {(k or "").strip().upper(): (v or "").strip() for k, v in r.items()}   # the header has leading spaces
+                    try:
+                        fv = float(row.get("FACE VALUE", ""))
+                    except ValueError:
+                        continue
+                    if row.get("SYMBOL") and fv > 0:
+                        face[row["SYMBOL"].upper()] = fv
+            except Exception as e:  # noqa: BLE001 - a nicety, never a failure
+                log.warning("NSE equity list unavailable for face values: %s", e)
+            self._face = face
+        return (self._face or {}).get(symbol.upper())
 
     def _groww_names(self) -> dict[str, dict[str, str]]:
         """symbol -> {name, exchange, series}; NSE wins when a symbol trades on both."""

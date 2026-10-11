@@ -470,3 +470,111 @@ dialog.pal[open] { display: flex; }
   .sc-savebox input { flex: 1 1 120px; width: auto; }
   .sc-name { max-width: 120px; }
 }
+
+/* ---- Top of the dashboard: portfolio and stock page side by side from 1200 px (60 / 40) ---- */
+@media (min-width: 1200px) {
+  .topsplit { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 32px; align-items: start; }
+  .split-left, .split-right { display: flex; flex-direction: column; gap: 32px; min-width: 0; }
+  .split-right { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; overscroll-behavior: contain; padding-bottom: 2px; }
+  .split-left .cols { flex-direction: column; flex-wrap: nowrap; }
+  .split-left .cols > .main, .split-left .cols > .side { flex: 0 0 auto; width: 100%; }
+  /* the portfolio table must fit its 60 %: tighter cells, Protection as an icon with a tooltip, names on one line */
+  #mp-card table { min-width: 0; font-size: 13px; }
+  #mp-card th, #mp-card td { padding: 6px 5px; }
+  #mp-card .prot-cell, #mp-card th.prot-cell { display: none; }
+  #mp-card .prot-line { display: flex; flex-direction: row; gap: 4px; }
+  #mp-card .prot-line .prot > span:last-child, #mp-card .prot-line .prot-warn > span:last-child {
+    position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  #mp-card td:first-child .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 170px; }
+  #mp-card tfoot td { padding-top: 8px; }
+}
+@media (min-width: 1200px) and (max-width: 1399px) {   /* the narrowest 60 %: Invested can be worked out from Qty and Buy price */
+  #mp-card thead th:nth-child(5), #mp-card tbody tr:not(.sell-row) td:nth-child(5), #mp-card tfoot td:nth-child(5) { display: none; }
+}
+@media (max-width: 1199px) {
+  .topsplit, .split-left, .split-right { display: contents; }
+  #mp-card { order: 1; } .split-right > [data-anchor="lookup"] { order: 2; }
+  .split-right > [data-anchor="size"] { order: 3; } .split-right > [data-anchor="costs"] { order: 4; }
+  .split-left > .cols { order: 5; } main > footer { order: 9; }
+}
+
+/* ---- Stock page (stockpage.js): header, chart, tabs, collapsible sections, phone bar and drawer. Tokens only. ---- */
+.sp { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.sp-head { display: flex; flex-direction: column; gap: 4px; }
+.sp-name { font-family: var(--font-heading); font-size: 20px; font-weight: var(--font-heading-weight); line-height: 1.2; overflow-wrap: anywhere; }
+.sp-codetxt { font-weight: 600; color: var(--color-label); }
+.sp-px { font-family: var(--font-heading); font-size: 30px; font-weight: 600; line-height: 1.1; }
+.sp-chg { font-weight: 600; font-size: 15px; }
+.sp-exch button { min-height: 28px; padding: 0 10px; font-size: 12px; }
+.sp-actions { display: flex; gap: 8px; margin-top: 6px; }
+.sp-chartbox, .sp-chartbox .lk-chart { min-width: 0; }
+.sp-holdbox:empty { display: none; }
+.card-inset { border: 1px solid var(--color-divider); border-radius: var(--radius-md); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.sp-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--color-divider); }
+.sp-tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; min-height: 40px; padding: 0 14px;
+  color: var(--color-muted); font-size: 14px; }
+.sp-tabs button[aria-selected="true"] { color: var(--color-text); border-bottom-color: var(--color-accent); font-weight: 600; }
+.sp-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.sp-sec { border: 1px solid var(--color-divider); border-radius: var(--radius-md); min-width: 0; }
+.sp-sec > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px;
+  font-family: var(--font-heading); font-weight: 500; font-size: 16px; }
+.sp-sec > summary::-webkit-details-marker { display: none; }
+.sp-sec > summary::after { content: ""; margin-left: auto; width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(45deg); transition: transform .15s; flex: none; }
+.sp-sec[open] > summary::after { transform: rotate(225deg); }
+.sp-hint { font-family: var(--font-body); font-weight: 400; }
+.sp-sec-body { padding: 2px 12px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.sp-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px 12px; }
+.sp-kv.sp-kv2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sp-kvi { min-width: 0; }
+.sp-v { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.sp-rl { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.sp-rng .qtrack { margin: 6px 0; }
+.sp-about { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.sp-fin { width: 100%; height: auto; max-height: 190px; }
+.sp-grp { cursor: pointer; outline: none; }
+.sp-hit { fill: transparent; }
+.sp-grp:focus-visible .sp-hit { stroke: var(--color-accent); stroke-width: 2; }
+.sp-bar-rev { fill: var(--color-accent); } .sp-bar-profit { fill: var(--color-profit); } .sp-bar-loss { fill: var(--color-loss); }
+.sp-grp:not(.sel) rect:not(.sp-hit) { opacity: .4; }
+.sp-axis { fill: var(--color-muted); font-size: 9px; }
+.sp-grp.sel .sp-axis { fill: var(--color-text); font-weight: 700; }
+.sp-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; }
+.sp-sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+.sp-sw-rev { background: var(--color-accent); } .sp-sw-profit { background: var(--color-profit); }
+.sp-fin-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.sp-growth { min-width: 0; }
+.sp-growth th, .sp-growth td { padding: 6px 4px; }
+.sp-sh { margin-bottom: 8px; }
+.sp-shl { display: flex; justify-content: space-between; font-size: 13px; }
+.sp-shbar { height: 8px; border-radius: 4px; background: var(--color-divider); overflow: hidden; margin-top: 3px; }
+.sp-shbar > span { display: block; height: 100%; background: var(--color-accent); }
+.sp-sim { display: flex; flex-direction: column; }
+.sp-simrow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; width: 100%; min-height: 48px; padding: 6px 4px;
+  border: none; border-radius: 0; border-bottom: 1px solid var(--color-rule); background: transparent; text-align: left; font-weight: 400; }
+.sp-simrow:hover { background: var(--color-row-hover); }
+.sp-simname { display: flex; flex-direction: column; min-width: 0; } .sp-simname .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-simpx, .sp-simchg { font-variant-numeric: tabular-nums; text-align: right; }
+.sp-tech { min-width: 0; }
+.sp-news { min-width: 0; }
+/* The practice buttons: at the top on a wide screen, a bar stuck to the bottom of the stock page on a phone (inside it, not over the nav). */
+.sp-bar { display: none; }
+@media (max-width: 700px) {
+  .sp-actions { display: none; }
+  .sp-bar { display: flex; position: sticky; bottom: 0; z-index: 3; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 10px 12px; margin: 0 -12px; background: var(--color-surface); border-top: 1px solid var(--color-divider); }
+  .sp-bar-btns { display: flex; gap: 8px; flex: 1 1 auto; justify-content: flex-end; }
+  .sp-bar-btns button { flex: 1 1 0; min-height: 44px; }
+  .sp-bar-note { flex: 0 1 90px; font-size: 11px; line-height: 1.2; }
+  .sp-px { font-size: 28px; }
+}
+/* Phone drawer: the stock page slides in from the right; a modal dialog, so focus is trapped and Esc closes it. */
+dialog.sp-drawer { margin: 0 0 0 auto; padding: 0; width: min(100%, 560px); max-width: 100%; height: 100dvh; max-height: 100dvh; border-radius: 0;
+  overflow: hidden; }
+dialog.sp-drawer[open] { display: flex; flex-direction: column; animation: sp-slide .2s ease-out; }
+.sp-drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--color-divider); }
+.sp-drawer-title { font-family: var(--font-heading); font-size: 14px; color: var(--color-muted); }
+.sp-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 12px 0; }
+@keyframes sp-slide { from { transform: translateX(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { dialog.sp-drawer[open] { animation: none; } }
+.ck-inds { margin-top: 0; }

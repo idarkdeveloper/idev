@@ -12,36 +12,39 @@
   "use strict";
   const SYMBOL = /^[A-Z0-9][A-Z0-9&._-]{0,19}$/;
   const cleanSymbol = (s) => { const t = String(s == null ? "" : s).trim().toUpperCase(); return SYMBOL.test(t) ? t : null; };
-  const STOCK_OPS = ["lookup", "size", "chart", "buy"];
+  const STOCK_OPS = ["lookup", "size", "chart", "buy"];   // what the menu offers
+  const LANDING_OPS = STOCK_OPS.concat(["sell"]);          // what a page can be opened with; Practice sell is offered by the stock page, not the menu
   const OP_LABEL = {lookup: "Look up", size: "Size", chart: "Chart", buy: "Practice buy"};
   const OP_HINT = {lookup: "momentum, price and announcements", size: "how many shares to buy",
                    chart: "Look up, scrolled to the price chart", buy: "practice account only; opens the order form, you confirm there"};
   const PAGES = {live: ["Live", "/"], replay: ["Replay", "/replay"], demo: ["Demo", "/demo"], screener: ["Screener", "/screener"]};
 
   // Where the destination page expects each stock action to arrive: /?lookup=SYM, /?size=SYM, /?chart=SYM, /demo?buy=SYM.
-  const landingUrl = (op, sym) => (op === "buy" ? "/demo" : "/") + "?" + op + "=" + encodeURIComponent(sym);
+  const landingUrl = (op, sym) => (op === "buy" || op === "sell" ? "/demo" : "/") + "?" + op + "=" + encodeURIComponent(sym);
   // The page that receives such an address reads it back with this; anything unknown or malformed is ignored.
   function landing(search){
     const out = [];
     try {
       const p = new URLSearchParams(String(search || ""));
-      for(const op of STOCK_OPS){ const s = cleanSymbol(p.get(op)); if(s) out.push({op, symbol: s}); }
+      for(const op of LANDING_OPS){ const s = cleanSymbol(p.get(op)); if(s) out.push({op, symbol: s}); }
     } catch(e){}
     return out[0] || null;
   }
   // Practice buy has exactly two outcomes and neither reads any live-orders setting: pre-fill the practice form on
   // this page (Demo), or go to the Demo page with the ticker.
-  function practiceBuyTarget(sym, mode, hostCanPrefill){
+  // Practice sell is the same: it fills the practice order form on the sell side, or opens /demo?sell=SYM.
+  function practiceOrderTarget(op, sym, mode, hostCanPrefill){
     const s = cleanSymbol(sym);
-    if(!s) return null;
-    if(mode === "demo" && hostCanPrefill) return {via: "host", op: "buy", symbol: s};
-    return {via: "navigate", op: "buy", symbol: s, url: landingUrl("buy", s)};
+    if(!s || (op !== "buy" && op !== "sell")) return null;
+    if(mode === "demo" && hostCanPrefill) return {via: "host", op, symbol: s};
+    return {via: "navigate", op, symbol: s, url: landingUrl(op, s)};
   }
+  const practiceBuyTarget = (sym, mode, hostCanPrefill) => practiceOrderTarget("buy", sym, mode, hostCanPrefill);
   // How a stock action is carried out: by this page's own handler when it has one, else by opening the page that has it.
   function routeStockOp(op, sym, mode, host){
     const s = cleanSymbol(sym);
-    if(!s || STOCK_OPS.indexOf(op) < 0) return null;
-    if(op === "buy") return practiceBuyTarget(s, mode, !!(host && typeof host.buy === "function"));
+    if(!s || LANDING_OPS.indexOf(op) < 0) return null;
+    if(op === "buy" || op === "sell") return practiceOrderTarget(op, s, mode, !!(host && typeof host[op] === "function"));
     if(host && typeof host[op] === "function") return {via: "host", op, symbol: s};
     return {via: "navigate", op, symbol: s, url: landingUrl(op, s)};
   }
@@ -325,7 +328,7 @@
   }
 
   const palette = {install, createModel, createSearcher, buildCommands, filterCommands, scoreCommand, cleanSymbol,
-                   landing, landingUrl, routeStockOp, practiceBuyTarget, STOCK_OPS, OP_LABEL};
+                   landing, landingUrl, routeStockOp, practiceBuyTarget, practiceOrderTarget, STOCK_OPS, OP_LABEL};
   if(typeof window !== "undefined" && window.TA) window.TA.palette = palette;
   if(typeof module !== "undefined" && module.exports) module.exports = palette;
 })();

@@ -261,7 +261,7 @@ console.log(JSON.stringify({noneHasStop:none.includes('Stop'),noneHasCost:none.i
     r = subprocess.run([node, "-e", js, str(ui / "common.js")], capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == {"noneHasStop": False, "noneHasCost": True, "stopShown": True, "zero": False}
-    for src in ("index.html", "replay.js"):
+    for src in ("stockpage.js", "replay.js"):   # the Look up page code lives in stockpage.js now
         text = (ui / src).read_text(encoding="utf-8")
         assert "stop != null" in text, src      # callers also skip the Stop reference when there is no level
     h = subprocess.run([node, str(Path(__file__).parent / "ui_mode_harness.js"), "demo"], capture_output=True, text=True, encoding="utf-8")

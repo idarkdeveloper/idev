@@ -102,14 +102,15 @@ class YahooFundamentals:
         self._crumb = crumb
         return crumb
 
-    def _fetch(self, symbol: str) -> dict[str, Any]:
+    def _result(self, symbol: str, modules: str) -> dict[str, Any]:
+        """One quoteSummary result (the raw module dict) for ``modules``; raises LookupError when Yahoo has none."""
         ysym = symbol.upper() if "." in symbol else f"{symbol.upper()}{self.suffix}"
         for attempt in (0, 1):
             if self._calls and self.pause:
                 self.sleep(self.pause)
             self._calls += 1
             r = self.session.get(SUMMARY_URL.format(symbol=ysym), headers={"User-Agent": UA},
-                                 params={"modules": MODULES, "crumb": self._get_crumb(refresh=attempt == 1)},
+                                 params={"modules": modules, "crumb": self._get_crumb(refresh=attempt == 1)},
                                  timeout=self.timeout)
             if r.status_code in (401, 403) and attempt == 0:
                 continue  # stale crumb: get a new one once
@@ -117,8 +118,28 @@ class YahooFundamentals:
             res = ((r.json().get("quoteSummary") or {}).get("result") or [])
             if not res:
                 raise LookupError(f"Yahoo has no fundamentals for {ysym}")
-            return parse_summary(res[0])
+            return res[0]
         raise LookupError(f"Yahoo refused fundamentals for {ysym}")
+
+    def _fetch(self, symbol: str) -> dict[str, Any]:
+        return parse_summary(self._result(symbol, MODULES))
+
+    def fetch_modules(self, symbol: str, modules: str) -> dict[str, Any]:
+        """The raw quoteSummary modules for the stock page (price, statements, profile ...). Not cached on disk: the page
+        keeps its own short cache. Raises on failure, so the caller can say what was unavailable."""
+        return self._result(symbol, modules)
+
+    def peek(self, symbol: str) -> dict[str, Any] | None:
+        """The saved snapshot for ``symbol`` however old it is, or None: no request is ever made. The stock page uses it
+        for the industry P/E (the median over peers the screener has already fetched)."""
+        path = self._cache_path(symbol)
+        if not path or not path.exists():
+            return None
+        try:
+            out = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return out if isinstance(out, dict) and "error" not in out else None
 
     def get(self, symbol: str) -> dict[str, Any]:
         path = self._cache_path(symbol)

@@ -44,9 +44,26 @@ check("practice buy never leaves the practice account, whatever the live-orders 
     }
   }
   assert.strictEqual(P.routeStockOp("buy", "bad symbol", "demo", {buy() {}}), null);
-  assert.strictEqual(P.routeStockOp("sell", "TCS", "demo", {}), null);        // there is no such action
   assert.strictEqual(P.routeStockOp("order", "TCS", "demo", {order() {}}), null);
   assert.deepStrictEqual(P.STOCK_OPS, ["lookup", "size", "chart", "buy"]);
+});
+
+check("practice sell is the same: fill the practice form on the Demo page, else open /demo?sell=SYM, never read a live setting", () => {
+  for (const mode of ["live", "demo", "replay", "weird"]) {
+    for (const flags of [{}, {liveOrders: true}, {GROWW_LIVE_ORDERS: "true", live_orders: true}]) {
+      for (const hasSell of [true, false]) {
+        const host = Object.assign({}, flags, hasSell ? {sell() {}} : {});
+        const t = P.routeStockOp("sell", "tcs", mode, host);
+        assert.ok(t && t.op === "sell" && t.symbol === "TCS", JSON.stringify(t));
+        if (t.via === "host") assert.ok(mode === "demo" && hasSell, "host prefill only on the Demo page: " + mode);
+        else assert.strictEqual(t.url, "/demo?sell=TCS", mode);
+      }
+    }
+  }
+  assert.deepStrictEqual(P.landing("?sell=TCS"), {op: "sell", symbol: "TCS"});
+  assert.strictEqual(P.landingUrl("sell", "M&M"), "/demo?sell=M%26M");
+  assert.strictEqual(P.routeStockOp("sell", "bad symbol", "demo", {sell() {}}), null);
+  assert.deepStrictEqual(P.STOCK_OPS, ["lookup", "size", "chart", "buy"]);   // the menu is unchanged: Practice sell lives on the stock page
 });
 
 check("other stock actions use the page's handler, else open the page that has it", () => {
