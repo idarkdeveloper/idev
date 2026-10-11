@@ -219,8 +219,9 @@ def _cancel_at_groww(settings: Any, broker_fn: Callable[[], Any] | None, cancel_
 def _forget_gtts(settings: Any, ids: set[str]) -> None:
     """GTTs the switch cancelled leave ``gtt_stops`` (moved to ``gtt_history``), so the sync after a release
     creates fresh ones instead of modifying cancelled ids."""
-    from .state import STATE_LOCK, State
-    with STATE_LOCK:
+    from .live import GTT_KEYS, gtt_lock
+    from .state import State
+    with gtt_lock(settings.state_dir):
         st = State(Path(settings.state_dir) / "state.json")
         stops = st.data.get("gtt_stops") or {}
         hist = st.data.setdefault("gtt_history", [])
@@ -229,7 +230,7 @@ def _forget_gtts(settings: Any, ids: set[str]) -> None:
                 hist.append({**stops.pop(sym), "symbol": sym, "status": "CANCELLED",
                              "closed_at": datetime.now(IST).isoformat(timespec="seconds"), "reason": "kill switch"})
         st.data["gtt_history"] = hist[-200:]
-        st.save()
+        st.save_only(GTT_KEYS)
 
 
 def _delete_token(settings: Any) -> str:
@@ -274,7 +275,8 @@ def summary(report: dict[str, Any]) -> str:
     if not report.get("groww"):
         if not report.get("orders_cancelled") and not report.get("orders_failed") and not report.get("orders_other"):
             lines.append("No open orders at Groww.")
-        kept = [g for g in report.get("gtts") or [] if g not in (report.get("gtts_cancelled") or [])]
+        kept = [g for g in report.get("gtts") or []
+                if g not in (report.get("gtts_cancelled") or []) and g not in (report.get("gtts_other") or [])]
         if kept:
             lines.append(f"GTT stop-losses left active ({len(kept)}): " + "; ".join(kept))
     if report.get("gtts_error"):

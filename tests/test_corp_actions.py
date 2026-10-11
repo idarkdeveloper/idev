@@ -376,3 +376,60 @@ def test_a_modify_at_or_above_the_price_is_refused_and_alerted(tmp_path):
     acts = mgr.sync()
     assert g.calls == [] and acts[0]["action"] == "error" and "at or above the price" in acts[0]["error"]
     assert sent == ["[GTT MODIFY FAILED] AAA"]
+
+
+# --------------------------------------------------------------------------- #
+# second review: a long agent run never overwrites what the watch wrote meanwhile
+# --------------------------------------------------------------------------- #
+def test_an_agent_runs_stale_state_never_creates_a_second_gtt_or_erases_the_watchs(tmp_path, settings, monkeypatch):
+    import trading_agent.live as live
+    from trading_agent import runner
+    settings.state_dir, settings.market = tmp_path, "in"
+    settings.broker, settings.groww_live_orders, settings.groww_gtt_stops = "groww", True, True
+    st, g, clock, _ = _suspended_bonus(tmp_path)                    # Friday 15:05: GTT cancelled, holding suspended
+    st.save()
+    monkeypatch.setattr(live, "_clock", lambda: clock[0])
+    monkeypatch.setattr(runner, "free_prices", lambda s: type("P", (), {"history": lambda self, sym, r: []})())
+    agent_state = State(tmp_path / "state.json")                    # the agent run loads state.json ...
+    clock[0] = t(EX, 10, 0)
+    g.pos = [Position("SURYAROSNI", 20, 350.0, current_price=495.0)]
+    live.locked_gtt_sync(settings, g)                               # ... the watch resumes and re-creates meanwhile
+    assert [c[0] for c in g.calls] == ["cancel", "create"]
+    clock[0] = t(EX, 10, 3)
+    runner._after_run_gtt(settings, g, agent_state, None)           # the agent's own GTT sync at the end of its run
+    agent_state.save(fresh_keys=live.GTT_KEYS)                      # and its final save
+    assert [c[0] for c in g.calls] == ["cancel", "create"]           # no second GTT at Groww
+    disk = State(tmp_path / "state.json").data
+    assert disk["gtt_stops"]["SURYAROSNI"]["qty"] == 20 and "SURYAROSNI:2026-10-19" in disk["gtt_corp_done"]
+    assert disk["gtt_suspended"] == {}
+
+
+def test_a_first_gtt_on_a_stale_average_is_placed_from_the_price(tmp_path):
+    st = State(tmp_path / "state.json")
+    st.data["gtt_corp_done"] = {"AAA:2026-10-19": "2026-10-19T10:00:00+05:30"}   # a bonus handled; the create failed
+    g = FakeLive()
+    mgr = GttStopManager(g, st, bars_fn=lambda s: [], now_fn=lambda: t(date(2026, 10, 20), 10))
+    g.pos = [Position("AAA", 20, 1100.0, current_price=600.0)]              # Groww's average not yet adjusted
+    acts = mgr.sync()
+    assert acts[0]["action"] == "create" and g.calls[0][3] == pytest.approx(510.0)   # 15% under the price
+    other = GttStopManager(FakeLive(), State(tmp_path / "other.json"), bars_fn=lambda s: [],
+                           now_fn=lambda: t(date(2026, 10, 20), 10))
+    other.broker.pos = [Position("AAA", 20, 1100.0, current_price=600.0)]   # no corporate action: under water
+    assert other.sync()[0]["action"] == "skip" and other.broker.calls == []  # the old rule: no GTT
+
+
+def test_a_refused_modify_alerts_once_a_day(tmp_path):
+    st = State(tmp_path / "state.json")
+    st.data["gtt_stops"] = {"AAA": {"smart_order_id": "S0", "trigger": 80.0, "limit": 79.0, "qty": 10,
+                                    "high_water": 100.0}}
+    g = FakeLive()
+    sent = []
+
+    class Notes:
+        def send(self, subject, body):
+            sent.append(subject)
+    mgr = GttStopManager(g, st, notifier=Notes(), bars_fn=lambda s: [])
+    g.pos = [Position("AAA", 12, 100.0, current_price=79.5)]
+    for _ in range(3):
+        mgr.sync()
+    assert g.calls == [] and sent == ["[GTT MODIFY FAILED] AAA"]

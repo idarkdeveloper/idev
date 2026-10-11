@@ -273,3 +273,25 @@ def test_a_partly_filled_buy_cancelled_at_120_s_is_partial_not_failed(settings):
     o2 = broker(FakeGroww(routes(quote=ok({"ohlc": {"open": 990.0}}))), collar_bps=30, buy_timeout_s=120) \
         .submit_order("RELIANCE", "buy", qty=3)
     assert o2["status"] == "failed"                                                # nothing filled: still failed
+
+
+def test_a_late_cancel_acknowledgement_with_a_fill_is_recorded_partial(settings):
+    from trading_agent.live import record_order, refresh_open_orders
+    from trading_agent.state import State
+    sent = []
+
+    class Notes:
+        def send(self, subject, body):
+            sent.append(subject)
+    st = State(settings.state_dir / "state.json")
+    record_order(st, {"groww_order_id": "GMK1", "symbol": "RELIANCE", "side": "buy", "qty": 3, "status": "open",
+                      "order_status": "CANCELLATION_REQUESTED", "filled_quantity": 1}, Notes())
+
+    class Later:
+        def confirm_order(self, oid, tries=None):
+            return {"order_status": "CANCELLED", "filled_quantity": 1.0, "status": "failed"}
+    rows = refresh_open_orders(Later(), st, Notes())
+    assert rows[0]["status"] == "partial" and sent == []
+    assert record_order(st, {"groww_order_id": "X2", "symbol": "TCS", "side": "buy", "qty": 1, "status": "failed",
+                             "order_status": "CANCELLED", "filled_quantity": 0}, Notes())["status"] == "failed"
+    assert sent == ["[ORDER CANCELLED] BUY TCS"]

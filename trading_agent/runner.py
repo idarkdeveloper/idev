@@ -489,13 +489,13 @@ def record_equity(state: State, broker: Any) -> None:
 
 def _after_run_gtt(settings: Settings, broker: Any, state: State, notifier: Any) -> None:
     """Keep the Groww GTT stop-losses in line with holdings (live + GROWW_GTT_STOPS only)."""
-    from .live import gtt_enabled, sync_gtt_stops
+    from .live import gtt_enabled, locked_gtt_sync
 
     if not gtt_enabled(settings, broker):
         return
     prices = free_prices(settings)
-    actions = sync_gtt_stops(settings, broker, state, notifier=notifier,
-                             bars_fn=lambda sym: prices.history(sym, "1y"))
+    # on the state as it is on disk now, not this run's copy (loaded before the agent ran): see locked_gtt_sync
+    actions = locked_gtt_sync(settings, broker, notifier=notifier, bars_fn=lambda sym: prices.history(sym, "1y"))
     if actions:
         log.info("GTT stops: %s", actions)
 
@@ -579,5 +579,6 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
                       "orders": len(result.orders), "model": result.model,
                       "refusal": result.refusal, "fallback_used": result.fallback_used,
                       "stop": result.stop, "usage": result.usage.to_dict()})
-    state.save()
+    from .live import GTT_KEYS
+    state.save(fresh_keys=GTT_KEYS)   # the GTT records as the locked syncs left them, never this run's old copy
     return result

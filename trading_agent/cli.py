@@ -460,7 +460,6 @@ def cmd_groww_check(args: argparse.Namespace) -> int:
 
 def cmd_gtt(args: argparse.Namespace) -> int:
     """Show the Groww GTT stop-losses; --sync creates/raises/cancels them (live only)."""
-    from .live import GttStopManager
     from .runner import free_prices, make_groww, make_notifier
     settings = _settings(args)
     st = State(settings.state_dir / "state.json")
@@ -472,12 +471,11 @@ def cmd_gtt(args: argparse.Namespace) -> int:
             print("Refusing: GROWW_GTT_STOPS is not true.")
             return 1
         prices = free_prices(settings)
-        from .live import corp_book
-        mgr = GttStopManager(make_groww(settings, prices), st, notifier=make_notifier(settings),
-                             bars_fn=lambda sym: prices.history(sym, "1y"), corp=corp_book(settings))
-        for a in mgr.sync():
+        from .live import locked_gtt_sync
+        for a in locked_gtt_sync(settings, make_groww(settings, prices), notifier=make_notifier(settings),
+                                 bars_fn=lambda sym: prices.history(sym, "1y")) or []:
             print("  ", a)
-        st.save()
+        st = State(settings.state_dir / "state.json")
     stops = st.data.get("gtt_stops", {})
     if not stops:
         print("No GTT stop-losses recorded.")
