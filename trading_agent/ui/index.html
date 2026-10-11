@@ -51,6 +51,7 @@
   <button type="button" role="tab" id="wst-deals" data-ws-tab="deals" aria-controls="ws-deals" aria-selected="false" tabindex="-1">Deals &amp; orders<span class="ws-count" id="ws-newdeals" hidden></span></button>
   <button type="button" role="tab" id="wst-research" data-ws-tab="research" aria-controls="ws-research" aria-selected="false" tabindex="-1">Research</button>
   <button type="button" role="tab" id="wst-tools" data-ws-tab="tools" aria-controls="ws-tools" aria-selected="false" tabindex="-1">Tools</button>
+  <button type="button" role="tab" id="wst-health" data-ws-tab="health" aria-controls="ws-health" aria-selected="false" tabindex="-1">Health<span class="ws-count hl-count" id="ws-health-count" hidden></span></button>
 </div></div>
 
 <main class="ws-main">
@@ -59,6 +60,7 @@
     <div class="ws-navgroup"><span class="ws-navhead">Deals &amp; orders</span><a href="#deals">Disclosed deals</a><a href="#orders">Order history</a><a href="#runs">Recent runs</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Research</span><a href="#lookup">Look up a stock</a><a href="#track-record">Claude's track record</a><a href="#screen">Factor screen</a><a href="#signal-lab">Signal lab</a><a href="#backtest">Backtest</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Tools</span><a href="#size">Position size</a><a href="#costs">Trade cost</a></div>
+    <div class="ws-navgroup"><span class="ws-navhead">Health</span><a href="#health">Data sources</a><a href="#groww-logins">Groww logins</a></div>
   </nav>
   <div class="ws-content">
   <div class="mode-banner demo" id="demo-banner" hidden><span id="demo-title"></span> <span class="sub" id="demo-sub"></span>
@@ -91,7 +93,8 @@
       <section class="card" id="mp-card" data-anchor="portfolio">
         <div class="cardhead"><h2>My Groww portfolio</h2><span class="sub" id="mp-sub">loading your holdings…</span>
           <button type="button" class="small primary" id="mp-copy" style="margin-left:auto" hidden>Copy into practice account</button>
-          <button type="button" class="small" id="mp-refresh">Refresh</button></div>
+          <button type="button" class="small" id="mp-refresh">Refresh</button>
+          <button type="button" class="small" id="mp-groww-refresh" hidden title="Read your holdings from Groww now, even outside market hours (read-only)">Refresh from Groww</button></div>
         <div class="tiles" id="tiles"></div>
         <div class="cardbody" id="copy-confirm" role="group" aria-label="Confirm copying your Groww portfolio" hidden>
           <div class="row"><span id="copy-confirm-text"></span>
@@ -264,6 +267,20 @@
       </div>
     </div>
   </section>
+
+  <!-- ===================== Health ===================== -->
+  <section class="ws-panel" id="ws-health" data-ws="health" role="tabpanel" aria-labelledby="wst-health">
+    <section class="card" data-anchor="health" aria-labelledby="hl-title">
+      <div class="cardhead"><h2 id="hl-title">Data health</h2><span class="sub" id="hl-sub" aria-live="polite">loading…</span>
+        <button type="button" class="small" id="hl-refresh" style="margin-left:auto">Refresh</button></div>
+      <div class="cardbody"><p class="sub hl-note">Every data source the agent reads, failing first: when it last worked, how many rows it brought, whether it is on time for its schedule (weekends and NSE holidays are never late), any back-off, and its last error with anything secret-looking removed. Read from what the agent records on this machine; this page asks no data source again and never logs in to Groww.</p>
+        <ul class="hl-list" id="hl-list" aria-label="Data sources"></ul></div>
+    </section>
+    <section class="card" data-anchor="groww-logins" aria-labelledby="gl-title">
+      <div class="cardhead"><h2 id="gl-title">Groww logins today</h2><span class="sub" id="gl-sub"></span></div>
+      <div class="cardbody" id="gl-body"><p class="sub">loading…</p></div>
+    </section>
+  </section>
   <footer>Paper trading only. Bulk-deal client names can be brokers acting for someone else. Not financial advice.</footer>
   </div>
 </main>
@@ -428,12 +445,12 @@
   // ---- Workspaces (the tabs) and the URL state (history.replaceState, no reloads) ----
   // Each tab has an address (#overview, #deals, #research, #tools); the old section anchors (#portfolio, #lookup, ...) map
   // into their tab and scroll there. The query string and the hash win over localStorage on load; unknown values are
-  // ignored (see TA.safety.parseUrl). A data health tab can join WORKSPACES later.
-  const WORKSPACES = [["overview", "Overview"], ["deals", "Deals & orders"], ["research", "Research"], ["tools", "Tools"]];
+  // ignored (see TA.safety.parseUrl). Health (#health) is the data health tab.
+  const WORKSPACES = [["overview", "Overview"], ["deals", "Deals & orders"], ["research", "Research"], ["tools", "Tools"], ["health", "Health"]];
   const WS_OF = {overview: "overview", portfolio: "overview", recs: "overview", practice: "overview", forward: "overview",
                  deals: "deals", orders: "deals", runs: "deals",
                  research: "research", lookup: "research", "track-record": "research", screen: "research", "signal-lab": "research", backtest: "research",
-                 tools: "tools", size: "tools", costs: "tools"};
+                 tools: "tools", size: "tools", costs: "tools", health: "health", "groww-logins": "health"};
   const ANCHORS = Object.keys(WS_OF);
   const store = {get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }, set(k, v){ try { localStorage.setItem(k, v); } catch(e){} }};
   let layout = store.get("liveLayout") === "sections" ? "sections" : "tabs";
@@ -484,6 +501,7 @@
     curWs = ws; store.set("liveTab", ws);
     paintWorkspaces();
     if(changed) setTimeout(redrawCharts, 0);   // charts drawn while their tab was hidden had no width
+    if(ws === "health") loadHealth();
     curAnchor = id; syncUrl();
     if(id !== ws || layout === "sections") scrollToEl(document.querySelector(`[data-anchor="${id}"]`) || $("ws-" + ws), smooth);
   }
@@ -537,6 +555,41 @@
       $("btn-integ").disabled = !!(j && j.running);
     } catch(e){}
   }
+  // ---- Health tab: data sources (failing first) and the Groww login counter; read-only, GET /api/health ----
+  const HL_PILL = {ok: "ok", late: "warn", failing: "bad", off: ""};
+  const hlTime = (iso) => iso ? new Date(iso).toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) + " IST" : "never";
+  function healthItem(r){
+    const facts = [`Last success: ${esc(hlTime(r.last_success))}${r.age ? ` (${esc(r.age)})` : ""}`, r.rows != null ? `Rows: ${esc(r.rows)}` : "", `Feeds: ${esc(r.feeds.join(", "))}`].filter(Boolean);
+    return `<li class="hl-item hl-${esc(r.status)}"><div class="hl-head"><span class="pill mini ${HL_PILL[r.status] || ""}">${esc(r.status_text)}</span><span class="hl-name">${esc(r.name)}</span></div>
+      <div class="hl-facts">${facts.map(f => `<span>${f}</span>`).join("")}</div>
+      ${r.delay ? `<div class="hl-line hl-delay">Late: ${esc(r.delay)}</div>` : ""}${r.backoff ? `<div class="hl-line hl-backoff">Back-off: ${esc(r.backoff)}</div>` : ""}${r.error ? `<div class="hl-line hl-error">Last error: ${esc(r.error)}</div>` : ""}
+      <div class="hl-line sub">Schedule: ${esc(r.schedule)}${r.detail ? " · " + esc(r.detail) : ""}</div></li>`;
+  }
+  function paintGrowwLogins(g){
+    const L = g.logins, lvl = L.level, pct = Math.min(100, Math.round(L.sent / L.limit * 100));
+    $("gl-sub").textContent = g.configured ? `since 06:00 IST · resets ${hlTime(L.resets_at)}` : "Groww isn't linked on this machine";
+    const tok = g.token ? `Token made ${esc(hlTime(g.token.created_at))}${g.token.age ? ` (${esc(g.token.age)})` : ""} · ${g.token.valid ? "expires " + esc(hlTime(g.token.expires_at)) : "expired"}` : "No saved token";
+    const cool = g.cooldown ? `<div class="hl-line hl-backoff">Cooling down until ${esc(hlTime(g.cooldown.until))}${g.cooldown.reason ? " (" + esc(g.cooldown.reason) + ")" : ""}: no token request is sent until then.</div>` : `<div class="hl-line sub">No cool-down.</div>`;
+    const warn = lvl === "stopped" ? `${L.stop_at} sent: the agent sends no more today.` : lvl === "red" ? `Close to the limit: the agent stops at ${L.stop_at}.` : lvl === "amber" ? `Many requests today (warns at ${L.warn_at}).` : "";
+    $("gl-body").innerHTML = `<div class="gl-count gl-${esc(lvl)}"><b>${esc(L.sent)} sent</b> · ${esc(L.ok)} ok · ${esc(L.refused)} refused${L.errors ? ` · ${esc(L.errors)} other errors` : ""} · of ${esc(L.limit)}</div>
+      <div class="gl-meter" role="meter" aria-valuemin="0" aria-valuemax="${esc(L.limit)}" aria-valuenow="${esc(L.sent)}" aria-label="Groww token requests sent today"><span class="gl-${esc(lvl)}" style="width:${pct}%"></span></div>
+      ${warn ? `<div class="hl-line gl-${esc(lvl)}">${esc(warn)}</div>` : ""}
+      <div class="hl-line">${tok}</div>${cool}
+      <div class="hl-line sub">${esc(g.note)}</div>
+      ${L.last.length ? `<h3 class="gl-h">Last ${L.last.length} requests</h3><ul class="gl-last">${L.last.map(e => `<li><span>${esc(hlTime(e.at))}</span><span>${esc(e.host)}</span><span class="${e.result === "ok" ? "" : "hl-error"}">${esc(e.result)}</span></li>`).join("")}</ul>` : `<p class="sub">No token requests recorded yet.</p>`}`;
+  }
+  async function loadHealth(){
+    try {
+      const h = await api("/api/health"), c = h.counts || {};
+      $("hl-list").innerHTML = h.sources.map(healthItem).join("");
+      $("hl-sub").textContent = `${c.failing || 0} failing · ${c.late || 0} late · ${c.ok || 0} ok · ${c.off || 0} not configured · ${hlTime(h.at)}`;
+      const badge = $("ws-health-count"); badge.hidden = !c.failing; badge.textContent = c.failing ? String(c.failing) : "";
+      badge.title = c.failing ? `${c.failing} data source${c.failing === 1 ? "" : "s"} failing` : "";
+      $("wst-health").setAttribute("aria-label", c.failing ? `Health, ${c.failing} failing` : "Health");
+      paintGrowwLogins(h.groww);
+    } catch(e){ $("hl-sub").textContent = "Couldn't load: " + e.message; }
+  }
+  $("hl-refresh").addEventListener("click", loadHealth);
   async function loadIntegration(){
     try { const j = await api("/api/integration"); paintIntegration(j); if(j.running && !integPoll) integPoll = setInterval(loadIntegration, 3000); if(!j.running && integPoll){ clearInterval(integPoll); integPoll = null; } }
     catch(e){ paintIntegration({line: {level: "idle", text: "Integration unavailable", title: e.message}}); }
@@ -1014,6 +1067,7 @@
   }
   function renderMyPortfolio(m, force){
     MP = m; if(S) renderTiles();
+    paintGrowwRefresh(m);
     const keepRows = !force && sellEdit !== null && sellEdit.source === "groww";   // a what-if panel is open: don't rebuild under it
     const rows = $("mp-rows"), stats = $("mp-stats");
     $("mp-foot").innerHTML = "";
@@ -1030,7 +1084,10 @@
       return;
     }
     const tone = toneOf;
-    if(m.source === "saved"){
+    if(m.source === "saved" && m.market_closed){   // the normal state outside market hours: a plain note, never an error
+      const r = String(m.reason || "market closed");
+      $("mp-sub").textContent = `${r.charAt(0).toUpperCase() + r.slice(1)} · prices from Yahoo (delayed)${m.source_note ? " · " + m.source_note : ""}`;
+    } else if(m.source === "saved"){
       const until = m.blocked_until ? new Date(m.blocked_until).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false}) : null;
       $("mp-sub").textContent = `Saved holdings from ${new Date(m.saved_at).toLocaleString("en-IN", {timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false})} IST${m.age_trading_days > 1 ? ` — ${m.age_trading_days} trading days old; buys or sells since then are missing` : ""} · ${until ? "Groww unavailable until " + until + " IST" : m.reason} · prices from Yahoo (delayed)${m.source_note ? " · " + m.source_note : ""}`;
     } else $("mp-sub").textContent = `${m.holdings.length} holdings · read-only from Groww · ${when(m.at)}`;
@@ -1057,6 +1114,21 @@
     loadSparks(m.holdings);
   }
   $("mp-refresh").addEventListener("click", () => loadMyPortfolio(true));
+  // "Refresh from Groww": one read-only Groww read now, even outside market hours; off while a refused login cools down
+  const istTime = (iso) => new Date(iso).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false});
+  function paintGrowwRefresh(m){
+    const b = $("mp-groww-refresh"); if(!b) return;
+    if(MODE !== "live" || !m || !m.linked){ b.hidden = true; return; }
+    b.hidden = false;
+    const cool = m.cooldown_until && new Date(m.cooldown_until) > new Date();
+    b.disabled = !!cool;
+    b.textContent = cool ? "Groww cooling down until " + istTime(m.cooldown_until) + " IST" : "Refresh from Groww";
+  }
+  $("mp-groww-refresh").addEventListener("click", async () => {
+    const b = $("mp-groww-refresh"); b.disabled = true; b.textContent = "Reading Groww…";
+    try { renderMyPortfolio(await api("/api/groww/refresh", {}), true); toast("Holdings read from Groww"); }
+    catch(e){ toast(e.message); b.disabled = false; b.textContent = "Refresh from Groww"; }
+  });
 
   function renderForward(){
     const f = S.forward, el = $("fw-body");
@@ -1633,8 +1705,9 @@
   if(urlStock) lookup(urlStock);   // ?stock=SYM: the stock page opens on it
   setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 120000);
   setInterval(() => { if(!document.hidden) refresh(); }, 60000);   // a hidden tab does not poll
-  loadFreshness(); loadIntegration(); calcCosts();
+  loadFreshness(); loadIntegration(); calcCosts(); loadHealth();
   setInterval(() => { if(!document.hidden){ loadFreshness(); loadIntegration(); } }, 60000);
+  setInterval(() => { if(!document.hidden) loadHealth(); }, 120000);   // the tab badge counts failing sources
   document.addEventListener("visibilitychange", () => { if(!document.hidden){ loadFreshness(); refresh(); } });
 })();
 </script>

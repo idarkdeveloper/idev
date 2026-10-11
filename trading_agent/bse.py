@@ -535,6 +535,8 @@ class BSEClient:
                 self._fail(e)
         if end >= today and self._is_trading_day(today) and (now.hour, now.minute) >= PUBLISHED_AFTER:
             rows += self._today_rows()
+        if self.monotonic() >= self._fail_until:   # no failure pending: the BSE side worked (from cache or freshly)
+            self._note(True, len(rows))
         return rows
 
     def _today_rows(self) -> list[dict[str, Any]]:
@@ -551,7 +553,15 @@ class BSEClient:
         self._today_cache = (self.monotonic(), rows)
         return rows
 
+    def _note(self, ok: bool, rows: int | None = None, error: str | None = None) -> None:
+        """The Health tab's run record (source_runs.json in the state dir, beside cache/)."""
+        if self.cache_dir is None or self.cache_dir.parent.name != "cache":   # only the real state/cache layout
+            return
+        from .health import note_run
+        note_run(self.cache_dir.parent.parent, "bse", ok=ok, rows=rows, error=error)
+
     def _fail(self, error: BaseException) -> None:
+        self._note(False, error=f"{type(error).__name__}: {error}")
         self.last_error = str(error)
         self._fail_until = self.monotonic() + RETRY_AFTER_FAILURE_S
         warn_once_per_day(error, self.clock().date())

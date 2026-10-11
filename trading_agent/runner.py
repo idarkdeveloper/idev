@@ -28,6 +28,11 @@ def token_cache(settings: Settings) -> Any:
     return TokenCache(settings.state_dir / "groww_token.json")
 
 
+def login_host(settings: Settings) -> str:
+    """'server' or 'laptop': which machine sent a Groww token request (the login counter keeps one log per machine)."""
+    return "server" if str(getattr(settings, "ta_role", "") or "").lower() == "server" else "laptop"
+
+
 def token_block(settings: Settings) -> Any | None:
     """The GrowwTokenUnavailable that asking for a token would raise right now (no network), else None.
     None when an env token is set, or a valid cached token exists, or no key is configured."""
@@ -54,11 +59,11 @@ def resolve_groww_token(settings: Settings, *, fresh: bool = False, session: Any
     key = settings.groww_api_key
     if key and settings.groww_api_secret:
         return cached_access_token(key, token_cache(settings), secret=settings.groww_api_secret,
-                                   fresh=fresh, session=session, force=force)
+                                   fresh=fresh, session=session, force=force, host=login_host(settings))
     if key and settings.groww_totp_secret:
         totp_secret = settings.groww_totp_secret
         return cached_access_token(key, token_cache(settings), totp_fn=lambda: totp_now(totp_secret),
-                                   fresh=fresh, session=session, force=force)
+                                   fresh=fresh, session=session, force=force, host=login_host(settings))
     raise SystemExit("Groww selected but no GROWW_ACCESS_TOKEN or GROWW_API_KEY + "
                      "GROWW_API_SECRET / GROWW_TOTP_SECRET is set.")
 
@@ -472,7 +477,9 @@ def check(settings: Settings, *, force: bool = False, dry_run: bool = False,
     live_run = trades is None  # trades fetched here, not supplied by a demo or test
     if live_run:
         data = data or make_data_source(settings)
-        trades = fetch_followed(data, settings.investors, settings.watch_source)
+        from . import health
+        trades = health.recorded(settings.state_dir, health.deals_source(settings),
+                                 lambda: fetch_followed(data, settings.investors, settings.watch_source))
     assert trades is not None  # supplied by the caller, or fetched just above
 
     new = state.new_trades(trades)  # a deal is seen once for everyone who matches it

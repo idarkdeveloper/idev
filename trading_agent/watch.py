@@ -150,16 +150,24 @@ class Watcher:
         st = State(self.settings.state_dir / "state.json")
         seen = st.data.setdefault("seen_announcements", {})
         fresh: list[dict[str, Any]] = []
-        for t in self.interesting_tickers():
+        tickers = self.interesting_tickers()
+        got, errors = 0, []
+        for t in tickers:
             try:
                 rows = self._data.announcements(t, limit=5)
             except Exception as e:  # noqa: BLE001
                 log.warning("announcements for %s failed: %s", t, e)
+                errors.append(f"{t}: {type(e).__name__}: {e}")
                 continue
+            got += len(rows)
             for a in rows:
                 if a["id"] and a["id"] not in seen:
                     seen[a["id"]] = a["at"]
                     fresh.append(a)
+        if tickers:   # the Health tab's record: a success when at least one stock could be read
+            from . import health
+            health.note_run(self.settings.state_dir, "announcements", ok=len(errors) < len(tickers), rows=got,
+                            error="; ".join(errors[:3]) or None)
         if fresh:
             st.save()
             if self._notifier is not None:
@@ -178,13 +186,21 @@ class Watcher:
             log.warning("news alerts are off: no headline tagger is available "
                         "(start Ollama with `ollama serve` and `ollama pull <model>`, or set NEWS_TAGGER)")
         candidates: list[dict[str, Any]] = []
-        for t in self.interesting_tickers():  # slow: network and tagging, with no State held open
+        tickers = self.interesting_tickers()
+        got, errors = 0, []
+        for t in tickers:  # slow: network and tagging, with no State held open
             try:
                 items = self._news.for_symbol(t)["items"]
             except Exception as e:  # noqa: BLE001
                 log.warning("news for %s failed: %s", t, e)
+                errors.append(f"{t}: {type(e).__name__}: {e}")
                 continue
+            got += len(items)
             candidates += [{**i, "symbol": t} for i in items if is_alert(i)]
+        if tickers:   # the Health tab's record
+            from . import health
+            health.note_run(self.settings.state_dir, "news", ok=len(errors) < len(tickers), rows=got,
+                            error="; ".join(errors[:3]) or None)
         if not candidates:
             return []
         st = State(self.settings.state_dir / "state.json")  # loaded now, so concurrent writes are kept
@@ -341,7 +357,9 @@ class Watcher:
             return []
         from .quiver import fetch_followed
         try:
-            trades = fetch_followed(self._data, self.settings.investors, self.settings.watch_source)
+            from . import health
+            trades = health.recorded(self.settings.state_dir, health.deals_source(self.settings),
+                                     lambda: fetch_followed(self._data, self.settings.investors, self.settings.watch_source))
         except Exception as e:  # noqa: BLE001
             log.warning("deals unavailable: %s", e)
             return []
