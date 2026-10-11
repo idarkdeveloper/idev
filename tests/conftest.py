@@ -23,6 +23,17 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
+@pytest.fixture(autouse=True)
+def groww_window_open_by_default(monkeypatch):
+    """The Groww gate (groww_hours) reads the clock; unless a test sets its own, it is Tuesday 11:00 IST, inside the
+    window, so tests never depend on the time of day they run at."""
+    from datetime import datetime
+
+    import trading_agent.groww_hours as gh
+    from trading_agent.timezones import IST
+    monkeypatch.setattr(gh, "now_ist", lambda: datetime(2026, 6, 9, 11, 0, tzinfo=IST))
+
+
 @pytest.fixture
 def sample_rows() -> list[dict]:
     fx = Path(__file__).resolve().parents[1] / "trading_agent" / "fixtures" / "congress_sample.json"

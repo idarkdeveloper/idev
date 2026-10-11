@@ -52,6 +52,13 @@ print when to try again (`--force` asks anyway and may extend Groww's wait). Mea
 alerting on new deals ("analysis paused: Groww unavailable"), announcements and news, and the full
 check analyses those deals once Groww is back. Stop and order checks pause during the wait.
 
+Groww is used mainly while the market is live: `GROWW_WINDOW_START` to `GROWW_WINDOW_END` (default 08:30 to 16:00
+IST, NSE trading days). The watch service takes one holdings read after the close (15:35 to 15:50, up to 3 tries) and
+saves it as the close snapshot; in the evening, at night, at weekends and on holidays the dashboard and the emails
+show that saved copy priced from Yahoo ("market closed — holdings saved at the <date> close") instead of calling
+Groww. Only when no snapshot covers the latest session is there one Groww read, once a day. Practice-account prices,
+the canary and a live-orders broker follow the same window; `groww-check` is an explicit command and always calls Groww.
+
 Other commands: `portfolio` (account + P&L), `history` (past recommendations),
 `reset` (forget seen trades, reset the paper account), `groww-token` (mint a daily token),
 `check --json`, and `--market us` to switch to the US stack.

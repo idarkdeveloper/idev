@@ -225,6 +225,9 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
         bse = make_bse_client(settings)
     if groww is _UNSET:
         def groww() -> Any:
+            from .groww_hours import window_open
+            if not window_open(settings, now, holidays):   # Groww is called inside its window only
+                raise Skip("skipped (outside the Groww window)")
             return cached_groww(settings)
     claude = claude or claude_ping
     if clock is None:

@@ -859,11 +859,21 @@ def cmd_watch(args: argparse.Namespace) -> int:
     from .notify import install_log_redaction
     install_log_redaction()   # bot tokens and the heartbeat path never reach a log, even at -v
     forward_prices = free_prices(settings)
+    close_snapshot = None
+    if settings.use_groww and settings.has_groww_credentials:
+        from datetime import datetime
+        from .timezones import IST
+        from .groww_hours import CloseSnapshot
+        from .runner import read_groww_portfolio
+        close_prices = free_prices(settings)
+        close_snapshot = CloseSnapshot(
+            settings, lambda day: read_groww_portfolio(settings, close_prices, datetime.now(IST).isoformat(timespec="seconds"),
+                                                       force=True, close_session=day), holidays)
     forward = ForwardScheduler(settings.state_dir, lambda: print(run_forward_due(settings, forward_prices, holidays, notifier)),
                                holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
                 integration=make_integration_scheduler(settings, notifier, holidays),
-                backup=make_backup_scheduler(settings, holidays),
+                backup=make_backup_scheduler(settings, holidays), close_snapshot=close_snapshot,
                 heartbeat=Heartbeat(settings.heartbeat_url, fail_enabled=True if settings.heartbeat_fail else None),
                 window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),

@@ -196,6 +196,9 @@ class Settings:
     groww_sell_t1: bool = False  # live sells may include T1 shares (BTST: short-delivery / auction risk)
     groww_allowed_ip: str | None = None  # the static IP registered with Groww (SEBI 2026); live orders refuse elsewhere
     groww_proxy_url: str | None = None  # send Groww calls through this fixed-IP proxy (e.g. from GitHub Actions)
+    # Groww is called mainly in this window (IST, NSE trading days); after it the holdings saved at the close are used.
+    groww_window_start: str = "08:30"
+    groww_window_end: str = "16:00"
     # Needed when the API key is not scoped to one workspace (the API then asks for it).
     anthropic_workspace_id: str | None = None
     # News headline tagging: auto = local Ollama when it is running, else untagged (never Claude implicitly)
@@ -279,6 +282,22 @@ class Settings:
         return "INR" if self.market == "in" else "USD"
 
 
+def _groww_window(start: str | None, end: str | None) -> tuple[str, str]:
+    """GROWW_WINDOW_START / GROWW_WINDOW_END as HH:MM (IST); start must be before end."""
+    from datetime import time as dtime
+    out = []
+    for name, raw, default in (("GROWW_WINDOW_START", start, "08:30"), ("GROWW_WINDOW_END", end, "16:00")):
+        text = (raw or default).strip()
+        try:
+            t = dtime.fromisoformat(text)
+        except ValueError:
+            raise SystemExit(f"{name} must be a time like {default}, got {text!r}") from None
+        out.append(t.strftime("%H:%M"))
+    if out[0] >= out[1]:
+        raise SystemExit("GROWW_WINDOW_START must be earlier than GROWW_WINDOW_END")
+    return out[0], out[1]
+
+
 def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
     if dotenv is not None:
         _load_dotenv(dotenv)
@@ -341,6 +360,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
     except ValueError as e:
         raise SystemExit(f"INVESTORS: {e}") from None
     default_source = "deals" if data_source == "nse" else "congress"
+    groww_window = _groww_window(env("GROWW_WINDOW_START"), env("GROWW_WINDOW_END"))
     return Settings(
         anthropic_api_key=env("ANTHROPIC_API_KEY") or None,
         claude_model=env("CLAUDE_MODEL") or "claude-opus-5-5",
@@ -373,6 +393,8 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         groww_sell_t1=_bool(env("GROWW_SELL_T1"), False),
         groww_allowed_ip=env("GROWW_ALLOWED_IP") or None,
         groww_proxy_url=env("GROWW_PROXY_URL") or None,
+        groww_window_start=groww_window[0],
+        groww_window_end=groww_window[1],
         anthropic_workspace_id=env("ANTHROPIC_WORKSPACE_ID") or None,
         news_tagger=news_tagger,
         ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),

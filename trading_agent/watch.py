@@ -75,7 +75,7 @@ class Watcher:
                  holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
                  news: Any | None = None, broker_factory: Callable[[], Any] | None = None,
                  digest: Any | None = None, forward: Any | None = None, heartbeat: Any | None = None,
-                 integration: Any | None = None, backup: Any | None = None):
+                 integration: Any | None = None, backup: Any | None = None, close_snapshot: Any | None = None):
         self.settings = settings
         self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
         self._blocked_until: datetime | None = None
@@ -97,6 +97,8 @@ class Watcher:
         self._forward = forward  # ForwardScheduler: the paper forward test, once a trading day after the close
         self._backup = backup  # BackupScheduler: copies the state files once a trading day after the close
         self._integration = integration  # IntegrationScheduler: the read-only live-services check at 08:35 IST
+        self._close_snapshot = close_snapshot  # groww_hours.CloseSnapshot: one saved Groww read at the close (15:35-15:50)
+        self._groww_paused = False  # live Groww broker outside the Groww window: no Groww call this tick
         self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every 5 minutes (every minute in the market window)
         self._broker = broker
         self._notifier = notifier
@@ -120,11 +122,20 @@ class Watcher:
             return False
         return self.window[0] <= now.time() <= self.window[1]
 
+    def groww_paused(self, now: datetime | None = None) -> bool:
+        """A real (live-orders) Groww broker is not touched outside the Groww window. The practice account needs no
+        gate here: its Groww prices are gated where it is built (runner.make_practice_broker)."""
+        s = self.settings
+        if not (getattr(s, "use_groww", False) and getattr(s, "groww_live_orders", False)):
+            return False
+        from .groww_hours import window_open
+        return not window_open(s, now or datetime.now(self.tz), self.holidays)
+
     # -- one iteration ----------------------------------------------------------
     def interesting_tickers(self) -> list[str]:
         st = State(self.settings.state_dir / "state.json")
         tickers: list[str] = []
-        if self._broker is not None:
+        if self._broker is not None and not self._groww_paused:
             try:
                 tickers += [p.symbol for p in self._broker.positions()]
             except Exception as e:  # noqa: BLE001
@@ -198,7 +209,7 @@ class Watcher:
         return fresh
 
     def check_trailing_stops(self) -> list[dict[str, Any]]:
-        if self._broker is None:
+        if self._broker is None or self._groww_paused:
             return []
         try:
             positions = self._broker.positions()
@@ -257,7 +268,7 @@ class Watcher:
         """Live Groww only: re-check open orders and keep GTT stop-losses in line."""
         from .live import is_live_broker, refresh_open_orders, sync_gtt_stops
 
-        if not is_live_broker(self._broker):
+        if not is_live_broker(self._broker) or self._groww_paused:
             return None
         st = State(self.settings.state_dir / "state.json")
         out: dict[str, Any] = {}
@@ -386,6 +397,14 @@ class Watcher:
                 info["integration"] = self._integration.tick(now)
             except Exception:  # noqa: BLE001 - the integration check never stops the watch
                 log.exception("integration check scheduling failed")
+        if self._close_snapshot is not None:  # 15:35-15:50 on trading days: the one saved Groww read of the session
+            try:
+                info["close_snapshot"] = self._close_snapshot.tick(now)
+            except Exception:  # noqa: BLE001 - never stops the watch
+                log.exception("close snapshot failed")
+        self._groww_paused = self.groww_paused(now)
+        if self._groww_paused:
+            info["groww_paused"] = "outside the Groww window: no Groww calls (stops and order checks resume at the open)"
         if self._awake is not None and info["in_window"] != self._awake_on:
             self._awake(info["in_window"])
             self._awake_on = info["in_window"]
@@ -393,12 +412,13 @@ class Watcher:
             info["skipped"] = True
             self.last_tick = info
             return info
-        alerts_only = self.ensure_broker() is None and self._broker_factory is not None
+        alerts_only = (not self._groww_paused and self.ensure_broker() is None
+                       and self._broker_factory is not None)
         if alerts_only:
             info["alerts_only"] = "Groww is unavailable: stop and order checks are paused"
             info["new_deals_unanalysed"] = self.poll_deals_blocked()
         try:
-            if self._check_fn is not None and not alerts_only:
+            if self._check_fn is not None and not alerts_only and not self._groww_paused:
                 result = self._check_fn()
                 info["check"] = result.to_dict() if hasattr(result, "to_dict") else result
         except Exception as e:  # noqa: BLE001

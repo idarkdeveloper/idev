@@ -119,9 +119,13 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
     sim_path = settings.state_dir / "paper_broker.json"
     price_fn = price_fn or free_prices(settings)
     if settings.use_groww:
+        from . import groww_hours
         read_only = dataclasses.replace(settings, groww_live_orders=False)
+        calendar = groww_hours.default_calendar(settings)
         try:
-            groww = groww or make_groww(read_only, price_fn)
+            # Groww prices the account only inside its window; outside it the free source does
+            groww = groww or (make_groww(read_only, price_fn)
+                              if groww_hours.window_open(settings, holidays=calendar) else None)
         except GrowwTokenUnavailable as e:
             # Groww will not give us a token right now: price from the free source and keep trying Groww
             # (a file read, no network, while the cool-down lasts) so it is used again once it is lifted.
@@ -130,6 +134,8 @@ def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww:
         holder: dict[str, Any] = {"g": groww}
 
         def groww_or_free(symbol: str) -> float:
+            if not groww_hours.window_open(settings, holidays=calendar):
+                return price_fn(symbol)   # evenings, nights, weekends, holidays: no Groww call
             if holder["g"] is None:
                 blocked = token_block(settings)  # a file read: no client or Session is built while blocked
                 if blocked is not None:
@@ -229,11 +235,13 @@ def _assemble(entries: list[dict[str, Any]], stamp: str) -> dict[str, Any]:
             "unpriced": [r["symbol"] for r in rows if r["value"] is None]}
 
 
-def save_groww_snapshot(settings: Settings, rows: list[dict[str, Any]]) -> None:
+def save_groww_snapshot(settings: Settings, rows: list[dict[str, Any]], *, kind: str | None = None,
+                        session: str | None = None) -> None:
     """Remember the holdings (no prices, no tokens or keys) so the page and the daily emails still work while
     Groww refuses a login. Written beside the file and swapped in, owner-only from the moment it is created; a
     failure to save is logged, never raised. A ``source_note`` already in the file (a statement the user loaded)
-    is dropped: this snapshot is Groww's own."""
+    is dropped: this snapshot is Groww's own. ``kind="close"`` with the ``session`` date marks the read taken after
+    the close (see groww_hours.CloseSnapshot)."""
     import json
     import os
     import threading
@@ -242,8 +250,10 @@ def save_groww_snapshot(settings: Settings, rows: list[dict[str, Any]]) -> None:
     path = settings.state_dir / SNAPSHOT_FILE
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        body = {"saved_at": datetime.now(IST).isoformat(timespec="seconds"),
+        body: dict[str, Any] = {"saved_at": datetime.now(IST).isoformat(timespec="seconds"),
                 "holdings": [{k: r.get(k) for k in _SNAPSHOT_KEYS} for r in rows]}
+        if kind:
+            body["kind"], body["session"] = kind, session
         path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -264,6 +274,8 @@ def load_groww_snapshot(settings: Settings) -> dict[str, Any] | None:
         rows = [r for r in data["holdings"] if isinstance(r, dict) and r.get("symbol")
                 and isinstance(r.get("qty"), (int, float)) and isinstance(r.get("avg_price"), (int, float))]
         out = {"saved_at": str(data["saved_at"]), "holdings": rows}
+        if data.get("kind") == "close" and isinstance(data.get("session"), str):
+            out["kind"], out["session"] = "close", data["session"]
         if isinstance(data.get("source_note"), str) and data["source_note"].strip():
             out["source_note"] = " ".join(data["source_note"].split())[:200]
         return out
@@ -311,20 +323,47 @@ def _from_snapshot(settings: Settings, prices: Any, bse: Any, reason: str, error
     return out
 
 
-def read_groww_portfolio(settings: Settings, prices: Any, stamp: str = "") -> dict[str, Any]:
+def read_groww_portfolio(settings: Settings, prices: Any, stamp: str = "", *, force: bool = False,
+                         now: Any = None, holidays: Any = None, close_session: Any = None) -> dict[str, Any]:
     """Your real Groww holdings with buy price, current price and profit or loss. Read-only: the client is built
     with live orders off and never places an order. After every successful read the holdings are saved to
     ``groww_holdings.json``. When Groww cannot be read (cool-down after a refusal, any error, not linked) and a
     snapshot exists, that is returned priced from the free source with ``source: "saved"``, ``saved_at``,
     ``reason`` and ``prices``; with no snapshot: {"linked": False} without credentials, or
     {"linked": True, "error": text[, "blocked_until": iso]}. A successful read has {"linked": True, "at",
-    "holdings", "invested", "value", "pl", "pl_pct", "unpriced"}. The dashboard and the daily emails use it."""
+    "holdings", "invested", "value", "pl", "pl_pct", "unpriced"}. The dashboard and the daily emails use it.
+
+    Groww is called mainly inside its window (groww_hours: 08:30 to 16:00 IST on trading days). Outside it, a saved
+    snapshot of the latest completed session is returned as is (``source: "saved"``, ``market_closed: True``, a
+    ``reason`` that is not an error); only when none covers that session is there one Groww read, once a day.
+    ``force=True`` bypasses the gate (a "Refresh from Groww" button) but not the cool-down after a refusal.
+    ``close_session`` (a date) saves the read as that session's close snapshot. ``now`` and ``holidays`` are for tests."""
+    from . import groww_hours
     from .groww import GrowwBroker
     from .instruments import CompanyNames, nse_then_bse
     from .price_archive import archive_for
     bse = YahooPrices(suffix=".BO", cache_dir=settings.state_dir / "cache", archive=archive_for(settings))
     if not settings.has_groww_credentials:
         return {"linked": False}   # no credentials: a leftover snapshot is not shown
+    if not force:
+        clock = (now or groww_hours.now_ist())
+        cal = holidays if holidays is not None else groww_hours.default_calendar(settings)
+        if not groww_hours.window_open(settings, clock, cal):
+            snap = load_groww_snapshot(settings)
+            if groww_hours.snapshot_covers(snap, clock, cal):
+                out = _from_snapshot(settings, prices, bse, groww_hours.closed_reason(clock, cal), {"linked": True})
+                if out is not None:
+                    out["market_closed"] = True
+                    return out
+            today = clock.astimezone(groww_hours.IST).date()
+            if groww_hours.offhours_attempted(settings, today):   # the one read allowed outside the window is spent
+                text = "market closed — Groww is read again at the next open"
+                stale = _from_snapshot(settings, prices, bse, text, {"linked": True}) if snap else None
+                if stale is not None:
+                    stale["market_closed"] = True
+                    return stale
+                return {"linked": True, "error": text + "; no holdings are saved yet"}
+            groww_hours.record_offhours_attempt(settings, today)
     failure: dict[str, Any]
     try:
         g = GrowwBroker(resolve_groww_token(settings), live_orders=False, exchange=settings.groww_exchange,
@@ -355,7 +394,10 @@ def read_groww_portfolio(settings: Settings, prices: Any, stamp: str = "") -> di
                         "qty": p.qty, "sellable_qty": p.free_qty, "avg_price": p.avg_entry_price,
                         "price": p.current_price})
     out = _assemble(entries, stamp)
-    save_groww_snapshot(settings, out["holdings"])
+    if close_session is not None:
+        save_groww_snapshot(settings, out["holdings"], kind="close", session=close_session.isoformat())
+    else:
+        save_groww_snapshot(settings, out["holdings"])
     return out
 
 
