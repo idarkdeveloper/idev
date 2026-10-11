@@ -1,0 +1,66 @@
+{
+ "comNameList": [
+  "Castrol India Limited",
+  "IDFC First Bank Limited",
+  "CRISIL Ltd.",
+  "Unknown Listed Company Limited"
+ ],
+ "data": [
+  {
+   "comName": "Castrol India Limited",
+   "totIssuedShares": "989170980",
+   "totPromoterHolding": "507390000",
+   "percPromoterHolding": "51.29",
+   "totPublicHolding": "481780980",
+   "totPromoterShares": "126847500",
+   "percPromoterShares": "25.00",
+   "percTotShares": "12.82",
+   "noOfPledgeShare": "2512.50",
+   "disclosureToDate": "07-Oct-2026 18:00:00",
+   "numSharesPledged": "0",
+   "totDematShares": "989000000",
+   "percSharesPledged": "0.00",
+   "noOfSecPledgeShare": "0.00",
+   "broadcastDt": "07-Oct-2026 18:05:12"
+  },
+  {
+   "comName": "IDFC First Bank Limited",
+   "totIssuedShares": "7322000000",
+   "totPromoterHolding": "0",
+   "percPromoterHolding": "0.00",
+   "totPublicHolding": "7322000000",
+   "totPromoterShares": "0",
+   "percPromoterShares": "0.00",
+   "percTotShares": "0.00",
+   "noOfPledgeShare": "0.00",
+   "disclosureToDate": "-",
+   "numSharesPledged": "1200000",
+   "totDematShares": "7300000000",
+   "percSharesPledged": "0.02",
+   "noOfSecPledgeShare": "9.20",
+   "broadcastDt": "29-Sep-2026 17:00:00"
+  },
+  {
+   "comName": "CRISIL Ltd.",
+   "totIssuedShares": "73100000",
+   "totPromoterHolding": "48900000",
+   "percPromoterHolding": "66.89",
+   "totPublicHolding": "24200000",
+   "totPromoterShares": "2445000",
+   "percPromoterShares": "5.00",
+   "percTotShares": "3.34",
+   "noOfPledgeShare": "1180.00",
+   "disclosureToDate": "01-Oct-2026 16:30:00",
+   "numSharesPledged": "0",
+   "totDematShares": "73000000",
+   "percSharesPledged": "0.00",
+   "noOfSecPledgeShare": "0.00",
+   "broadcastDt": "01-Oct-2026 16:31:00"
+  },
+  {
+   "comName": "Unknown Listed Company Limited",
+   "percPromoterShares": "90.00",
+   "broadcastDt": "01-Oct-2026 10:00:00"
+  }
+ ]
+}

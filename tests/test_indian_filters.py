@@ -283,3 +283,60 @@ def test_portfolio_rows_and_the_stock_page_carry_the_flags(server, monkeypatch):
     assert "MP.filter_flags" in page and 'id="f-asm"' in page and 'id="f-results"' in page and 'id="f-pledge"' in page
     sp = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "stockpage.js").read_text(encoding="utf-8")
     assert "r.filter_block" in sp and "r.filters_note" in sp
+
+
+# ---------- NSE's real answer shapes ----------
+FX = Path(__file__).parent / "fixtures"
+EQUITY = {"CASTROLIND": "Castrol India Limited", "IDFCFIRSTB": "IDFC First Bank Limited", "CRISIL": "CRISIL Limited",
+          "CGCL": "Capri Global Capital Limited", "TWINA": "Twin Co Limited", "TWINB": "Twin Co Ltd"}
+
+
+class RecordingNSE(FakeNSE):
+    def __init__(self, answers=None):
+        super().__init__(answers)
+        self.params = {}
+
+    def _get(self, path, params=None, referer=None):
+        self.params[path] = params
+        return super()._get(path, params, referer)
+
+
+def real_answers():
+    return {**FakeNSE().answers, "api/corporate-board-meetings": json.loads((FX / "nse_board_meetings_sample.json").read_text()),
+            "api/corporate-pledgedata": json.loads((FX / "nse_pledge_sample.json").read_text())}
+
+
+def test_board_meetings_are_asked_for_by_meeting_date_two_weeks_ahead(tmp_path):
+    nse = RecordingNSE(real_answers())
+    b = book(tmp_path)
+    got = b.tick(nse, MON, names=EQUITY)
+    assert nse.params["api/corporate-board-meetings"] == {"index": "equities", "from_date": "12-10-2026", "to_date": "26-10-2026"}
+    m = b.load()["results"]["symbols"]
+    assert set(m) == {"CASTROLIND", "IDFCFIRSTB", "CRISIL"} and got["results"] == 3          # fund raising is not results
+    # "Board Meeting Intimation" rows whose text says results count too (CASTROLIND's financial-results notice is there)
+    assert {x["date"] for x in m["CASTROLIND"]} == {"2026-10-24"}
+
+
+def test_pledge_rows_name_the_company_and_are_mapped_to_symbols(tmp_path):
+    p = fi.parse_pledges(json.loads((FX / "nse_pledge_sample.json").read_text()), EQUITY)
+    assert p == {"CASTROLIND": {"pct": 25.0, "filed": "2026-10-07T18:05:12"}, "IDFCFIRSTB": {"pct": 0.0, "filed": "2026-09-29T17:00:00"},
+                 "CRISIL": {"pct": 5.0, "filed": "2026-10-01T16:31:00"}}                       # "CRISIL Ltd." = "CRISIL Limited"
+    assert fi.norm_name("The Tata Power Company Ltd.") == "tata power" and fi.norm_name("M&M Financial") == "m and m financial"
+    assert "twin" not in fi.name_index(EQUITY)                                                  # two symbols share it: not guessed
+    b = book(tmp_path)
+    b.tick(RecordingNSE(real_answers()), MON, names=lambda: EQUITY)
+    assert b.check("CASTROLIND")["block"] and "25.0%" in b.refuse_buy("CASTROLIND")
+    assert not b.check("CRISIL")["block"] and b.check("CRISIL")["flags"] == ["Pledge 5%"]
+
+
+def test_an_empty_answer_is_unavailable_data_not_an_empty_list(tmp_path):
+    b = book(tmp_path)
+    got = b.tick(RecordingNSE({**real_answers(), "api/corporate-pledgedata": {"comNameList": [], "data": []}}), MON, names=EQUITY)
+    assert "pledge" not in got and b.load().get("pledge") is None
+    assert b.note() == "filter data unavailable: promoter pledges (buys are held back only by the other rules)"
+    assert "no usable rows" in b.load()["tries"]["2026-10-12"]["errors"]["pledge"]
+    # names are only looked up when a row has no symbol
+    called = []
+    b2 = book(tmp_path / "x")
+    b2.tick(FakeNSE(), MON, names=lambda: called.append(1) or {})
+    assert called == []
