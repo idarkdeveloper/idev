@@ -192,4 +192,25 @@ check("universe list is the six indices plus holdings and followed buys", () => 
   assert.strictEqual(S.UNIVERSE_LABEL.DEALS, "Followed investors' recent buys");
 });
 
+check("All columns lists every table column but never the filter-only fields, and adds TradingView only when on", () => {
+  const all = S.allColumns(false), allTv = S.allColumns(true);
+  for (const k of ["price", "ret_1w", "ret_6m", "volume", "atr_pct", "band", "above_200", "mom_score"]) assert.ok(all.includes(k), k);
+  for (const k of ["industry", "held", "deal"]) assert.ok(!all.includes(k), k);
+  assert.ok(!all.some(k => k.startsWith("tv_")) && allTv.some(k => k.startsWith("tv_")));
+  assert.ok(S.defaultColumns(false, false).every(k => all.includes(k)) && all.length > S.defaultColumns(false, false).length);
+});
+
+check("sparkline path spans the box, puts the high at the top and the low at the bottom, and needs two points", () => {
+  const d = S.sparkPath([10, 20, 15], 72, 26, 2);
+  const pts = d.split(/[ML]/).filter(Boolean).map(s => s.trim().split(" ").map(Number));
+  assert.strictEqual(pts.length, 3);
+  assert.ok(d.startsWith("M") && (d.match(/L/g) || []).length === 2);
+  assert.deepStrictEqual(pts[0], [2, 24]); assert.deepStrictEqual(pts[1], [36, 2]); assert.deepStrictEqual(pts[2], [70, 13]);
+  assert.strictEqual(S.sparkPath([5], 72, 26, 2), "");
+  assert.strictEqual(S.sparkPath(null, 72, 26, 2), "");
+  const flat = S.sparkPath([7, 7, 7], 360, 140, 4);   // a flat line still draws, along the bottom
+  assert.ok(flat && !/NaN|Infinity/.test(flat));
+  assert.strictEqual(S.sparkPath([1, "x", null, 3], 10, 10, 0).split("L").length, 2);   // junk values are skipped
+});
+
 console.log(JSON.stringify({n, failures}));
