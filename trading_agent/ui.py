@@ -53,6 +53,7 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 "/static/common.js": ("common.js", "text/javascript; charset=utf-8"),
                 "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8"),
                 "/static/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
+                "/static/screener.js": ("screener.js", "text/javascript; charset=utf-8"),
                 # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
                                                   "text/javascript; charset=utf-8")}
@@ -63,6 +64,7 @@ EDITABLE_ENV_KEYS = {
     "bse_deals": "BSE_DEALS",  # also read BSE bulk/block deals beside NSE's
     "flows_breadth": "FLOWS_BREADTH",  # FII/DII flows and market breadth lines in the morning email
     "price_band_filter": "PRICE_BAND_FILTER",  # skip 2% and 5% price-band stocks for buys
+    "tradingview_screener": "TRADINGVIEW_SCREENER",  # screener page: extra TradingView columns (unofficial, display only)
     "auto_trade": "AUTO_TRADE",
     "notify_email_to": "NOTIFY_EMAIL_TO",
     "notify_webhook_url": "NOTIFY_WEBHOOK_URL",
@@ -174,6 +176,7 @@ class App:
         self.busy = False
         self.running: Job | None = None  # the job holding the one slot
         self._replay: Any | None = None  # ReplayApp, built on first use
+        self._screener: Any | None = None  # ScreenerService, built on first use
         self._holidays: Any | None = None
         self._demo: "App | None" = None
         self._settings_version = 0  # bumped when settings change, so the Demo child is rebuilt only then
@@ -324,6 +327,73 @@ class App:
                 self._replay = ReplayApp(self)
             return self._replay
 
+    # -- stock screener -------------------------------------------------------
+    @property
+    def screener(self) -> Any:
+        """The screener page's service (caches and background fill), built on first use and shared by Live and Demo.
+        Read-only: market data and saved state only, never a broker."""
+        if self._parent is not None:
+            return self._parent.screener
+        with self._lazy_lock:
+            if self._screener is None:
+                from .bands import book_for
+                from .fundamentals import YahooFundamentals
+                from .screen import load_universe
+                from .screener import ScreenerService
+                from .tvscreener import TradingViewColumns
+                st = self.settings
+                tv = TradingViewColumns(st.state_dir, enabled=lambda: bool(self.settings.tradingview_screener),
+                                        role=lambda: self.settings.ta_role)
+                funds = YahooFundamentals(st.state_dir / "cache", cache_ttl=24 * 3600)
+                self._screener = ScreenerService(prices=self.prices, fundamentals=funds, load_universe=load_universe,
+                                                 bands=lambda: book_for(self.settings), tv=tv, names=self._screener_names)
+            return self._screener
+
+    def _screener_names(self, symbols: list[str]) -> dict[str, str]:
+        n = self.names   # NSE's equity list only: no Groww file is read for the screener
+        return n.nse_names(symbols) if n is not None else {}
+
+    def _held_symbols(self) -> set[str]:
+        """Symbols you own, from saved state only (the last Groww snapshot on disk and the practice account's file);
+        never a call to Groww."""
+        from .runner import load_groww_snapshot
+        out: set[str] = set()
+        snap = load_groww_snapshot(self.settings)
+        for h in (snap or {}).get("holdings", []):
+            if (h.get("kind") or "equity") == "equity":
+                out.add(str(h["symbol"]).upper())
+        try:
+            data = json.loads((self.settings.state_dir / "paper_broker.json").read_text(encoding="utf-8"))
+            for sym, pos in (data.get("positions") or {}).items():
+                if isinstance(pos, dict) and float(pos.get("qty") or 0) > 0:
+                    out.add(str(sym).upper())
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+        return out
+
+    def screener_data(self, universe: str) -> dict[str, Any]:
+        """GET /api/screener: rows cached so far plus how many stocks are still being fetched (the page polls)."""
+        from .screener import DEALS, HOLDINGS, deal_buyers, universe_key
+        from .screen import UNIVERSES
+        key = universe_key(universe)
+        if key is None:
+            raise ValueError("universe must be one of " + ", ".join([*UNIVERSES, HOLDINGS, DEALS]))
+        if self._parent is not None:
+            return self._parent.screener_data(key)
+        if self.demo_trades is not None:   # the offline sample: no network, so no market lists
+            return {"universe": key, "count": 0, "pending": 0, "loading": False, "rows": [], "as_of": None, "source": "",
+                    "tv": {"state": "off", "until": None},
+                    "error": "The screener needs live market data, which the offline sample does not use."}
+        from .timezones import IST
+        held = self._held_symbols()
+        buyers = deal_buyers(self.deals(), self._now_dt().astimezone(IST).date().isoformat())
+        given: list[dict[str, str]] | None = None
+        if key == HOLDINGS:
+            given = [{"symbol": s, "name": "", "industry": ""} for s in sorted(held)]
+        elif key == DEALS:
+            given = [{"symbol": s, "name": "", "industry": ""} for s in sorted(buyers)]
+        return self.screener.snapshot(key, given=given, held=held, deals=buyers)
+
     # -- deals ----------------------------------------------------------------
     def deals(self, refresh: bool = False) -> list[DisclosedTrade]:
         if self._parent is not None:  # the same deals, fetched and cached once
@@ -441,6 +511,7 @@ class App:
                 "paper_starting_cash": s.paper_starting_cash,
                 "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,
                 "flows_breadth": s.flows_breadth, "price_band_filter": s.price_band_filter,
+                "tradingview_screener": s.tradingview_screener, "tradingview_allowed": s.ta_role != "server",
                 "groww_ddpi_confirmed": s.groww_ddpi_confirmed, "groww_sell_t1": s.groww_sell_t1,
                 "digest_morning_on": s.digest_morning_on, "digest_evening_on": s.digest_evening_on,
                 "digest_morning": s.digest_morning, "digest_evening": s.digest_evening,
@@ -1254,7 +1325,7 @@ class App:
                          "heartbeat_url": parse_heartbeat_url}[key]
                 value = parse(value) or ""
                 ops.append(lambda k=key, v=value: setattr(st, k, v or None))
-            elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
+            elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "tradingview_screener", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
                          "telegram_alerts", "integration_check", "integration_claude"):
                 value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
@@ -1610,7 +1681,7 @@ def _check_type(key: str, value: Any) -> None:
         ok = isinstance(value, str) or (isinstance(value, (list, tuple)) and all(isinstance(i, str) for i in value))
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
-    elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
+    elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "tradingview_screener", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
                  "telegram_alerts", "integration_check", "integration_claude"):
         _bool_setting(key, value)
     elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url", "forward_start", "allowed_hosts"):
@@ -1667,6 +1738,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     if sample:  # the sample app is the whole dashboard, at /
         index_html = index_html.replace("<body>", f'<body data-mode="demo"{sample}>', 1)
     replay_html = (resources.files("trading_agent") / "ui" / "replay.html").read_text(encoding="utf-8")
+    screener_html = (resources.files("trading_agent") / "ui" / "screener.html").read_text(encoding="utf-8")
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "trading-agent-ui/1"
@@ -1724,6 +1796,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
                     return
                 self._bytes(data, ctype)
+                return
+            if path in ("/screener", "/screener/"):
+                self._bytes(screener_html.encode(), "text/html; charset=utf-8")
                 return
             if self._replay("GET"):
                 return
@@ -1810,6 +1885,12 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
                 else:
                     self._json(app.news_for_ticker(ticker))
+            elif path == "/api/screener":
+                from urllib.parse import parse_qs
+                try:
+                    self._json(app.screener_data((parse_qs(urlparse(self.path).query).get("universe") or ["NIFTY50"])[0]))
+                except ValueError as e:
+                    self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
             elif path == "/api/backtest":
                 self._json(app.last_backtest or {})
             elif path == "/api/screen":

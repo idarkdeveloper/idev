@@ -177,7 +177,7 @@ LITERAL = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
 LITERAL_ALLOWLIST: dict[str, set[str]] = {"common.js": {"rgb(", "rgba("}}
 
 
-@pytest.mark.parametrize("name", ["index.html", "replay.html", "common.js", "replay.js", "palette.js"])
+@pytest.mark.parametrize("name", ["index.html", "replay.html", "common.js", "replay.js", "palette.js", "screener.html", "screener.js"])
 def test_no_colour_literals_in_page_code(name):
     text = (UI / name).read_text(encoding="utf-8")
     found = [m.group(0) for m in LITERAL.finditer(text) if m.group(0) not in LITERAL_ALLOWLIST.get(name, set())]
@@ -195,7 +195,7 @@ def test_css_literals_live_only_in_token_blocks():
 
 
 def test_every_page_has_head_script_and_switch():
-    for name in ("index.html", "replay.html"):
+    for name in ("index.html", "replay.html", "screener.html"):
         html = (UI / name).read_text(encoding="utf-8")
         head = html.split("</head>")[0]
         assert "dataset.theme" in head and 'localStorage.getItem("theme")' in head, name

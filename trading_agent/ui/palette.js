@@ -1,4 +1,4 @@
-// Ctrl+K (Cmd+K) command palette, shared by the Live, Demo and Replay pages. Needs common.js (window.TA) first.
+// Ctrl+K (Cmd+K) command palette, shared by the Live, Demo, Replay and Screener pages. Needs common.js (window.TA) first.
 //
 // Safety: the palette never sends an order and has no way to ask for a live (Groww) one. "Practice buy" only
 // opens the practice account's own order form pre-filled (on the Demo page) or takes you to the Demo page with
@@ -16,7 +16,7 @@
   const OP_LABEL = {lookup: "Look up", size: "Size", chart: "Chart", buy: "Practice buy"};
   const OP_HINT = {lookup: "momentum, price and announcements", size: "how many shares to buy",
                    chart: "Look up, scrolled to the price chart", buy: "practice account only; opens the order form, you confirm there"};
-  const PAGES = {live: ["Live", "/"], replay: ["Replay", "/replay"], demo: ["Demo", "/demo"]};
+  const PAGES = {live: ["Live", "/"], replay: ["Replay", "/replay"], demo: ["Demo", "/demo"], screener: ["Screener", "/screener"]};
 
   // Where the destination page expects each stock action to arrive: /?lookup=SYM, /?size=SYM, /?chart=SYM, /demo?buy=SYM.
   const landingUrl = (op, sym) => (op === "buy" ? "/demo" : "/") + "?" + op + "=" + encodeURIComponent(sym);
@@ -53,7 +53,7 @@
     const out = [];
     for(const k of Object.keys(PAGES)){
       if(k === opts.mode) continue;
-      out.push({id: "page-" + k, group: "Go to", label: PAGES[k][0] + " page", keywords: "page tab open " + k, run: {kind: "page", url: PAGES[k][1]}});
+      out.push({id: "page-" + k, group: "Go to", label: PAGES[k][0] + " page", keywords: "page tab open " + k + (k === "screener" ? " stocks filter sort table scan" : ""), run: {kind: "page", url: PAGES[k][1]}});
     }
     for(const s of (opts.sections || [])){
       out.push({id: "sec-" + s.id, group: "Go to", label: s.label, keywords: "section card jump scroll " + s.id, run: {kind: "section", id: s.id}});

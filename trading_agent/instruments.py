@@ -79,6 +79,11 @@ class CompanyNames:
             self._groww = out
         return self._groww
 
+    def nse_names(self, symbols: Iterable[str]) -> dict[str, str]:
+        """{symbol: company name} from NSE's published equity list only (no Groww file); unknown symbols are left out."""
+        nse = self._nse_names()
+        return {s.upper(): nse[s.upper()] for s in symbols if nse.get(s.upper())}
+
     def lookup(self, symbols: Iterable[str]) -> dict[str, dict[str, Any]]:
         """{symbol: {"name", "exchange": "NSE" | "BSE" | None, "kind": "equity" | "bond", "maturity"}}."""
         symbols = [s.upper() for s in symbols]

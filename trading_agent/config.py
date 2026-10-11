@@ -238,6 +238,11 @@ class Settings:
     # Read-only check of the real services (integration.py), run by the watch service at 08:35 IST on trading days.
     integration_check: bool = True
     integration_claude: bool = False  # also make one tiny Claude call (spends a few tokens); off unless asked for
+    # Stock screener page: extra TradingView columns (display only; unofficial endpoint, off unless you turn it on).
+    tradingview_screener: bool = False
+    # Where this copy runs: "server" on the cloud box whose IP is registered with Groww (TA_ROLE=server in its .env),
+    # which never calls TradingView; empty on the laptop.
+    ta_role: str = ""
 
     def __post_init__(self) -> None:
         self.watch_investors = list(self.watch_investors)  # never shared between copies of the settings
@@ -398,4 +403,6 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         forward_universe=(env("FORWARD_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),
         integration_check=_bool(env("INTEGRATION_CHECK"), True),
         integration_claude=_bool(env("INTEGRATION_CLAUDE"), False),
+        tradingview_screener=_bool(env("TRADINGVIEW_SCREENER"), False),
+        ta_role=(env("TA_ROLE") or "").strip().lower(),
     )
