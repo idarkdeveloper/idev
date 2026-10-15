@@ -249,7 +249,7 @@ class Settings:
     digest_claude_model: str = "claude-haiku-5-5"
     digest_bulletin: bool = True  # the market bulletin (Nifty levels, global markets, commodities, concept) in the evening email
     digest_charts: bool = True  # its chart images (needs matplotlib); False sends the bulletin as text only
-    # Dead-man's switch: the watch loop pings this https URL every 5 minutes (healthchecks.io style); the path is a secret.
+    # Dead-man's switch: the watch loop pings this https URL every minute (healthchecks.io style); the path is a secret.
     heartbeat_url: str | None = None
     # Extra Host names the dashboard answers to besides localhost (a tailnet name); anything else gets 421.
     allowed_hosts: list[str] = field(default_factory=list)

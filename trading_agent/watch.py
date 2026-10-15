@@ -103,7 +103,7 @@ class Watcher:
         self._integration = integration  # IntegrationScheduler: the read-only live-services check at 08:35 IST
         self._close_snapshot = close_snapshot  # groww_hours.CloseSnapshot: one saved Groww read at the close (15:35-15:50)
         self._groww_paused = False  # live Groww broker outside the Groww window: no Groww call this tick
-        self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every 5 minutes (every minute in the market window)
+        self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every minute, at all hours
         self._broker = broker
         self._notifier = notifier
         self._stop = threading.Event()
