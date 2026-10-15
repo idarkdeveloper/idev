@@ -810,6 +810,15 @@ class GrowwBroker:
         return Account(cash=round(cash, 2), equity=round(cash + holdings_value, 2),
                        currency="INR", paper=not self.live_orders)
 
+    def daily_candles(self, symbol: str, start: Any, end: Any) -> list[dict[str, Any]]:
+        """Daily candles for an NSE code (or NIFTY) from ``start`` to ``end`` (dates, inclusive), from Groww's
+        historical API: a GET, nothing else. [{date, open, high, low, close, volume}], oldest first."""
+        from .groww_fill import parse_candles
+        data = self._req("GET", "v1/historical/candle/range", params={
+            "exchange": "NSE", "segment": "CASH", "trading_symbol": str(symbol).upper(),
+            "start_time": f"{start} 09:15:00", "end_time": f"{end} 15:30:00", "interval_in_minutes": 1440})
+        return sorted(parse_candles(data), key=lambda b: b["date"])
+
     def ltp_many(self, symbols: list[str]) -> dict[str, float]:
         out: dict[str, float] = {}
         for i in range(0, len(symbols), 50):

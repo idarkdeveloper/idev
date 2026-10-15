@@ -42,6 +42,7 @@ class YahooPrices:
         self.timeout = timeout
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.cache_ttl = cache_ttl
+        self.fill: Any | None = None   # groww_fill.GrowwFill: a daily bar Yahoo has not posted yet, from Groww
 
     def yahoo_symbol(self, symbol: str) -> str:
         symbol = symbol.upper()
@@ -83,15 +84,19 @@ class YahooPrices:
         With an ``archive``, closed bars Yahoo no longer serves (or rewrites) are kept and merged in."""
         ysym = self.yahoo_symbol(symbol)
         if self.archive is None:
-            return self._history(ysym, range_)
+            return self._filled(ysym, self._history(ysym, range_))
         try:
             bars = self._history(ysym, range_)
         except Exception:
             merged = self.archive.merge(ysym, [], range_)   # Yahoo failed or has nothing for it: serve what we kept
             if merged:
-                return merged
+                return self._filled(ysym, merged)
             raise
-        return self.archive.merge(ysym, bars, range_) or bars
+        return self._filled(ysym, self.archive.merge(ysym, bars, range_) or bars)
+
+    def _filled(self, ysym: str, bars: list[dict[str, Any]], ohlc: bool = False) -> list[dict[str, Any]]:
+        """``bars`` with a late latest session filled from Groww (groww_fill), when a fill is attached."""
+        return self.fill.fill(ysym, bars, ohlc=ohlc) if self.fill is not None else bars
 
     def _history(self, ysym: str, range_: str) -> list[dict[str, Any]]:
         cache = self.cache_dir / f"yahoo_{ysym.replace('^', 'IDX_')}_{range_}.json" if self.cache_dir else None
@@ -133,7 +138,8 @@ class YahooPrices:
         cache = (self.cache_dir / f"yahoo_{ysym.replace('^', 'IDX_').replace('=', '_')}_{range_}_{interval}_ohlc.json"
                  if self.cache_dir else None)
         if cache and cache.exists() and time.time() - cache.stat().st_mtime < ttl:
-            return json.loads(cache.read_text())
+            cached: list[dict[str, Any]] = json.loads(cache.read_text())
+            return self._filled(ysym, cached, ohlc=True) if interval == "1d" else cached
         resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
                                 params={"range": range_, "interval": interval}, timeout=self.timeout)
         _check_status(resp, ysym)
@@ -158,7 +164,7 @@ class YahooPrices:
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(bars))
-        return bars
+        return self._filled(ysym, bars, ohlc=True) if interval == "1d" else bars
 
     def history_ohlc(self, symbol: str, range_: str = "1y", ttl: float | None = None) -> list[dict[str, Any]]:
         """Daily OHLC bars (see ``_ohlc``). Cached for at most 15 minutes, so an evening read sees the day's final bar."""

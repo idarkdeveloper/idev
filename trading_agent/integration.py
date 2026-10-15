@@ -114,7 +114,7 @@ class ReadOnlySession:
 class ReadOnlyGroww:
     """The two Groww reads the check needs and nothing else; any other attribute raises ``OrderBlocked``."""
 
-    ALLOWED = ("holdings", "order_list", "available_cash")
+    ALLOWED = ("holdings", "order_list", "available_cash", "daily_candles")   # reads only (GET)
 
     def __init__(self, broker: Any):
         self._broker = broker
@@ -226,7 +226,10 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
     last_day = previous_trading_day(now.date(), holidays)
     sess = session or requests.Session()
     nse = nse or NSEClient(session=sess, timeout=30.0)
-    prices = prices or YahooPrices(suffix=".NS", session=sess, timeout=20.0)   # no disk cache, no archive: live reads
+    if prices is None:
+        from .groww_fill import make_fill
+        prices = YahooPrices(suffix=".NS", session=sess, timeout=20.0)   # no disk cache, no archive: live reads
+        prices.fill = make_fill(settings)   # the same Groww fallback the agent's prices use, so both see the same bars
     if bse is _UNSET:
         from .bse import make_bse_client
         bse = make_bse_client(settings)
@@ -261,12 +264,14 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
         return f"bulk and block CSV for {last_day} has the expected header ({len(rows)} rows)"
 
     def yahoo() -> str:
+        notes = []
         for sym in YAHOO_REQUIRED:
             bars = prices.history(sym, "1mo")
             have = {b["date"] for b in bars}
             if last_day.isoformat() not in have:
                 raise ValueError(f"{sym} has no bar for {last_day} (newest {max(have) if have else 'none'})")
-        notes = []
+            if any(b.get("source") == "groww" and b["date"] == last_day.isoformat() for b in bars):
+                notes.append(f"{sym}'s {last_day} bar is from Groww (Yahoo has not posted it yet)")
         for sym, why in YAHOO_NOTED.items():   # reported, never a failure: nothing that buys reads it
             try:
                 have = {b["date"] for b in prices.history(sym, "1mo")}

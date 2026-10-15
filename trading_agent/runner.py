@@ -155,8 +155,11 @@ def groww_session(settings: Settings) -> requests.Session:
 def free_prices(settings: Settings) -> YahooPrices:
     """Keyless quotes and history: NSE via Yahoo (.NS / .BO suffix), US bare symbols."""
     suffix = (".BO" if settings.groww_exchange == "BSE" else ".NS") if settings.market == "in" else ""
+    from .groww_fill import make_fill
     from .price_archive import archive_for
-    return YahooPrices(suffix=suffix, cache_dir=settings.state_dir / "cache", archive=archive_for(settings))
+    prices = YahooPrices(suffix=suffix, cache_dir=settings.state_dir / "cache", archive=archive_for(settings))
+    prices.fill = make_fill(settings)   # a late Yahoo bar from Groww's daily candles (Groww linked, saved token only)
+    return prices
 
 
 def make_practice_broker(settings: Settings, price_fn: Any | None = None, groww: Any | None = None) -> LocalPaperBroker:
