@@ -163,6 +163,8 @@ def recommendation_card(rec: dict[str, Any], *, deal: dict[str, Any] | None = No
     badges = [_badge(f"⛔ {label}" if "NO NEW BUYS" in label else label, colour)]
     if conf in CONFIDENCE:
         badges.append(_badge(f"CONFIDENCE: {conf.upper()}", CONFIDENCE[conf]))
+    if str(rec.get("ticker") or "").upper().endswith(".BO"):
+        badges.append(_badge("BSE ONLY · NOT TRADABLE HERE", GRAY))
     if m.get("nifty_up") is not None:
         badges.append(_badge(f"NIFTY TREND: {'UP' if m['nifty_up'] else 'DOWN'}", GREEN if m["nifty_up"] else RED))
     tiles = []

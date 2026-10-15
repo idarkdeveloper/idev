@@ -566,3 +566,10 @@ def test_a_late_niftybees_bar_is_noted_but_never_blocks_buys(s):
     down = good(s, prices=Broken())
     assert down["ok"] is True and "NIFTYBEES.NS unavailable (ValueError; backtest only)" in by_name(down)["Yahoo prices"]["detail"]
     assert by_name(good(s))["Yahoo prices"]["detail"] == f"^NSEI and RELIANCE.NS both have a daily bar for {LAST}"
+
+
+def test_a_late_bse_bar_is_noted_too(s):
+    late = good(s, prices=FakePrices(missing="RELIANCE.BO"))
+    step = by_name(late)["Yahoo prices"]
+    assert late["ok"] is True and step["ok"] is True
+    assert "RELIANCE.BO not posted yet (newest 2026-10-08; BSE prices: BSE-only holdings' stops and charts)" in step["detail"]
