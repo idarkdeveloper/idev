@@ -1,5 +1,5 @@
 """The Telegram version of the daily emails: a phone-sized HTML message built from the email's own data (no model, no
-network). ``telegram_brief(email, allowed_hosts)`` gives {"html", "plain", "button"}; the notifier sends the HTML with
+network). ``telegram_brief(email, allowed_hosts, commands)`` gives {"html", "plain", "button"}; the notifier sends the HTML with
 parse_mode HTML and, if Telegram refuses it, the plain text once. Every value that comes from outside is escaped."""
 
 from __future__ import annotations
@@ -345,8 +345,10 @@ def html_to_plain(text: str) -> str:
     return _html.unescape(re.sub(r"</?(?:b|i|code|pre)>", "", text))
 
 
-def telegram_brief(email: dict[str, Any], allowed_hosts: Any = None) -> dict[str, Any]:
-    """{"html", "plain", "button"} for a built email (morning or evening); ``html`` is at most 4,000 characters."""
+def telegram_brief(email: dict[str, Any], allowed_hosts: Any = None, commands: bool = False) -> dict[str, Any]:
+    """{"html", "plain", "button"} for a built email (morning or evening); ``html`` is at most 4,000 characters.
+    ``commands``: the bot answers commands (TELEGRAM_COMMANDS), so the brief gets Portfolio / Stops / Status buttons
+    that run those read commands; without the bot they would do nothing, so they are left out."""
     data = email.get("data") or {}
     kind = "evening" if data.get("kind") == "evening" else "morning"
     if kind == "morning":
@@ -369,5 +371,10 @@ def telegram_brief(email: dict[str, Any], allowed_hosts: Any = None) -> dict[str
     if len(text) > LIMIT:
         text = _assemble(head, mid, None, _watch_block(data.get("watch"), rollover=False), tail)
     url = dashboard_url(allowed_hosts)
-    button = {"inline_keyboard": [[{"text": "📊 Dashboard", "url": url}]]} if url else None
+    rows: list[list[dict[str, str]]] = [[{"text": "📊 Dashboard", "url": url}]] if url else []
+    if commands:
+        rows.append([{"text": "💼 Portfolio", "callback_data": "go:portfolio"},
+                     {"text": "🛡️ Stops", "callback_data": "go:stops"},
+                     {"text": "🩺 Status", "callback_data": "go:status"}])
+    button = {"inline_keyboard": rows} if rows else None
     return {"html": text, "plain": html_to_plain(text), "button": button}

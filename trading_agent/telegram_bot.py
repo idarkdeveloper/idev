@@ -10,8 +10,9 @@ and carry the one-time nonce of a confirmation still under 2 minutes old, and a 
 goes through the dashboard's own practice path (App.demo.paper_order): Indian filters (a flagged buy is held back;
 there is no override here), price bands, the collar time rule, the day brake and HALT all apply.
 
-/lookup answers with three buttons: Size (1%) and Stops answer for that company, Practice Buy only shows the /buy line
-to send (it never places anything). /halt is the emergency kill switch: it asks first, and only a tap on ENGAGE HALT
+/lookup answers with four buttons: Size (1%), Stops and Chart answer for that company, Practice Buy only shows the
+/buy line to send (it never places anything). /chart sends a picture of the last 3 months (daily candles, 20/50-day
+EMAs, your cost and stop). The daily brief carries Portfolio / Stops / Status buttons that run those read commands. /halt is the emergency kill switch: it asks first, and only a tap on ENGAGE HALT
 within 60 seconds (a one-time nonce, from the same chat and person) engages it, through the dashboard's own kill switch
 (state/HALT, the watch stops, an alert). /halt is never rate-limited. Releasing HALT is not possible from Telegram.
 
@@ -58,6 +59,7 @@ BACKOFF_S = (5, 15, 60)
 HELP = ("<b>Commands</b> (practice account only; nothing here places a live order). "
         "Use the company's name or its NSE code: <i>tata steel</i> or <i>TATASTEEL</i>.\n"
         "/lookup NAME: price, momentum, 200-day average, stop, news and what it means\n"
+        "/chart NAME: 3 months of daily candles with the 20/50-day EMAs, your cost and stop\n"
         "/size NAME [risk% max%]: shares, cost, stop and charges (practice account)\n"
         "/portfolio: the practice account and your Groww holdings\n"
         "/stops: practice stops and the GTT stop-losses at Groww\n"
@@ -69,6 +71,7 @@ HELP = ("<b>Commands</b> (practice account only; nothing here places a live orde
 
 # shown by Telegram when you type "/" (setMyCommands, sent when the poller starts)
 COMMANDS = [{"command": "lookup", "description": "Look up a company: price, trend, stop, news (name or code)"},
+            {"command": "chart", "description": "Price chart: 3 months daily, EMAs, cost and stop (name or code)"},
             {"command": "size", "description": "Position size: NAME [risk% max%]"},
             {"command": "buy", "description": "PRACTICE buy: NAME QTY or NAME ₹AMOUNT (you confirm)"},
             {"command": "sell", "description": "PRACTICE sell: NAME QTY (you confirm)"},
@@ -78,7 +81,9 @@ COMMANDS = [{"command": "lookup", "description": "Look up a company: price, tren
             {"command": "status", "description": "Live orders, kill switch, day brake"},
             {"command": "halt", "description": "Emergency kill switch: stop watch and trading"},
             {"command": "help", "description": "What the bot can do"}]
-NAMED = ("lookup", "size", "buy", "sell")   # commands that take a company name or code
+NAMED = ("lookup", "chart", "size", "buy", "sell")   # commands that take a company name or code
+GO = {"portfolio", "stops", "status"}   # the read commands the brief's buttons may run (go:<command>)
+CHART_RANGE = "3M"
 MAX_CHOICES = 5
 TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9&_-]{0,19}")   # an NSE code as it may ride in a button (M&M, BAJAJ-AUTO)
 
@@ -88,7 +93,8 @@ def lookup_buttons(ticker: str) -> dict[str, Any] | None:
     if not TICKER_RE.fullmatch(ticker or ""):
         return None
     return {"inline_keyboard": [[{"text": "📏 Size (1%)", "callback_data": f"sz:{ticker}:1"},
-                                 {"text": "🛡️ Stops", "callback_data": f"st:{ticker}"},
+                                 {"text": "🛡️ Stops", "callback_data": f"st:{ticker}"}],
+                                [{"text": "📈 Chart", "callback_data": f"ch:{ticker}"},
                                  {"text": "🟢 Practice Buy", "callback_data": f"by:{ticker}"}]]}
 
 
@@ -139,6 +145,21 @@ class TelegramAPI:
     def call(self, method: str, payload: dict[str, Any], timeout: float = 10.0) -> Any:
         try:
             r = self.session.post(f"https://api.telegram.org/bot{self.token}/{method}", json=payload, timeout=timeout + 10)
+            data = r.json()
+        except Exception as ex:  # noqa: BLE001
+            raise TelegramError(redact(f"{method}: {type(ex).__name__}: {ex}", self.token)) from None
+        if not isinstance(data, dict) or not data.get("ok"):
+            desc = data.get("description") if isinstance(data, dict) else data
+            raise TelegramError(redact(f"{method}: {desc}", self.token))
+        return data.get("result")
+
+    def upload(self, method: str, payload: dict[str, Any], files: dict[str, tuple[str, bytes, str]],
+               timeout: float = 30.0) -> Any:
+        """A multipart call (sendPhoto with the picture's bytes). Same errors as ``call``."""
+        try:
+            r = self.session.post(f"https://api.telegram.org/bot{self.token}/{method}",
+                                  data={k: v if isinstance(v, str) else json.dumps(v) for k, v in payload.items()},
+                                  files=files, timeout=timeout)
             data = r.json()
         except Exception as ex:  # noqa: BLE001
             raise TelegramError(redact(f"{method}: {type(ex).__name__}: {ex}", self.token)) from None
@@ -263,6 +284,7 @@ class CommandBot:
 
     # -- company names -----------------------------------------------------------------------------------
     USAGE = {"lookup": "/lookup NAME (a company name or NSE code)",
+             "chart": "/chart NAME (a company name or NSE code)",
              "size": "/size NAME [risk% max%], e.g. /size tata steel 1 10",
              "buy": "/buy NAME QTY or /buy NAME ₹AMOUNT (practice account only)",
              "sell": "/sell NAME QTY (practice account only)"}
@@ -271,7 +293,7 @@ class CommandBot:
         """(the company words, the numbers after them), or the usage text. Names of any length: the numbers are
         read from the end (/size: up to two; /buy and /sell: the last word)."""
         args = list(args)
-        if cmd == "lookup":
+        if cmd in ("lookup", "chart"):
             rest: list[str] = []
         elif cmd == "size":
             rest = []
@@ -366,6 +388,8 @@ class CommandBot:
     def _run(self, cmd: str, rest: list[str], target: tuple[str, str | None]) -> None:
         if cmd == "lookup":
             self.cmd_lookup(target)
+        elif cmd == "chart":
+            self.cmd_chart(target)
         elif cmd == "size":
             self.cmd_size(target, rest)
         else:
@@ -443,6 +467,24 @@ class CommandBot:
         if note:
             lines.append("<b>What this means</b>\n" + e(note))
         self.reply("\n".join(lines), lookup_buttons(str(r["ticker"])))
+
+    def cmd_chart(self, target: tuple[str, str | None]) -> None:
+        """3 months of daily candles as a picture, from the dashboard's own candles (the lookup's price source)."""
+        from .charts import stock_daily_png
+        ticker, name = target
+        data = self.practice.candles(ticker, CHART_RANGE)
+        who = label(ticker, name)
+        png = stock_daily_png(f"{short_name(name) + ' (' + ticker + ')' if name else ticker} · 3 months, daily", data)
+        if png is None:
+            self.reply(f"{who}: no chart ({e(data.get('error') or 'no price history')}).")
+            return
+        bars = data["bars"]
+        first, last = float(bars[0]["close"]), float(bars[-1]["close"])
+        caption = (f"📈 <b>{who}</b> · close {inr(last, 2)} ({pct(last / first - 1 if first else None)} over 3 months)"
+                   + (f"\nYour cost {inr(data['position']['cost'], 2)} · stop {inr(data['position']['stop'], 2)}"
+                      if (data.get("position") or {}).get("cost") and (data.get("position") or {}).get("stop") else ""))
+        self.api.upload("sendPhoto", {"chat_id": self.chat, "caption": caption[:1000], "parse_mode": "HTML"},
+                        {"photo": (f"{ticker}.png", png, "image/png")})
 
     def cmd_size(self, target: tuple[str, str | None], rest: list[str]) -> None:
         nums = [a.rstrip("%") for a in rest[:2]]
@@ -549,7 +591,7 @@ class CommandBot:
         from .telegram_brief import telegram_brief
         self.reply("Building the morning brief…")
         email = self.app.digest_email("morning", groww=self._groww_portfolio)
-        b = telegram_brief(email, getattr(self.settings, "allowed_hosts", None))
+        b = telegram_brief(email, getattr(self.settings, "allowed_hosts", None), commands=True)
         self.reply(b["html"], b.get("button"))
 
     # -- the emergency stop ----------------------------------------------------------------------------
@@ -595,7 +637,7 @@ class CommandBot:
 
     # -- the /lookup buttons -----------------------------------------------------------------------------
     def _lookup_tap(self, cid: Any, verb: str, rest: str) -> None:
-        """sz:<TICKER>:<RISK>, st:<TICKER>, by:<TICKER>. Read-only (no order), so no nonce; rate-limited like a command."""
+        """sz:<TICKER>:<RISK>, st:<TICKER>, ch:<TICKER>, by:<TICKER>. Read-only (no order), so no nonce; rate-limited like a command."""
         ticker, _, risk = rest.partition(":")
         if not TICKER_RE.fullmatch(ticker) or (verb == "sz") != bool(risk) or (risk and not re.fullmatch(r"\d+(?:\.\d+)?", risk)):
             self._answer(cid, "Unknown button.")
@@ -603,15 +645,29 @@ class CommandBot:
         if not self._allow():
             self._answer(cid, "Too many commands: wait a minute.")
             return
-        self._answer(cid, {"sz": f"Size at {risk}% risk", "st": "Stops", "by": "Practice buy"}[verb])
+        self._answer(cid, {"sz": f"Size at {risk}% risk", "st": "Stops", "ch": "Drawing the chart…", "by": "Practice buy"}[verb])
         target = (ticker, self.name_of(ticker))
         if verb == "sz":
             self._guard("size", lambda: self.cmd_size(target, [risk]))
         elif verb == "st":
             self._guard("stops", lambda: self.stops_for(ticker))
+        elif verb == "ch":
+            self._guard("chart", lambda: self.cmd_chart(target))
         else:   # never places anything: it shows the command to send, which then asks to confirm as usual
             self.reply(f"🟢 Practice buy of {label(*target)}: send\n<code>/buy {e(ticker)} QTY</code>\n"
                        f"or <code>/buy {e(ticker)} ₹AMOUNT</code>\n(you confirm before anything is placed)")
+
+    def _go_tap(self, cid: Any, cmd: str) -> None:
+        """The daily brief's buttons: go:portfolio, go:stops, go:status. Read commands only; rate-limited."""
+        if cmd not in GO:
+            self._answer(cid, "Unknown button.")
+            return
+        if not self._allow():
+            self._answer(cid, "Too many commands: wait a minute.")
+            return
+        self._answer(cid, f"/{cmd}")
+        run = {"portfolio": self.cmd_portfolio, "stops": self.cmd_stops, "status": self.cmd_status}[cmd]
+        self._guard(cmd, lambda: run([]))
 
     # -- practice orders -------------------------------------------------------------------------------
     def cmd_order(self, side: str, target: tuple[str, str | None], rest: list[str]) -> None:
@@ -667,8 +723,11 @@ class CommandBot:
         if verb == "pk":
             self._picked(cid, msg, nonce)
             return
-        if verb in ("sz", "st", "by"):
+        if verb in ("sz", "st", "ch", "by"):
             self._lookup_tap(cid, verb, nonce)
+            return
+        if verb == "go":
+            self._go_tap(cid, nonce)
             return
         if verb == "halt_confirm" or (verb == "no" and nonce in self.halts):
             self._halt_tap(cid, msg, verb, nonce)
