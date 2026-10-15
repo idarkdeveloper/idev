@@ -181,8 +181,15 @@ class Watcher:
         if fresh:
             st.save()
             if self._notifier is not None:
+                from .agent import send_with_html
+                from .alert_cards import announcements_card, announcements_subject
                 body = "\n".join(f"{a['at']} {a['symbol']} [{a['category']}] {a['text']}" for a in fresh)
-                self._notifier.send(f"[NEWS] {len(fresh)} new announcement(s)", body)
+                try:
+                    card: str | None = announcements_card(fresh)
+                except Exception:  # noqa: BLE001 - the text email still goes
+                    log.exception("announcements card failed")
+                    card = None
+                send_with_html(self._notifier, _plain(announcements_subject(fresh)), _plain(body), card)
         return fresh
 
     def poll_news(self) -> list[dict[str, Any]]:

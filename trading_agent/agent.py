@@ -184,6 +184,50 @@ class AgentContext:
             getattr(self.broker, "live_orders", False)
 
 
+def send_with_html(notifier: Any, subject: str, body: str, html: str | None) -> Any:
+    """``notifier.send`` with an HTML part when there is one and the notifier takes it (test fakes may not)."""
+    import inspect
+    try:
+        params = inspect.signature(notifier.send).parameters
+    except (TypeError, ValueError):
+        params = {}  # type: ignore[assignment]
+    takes = "html" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    return notifier.send(subject, body, html=html) if html and takes else notifier.send(subject, body)
+
+
+def _recommendation_html(ctx: AgentContext, rec: dict[str, Any]) -> str | None:
+    """The alert's HTML card (alert_cards.recommendation_card). Each fact is optional: one that cannot be read is left
+    out, and any failure leaves the plain-text email as it was."""
+    from .alert_cards import deal_facts, market_facts, money, recommendation_card
+    try:
+        ticker = str(rec["ticker"])
+        deal = deal_facts(ctx.result.new_trades, ticker, rec.get("investor") or None) if ticker != "PORTFOLIO" else None
+        market: dict[str, Any] = {}
+        if ctx.context is not None:
+            try:
+                market = market_facts(ctx.context.fetch())
+            except Exception:  # noqa: BLE001
+                market = {}
+        price = holding = None
+        if ticker != "PORTFOLIO":
+            try:
+                price = float(ctx.broker.latest_price(ticker))
+            except Exception:  # noqa: BLE001
+                price = None
+            try:
+                held = next((p for p in ctx.broker.positions() if p.symbol.upper() == ticker.upper()), None)
+                cash = ctx.broker.account().cash
+                holding = (f"You hold {held.qty:g} shares" if held else "No current holding") + \
+                    f" · cash {money(float(cash), ctx.settings.currency)}"
+            except Exception:  # noqa: BLE001
+                holding = None
+        return recommendation_card(rec, deal=deal, market=market, price=price, holding=holding,
+                                   currency=ctx.settings.currency)
+    except Exception:  # noqa: BLE001 - the text email still goes
+        log.exception("recommendation card failed")
+        return None
+
+
 def build_tools(ctx: AgentContext) -> list[Any]:
     """Create the tool functions bound to this run's context."""
 
@@ -285,7 +329,7 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                 + (f"Suggested size: {_money(cast(float, rec['suggested_notional_usd']), ctx.settings.currency)}\n"
                    if rec['suggested_notional_usd'] else "")
                 + f"\n{rationale}\n")
-        delivered = ctx.notifier.send(subject, body)
+        delivered = send_with_html(ctx.notifier, subject, body, _recommendation_html(ctx, rec))
         return json.dumps({"ok": True, "delivered_via": delivered})
 
     @beta_tool
