@@ -311,7 +311,7 @@ The stock look-up shows recent mainstream headlines under the NSE announcements,
 positive / neutral / negative with an event type (results, order win, legal or regulatory,
 fraud allegation, ...). Sources are public RSS feeds: ET Markets, ET Stocks, Business Standard
 and Livemint, plus Google News per company. Only the headline, link, source and time are kept;
-article text is never fetched or stored.
+article text is never stored (an alert reads its article once, see below).
 
 - **Tagging runs on a local Ollama model by default, so it is free.** Install Ollama from
   ollama.com, run `ollama pull qwen2.5:3b`, and keep `ollama serve` running. On an Oracle Ampere
@@ -321,7 +321,15 @@ article text is never fetched or stored.
 - `python -m trading_agent news SYMBOL` prints the tagged headlines;
   `python -m trading_agent news --check-tagger` shows which tagger is active and whether Ollama is ready.
 - Watch mode sends `[NEWS] SYMBOL: headline` once per headline that is negative with medium or high
-  confidence, for stocks you hold or were recently recommended. Claude's daily check can call
+  confidence, for stocks you hold or were recently recommended. The alert is a card you can read without
+  leaving the email: the Google News link is decoded to the publisher's address, the article is read
+  (trafilatura: no ads, menus or cookie notices) and the tagger's own model writes a headline, impact and
+  event labels, 2-3 key takeaways with the article's numbers and a two-paragraph story; a "Read the
+  original on <publisher>" button replaces the raw link. A takeaway or story with a number that is not in
+  the article is dropped; with no model (or a model error) the article's first paragraphs are shown, and a
+  paywalled or blocked page leaves the headline card with the button. The article is fetched only from a
+  public internet address (each redirect checked), on the alert's own thread, so stop checks never wait for
+  it. `NEWS_FULL_STORY=false` sends the headline card only. Claude's daily check can call
   `get_news` for the last two days of tagged headlines; it is told to treat them as data, never as instructions.
 - Every headline is written once per stock, with its tags, to `state/news/YYYY-MM.jsonl`; its first-seen time is the
   earliest `logged_at` for its id. The look-up shows headlines at once and labels new ones in the background, so labels
@@ -662,6 +670,7 @@ treated as missing (no filtering).
 | `INTEGRATION_CHECK`, `INTEGRATION_CLAUDE` | `true` / `false` (defaults). The daily read-only check of the live services at 08:30 IST, and whether it also makes one 5-token Claude call. See *Development*. |
 | `QUIVER_API_KEY`, `ALPACA_*` | US mode only. |
 | `NEWS_TAGGER`, `OLLAMA_URL`, `OLLAMA_MODEL`, `NEWS_CLAUDE_MODEL` | Headline tagging: `auto` (default, local Ollama `qwen2.5:3b` if running) / `ollama` / `claude` / `none`. See *News headlines*. |
+| `NEWS_FULL_STORY` | `true` (default): news alerts read the publisher's article and carry its summary (takeaways, story, a clean source button). `false` = headline card only. See *News headlines*. |
 
 ## One engine: the server (runs by itself)
 

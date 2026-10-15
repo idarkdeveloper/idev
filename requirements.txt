@@ -1,5 +1,6 @@
 anthropic>=1.12,<2
 requests>=2.31,<3
+trafilatura>=2.0,<3
 pytest>=8
 pypdf>=4
 tzdata; sys_platform == "win32"
