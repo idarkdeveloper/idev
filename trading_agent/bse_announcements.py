@@ -194,7 +194,7 @@ class BSEAnnouncements:
         self._api_at[code] = now
         self._api_ok.discard(code)
         end = self.clock()
-        params = {"pageno": 1, "strCat": -1, "strPrevDate": (end - timedelta(days=DAYS)).strftime("%Y%m%d"),
+        params: dict[str, Any] = {"pageno": 1, "strCat": -1, "strPrevDate": (end - timedelta(days=DAYS)).strftime("%Y%m%d"),
                   "strScrip": code, "strSearch": "P", "strToDate": end.strftime("%Y%m%d"), "strType": "C",
                   "subcategory": -1}
         r = self.session.get(API_URL, params=params, headers=HEADERS, timeout=self.timeout)
