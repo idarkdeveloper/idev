@@ -1,7 +1,8 @@
 """Mainstream market news headlines for a stock, tagged positive / neutral / negative.
 
 Sources are public RSS feeds (ET Markets, ET Stocks, Business Standard, Livemint, and Google News per
-company). Only the title, link, source and time are kept; article bodies are never fetched or stored.
+company). Only the title, link, source and time are kept; article bodies are never stored. The article of a headline
+that becomes an alert is read once, to write the alert (news_story.py; NEWS_FULL_STORY=false turns that off).
 Tagging runs on a local Ollama model by default (free). Claude is only used when NEWS_TAGGER=claude.
 Headlines are untrusted third-party text: they go to the tagger inside a fenced data block.
 A headline's first-seen time is the earliest ``logged_at`` of its id in the log.
@@ -687,12 +688,29 @@ class NewsService:
             out.append({**i, "sentiment": t.get("sentiment"), "event": t.get("event"), "confidence": t.get("confidence")})
         return sorted(out, key=lambda i: i["published"], reverse=True)
 
+    def name_of(self, symbol: str) -> str | None:
+        if self.names is None:
+            return None
+        try:
+            return self.names.resolve(symbol)[1]
+        except Exception:  # noqa: BLE001 - names are a nicety
+            return None
+
+    def story(self, item: dict[str, Any], symbol: str, context: str | None = None) -> dict[str, Any]:
+        """The alert card for a headline: the publisher's article read and summarised by the tagger's own model
+        (news_story.build_story); with NEWS_FULL_STORY=false, the headline alone. Slow (network and a model): the
+        watch calls it on its own thread."""
+        from . import news_story
+        tagger = self.tagger
+        name = self.name_of(symbol)
+        if not getattr(self.settings, "news_full_story", True):
+            return news_story.basic_card(item, symbol, name, context, tagger.name)
+        return news_story.build_story(item, symbol, name, session=self.feed.session, context=context,
+                                      writer=news_story.make_writer(tagger), tagger=tagger.name)
+
     def for_symbol(self, symbol: str, name: str | None = None, background: bool = False) -> dict[str, Any]:
-        if name is None and self.names is not None:
-            try:
-                name = self.names.resolve(symbol)[1]
-            except Exception:  # noqa: BLE001 - names are a nicety
-                name = None
+        if name is None:
+            name = self.name_of(symbol)
         res = news_for(symbol, name, self.feed, (lambda: self.tagger) if background else self.tagger,
                        self.log, background=background)
         if self._tagger is not None:  # "pending" only before the first probe

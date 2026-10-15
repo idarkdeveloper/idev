@@ -94,6 +94,9 @@ class Watcher:
         self._data = data
         self._warned_no_tagger = False
         self._news = news  # NewsService: negative headlines for held stocks
+        self._story_jobs: list[tuple[dict[str, Any], str]] = []   # news alerts waiting for their article (own thread)
+        self._story_lock = threading.Lock()
+        self._story_thread: threading.Thread | None = None
         self._digest = digest  # DigestScheduler: the morning and evening emails (own worker thread)
         self._forward = forward  # ForwardScheduler: the paper forward test, once a trading day after the close
         self._backup = backup  # BackupScheduler: copies the state files once a trading day after the close
@@ -134,17 +137,22 @@ class Watcher:
         return not window_open(s, now or datetime.now(self.tz), self.holidays)
 
     # -- one iteration ----------------------------------------------------------
-    def interesting_tickers(self) -> list[str]:
+    def _tickers_by_reason(self) -> tuple[list[str], list[str]]:
+        """(held, recently recommended)."""
         st = State(self.settings.state_dir / "state.json")
-        tickers: list[str] = []
+        held: list[str] = []
         if self._broker is not None and not self._groww_paused:
             try:
-                tickers += [p.symbol for p in self._broker.positions()]
+                held = [p.symbol for p in self._broker.positions()]
             except Exception as e:  # noqa: BLE001
                 log.warning("positions unavailable: %s", e)
-        tickers += [r["ticker"] for r in st.data.get("recommendations", [])[-10:]
-                    if r.get("ticker") and r["ticker"] != "PORTFOLIO"]
-        return list(dict.fromkeys(tickers))  # de-duplicated, first-seen order
+        recent = [r["ticker"] for r in st.data.get("recommendations", [])[-10:]
+                  if r.get("ticker") and r["ticker"] != "PORTFOLIO"]
+        return held, recent
+
+    def interesting_tickers(self) -> list[str]:
+        held, recent = self._tickers_by_reason()
+        return list(dict.fromkeys(held + recent))  # de-duplicated, first-seen order
 
     def poll_announcements(self) -> list[dict[str, Any]]:
         if self._data is None or not hasattr(self._data, "announcements"):
@@ -173,8 +181,15 @@ class Watcher:
         if fresh:
             st.save()
             if self._notifier is not None:
+                from .agent import send_with_html
+                from .alert_cards import announcements_card, announcements_subject
                 body = "\n".join(f"{a['at']} {a['symbol']} [{a['category']}] {a['text']}" for a in fresh)
-                self._notifier.send(f"[NEWS] {len(fresh)} new announcement(s)", body)
+                try:
+                    card: str | None = announcements_card(fresh)
+                except Exception:  # noqa: BLE001 - the text email still goes
+                    log.exception("announcements card failed")
+                    card = None
+                send_with_html(self._notifier, _plain(announcements_subject(fresh)), _plain(body), card)
         return fresh
 
     def poll_news(self) -> list[dict[str, Any]]:
@@ -188,7 +203,8 @@ class Watcher:
             log.warning("news alerts are off: no headline tagger is available "
                         "(start Ollama with `ollama serve` and `ollama pull <model>`, or set NEWS_TAGGER)")
         candidates: list[dict[str, Any]] = []
-        tickers = self.interesting_tickers()
+        held, recent = self._tickers_by_reason()
+        tickers = list(dict.fromkeys(held + recent))
         got, errors = 0, []
         for t in tickers:  # slow: network and tagging, with no State held open
             try:
@@ -218,13 +234,51 @@ class Watcher:
                 del seen[k]  # headlines older than 30 days can't come back
             st.save()
             if self._notifier is not None:
-                for i in fresh:
-                    self._notifier.send(
-                        _plain(f"[NEWS] {i['symbol']}: {i['title']}"),
-                        _plain(f"{i['source']}, {i['published']}\n{i['link']}\n"
-                               f"Tagged {i['sentiment']} ({i['event']}, {i['confidence']} confidence) by a "
-                               "language model; headlines can be wrong or late."))
+                self._queue_news_alerts([(i, "held in your portfolio" if i["symbol"] in held
+                                          else "recently recommended by the agent (watch list)") for i in fresh])
         return fresh
+
+    def _queue_news_alerts(self, jobs: list[tuple[dict[str, Any], str]]) -> None:
+        """Each alert as a card. With a NewsService the article is read and summarised first, on the news-alert
+        thread: that takes network and model time, which must never hold up the stop checks in this tick."""
+        story = getattr(self._news, "story", None)
+        if story is None:
+            from .news_story import basic_card
+            tagger = getattr(getattr(self._news, "tagger", None), "name", None)
+            for item, ctx in jobs:
+                self._send_news_card(basic_card(item, item["symbol"], None, ctx, tagger))
+            return
+        with self._story_lock:
+            self._story_jobs.extend(jobs)
+            if self._story_thread is None or not self._story_thread.is_alive():
+                self._story_thread = threading.Thread(target=self._story_worker, daemon=True, name="news-alerts")
+                self._story_thread.start()
+
+    def _story_worker(self) -> None:
+        from .news_story import basic_card
+        news = self._news
+        assert news is not None
+        while True:
+            with self._story_lock:
+                if not self._story_jobs:
+                    return
+                item, ctx = self._story_jobs.pop(0)
+            try:
+                card = news.story(item, item["symbol"], ctx)
+            except Exception:  # noqa: BLE001 - the alert still goes out, with the headline alone
+                log.exception("news story failed for %s", item.get("symbol"))
+                card = basic_card(item, item["symbol"], None, ctx, getattr(news.tagger, "name", None))
+            try:
+                self._send_news_card(card)
+            except Exception:  # noqa: BLE001
+                log.exception("news alert not sent for %s", item.get("symbol"))
+
+    def _send_news_card(self, card: dict[str, Any]) -> None:
+        from .news_story import render_html, render_telegram, render_text, subject
+        tg_html, tg_plain, tg_button = render_telegram(card)
+        assert self._notifier is not None
+        self._notifier.send(_plain(subject(card)), _plain(render_text(card)), html=render_html(card),
+                            telegram_html=tg_html, telegram_plain=tg_plain, telegram_button=tg_button)
 
     def check_trailing_stops(self) -> list[dict[str, Any]]:
         if self._broker is None or self._groww_paused:

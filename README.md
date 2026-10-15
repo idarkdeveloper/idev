@@ -311,7 +311,7 @@ The stock look-up shows recent mainstream headlines under the NSE announcements,
 positive / neutral / negative with an event type (results, order win, legal or regulatory,
 fraud allegation, ...). Sources are public RSS feeds: ET Markets, ET Stocks, Business Standard
 and Livemint, plus Google News per company. Only the headline, link, source and time are kept;
-article text is never fetched or stored.
+article text is never stored (an alert reads its article once, see below).
 
 - **Tagging runs on a local Ollama model by default, so it is free.** Install Ollama from
   ollama.com, run `ollama pull qwen2.5:3b`, and keep `ollama serve` running. On an Oracle Ampere
@@ -321,7 +321,15 @@ article text is never fetched or stored.
 - `python -m trading_agent news SYMBOL` prints the tagged headlines;
   `python -m trading_agent news --check-tagger` shows which tagger is active and whether Ollama is ready.
 - Watch mode sends `[NEWS] SYMBOL: headline` once per headline that is negative with medium or high
-  confidence, for stocks you hold or were recently recommended. Claude's daily check can call
+  confidence, for stocks you hold or were recently recommended. The alert is a card you can read without
+  leaving the email: the Google News link is decoded to the publisher's address, the article is read
+  (trafilatura: no ads, menus or cookie notices) and the tagger's own model writes a headline, impact and
+  event labels, 2-3 key takeaways with the article's numbers and a two-paragraph story; a "Read the
+  original on <publisher>" button replaces the raw link. A takeaway or story with a number that is not in
+  the article is dropped; with no model (or a model error) the article's first paragraphs are shown, and a
+  paywalled or blocked page leaves the headline card with the button. The article is fetched only from a
+  public internet address (each redirect checked), on the alert's own thread, so stop checks never wait for
+  it. `NEWS_FULL_STORY=false` sends the headline card only. Claude's daily check can call
   `get_news` for the last two days of tagged headlines; it is told to treat them as data, never as instructions.
 - Every headline is written once per stock, with its tags, to `state/news/YYYY-MM.jsonl`; its first-seen time is the
   earliest `logged_at` for its id. The look-up shows headlines at once and labels new ones in the background, so labels
@@ -655,13 +663,14 @@ treated as missing (no filtering).
 | `RESEND_API_KEY` + `NOTIFY_EMAIL_TO` | Email each recommendation via Resend. |
 | `NOTIFY_WEBHOOK_URL` | POST `{"text": ...}` to Slack/Discord/n8n/etc. |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Mirror every alert and daily email to Telegram (`TELEGRAM_ALERTS=false` = off). Runbook section 13. |
-| `TELEGRAM_COMMANDS` | `false` (default). `true` = the watch service answers commands from `TELEGRAM_CHAT_ID` only (your private chat with the bot): `/lookup`, `/size`, `/portfolio`, `/brief`, `/stops`, `/status`, `/help`, and **practice** `/buy NAME QTY` (or `₹AMOUNT`) / `/sell NAME QTY`. A company name works everywhere (`/size tata steel 1 10`); a name that fits several companies gets "Did you mean…" buttons. Orders show "Company (CODE)" and each with a Confirm / Cancel button that expires after 2 minutes. Orders go through the dashboard's practice path (Indian filters, price bands, collar time rule, day brake, HALT); there is no path to a live order. `/lookup` replies with **📏 Size (1%)**, **🛡️ Stops** and **🟢 Practice Buy** buttons (the last only shows the `/buy` line to send). `/halt` is the emergency kill switch: an **⛔ ENGAGE HALT** / Cancel prompt good for 60 seconds, then the dashboard's own kill switch (state/HALT, the watch stops, an alert); it is never rate-limited, and HALT is released from the dashboard or the CLI only. 20 commands a minute; Health tab row. |
+| `TELEGRAM_COMMANDS` | `false` (default). `true` = the watch service answers commands from `TELEGRAM_CHAT_ID` only (your private chat with the bot): `/lookup`, `/size`, `/portfolio`, `/brief`, `/stops`, `/status`, `/help`, and **practice** `/buy NAME QTY` (or `₹AMOUNT`) / `/sell NAME QTY`. A company name works everywhere (`/size tata steel 1 10`); a name that fits several companies gets "Did you mean…" buttons. Orders show "Company (CODE)" and each with a Confirm / Cancel button that expires after 2 minutes. Orders go through the dashboard's practice path (Indian filters, price bands, collar time rule, day brake, HALT); there is no path to a live order. `/lookup` replies with **📏 Size (1%)**, **🛡️ Stops**, **📈 Chart** and **🟢 Practice Buy** buttons (the last only shows the `/buy` line to send). `/chart NAME` sends a picture of 3 months of daily candles with the 20/50-day EMAs and your cost and stop. The daily brief on Telegram gets **💼 Portfolio / 🛡️ Stops / 🩺 Status** buttons that run those read commands. `/halt` is the emergency kill switch: an **⛔ ENGAGE HALT** / Cancel prompt good for 60 seconds, then the dashboard's own kill switch (state/HALT, the watch stops, an alert); it is never rate-limited, and HALT is released from the dashboard or the CLI only. 20 commands a minute; Health tab row. |
 | `HEARTBEAT_URL` | https ping URL called every 5 minutes by the watch service (healthchecks.io style dead-man's switch). Runbook section 12. |
 | `TA_ALLOWED_HOSTS` | Extra Host names the dashboard answers to besides localhost, as a comma list of exact names (for phone access over Tailscale: `box.tail1234.ts.net`). Any other Host gets HTTP 421. Runbook section 15. |
 | `TRADINGVIEW_SCREENER`, `TA_ROLE` | Screener page (`/screener`): `TRADINGVIEW_SCREENER=true` (default `false`, also a Settings switch) adds a few display-only TradingView columns from its unofficial scanner endpoint, whose terms restrict automated access. One request per list at most every 15 minutes; any error or HTTP 403/429 pauses it for 24 hours. `TA_ROLE=server` (set it in the cloud server's `.env`) makes the code refuse to call TradingView from that box. |
 | `INTEGRATION_CHECK`, `INTEGRATION_CLAUDE` | `true` / `false` (defaults). The daily read-only check of the live services at 08:30 IST, and whether it also makes one 5-token Claude call. See *Development*. |
 | `QUIVER_API_KEY`, `ALPACA_*` | US mode only. |
 | `NEWS_TAGGER`, `OLLAMA_URL`, `OLLAMA_MODEL`, `NEWS_CLAUDE_MODEL` | Headline tagging: `auto` (default, local Ollama `qwen2.5:3b` if running) / `ollama` / `claude` / `none`. See *News headlines*. |
+| `NEWS_FULL_STORY` | `true` (default): news alerts read the publisher's article and carry its summary (takeaways, story, a clean source button). `false` = headline card only. See *News headlines*. |
 
 ## One engine: the server (runs by itself)
 
@@ -746,7 +755,7 @@ python -m trading_agent integration-check --claude   # also one 5-token Claude H
 ```
 
 Steps: the server clock (NTP synchronised, offset at most 1 s; Linux only); NSE bulk/block deals CSV for the last trading day and one announcements call; BSE deals CSV (a request flow per
-deal type, through the BSE client's throttle); Yahoo daily bars for `NIFTYBEES.NS` and `^NSEI`; NSE's price-band file and
+deal type, through the BSE client's throttle); Yahoo daily bars for `^NSEI` and `RELIANCE.NS` (what buying reads; `NIFTYBEES.NS`, the backtest's benchmark, is only noted when Yahoo posts it late, as it often does for ETFs); NSE's price-band file and
 the last trading day's bhavcopy; Groww holdings and order list **only with a token that is already cached** (a new one
 is never requested, so the 150-a-day budget is untouched; with no cached token or an active cool-down the step says
 "skipped (no cached token)"); Claude only with `INTEGRATION_CLAUDE=true`; Resend and Telegram for configuration only

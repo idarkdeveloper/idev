@@ -34,6 +34,13 @@ class FakeAPI:
             return {"message_id": self.n}
         return True
 
+    def upload(self, method, payload, files, timeout=30.0):
+        self.calls.append((method, {**payload, "files": files}))
+        return {"message_id": 99}
+
+    def photos(self):
+        return [p for m, p in self.calls if m == "sendPhoto"]
+
     def sent(self):
         return [p for m, p in self.calls if m == "sendMessage"]
 
@@ -361,12 +368,12 @@ def test_lookup_size_portfolio_and_stops(s):
 def test_brief_sends_the_telegram_brief_with_its_button(s, monkeypatch):
     fa = FakeApp(s)
     monkeypatch.setattr("trading_agent.telegram_brief.telegram_brief",
-                        lambda email, hosts=None: {"html": "<b>Morning</b> brief", "plain": "x",
+                        lambda email, hosts=None, commands=False: {"html": "<b>Morning</b> brief" + " (buttons)" * commands, "plain": "x",
                                                    "button": {"inline_keyboard": [[{"text": "📊 Dashboard", "url": "https://x/"}]]}})
     api = FakeAPI([msg("/brief")])
     b = bot(s, fa, api)
     b.poll_once()
-    assert api.texts() == ["Building the morning brief…", "<b>Morning</b> brief"]
+    assert api.texts() == ["Building the morning brief…", "<b>Morning</b> brief (buttons)"]   # the bot answers: its buttons work
     assert api.sent()[-1]["reply_markup"]["inline_keyboard"][0][0]["text"] == "📊 Dashboard"
     fa.brief_groww()
     assert fa.portfolio_calls == [False]
@@ -572,8 +579,8 @@ def test_the_command_list_is_registered_when_the_poller_starts(s, app):
     api = Once()
     bot(s, app, api).run(stop)
     assert api.calls[0] == ("setMyCommands", {"commands": telegram_bot.COMMANDS})
-    assert {c["command"] for c in telegram_bot.COMMANDS} == {"lookup", "size", "buy", "sell", "portfolio", "stops",
-                                                              "brief", "status", "halt", "help"}
+    assert {c["command"] for c in telegram_bot.COMMANDS} == {"lookup", "chart", "size", "buy", "sell", "portfolio",
+                                                              "stops", "brief", "status", "halt", "help"}
     assert {"command": "halt", "description": "Emergency kill switch: stop watch and trading"} in telegram_bot.COMMANDS
     assert all(c["command"].islower() and len(c["description"]) <= 256 for c in telegram_bot.COMMANDS)
 
@@ -586,18 +593,17 @@ def answers(api):
     return [p["text"] for m, p in api.calls if m == "answerCallbackQuery"]
 
 
-def test_lookup_reply_carries_the_three_buttons(s):
+def test_lookup_reply_carries_its_buttons(s):
     api = FakeAPI([msg("/lookup abc")])
     bot(s, FakeApp(s), api).poll_once()
-    assert api.sent()[0]["reply_markup"] == {"inline_keyboard": [[
-        {"text": "📏 Size (1%)", "callback_data": "sz:ABC:1"},
-        {"text": "🛡️ Stops", "callback_data": "st:ABC"},
-        {"text": "🟢 Practice Buy", "callback_data": "by:ABC"}]]}
+    assert api.sent()[0]["reply_markup"] == {"inline_keyboard": [
+        [{"text": "📏 Size (1%)", "callback_data": "sz:ABC:1"}, {"text": "🛡️ Stops", "callback_data": "st:ABC"}],
+        [{"text": "📈 Chart", "callback_data": "ch:ABC"}, {"text": "🟢 Practice Buy", "callback_data": "by:ABC"}]]}
     assert lookup_buttons("M&M")["inline_keyboard"][0][0]["callback_data"] == "sz:M&M:1"
     assert lookup_buttons("BAJAJ-AUTO") is not None
     for bad in ("", "abc", "A:B", "A B", "<b>", "X" * 21):
         assert lookup_buttons(bad) is None
-    assert all(len(b["callback_data"].encode()) <= 64 for b in lookup_buttons("X" * 20)["inline_keyboard"][0])
+    assert all(len(b["callback_data"].encode()) <= 64 for row in lookup_buttons("X" * 20)["inline_keyboard"] for b in row)
 
 
 def test_size_button_runs_size_for_that_company_and_risk(s):
@@ -765,3 +771,114 @@ def test_halt_through_the_real_dashboard_kill_switch_writes_halt_and_blocks_orde
     api.batches.append([msg("/buy RELIANCE 1", uid=60), msg("/halt", uid=61)])
     b.poll_once()
     assert api.texts()[-2].startswith("HALT is set") and "HALT is set" in api.texts()[-1]   # the ask says it is already on
+
+
+
+# --------------------------------------------------------------------------- #
+# /chart, the 📈 button, and the brief's buttons
+# --------------------------------------------------------------------------- #
+def candles_payload(n=60, position=None):
+    from datetime import date, timedelta
+    from trading_agent.candles import build_candles
+    bars, d = [], date(2026, 6, 1)
+    for i in range(n * 2):
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            px = 100.0 + i
+            bars.append({"date": d.isoformat(), "open": px, "high": px + 2, "low": px - 2, "close": px + 1, "volume": 1})
+    return build_candles("ABC", "3M", bars, position)
+
+
+class ChartApp(FakeApp):
+    def __init__(self, s, payload):
+        super().__init__(s)
+        self.payload, self.asked = payload, []
+
+    def candles(self, ticker, range_key, exchange="NSE"):
+        self.asked.append((ticker, range_key))
+        return self.payload
+
+
+def test_chart_sends_a_png_with_a_caption(s):
+    ca = ChartApp(s, candles_payload(position={"cost": 150.0, "stop": 140.0}))
+    api = FakeAPI([msg("/chart abc")])
+    bot(s, ca, api).poll_once()
+    (photo,) = api.photos()
+    name, png, ctype = photo["files"]["photo"]
+    assert name == "ABC.png" and ctype == "image/png" and png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert photo["chat_id"] == CHAT and photo["parse_mode"] == "HTML" and ca.asked == [("ABC", "3M")]
+    assert photo["caption"].startswith("📈 <b>Abc &lt;Industries&gt; (ABC)</b> · close ₹")
+    assert "Your cost ₹150.00 · stop ₹140.00" in photo["caption"] and api.texts() == []
+
+
+def test_chart_without_prices_says_so_and_the_button_draws_one(s):
+    api = FakeAPI([msg("/chart abc")])
+    bot(s, ChartApp(s, {"bars": [], "error": "price history unavailable"}), api).poll_once()
+    assert api.texts() == ["Abc &lt;Industries&gt; (ABC): no chart (price history unavailable)."] and api.photos() == []
+    api2 = FakeAPI([tap("ch:ABC"), tap("ch:<b>", uid=51), tap("ch:ABC", chat="999", uid=52)])
+    bot(s, ChartApp(s, candles_payload()), api2).poll_once()
+    assert len(api2.photos()) == 1 and answers(api2) == ["Drawing the chart…", "Unknown button."]
+
+
+def test_the_briefs_buttons_run_read_commands_only(s):
+    fa = FakeApp(s)
+    api = FakeAPI([tap("go:portfolio"), tap("go:stops", uid=51), tap("go:status", uid=52), tap("go:buy", uid=53),
+                   tap("go:halt", uid=54), tap("go:portfolio", sender="777", uid=55)])
+    b = bot(s, fa, api)
+    b.poll_once()
+    port, stops, status = api.texts()
+    assert port.startswith("<b>Practice account</b>") and stops.startswith("<b>Practice stops</b>")
+    assert status.startswith("<b>Status</b>") and answers(api) == ["/portfolio", "/stops", "/status", "Unknown button.",
+                                                                   "Unknown button."]
+    assert fa.portfolio_calls == [False]                                      # never forces a Groww login
+    api.batches.append([tap("go:status", uid=60 + i) for i in range(25)])
+    b.poll_once()
+    assert answers(api)[-1] == "Too many commands: wait a minute."
+
+
+def test_the_brief_has_command_buttons_only_when_the_bot_answers(s, monkeypatch):
+    from trading_agent.telegram_brief import telegram_brief
+    email = {"data": {"kind": "morning", "date": "2026-10-12"}, "summary": "", "writer": "rules"}
+    assert telegram_brief(email)["button"] is None
+    with_bot = telegram_brief(email, ["box.tail1234.ts.net"], commands=True)["button"]["inline_keyboard"]
+    assert with_bot[0] == [{"text": "📊 Dashboard", "url": "https://box.tail1234.ts.net/"}]
+    assert [b["callback_data"] for b in with_bot[1]] == ["go:portfolio", "go:stops", "go:status"]
+    assert all(c in telegram_bot.GO for c in ("portfolio", "stops", "status"))
+    from trading_agent import digest_schedule
+    sent = {}
+
+    class N:
+        def send(self, subject, body, **kw):
+            sent.update(kw)
+            return ["telegram"]
+    digest_schedule.send_digest(N(), {**email, "subject": "s", "text": "t", "html": "h"}, commands=True)
+    assert sent["telegram_button"]["inline_keyboard"][-1][0]["callback_data"] == "go:portfolio"
+
+
+def test_upload_is_multipart_and_never_logs_the_token():
+    class Sess:
+        def __init__(self, answer):
+            self.answer, self.kw = answer, None
+
+        def post(self, url, **kw):
+            self.kw = (url, kw)
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return type("R", (), {"json": lambda _self: self.answer})()
+    ok = Sess({"ok": True, "result": {"message_id": 5}})
+    api = TelegramAPI(TOKEN, session=ok)
+    assert api.upload("sendPhoto", {"chat_id": "42", "reply_markup": {"a": 1}}, {"photo": ("a.png", b"x", "image/png")}) == {"message_id": 5}
+    url, kw = ok.kw
+    assert url.endswith("/sendPhoto") and kw["data"] == {"chat_id": "42", "reply_markup": '{"a": 1}'} and "photo" in kw["files"]
+    import requests
+    with pytest.raises(TelegramError) as ex:
+        TelegramAPI(TOKEN, session=Sess(requests.ConnectionError(f"https://api.telegram.org/bot{TOKEN}/sendPhoto"))).upload(
+            "sendPhoto", {}, {})
+    assert TOKEN not in str(ex.value)
+
+
+def test_stock_chart_png_is_small_and_needs_bars():
+    from trading_agent import charts
+    png = charts.stock_daily_png("ABC · 3 months, daily", candles_payload(position={"cost": 120.0, "stop": 5.0}))
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) <= charts.MAX_BYTES
+    assert charts.stock_daily_png("x", {"bars": []}) is None and charts.stock_daily_png("x", None) is None

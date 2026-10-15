@@ -1,7 +1,8 @@
 """PNG charts for the evening bulletin (matplotlib Figure + Agg canvas: no pyplot, no window, no GUI).
 
 ``nifty_intraday_png`` draws the last session's 15-minute candles with the 21 EMA, the previous close and the watch
-levels; ``nifty_4h_png`` draws the 4-hour candles with an ADX panel underneath. Both are 1280x720 pixels (shown at
+levels; ``nifty_4h_png`` draws the 4-hour candles with an ADX panel underneath; ``stock_daily_png`` draws one stock's
+daily candles with its 20/50-day EMAs and your cost and stop (the Telegram /chart command). Both are 1280x720 pixels (shown at
 640 wide in the email, so text stays readable on a phone) in the dark colours of the email header, use only the font
 that ships with matplotlib, and stay under MAX_BYTES (re-quantized when over, None when still over). They return
 ``None`` when there is nothing to draw. matplotlib is imported when the first chart is made, so the rest of the app
@@ -213,6 +214,64 @@ def nifty_4h_png(bars4h: list[dict[str, Any]] | None, adx_series: dict[str, list
     import matplotlib
     with _LOCK, matplotlib.rc_context(RC):  # type: ignore[arg-type]
         return _png(_draw_4h(bars4h, adx_series))
+
+
+def _date_label(d: str) -> str:
+    dt = datetime.fromisoformat(str(d)[:10])
+    return f"{dt.day} {dt:%b}"
+
+
+def _draw_daily(title: str, bars: list[dict[str, Any]], lines: dict[str, list[dict[str, Any]]],
+                position: dict[str, Any] | None) -> Any:
+    """The daily stock figure (call inside the lock and the rc_context)."""
+    fig = _new_figure()
+    ax = fig.add_axes([AX_LEFT, 0.12, AX_RIGHT - AX_LEFT, 0.74])
+    _style(ax)
+    _candles(ax, bars)
+    n = len(bars)
+    at = {str(b["time"]): i for i, b in enumerate(bars)}
+    for key, colour, label in (("ema20", EMA, "20 EMA"), ("ema50", LEVEL, "50 EMA")):
+        pts = [(at[str(p["time"])], p["value"]) for p in lines.get(key) or [] if str(p.get("time")) in at
+               and p.get("value") is not None]
+        if pts:
+            ax.plot([q[0] for q in pts], [q[1] for q in pts], color=colour, linewidth=1.8, zorder=4, label=label)
+    lo_y, hi_y = min(b["low"] for b in bars), max(b["high"] for b in bars)
+    span = hi_y - lo_y or 1.0
+    marks = [(v, f"{name} {v:,.0f}", colour) for name, v, colour in
+             (("cost", (position or {}).get("cost"), PREV), ("stop", (position or {}).get("stop"), DOWN))
+             if isinstance(v, (int, float)) and _in_view([v], lo_y, hi_y, span)]
+    for v, _, colour in marks:
+        ax.axhline(v, color=colour, linestyle=":", linewidth=1.8, zorder=1)
+    pad = span * 0.08
+    y0, y1 = min([lo_y] + [m[0] for m in marks]) - pad, max([hi_y] + [m[0] for m in marks]) + pad
+    ax.set_ylim(y0, y1)
+    last = float(bars[-1]["close"])
+    labels = [(last, f"{last:,.2f}", FG), *marks]   # one spread for all of them: they never print on each other
+    for y, (_, text, colour) in zip(_spread([m[0] for m in labels], (y1 - y0) * 0.075), labels):
+        ax.annotate(text, (n - 0.5, y), xytext=(5, 0), textcoords="offset points", color=colour, fontsize=LABEL_PT,
+                    va="center", annotation_clip=False, fontweight="bold" if colour == FG else "normal")
+    ax.set_xlim(-1, n)
+    step = max(1, n // 5)
+    ax.set_xticks(range(0, n, step))
+    ax.set_xticklabels([_date_label(bars[i]["time"]) for i in range(0, n, step)])
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(loc="upper left", fontsize=LABEL_PT, frameon=False, labelcolor=MUTED, ncol=2)
+    fig.text(AX_LEFT, 0.92, title, color=FG, fontsize=TITLE_PT, fontweight="bold")
+    return fig
+
+
+def stock_daily_png(title: str, candles: dict[str, Any] | None) -> bytes | None:
+    """Daily candles from App.candles() ({bars: [{time, open, high, low, close}], ema20, ema50, position}), the 20 and
+    50-day EMAs, the last close, and dotted cost and stop lines when you hold it. None with no bars, or when the
+    picture cannot be made small enough."""
+    bars = [b for b in (candles or {}).get("bars") or []
+            if all(isinstance(b.get(k), (int, float)) for k in ("open", "high", "low", "close"))]
+    if not bars:
+        return None
+    import matplotlib
+    lines = {k: (candles or {}).get(k) or [] for k in ("ema20", "ema50")}
+    with _LOCK, matplotlib.rc_context(RC):  # type: ignore[arg-type]
+        return _png(_draw_daily(title, bars, lines, (candles or {}).get("position")))
 
 
 def bulletin_images(bulletin: dict[str, Any]) -> list[dict[str, Any]]:

@@ -224,6 +224,7 @@ class Settings:
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:3b"
     news_claude_model: str = "claude-haiku-4-5"
+    news_full_story: bool = True   # news alerts fetch the publisher's article and put a summary in the email
     # Everyone followed, from INVESTORS. Empty means "just watch_investor" (the single-name setting).
     watch_investors: list[str] = field(default_factory=list)
     # BSE bulk/block deals are read beside NSE's (Indian market only); bse_host is the page's host
@@ -438,6 +439,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),
         ollama_model=env("OLLAMA_MODEL") or "qwen2.5:3b",
         news_claude_model=env("NEWS_CLAUDE_MODEL") or "claude-haiku-4-5",
+        news_full_story=_bool(env("NEWS_FULL_STORY"), True),
         bse_deals=_bool(env("BSE_DEALS"), True),
         bse_host=bse_host,
         flows_breadth=_bool(env("FLOWS_BREADTH"), True),

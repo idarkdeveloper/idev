@@ -154,6 +154,7 @@ def test_every_step_ok_with_good_answers(s):
     ("NSE announcements", {"nse": FakeNSE(ann=[{"symbol": "", "at": "x"}])}, "lacks"),
     ("BSE deals", {"bse": FakeBSE(error="BSE deals page layout changed")}, "layout changed"),
     ("Yahoo prices", {"prices": FakePrices(missing="^NSEI")}, "^NSEI has no bar"),
+    ("Yahoo prices", {"prices": FakePrices(missing="RELIANCE.NS")}, "RELIANCE.NS has no bar"),
     ("NSE price bands", {"session": FakeSession(bands="Foo,Bar\n1,2\n")}, "Symbol / Band"),
     ("NSE bhavcopy", {"session": FakeSession(bhav="A,B\n1,2\n")}, "bhavcopy"),
     ("NSE bhavcopy", {"session": FakeSession(bhav=BHAV.replace("09-Oct", "08-Oct"))}, "not 2026-10-09"),
@@ -546,3 +547,22 @@ def test_the_watch_loop_ticks_the_integration_scheduler_and_survives_its_errors(
     w = Watcher(s, integration=Sched(), awake=None, weekdays_only=False)
     assert w.tick()["integration"] == {"due": False}
     assert "integration" not in w.tick() and len(ticks) == 2        # an error is logged, the tick carries on
+
+
+def test_a_late_niftybees_bar_is_noted_but_never_blocks_buys(s):
+    """Yahoo often posts Indian ETF closes a day late (13 and 14 Oct 2026); NIFTYBEES is the backtest's benchmark
+    only, so its lag is reported in the detail and the canary still passes."""
+    late = good(s, prices=FakePrices(missing="NIFTYBEES.NS"))
+    step = by_name(late)["Yahoo prices"]
+    assert late["ok"] is True and step["ok"] is True
+    assert step["detail"] == (f"^NSEI and RELIANCE.NS both have a daily bar for {LAST}; "
+                              "NIFTYBEES.NS not posted yet (newest 2026-10-08; backtest only)")
+
+    class Broken(FakePrices):
+        def history(self, symbol, range_="1mo"):
+            if symbol == "NIFTYBEES.NS":
+                raise ValueError("no data")
+            return super().history(symbol, range_)
+    down = good(s, prices=Broken())
+    assert down["ok"] is True and "NIFTYBEES.NS unavailable (ValueError; backtest only)" in by_name(down)["Yahoo prices"]["detail"]
+    assert by_name(good(s))["Yahoo prices"]["detail"] == f"^NSEI and RELIANCE.NS both have a daily bar for {LAST}"

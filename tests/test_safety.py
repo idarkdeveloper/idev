@@ -479,3 +479,71 @@ def test_allowed_hosts_setting_is_validated(tmp_path):
         _check_type("allowed_hosts", ["a"])
     with pytest.raises(ValueError):
         _write_env(tmp_path / ".env", {"TA_ALLOWED_HOSTS": "a.ts.net\nGROWW_LIVE_ORDERS=true"})
+
+
+# ---------------------------------------------------------------- dashboard edge cases (the ui.py audit)
+def test_a_failing_get_answers_json_instead_of_dropping_the_connection(server, monkeypatch, caplog):
+    base, app = server
+
+    def boom():
+        raise ZeroDivisionError("division by zero in a cache")
+    monkeypatch.setattr(app, "snapshot", boom)
+    with caplog.at_level("ERROR"):
+        assert _get(base + "/api/state") == (500, {"error": "ZeroDivisionError: division by zero in a cache"})
+    assert "GET /api/state failed" in caplog.text
+
+    def not_found(text):
+        raise LookupError("no NSE company matches 'zzzz'")
+    monkeypatch.setattr(app, "lookup", not_found)
+    assert _get(base + "/api/lookup?ticker=zzzz") == (400, {"error": "no NSE company matches 'zzzz'"})
+
+    def refused():
+        raise PermissionError("The kill switch stops the real agent")
+    monkeypatch.setattr(app, "freshness", refused)
+    assert _get(base + "/api/freshness")[0] == 403
+    assert _get(base + "/api/integration")[0] == 200                                      # one bad route, not the server
+
+
+def test_https_origin_through_a_proxy_that_keeps_the_host_header(server):
+    base, app = server
+    app.settings.allowed_hosts = [TS]
+    body = json.dumps({"index": 0}).encode()
+    js = {"Content-Type": "application/json", "Host": TS}
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Origin": f"https://{TS}", "X-Forwarded-Proto": "https"}) == 200
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Origin": f"https://{TS}"}) == 200
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Origin": "https://evil.example"}) == 403
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Origin": f"https://other.{TS}"}) == 403
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Origin": f"https://{TS}:8443"}) == 403   # another port is another origin
+    assert _raw_post(base, "/api/dismiss", body, {**js, "Host": "evil.example", "Origin": "https://evil.example"}) == 421
+
+
+def test_demo_screener_serves_the_screener_page(server):
+    base, _ = server
+    for path in ("/screener", "/demo/screener", "/demo/screener/"):
+        status, html = _get(base + path)
+        assert status == 200 and "<title>" in html and "screener" in html.lower(), path
+
+
+def test_lookup_and_news_take_names_but_not_huge_or_control_text(server, monkeypatch):
+    base, app = server
+    seen = []
+    monkeypatch.setattr(app, "lookup", lambda t: seen.append(t) or {"ticker": "TATASTEEL"})
+    monkeypatch.setattr(app, "note_bar", lambda found: None)
+    monkeypatch.setattr(app, "news_for_ticker", lambda t: seen.append(t) or {"items": []})
+    assert _get(base + "/api/lookup?ticker=tata%20steel")[0] == 200                       # a company name, with its space
+    assert _get(base + "/api/news?ticker=M%26M")[0] == 200
+    assert seen == ["tata steel", "M&M"]
+    for route in ("/api/lookup", "/api/news"):
+        assert _get(base + route + "?ticker=" + "x" * 81)[0] == 400
+        assert _get(base + route + "?ticker=a%00b")[0] == 400
+    assert seen == ["tata steel", "M&M"]
+
+
+def test_research_jobs_refuse_out_of_range_sizes(server):
+    base, app = server
+    for path, body in (("/api/factor-backtest", {"top": 0}), ("/api/factor-backtest", {"top": 101}),
+                       ("/api/factor-backtest", {"years": -1}), ("/api/factor-backtest", {"years": 11}),
+                       ("/api/signal-lab", {"years": 0}), ("/api/signal-lab", {"years": 99})):
+        status, out = _post(base + path, body)
+        assert status == 400 and ("top must be" in out["error"] or "years must be" in out["error"]), (path, body)
+    assert app.jobs == []                                                                 # nothing was started
