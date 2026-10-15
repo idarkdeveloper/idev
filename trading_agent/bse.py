@@ -394,6 +394,9 @@ class BSEClient:
         self._today_cache: tuple[float, list[dict[str, Any]]] | None = None
         self.last_error: str | None = None
         self.requests_made = 0
+        from .bse_announcements import BSEAnnouncements
+        self._announcements = BSEAnnouncements(self.session, Path(cache_dir) if cache_dir else None,
+                                               clock=self.clock, monotonic=monotonic)
 
     # -- http ----------------------------------------------------------------
     def _throttle(self) -> None:
@@ -565,6 +568,10 @@ class BSEClient:
         self.last_error = str(error)
         self._fail_until = self.monotonic() + RETRY_AFTER_FAILURE_S
         warn_once_per_day(error, self.clock().date())
+
+    def announcements(self, symbol: str, limit: int = 20) -> list[dict[str, Any]]:
+        """A BSE-only stock's own filings (bse_announcements.BSEAnnouncements), newest first."""
+        return self._announcements.announcements(symbol, limit=limit)
 
     def deals(self, start: date, end: date, kinds: Iterable[str] = ("bulk", "block"),
               investors: Iterable[str] | None = None) -> list[DisclosedTrade]:

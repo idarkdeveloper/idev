@@ -299,6 +299,15 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
                      rows=n, due=due_intra, schedule=intra + " for held and recommended stocks", error=err,
                      error_at=err_at, failing=bool(nse_off), backoff=nse_off, now=now))
 
+    ok, n, err, err_at = _run(runs, "bse_ann")
+    api_ok, _, api_err, api_err_at = _run(runs, "bse_ann_api")
+    rss_only = bool(api_err and api_err_at and (api_ok is None or api_err_at > api_ok))
+    rows.append(_row("bse_ann", "BSE announcements (BSE-only stocks)", [ALERTS, MORNING, DASH],
+                     configured=bool(getattr(settings, "bse_deals", False)) and nse, last_ok=ok, rows=n, error=err,
+                     error_at=err_at, now=now, schedule="with NSE announcements, for held or recommended .BO stocks",
+                     detail=("BSE's API refused this server: RSS feed only, which shows just the newest filings"
+                             if rss_only else "BSE's per-company API, with the RSS feed as fallback")))
+
     # prices
     ycache = list(cache.glob("yahoo_*.json")) if cache.exists() else []
     yok = _newest_mtime(ycache)

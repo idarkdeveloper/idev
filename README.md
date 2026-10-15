@@ -275,6 +275,11 @@ who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
 - **NSE announcements** (`NSEClient.announcements`): results, board meetings, pledges,
   regulatory orders, business updates, with text and PDF link. Claude must check them
   before a buy (`get_announcements`); the dashboard shows them in the stock lookup.
+  A BSE-only stock (`<scrip code>.BO`) has nothing at NSE, so its own BSE filings are read instead
+  (`bse_announcements.py`, when `BSE_DEALS` is on): BSE's per-company API for the last 30 days, and BSE's
+  latest-announcements RSS feed as the fallback (BSE's API refuses some cloud IPs; the feed only holds the newest
+  filings, so what it shows is kept in `cache/bse_ann/`). The Health tab's *BSE announcements* row says which one
+  answers. Alerts name the company: `[NEWS] 1 new announcement: XYZ Chemicals · BSE`.
 - **Watch mode**: `python -m trading_agent watch --every 60` (or the *Start watch* button)
   polls deals and announcements for your positions and recent recommendations every
   minute between 08:45 and 18:30 IST on weekdays, notifying on anything new. Meant for a
