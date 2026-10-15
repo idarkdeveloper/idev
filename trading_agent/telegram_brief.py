@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import html as _html
 import ipaddress
+import math
 import re
 from datetime import date
 from typing import Any, TypeGuard
@@ -15,6 +16,10 @@ from .digest_rules import label, srupee
 
 LIMIT = 4000
 TABLE_ROWS = 5
+HEAT_CELLS = 5
+DAY_STEP = 1.0      # a day's move: one heat cell per 1% (5 cells = 5% or more)
+LOSS_STEP = 10.0    # a total loss: one cell per 10% (5 cells = 50% or more)
+RULE = "━━━━━━━━━━━━"   # the portfolio card's separator: short enough for the narrowest phone
 ROLLOVER_CHARS = 400
 SUMMARY_CHARS = 300
 CRITERIA = "stop = buy price − 3×ATR · avg = 200-day average"
@@ -106,20 +111,25 @@ def _macro_line(world: Any, gauges: Any) -> str | None:
     return line
 
 
+def _card(value: str, today: str | None, total: str | None, holdings: Any = None) -> str:
+    """The portfolio card: a title, a rule, one line each for Value, Today and Total P&L, a rule. Plain lines (no
+    <pre>), so a narrow screen wraps them instead of scrolling a fixed-width block. ``value`` is already HTML."""
+    n = f" · {holdings} holdings" if isinstance(holdings, int) and holdings else ""
+    rows = [f"💼 <b>Portfolio</b>{n}", RULE, f"Value: <b>{value}</b>"]
+    rows += [f"Today: {today}"] if today else []
+    rows += [f"Total P&amp;L: {total}"] if total else []
+    return "\n".join([*rows, RULE])
+
+
 def _portfolio_line(watch: Any) -> str | None:
     p = watch.get("portfolio") if _ok(watch) else None
     if not isinstance(p, dict) or not isinstance(p.get("value"), (int, float)):
         return None
     v = float(p["value"])
     value = f"₹{v / 1e5:.2f}L" if v >= 1e5 else f"₹{num(v, 0)}"
-    parts = []
-    if isinstance(p.get("pl_pct"), (int, float)):
-        parts.append(pct_text(p["pl_pct"]))
-    if isinstance(p.get("pl"), (int, float)):
-        parts.append(srupee(p["pl"]))
-    n = p.get("holdings")
-    return (f"💼 <b>{value}</b>" + (f" ({' / '.join(parts)})" if parts else "")
-            + (f" · {n} holdings" if isinstance(n, int) and n else ""))
+    pl, pl_pct = p.get("pl"), p.get("pl_pct")
+    parts = ([srupee(pl)] if isinstance(pl, (int, float)) else []) + ([f"({pct_text(pl_pct)})"] if isinstance(pl_pct, (int, float)) else [])
+    return _card(value, None, _e(" ".join(parts)) or None, p.get("holdings"))   # morning: no day move before the open
 
 
 def _events_line(watch: Any) -> str | None:
@@ -165,26 +175,33 @@ def _flag(item: dict[str, Any]) -> str:
     parts = ["stop"] * stop + ["near"] * near + ["avg"] * avg
     if parts:
         return "+".join(parts)
-    loss = item.get("loss_pct")
-    return pct_text(loss, 0, sign=False) if isinstance(loss, (int, float)) else "news"
+    return "" if isinstance(item.get("loss_pct"), (int, float)) else "news"   # the % is already on the line
 
 
-def _compact(v: Any) -> str:
+def heat_bar(pct: Any, step: float = DAY_STEP, cells: int = HEAT_CELLS) -> str:
+    """A proportional bar for a % move: one filled cell per ``step`` percent, rounded up (any move shows one cell),
+    at most ``cells``. -2.4 → ▰▰▰▱▱. Always exactly ``cells`` characters."""
+    if not isinstance(pct, (int, float)) or math.isnan(pct):
+        return "▱" * cells
+    filled = min(cells, math.ceil(round(abs(pct) / step, 6)))
+    return "▰" * filled + "▱" * (cells - filled)
+
+
+def _arrow(pct: Any) -> str:
+    return "🔻" if isinstance(pct, (int, float)) and pct < 0 else "🔺" if isinstance(pct, (int, float)) and pct > 0 else "▫️"
+
+
+def _px(v: Any) -> str:
+    """A price for a phone line: whole rupees with Indian grouping from 1,000, else up to one decimal (940, 264.4)."""
     if not isinstance(v, (int, float)):
         return "n/a"
-    return f"{v:.0f}" if abs(v) >= 1000 else f"{v:.1f}"
+    return num(v, 0) if abs(v) >= 1000 else f"{v:.1f}".removesuffix(".0")
 
 
-def _price(v: Any) -> str:
-    """One decimal up to 9,999.9 (fits 6 characters), whole rupees above, so the column lines up."""
-    if not isinstance(v, (int, float)):
-        return "n/a"
-    return f"{v:.1f}" if abs(v) < 10000 else f"{v:.0f}"
-
-
-def _line(code: str, pl: str, price: str, flag: str) -> str:
-    """CODE (9) P&L (6) PRICE (6) FLAG (8), single spaces: at most 32 characters."""
-    return f"{code[:9]:<9} {pl[:6]:>6} {price[:6]:>6} {flag[:8]}".rstrip()
+def heat_line(code: Any, price: Any, pct: Any, step: float = DAY_STEP, d: int = 1, tag: str = "") -> str:
+    """One mover: ``🔻 TATAMOTORS · 940 (−2.4%) ▰▰▰▱▱`` (escaped), plus an optional short tag."""
+    line = f"{_arrow(pct)} {_e(str(code or '?')[:20])} · {_px(price)} ({pct_text(pct, d)}) {heat_bar(pct, step)}"
+    return line + (f" · {_e(tag)}" if tag else "")
 
 
 def _watch_block(watch: Any, rollover: bool = True) -> list[str]:
@@ -197,10 +214,8 @@ def _watch_block(watch: Any, rollover: bool = True) -> list[str]:
     items = sorted(watch.get("items") or [], key=key)
     top, rest = items[:TABLE_ROWS], items[TABLE_ROWS:]
     out = [f"⚠️ <b>Holdings to review ({total} flagged)</b>", f"<i>{_e(CRITERIA)}</i>"]
-    if top:
-        rows = [_line("CODE", "P&L%", "PRICE", "FLAG")]
-        rows += [_line(str(i.get("symbol") or "?"), _compact(i.get("loss_pct")), _price(i.get("price")), _flag(i)) for i in top]
-        out.append("<pre>" + "\n".join(_e(r) for r in rows) + "</pre>")
+    for i in top:   # one line each, worst loss first; the bar is the total loss (one cell per 10%)
+        out.append(heat_line(i.get("symbol"), i.get("price"), i.get("loss_pct"), LOSS_STEP, 0, _flag(i)))
     more = total - len(top)
     if more > 0:
         names: list[str] = []
@@ -267,19 +282,19 @@ def _evening_lines(data: dict[str, Any]) -> list[str]:
     if _ok(g):
         # always shows today: the day's move, or "no trading" on a stale day; then the total
         if stale:
-            today = "Today: no trading" if stale.get("reason") == "no trading today" else "Today: not closed yet"
+            today = "no trading" if stale.get("reason") == "no trading today" else "not closed yet"
         elif g.get("day_pl") is not None:
-            today = f"Today {_e(srupee(g['day_pl']))} ({_e(pct_text(g.get('day_pct')))})"
+            today = f"{_e(srupee(g['day_pl']))} ({_e(pct_text(g.get('day_pct')))})"
         else:
-            today = "Today: n/a"
-        out.append(f"💼 <b>₹{_e(num(g['value']))}</b> · {today} · Total {_e(srupee(g.get('pl')))} ({_e(pct_text(g.get('pl_pct')))})")
+            today = "n/a"
+        out.append(_card(f"₹{_e(num(g['value']))}", today, f"{_e(srupee(g.get('pl')))} ({_e(pct_text(g.get('pl_pct')))})"))
     bulletin: dict[str, Any] = data["bulletin"] if isinstance(data.get("bulletin"), dict) else {}
     nf = bulletin.get("nifty")
     if _ok(nf) and nf.get("close") is not None:
         out.append(f"📈 Nifty {_e(num(nf['close'], 2))} ({_e(pct_text(nf.get('change_pct'), 2))})")
     if _ok(nf):
         out += _cheat_lines(nf)
-    if stale and not _ok(g):   # the money line already says it when there is one
+    if stale and not _ok(g):   # the portfolio card already says it when there is one
         out.append("<i>" + _e("No trading today" if stale.get("reason") == "no trading today" else "The market has not closed yet") + "</i>")
     movers = _movers_table(g, stale)
     if movers:
@@ -294,19 +309,18 @@ def _evening_lines(data: dict[str, Any]) -> list[str]:
 
 
 def _movers_table(g: Any, stale: Any) -> str | None:
-    """Today's 3 biggest falls and 3 biggest gains (or, with no trading today, the 5 worst total losses)."""
+    """Today's 3 biggest falls and 3 biggest gains (or, with no trading today, the 5 worst total losses), one heat line
+    each: plain lines, no fixed-width table, so nothing scrolls sideways on a narrow screen."""
     if not _ok(g):
         return None
     rows = [h for h in g.get("holdings") or [] if isinstance(h.get("price"), (int, float))]
-    field, title = ("pl_pct", "Worst total loss") if stale else ("day_pct", "Today's movers")
+    field, title, step = ("pl_pct", "Worst total loss", LOSS_STEP) if stale else ("day_pct", "Today's movers", DAY_STEP)
     rows = [h for h in rows if isinstance(h.get(field), (int, float))]
     if not rows:
         return None
     rows.sort(key=lambda h: h[field])
     pick = rows[:5] if stale else (rows[:3] + [h for h in rows[-3:] if h[field] > 0 and h not in rows[:3]][::-1])
-    head = f"{'CODE':<10} {'%':>6} {'PRICE':>7}"
-    body = [f"{str(h.get('symbol') or '?')[:10]:<10} {h[field]:>+6.1f} {_price(h['price']):>7}" for h in pick]
-    return f"<b>{_e(title)}</b>\n<pre>" + "\n".join(_e(r) for r in [head, *body]) + "</pre>"
+    return f"<b>{_e(title)}</b>\n" + "\n".join(heat_line(h.get("symbol"), h["price"], h[field], step) for h in pick)
 
 
 def dashboard_url(allowed_hosts: Any) -> str | None:

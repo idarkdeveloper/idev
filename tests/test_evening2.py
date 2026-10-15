@@ -172,13 +172,17 @@ def brief_for(s, **kw):  # noqa: F811
 
 def test_telegram_money_line_always_shows_today_and_the_cheat_sheet(s):  # noqa: F811
     h = brief_for(s)["html"]
-    money = next(x for x in h.split("\n") if x.startswith("💼"))
-    assert re.fullmatch(r"💼 <b>₹[\d,]+</b> · Today [+−]₹[\d,]+ \([+−][\d.]+%\) · Total [+−]₹[\d,]+ \([+−][\d.]+%\)", money), money
+    card = h[h.index("💼"):].split("\n")[:6]
+    assert card[0] == "💼 <b>Portfolio</b>" and card[1] == card[5] == "━━━━━━━━━━━━", card
+    assert re.fullmatch(r"Value: <b>₹[\d,]+</b>", card[2]), card
+    assert re.fullmatch(r"Today: [+−]₹[\d,]+ \([+−][\d.]+%\)", card[3]), card
+    assert re.fullmatch(r"Total P&amp;L: [+−]₹[\d,]+ \([+−][\d.]+%\)", card[4]), card
     assert re.search(r"^📊 Session: range [\d,]+ – [\d,]+ · gap [+−]?\d+$", h, re.M)
     assert re.search(r"^📐 Pivots: S1 [\d,]+ · P [\d,]+ · R1 [\d,]+$", h, re.M)
     assert re.search(r"^⚡ Daily ADX \d+ · 4h ADX \d+ · RSI \d+$", h, re.M)
-    stale = next(x for x in brief_for(s, now=lambda: SAT)["html"].split("\n") if x.startswith("💼"))
-    assert re.fullmatch(r"💼 <b>₹[\d,]+</b> · Today: no trading · Total [+−]₹[\d,]+ \([+−][\d.]+%\)", stale), stale
+    stale = brief_for(s, now=lambda: SAT)["html"].split("\n")
+    assert "Today: no trading" in stale
+    assert any(re.fullmatch(r"Total P&amp;L: [+−]₹[\d,]+ \([+−][\d.]+%\)", x) for x in stale), stale
 
 
 def test_telegram_cheat_sheet_lines_appear_only_when_their_data_exists():

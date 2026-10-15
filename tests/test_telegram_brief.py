@@ -1,11 +1,10 @@
 """The Telegram daily brief: phone-sized HTML from fixture data. Fakes only, no network."""
-import re
 
 import requests
 
 from trading_agent.digest_schedule import send_digest
 from trading_agent.notify import Notifier
-from trading_agent.telegram_brief import telegram_brief
+from trading_agent.telegram_brief import LIMIT, heat_bar, heat_line, telegram_brief
 
 TOKEN = "123456789:AAH_fake-token-for-tests-0123456789abcd"
 
@@ -61,13 +60,30 @@ def test_morning_buy_day_and_regime_icon_follows_data():
     assert "🔴 <code>RISK-OFF</code>" in telegram_brief(e)["html"]
 
 
-def test_table_rows_criteria_once_and_rollover():
+def test_review_lines_criteria_once_and_rollover():
     h = telegram_brief(morning())["html"]
-    table = re.search(r"<pre>(.*?)</pre>", h, re.S).group(1).split("\n")
-    assert len(table) == 6 and all(len(r) <= 32 for r in table)   # header + 5
-    assert table[1].startswith("S00") and table[1].endswith("stop+avg") and table[2].endswith(" avg")
+    assert "<pre>" not in h   # no fixed-width block: narrow screens wrap the lines instead
+    rows = [ln for ln in h.split("\n") if ln.startswith("🔻 S")]
+    assert len(rows) == 5 and all(len(r) <= 40 for r in rows)
+    assert rows[0] == "🔻 S00 · 100 (−30%) ▰▰▰▱▱ · stop+avg" and rows[1].endswith(" · avg")
     assert h.count("3×ATR") == 1 and h.count("200-day average") == 1
     assert "<i>+ 8 more: S05, S06, S07" in h   # codes only, so the line stays short
+
+
+def test_heat_bar_is_proportional_and_fixed_width():
+    assert heat_bar(-2.4) == "▰▰▰▱▱" and heat_bar(2.4) == "▰▰▰▱▱"
+    assert heat_bar(0) == "▱▱▱▱▱" and heat_bar(0.05) == "▰▱▱▱▱" and heat_bar(1.0) == "▰▱▱▱▱"
+    assert heat_bar(-17.0) == "▰▰▰▰▰" and heat_bar(-23.0, step=10) == "▰▰▰▱▱"
+    assert heat_bar(None) == "▱▱▱▱▱" and heat_bar(float("nan")) == "▱▱▱▱▱"
+    assert all(len(heat_bar(v)) == 5 for v in (-99, -5, -0.1, 0, 0.1, 3.3, 500))
+
+
+def test_heat_line_matches_the_phone_format_and_escapes():
+    assert heat_line("TATAMOTORS", 940.0, -2.4) == "🔻 TATAMOTORS · 940 (−2.4%) ▰▰▰▱▱"
+    assert heat_line("INFY", 1023.4, 1.5) == "🔺 INFY · 1,023 (+1.5%) ▰▰▱▱▱"
+    assert heat_line("X", 264.35, 0.0) == "▫️ X · 264.4 (0.0%) ▱▱▱▱▱"
+    assert heat_line("A<b>&", 10.0, -1.0, tag="stop<") == "🔻 A&lt;b&gt;&amp; · 10 (−1.0%) ▰▱▱▱▱ · stop&lt;"
+    assert len(heat_line("Z" * 200, 1e9, -1e6)) < 80   # a silly code or number never makes a long line
 
 
 def test_escaping_of_names_and_codes():
@@ -77,13 +93,13 @@ def test_escaping_of_names_and_codes():
     h = telegram_brief(morning(w=w))["html"]
     assert "&lt;b&gt;X" in h and "E&lt;b&gt;&amp;" in h
     assert "<b>X" not in h and "E<b>" not in h
-    assert "P&amp;L%" in h
 
 
 def test_evening_lines_and_deals():
     h = telegram_brief(evening())["html"]
     assert h.startswith("<b>🌆 Close · Mon 12 Oct</b>")
-    assert "💼 <b>₹1,23,456</b> · Today +₹500 (+0.4%) · Total −₹2,000 (−1.6%)" in h and "📈 Nifty 24,100.50 (−0.40%)" in h
+    assert ("💼 <b>Portfolio</b>\n━━━━━━━━━━━━\nValue: <b>₹1,23,456</b>\nToday: +₹500 (+0.4%)\n"
+            "Total P&amp;L: −₹2,000 (−1.6%)\n━━━━━━━━━━━━\n📈 Nifty 24,100.50 (−0.40%)") in h
     assert "🤝 <b>Deals:</b> 1 new\nX bought Infosys (INFY) ₹12 cr (NSE)" in h
 
 
@@ -93,7 +109,16 @@ def test_huge_fixture_stays_under_4000():
         i["name"] = "Very Long Company Name Holdings " * 3
     e = morning(w=w, summary="A long sentence goes here. " * 40)
     h = telegram_brief(e)["html"]
-    assert len(h) <= 4000 and "+ 495 more" in h
+    assert len(h) <= LIMIT and "+ 495 more" in h
+
+
+def test_huge_evening_with_many_movers_stays_under_4000():
+    ev = evening()
+    ev["data"]["groww"]["holdings"] = [{"symbol": f"VERYLONGCODE{i:03d}", "price": 123456.78, "day_pct": (i - 50) / 3, "pl_pct": -i}
+                                       for i in range(300)]
+    ev["data"]["news"] = {"items": [{"symbol": f"N{i}", "sentiment": "negative"} for i in range(200)]}
+    h = telegram_brief({**ev, "summary": "Long. " * 400, "writer": "claude"})["html"]
+    assert len(h) <= LIMIT and h.count(" ▰") + h.count(" ▱") == 6   # three falls and three gains
 
 
 def test_button_only_with_https_allowed_host():
@@ -159,7 +184,8 @@ def test_cockpit_lines_portfolio_india_gauges_and_events():
     d["watch"]["portfolio"] = {"value": 168993.2, "pl": -21721.6, "pl_pct": -11.39, "holdings": 16}
     d["watch"]["events_checked"], d["watch"]["events"] = True, [{"symbol": "TCS", "what": "results", "date": "2026-10-14"}]
     h = telegram_brief(e)["html"]
-    assert "💼 <b>₹1.69L</b> (−11.4% / −₹21,722) · 16 holdings" in h
+    assert "💼 <b>Portfolio</b> · 16 holdings\n━━━━━━━━━━━━\nValue: <b>₹1.69L</b>\nTotal P&amp;L: −₹21,722 (−11.4%)\n━━━━━━━━━━━━" in h
+    assert "Today:" not in h   # no day move before the open
     assert "(+0) · Nifty below 200-day avg, downtrend · Nifty 22,520" in h
     assert "🇮🇳 India VIX 14.4 (+21% 20d) 🟡 · USD/INR 96.7 🔴" in h
     assert "📅 Events: TCS results 14 Oct" in h
@@ -176,7 +202,7 @@ def test_evening_stale_day_says_no_trading_once():
     assert "Today: not closed yet" in telegram_brief(ev)["html"]
 
 
-def test_evening_has_movers_table_and_negative_news_line():
+def test_evening_has_movers_heat_lines_and_negative_news_line():
     ev = evening()
     ev["data"]["groww"]["holdings"] = [
         {"symbol": "VEDL", "price": 264.0, "day_pct": -3.2, "pl_pct": -28.7},
@@ -185,5 +211,15 @@ def test_evening_has_movers_table_and_negative_news_line():
     ev["data"]["news"] = {"items": [{"symbol": "VEDL", "sentiment": "negative", "title": "x"}]}
     h = telegram_brief(ev)["html"]
     assert "<b>Today&#x27;s movers</b>" in h or "<b>Today's movers</b>" in h
-    assert "VEDL" in h and "-3.2" in h and "+1.5" in h and "1023.4" in h
+    assert "<pre>" not in h
+    assert "🔻 VEDL · 264 (−3.2%) ▰▰▰▰▱\n🔻 TCS · 2,156 (−0.4%) ▰▱▱▱▱\n🔺 INFY · 1,023 (+1.5%) ▰▰▱▱▱" in h
     assert "📰 <b>News:</b> 1 negative for your stocks (VEDL)" in h
+
+
+def test_stale_evening_lists_worst_total_losses_on_the_ten_percent_scale():
+    ev = evening()
+    ev["data"]["stale_close"] = {"reason": "no trading today"}
+    ev["data"]["groww"]["holdings"] = [{"symbol": "VEDL", "price": 264.0, "day_pct": -3.2, "pl_pct": -28.7},
+                                       {"symbol": "INFY", "price": 1023.4, "day_pct": 1.5, "pl_pct": -4.0}]
+    h = telegram_brief(ev)["html"]
+    assert "<b>Worst total loss</b>\n🔻 VEDL · 264 (−28.7%) ▰▰▰▱▱\n🔻 INFY · 1,023 (−4.0%) ▰▱▱▱▱" in h
