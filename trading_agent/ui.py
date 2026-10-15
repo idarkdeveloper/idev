@@ -1029,14 +1029,15 @@ class App:
         threading.Thread(target=run, daemon=True).start()
         return job
 
-    def kill_switch(self, confirm: Any, cancel_gtt: bool = False) -> dict[str, Any]:
-        """The dashboard's kill switch: the same five steps as ``kill-switch``; the word HALT must be typed."""
+    def kill_switch(self, confirm: Any, cancel_gtt: bool = False, by: str = "dashboard") -> dict[str, Any]:
+        """The dashboard's kill switch: the same five steps as ``kill-switch``; the word HALT must be typed. ``by`` is
+        who engaged it, for the HALT file and the log (the dashboard, or the Telegram /halt command)."""
         from . import killswitch
         from .runner import make_groww
         self._on_live_page("The kill switch stops the real agent")
         if confirm != "HALT":
             raise ValueError("Type HALT (in capitals) to stop all trading.")
-        report = killswitch.engage(self.settings, by="dashboard", cancel_gtt=bool(cancel_gtt),
+        report = killswitch.engage(self.settings, by=by, cancel_gtt=bool(cancel_gtt),
                                    broker_fn=lambda: make_groww(self.settings, halt_ok=True),
                                    stop_watch=lambda: self.watcher.stop() if self.watcher else None,
                                    notifier=make_notifier(self.settings))

@@ -10,6 +10,11 @@ and carry the one-time nonce of a confirmation still under 2 minutes old, and a 
 goes through the dashboard's own practice path (App.demo.paper_order): Indian filters (a flagged buy is held back;
 there is no override here), price bands, the collar time rule, the day brake and HALT all apply.
 
+/lookup answers with three buttons: Size (1%) and Stops answer for that company, Practice Buy only shows the /buy line
+to send (it never places anything). /halt is the emergency kill switch: it asks first, and only a tap on ENGAGE HALT
+within 60 seconds (a one-time nonce, from the same chat and person) engages it, through the dashboard's own kill switch
+(state/HALT, the watch stops, an alert). /halt is never rate-limited. Releasing HALT is not possible from Telegram.
+
 There is no path to a live order: every call goes to the Demo app, whose settings force GROWW_LIVE_ORDERS off and whose
 broker must be the practice account (checked again before each order), whatever GROWW_LIVE_ORDERS says. Read commands
 follow the dashboard's Groww market-hours rules and never force a Groww login. Replies are HTML-escaped and kept under
@@ -44,6 +49,7 @@ STATE_FILE = "telegram_commands.json"
 LEASE_FILE = "telegram_commands.lock"
 LEASE_S = 120.0            # a poller that has not renewed its lease this long is gone; another may take over
 CONFIRM_TTL_S = 120.0      # an order confirmation expires after 2 minutes
+HALT_TTL_S = 60.0          # a /halt confirmation expires after 60 seconds
 RATE_PER_MIN = 20
 POLL_TIMEOUT_S = 25
 LIMIT = 4000               # Telegram allows 4096 characters per message
@@ -57,6 +63,7 @@ HELP = ("<b>Commands</b> (practice account only; nothing here places a live orde
         "/stops: practice stops and the GTT stop-losses at Groww\n"
         "/brief: the morning brief now\n"
         "/status: live orders, kill switch, day brake\n"
+        "/halt: emergency kill switch (stops the watch and all trading, after you confirm)\n"
         "/buy NAME QTY or /buy NAME ₹AMOUNT: a PRACTICE buy, after you confirm\n"
         "/sell NAME QTY: a PRACTICE sell, after you confirm")
 
@@ -69,9 +76,20 @@ COMMANDS = [{"command": "lookup", "description": "Look up a company: price, tren
             {"command": "stops", "description": "Practice stops and GTT stop-losses"},
             {"command": "brief", "description": "The morning brief now"},
             {"command": "status", "description": "Live orders, kill switch, day brake"},
+            {"command": "halt", "description": "Emergency kill switch: stop watch and trading"},
             {"command": "help", "description": "What the bot can do"}]
 NAMED = ("lookup", "size", "buy", "sell")   # commands that take a company name or code
 MAX_CHOICES = 5
+TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9&_-]{0,19}")   # an NSE code as it may ride in a button (M&M, BAJAJ-AUTO)
+
+
+def lookup_buttons(ticker: str) -> dict[str, Any] | None:
+    """The /lookup reply's buttons; None for a code that cannot ride in callback data."""
+    if not TICKER_RE.fullmatch(ticker or ""):
+        return None
+    return {"inline_keyboard": [[{"text": "📏 Size (1%)", "callback_data": f"sz:{ticker}:1"},
+                                 {"text": "🛡️ Stops", "callback_data": f"st:{ticker}"},
+                                 {"text": "🟢 Practice Buy", "callback_data": f"by:{ticker}"}]]}
 
 
 def e(v: Any) -> str:
@@ -163,6 +181,7 @@ class CommandBot:
         self.path = Path(settings.state_dir) / STATE_FILE
         self.pending: dict[str, dict[str, Any]] = {}   # order confirmations, by nonce
         self.picks: dict[str, dict[str, Any]] = {}     # "Did you mean…" choices, by nonce
+        self.halts: dict[str, dict[str, Any]] = {}     # /halt confirmations, by nonce
         self._rate: deque[float] = deque()
         self._rate_warned = 0.0
 
@@ -217,14 +236,17 @@ class CommandBot:
         text = str(msg.get("text") or "").strip()
         if not text.startswith("/"):
             return
+        parts = text.split()
+        cmd = parts[0][1:].split("@", 1)[0].lower()
+        args = parts[1:]
+        if cmd == "halt":   # the emergency stop is never rate-limited
+            self._guard(cmd, lambda: self.cmd_halt(args))
+            return
         if not self._allow():
             if self.clock() - self._rate_warned > 60:
                 self._rate_warned = self.clock()
                 self.reply("Too many commands: wait a minute.")
             return
-        parts = text.split()
-        cmd = parts[0][1:].split("@", 1)[0].lower()
-        args = parts[1:]
         plain = {"help": self.cmd_help, "start": self.cmd_help, "status": self.cmd_status,
                  "portfolio": self.cmd_portfolio, "brief": self.cmd_brief, "stops": self.cmd_stops}
         if cmd not in plain and cmd not in NAMED:
@@ -420,7 +442,7 @@ class CommandBot:
         note = lookup_takeaway(r, None, None)
         if note:
             lines.append("<b>What this means</b>\n" + e(note))
-        self.reply("\n".join(lines))
+        self.reply("\n".join(lines), lookup_buttons(str(r["ticker"])))
 
     def cmd_size(self, target: tuple[str, str | None], rest: list[str]) -> None:
         nums = [a.rstrip("%") for a in rest[:2]]
@@ -472,12 +494,13 @@ class CommandBot:
             lines.append(f"Groww: unavailable ({e(str(g['error'])[:200])}).")
         self.reply("\n".join(lines))
 
-    def cmd_stops(self, args: list[str]) -> None:
+    def _stop_lines(self, only: str | None = None) -> tuple[list[str], list[str]]:
+        """(practice stop lines, GTT stop-loss lines), for every position or just ``only``."""
         from .risk import position_stop
         from .state import State
         pb = self.practice.practice_broker
-        lines = ["<b>Practice stops</b>"]
-        for p in sorted(pb.positions(), key=lambda p: p.symbol)[:25]:
+        practice: list[str] = []
+        for p in sorted((p for p in pb.positions() if only is None or p.symbol == only), key=lambda p: p.symbol)[:25]:
             bars: list[dict[str, Any]] = []
             if (p.stop_type or "trailing") == "trailing":
                 try:
@@ -487,19 +510,39 @@ class CommandBot:
             st = position_stop(p, bars)
             who = label(p.symbol, self.name_of(p.symbol))
             if st["level"] is None:
-                lines.append(f"• {who}: no stop-loss")
+                practice.append(f"• {who}: no stop-loss")
             elif p.current_price:
-                lines.append(f"• {who}: {e(st['label'])} stop {inr(st['level'], 2)}, "
-                             f"{(1 - st['level'] / p.current_price) * 100:.1f}% below {inr(p.current_price, 2)}")
+                practice.append(f"• {who}: {e(st['label'])} stop {inr(st['level'], 2)}, "
+                                f"{(1 - st['level'] / p.current_price) * 100:.1f}% below {inr(p.current_price, 2)}")
             else:
-                lines.append(f"• {who}: {e(st['label'])} stop {inr(st['level'], 2)}")
-        if len(lines) == 1:
-            lines.append("No practice positions.")
+                practice.append(f"• {who}: {e(st['label'])} stop {inr(st['level'], 2)}")
         gtt = State(Path(self.settings.state_dir) / "state.json").data.get("gtt_stops") or {}
-        if gtt:
-            lines.append("<b>GTT stop-losses at Groww</b>")
-            lines += [f"• {label(sym, self.name_of(sym))} qty {e(r.get('qty'))} trigger {inr(r.get('trigger'), 2)} ({e(r.get('status') or '')})"
-                      for sym, r in sorted(gtt.items())[:25]]
+        rows = [(sym, r) for sym, r in sorted(gtt.items()) if only is None or sym == only][:25]
+        groww = [f"• {label(sym, self.name_of(sym))} qty {e(r.get('qty'))} trigger {inr(r.get('trigger'), 2)} ({e(r.get('status') or '')})"
+                 for sym, r in rows]
+        return practice, groww
+
+    def cmd_stops(self, args: list[str]) -> None:
+        practice, groww = self._stop_lines()
+        lines = ["<b>Practice stops</b>", *(practice or ["No practice positions."])]
+        if groww:
+            lines += ["<b>GTT stop-losses at Groww</b>", *groww]
+        self.reply("\n".join(lines))
+
+    def stops_for(self, ticker: str) -> None:
+        """The 🛡️ Stops button: this company's practice stop and GTT stop-loss, or the stop the sizing would use."""
+        name = self.name_of(ticker)
+        practice, groww = self._stop_lines(ticker)
+        lines = [f"🛡️ <b>Stops · {label(ticker, name)}</b>"]
+        lines += [*practice, *(["<b>GTT stop-loss at Groww</b>", *groww] if groww else [])]
+        if not practice and not groww:
+            lines.append("Not held in the practice account and no GTT stop-loss at Groww.")
+            try:
+                q = self.practice.size_quote(ticker)
+                if q.get("stop"):
+                    lines.append(f"Suggested stop: {inr(q['stop'], 2)} ({e(q.get('basis') or 'trailing')})")
+            except Exception:  # noqa: BLE001
+                pass
         self.reply("\n".join(lines))
 
     def cmd_brief(self, args: list[str]) -> None:
@@ -508,6 +551,67 @@ class CommandBot:
         email = self.app.digest_email("morning", groww=self._groww_portfolio)
         b = telegram_brief(email, getattr(self.settings, "allowed_hosts", None))
         self.reply(b["html"], b.get("button"))
+
+    # -- the emergency stop ----------------------------------------------------------------------------
+    def cmd_halt(self, args: list[str]) -> None:
+        """Ask before engaging the kill switch: ENGAGE HALT / Cancel, a one-time nonce good for 60 seconds."""
+        from . import killswitch
+        now = self.clock()
+        self.halts = {k: v for k, v in self.halts.items() if now - v["at"] < HALT_TTL_S}
+        nonce = secrets.token_urlsafe(9)
+        self.halts[nonce] = {"chat": self.chat, "at": now}
+        already = killswitch.reason(self.settings.state_dir)
+        text = ("⛔ <b>Emergency stop</b>\n"
+                + (f"{e(already)}\nEngaging again re-runs the stop steps.\n" if already else "")
+                + "This engages the kill switch: it writes state/HALT, stops the watch, blocks every order path "
+                "(live and practice) and sends an alert. Release it from the dashboard or the CLI; Telegram cannot.\n"
+                "Confirm within 60 seconds.")
+        self.reply(text, {"inline_keyboard": [[{"text": "⛔ ENGAGE HALT", "callback_data": f"halt_confirm:{nonce}"},
+                                               {"text": "Cancel", "callback_data": f"no:{nonce}"}]]})
+
+    def _halt_tap(self, cid: Any, msg: dict[str, Any], verb: str, nonce: str) -> None:
+        h = self.halts.pop(nonce, None)   # one-time: a second tap finds nothing
+        if h is None or h.get("chat") != self.chat:
+            self._answer(cid, "Nothing to confirm (already done, cancelled or unknown).")
+            return
+        self._clear_buttons(msg)
+        if verb != "halt_confirm":
+            self._answer(cid, "Cancelled.")
+            self.reply("Cancelled: the kill switch was not engaged.")
+            return
+        if self.clock() - h["at"] >= HALT_TTL_S:
+            self._answer(cid, "Expired: not engaged.")
+            self.reply("Expired: the kill switch was not engaged. Send /halt again.")
+            return
+        self._answer(cid, "Engaging the kill switch…")
+        try:
+            r = self.app.kill_switch("HALT", by="telegram")
+        except Exception as ex:  # noqa: BLE001 - say so: the user must know the stop did not happen
+            log.warning("telegram /halt failed: %s", redact(ex, self.api.token))
+            self.reply(f"⚠️ The kill switch was NOT engaged: {e(type(ex).__name__)}: {e(redact(ex, self.api.token))[:300]}\n"
+                       "Use the dashboard or the CLI (kill-switch).")
+            return
+        self.reply(f"⛔ <b>HALT engaged</b>\n{e(r.get('summary') or '')}".rstrip())
+
+    # -- the /lookup buttons -----------------------------------------------------------------------------
+    def _lookup_tap(self, cid: Any, verb: str, rest: str) -> None:
+        """sz:<TICKER>:<RISK>, st:<TICKER>, by:<TICKER>. Read-only (no order), so no nonce; rate-limited like a command."""
+        ticker, _, risk = rest.partition(":")
+        if not TICKER_RE.fullmatch(ticker) or (verb == "sz") != bool(risk) or (risk and not re.fullmatch(r"\d+(?:\.\d+)?", risk)):
+            self._answer(cid, "Unknown button.")
+            return
+        if not self._allow():
+            self._answer(cid, "Too many commands: wait a minute.")
+            return
+        self._answer(cid, {"sz": f"Size at {risk}% risk", "st": "Stops", "by": "Practice buy"}[verb])
+        target = (ticker, self.name_of(ticker))
+        if verb == "sz":
+            self._guard("size", lambda: self.cmd_size(target, [risk]))
+        elif verb == "st":
+            self._guard("stops", lambda: self.stops_for(ticker))
+        else:   # never places anything: it shows the command to send, which then asks to confirm as usual
+            self.reply(f"🟢 Practice buy of {label(*target)}: send\n<code>/buy {e(ticker)} QTY</code>\n"
+                       f"or <code>/buy {e(ticker)} ₹AMOUNT</code>\n(you confirm before anything is placed)")
 
     # -- practice orders -------------------------------------------------------------------------------
     def cmd_order(self, side: str, target: tuple[str, str | None], rest: list[str]) -> None:
@@ -562,6 +666,12 @@ class CommandBot:
         verb, _, nonce = data.partition(":")
         if verb == "pk":
             self._picked(cid, msg, nonce)
+            return
+        if verb in ("sz", "st", "by"):
+            self._lookup_tap(cid, verb, nonce)
+            return
+        if verb == "halt_confirm" or (verb == "no" and nonce in self.halts):
+            self._halt_tap(cid, msg, verb, nonce)
             return
         p = self.pending.pop(nonce, None)   # one-time: a second tap finds nothing
         if p is None or p.get("chat") != chat:

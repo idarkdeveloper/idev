@@ -8,7 +8,8 @@ import pytest
 
 from trading_agent import health, killswitch, telegram_bot
 from trading_agent.broker import LocalPaperBroker
-from trading_agent.telegram_bot import CONFIRM_TTL_S, CommandBot, TelegramAPI, TelegramError, take_lease
+from trading_agent.telegram_bot import (CONFIRM_TTL_S, HALT_TTL_S, CommandBot, TelegramAPI, TelegramError, lookup_buttons,
+                                        take_lease)
 from trading_agent.ui import App
 
 CHAT = "4242"
@@ -572,5 +573,195 @@ def test_the_command_list_is_registered_when_the_poller_starts(s, app):
     bot(s, app, api).run(stop)
     assert api.calls[0] == ("setMyCommands", {"commands": telegram_bot.COMMANDS})
     assert {c["command"] for c in telegram_bot.COMMANDS} == {"lookup", "size", "buy", "sell", "portfolio", "stops",
-                                                              "brief", "status", "help"}
+                                                              "brief", "status", "halt", "help"}
+    assert {"command": "halt", "description": "Emergency kill switch: stop watch and trading"} in telegram_bot.COMMANDS
     assert all(c["command"].islower() and len(c["description"]) <= 256 for c in telegram_bot.COMMANDS)
+
+
+
+# --------------------------------------------------------------------------- #
+# the /lookup buttons: Size (1%), Stops, Practice Buy
+# --------------------------------------------------------------------------- #
+def answers(api):
+    return [p["text"] for m, p in api.calls if m == "answerCallbackQuery"]
+
+
+def test_lookup_reply_carries_the_three_buttons(s):
+    api = FakeAPI([msg("/lookup abc")])
+    bot(s, FakeApp(s), api).poll_once()
+    assert api.sent()[0]["reply_markup"] == {"inline_keyboard": [[
+        {"text": "📏 Size (1%)", "callback_data": "sz:ABC:1"},
+        {"text": "🛡️ Stops", "callback_data": "st:ABC"},
+        {"text": "🟢 Practice Buy", "callback_data": "by:ABC"}]]}
+    assert lookup_buttons("M&M")["inline_keyboard"][0][0]["callback_data"] == "sz:M&M:1"
+    assert lookup_buttons("BAJAJ-AUTO") is not None
+    for bad in ("", "abc", "A:B", "A B", "<b>", "X" * 21):
+        assert lookup_buttons(bad) is None
+    assert all(len(b["callback_data"].encode()) <= 64 for b in lookup_buttons("X" * 20)["inline_keyboard"][0])
+
+
+def test_size_button_runs_size_for_that_company_and_risk(s):
+    fa = FakeApp(s)
+    seen = []
+    fa.size_quote = lambda t, risk_pct=1.0, max_pct=10.0: seen.append((t, risk_pct, max_pct)) or FakeApp.size_quote(fa, t)
+    api = FakeAPI([tap("sz:ABC:1"), tap("sz:ABC:2.5", uid=51), tap("sz:ABC:9", uid=52)])
+    bot(s, fa, api).poll_once()
+    assert seen == [("ABC", 1.0, 10.0), ("ABC", 2.5, 10.0)]
+    first, second, refused = api.texts()
+    assert "9 shares × ₹110.00 = ₹990 (risk 1%, cap 10%)" in first and "(risk 2.5%, cap 10%)" in second
+    assert refused.startswith("Risk must be above 0 and at most 5%")
+    assert answers(api)[:2] == ["Size at 1% risk", "Size at 2.5% risk"]
+
+
+def test_stops_button_answers_for_that_company_only(s):
+    from trading_agent.state import State
+    fa = FakeApp(s)
+    fa.practice_broker.submit_order("XYZ", "buy", qty=1)
+    st = State(s.state_dir / "state.json")
+    st.data["gtt_stops"] = {"ABC": {"qty": 10, "trigger": 90.0, "status": "active"},
+                            "OTHER": {"qty": 1, "trigger": 5.0, "status": "active"}}
+    st.save(fresh_keys=())
+    api = FakeAPI([tap("st:ABC"), tap("st:NEW", uid=51)])
+    bot(s, fa, api).poll_once()
+    abc, new = api.texts()
+    assert abc.startswith("🛡️ <b>Stops · ABC</b>") and "• ABC: trailing stop ₹93.50" in abc
+    assert "<b>GTT stop-loss at Groww</b>\n• ABC qty 10 trigger ₹90.00 (active)" in abc
+    assert "XYZ" not in abc and "OTHER" not in abc
+    assert "Not held in the practice account" in new and "Suggested stop: ₹93.50 (15% below)" in new
+
+
+def test_practice_buy_button_only_shows_the_command_and_places_nothing(s, app):
+    api = FakeAPI([tap("by:RELIANCE")])
+    bot(s, app, api).poll_once()
+    (text,) = api.texts()
+    assert "<code>/buy RELIANCE QTY</code>" in text and "<code>/buy RELIANCE ₹AMOUNT</code>" in text
+    assert "Reliance Industries (RELIANCE)" in text and "reply_markup" not in api.sent()[0]
+    assert app.demo.practice_broker.positions() == []
+
+
+def test_lookup_buttons_refuse_bad_data_other_chats_and_floods(s):
+    fa = FakeApp(s)
+    api = FakeAPI([tap("sz:abc:1"), tap("sz:ABC", uid=51), tap("st:ABC:1", uid=52), tap("sz:ABC:1e9", uid=53),
+                   tap("by:<b>", uid=54), tap("st:ABC", chat="999", uid=55), tap("st:ABC", sender="777", uid=56)])
+    b = bot(s, fa, api)
+    b.poll_once()
+    assert api.texts() == [] and answers(api) == ["Unknown button."] * 5
+    api.batches.append([tap("st:ABC", uid=60 + i) for i in range(25)])
+    b.poll_once()
+    assert len(api.texts()) == 20 and answers(api)[-1] == "Too many commands: wait a minute."
+
+
+# --------------------------------------------------------------------------- #
+# /halt: the emergency kill switch
+# --------------------------------------------------------------------------- #
+class HaltApp(FakeApp):
+    def __init__(self, s):
+        super().__init__(s)
+        self.halts = []
+
+    def kill_switch(self, confirm, cancel_gtt=False, by="dashboard"):
+        self.halts.append((confirm, cancel_gtt, by))
+        return {"ok": True, "summary": "Trading HALTED (since now, by telegram).", "report": {}, "halt": {}}
+
+
+def halt_buttons(api):
+    kb = api.sent()[-1]["reply_markup"]["inline_keyboard"][0]
+    assert [b["text"] for b in kb] == ["⛔ ENGAGE HALT", "Cancel"]
+    return kb[0]["callback_data"], kb[1]["callback_data"]
+
+
+def test_halt_asks_first_and_a_confirm_engages_the_kill_switch_once(s):
+    ha = HaltApp(s)
+    api = FakeAPI([msg("/halt")])
+    b = bot(s, ha, api)
+    b.poll_once()
+    ask = api.texts()[0]
+    assert ask.startswith("⛔ <b>Emergency stop</b>") and "Confirm within 60 seconds." in ask and ha.halts == []
+    go, no = halt_buttons(api)
+    assert go.startswith("halt_confirm:") and no == "no:" + go.split(":", 1)[1]
+    api.batches.append([tap(go)])
+    b.poll_once()
+    assert ha.halts == [("HALT", False, "telegram")]
+    assert api.texts()[-1] == "⛔ <b>HALT engaged</b>\nTrading HALTED (since now, by telegram)."
+    assert ("editMessageReplyMarkup", {"chat_id": CHAT, "message_id": 1, "reply_markup": {"inline_keyboard": []}}) in api.calls
+    api.batches.append([tap(go, uid=51)])   # a second tap
+    b.poll_once()
+    assert ha.halts == [("HALT", False, "telegram")] and answers(api)[-1].startswith("Nothing to confirm")
+
+
+def test_halt_cancel_expiry_wrong_nonce_and_other_senders_engage_nothing(s):
+    ha = HaltApp(s)
+    api = FakeAPI([msg("/halt")])
+    b = bot(s, ha, api)
+    b.poll_once()
+    go, no = halt_buttons(api)
+    api.batches.append([tap("halt_confirm:forged"), tap(go, chat="999", uid=51), tap(go, sender="777", uid=52)])
+    b.poll_once()
+    assert ha.halts == []
+    api.batches.append([tap(no, uid=53)])
+    b.poll_once()
+    assert api.texts()[-1] == "Cancelled: the kill switch was not engaged."
+    api.batches.append([tap(go, uid=54)])   # cancelled: the confirm is gone too
+    b.poll_once()
+    assert ha.halts == []
+    api.batches.append([msg("/halt", uid=55)])
+    b.poll_once()
+    b.t[0] += HALT_TTL_S
+    api.batches.append([tap(halt_buttons(api)[0], uid=56)])
+    b.poll_once()
+    assert api.texts()[-1] == "Expired: the kill switch was not engaged. Send /halt again." and ha.halts == []
+
+
+def test_an_order_nonce_never_engages_halt_and_a_halt_nonce_never_places_an_order(s, app):
+    calls = []
+    app.kill_switch = lambda *a, **k: calls.append((a, k))
+    api = FakeAPI([msg("/buy RELIANCE 5"), msg("/halt", uid=2)])
+    b = bot(s, app, api)
+    b.poll_once()
+    order_ok = api.sent()[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    halt_go = api.sent()[1]["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+    api.batches.append([tap("halt_confirm:" + order_ok.split(":", 1)[1]), tap("ok:" + halt_go.split(":", 1)[1], uid=51)])
+    b.poll_once()
+    assert calls == [] and app.demo.practice_broker.positions() == []
+
+
+def test_halt_is_never_rate_limited(s):
+    ha = HaltApp(s)
+    api = FakeAPI([msg("/help", uid=i) for i in range(1, 22)] + [msg("/halt", uid=30)])
+    bot(s, ha, api).poll_once()
+    assert api.texts()[-2] == "Too many commands: wait a minute."
+    assert api.texts()[-1].startswith("⛔ <b>Emergency stop</b>")
+
+
+def test_a_failed_halt_says_it_was_not_engaged(s):
+    ha = HaltApp(s)
+
+    def boom(*a, **k):
+        raise PermissionError("The kill switch stops the real agent: use the Live page")
+    ha.kill_switch = boom
+    api = FakeAPI([msg("/halt")])
+    b = bot(s, ha, api)
+    b.poll_once()
+    api.batches.append([tap(halt_buttons(api)[0])])
+    b.poll_once()
+    assert api.texts()[-1].startswith("⚠️ The kill switch was NOT engaged: PermissionError")
+
+
+def test_halt_through_the_real_dashboard_kill_switch_writes_halt_and_blocks_orders(s, app, monkeypatch):
+    sent = []
+
+    class Note:
+        def send(self, subject, body):
+            sent.append(subject)
+            return ["fake"]
+    monkeypatch.setattr("trading_agent.ui.make_notifier", lambda settings: Note())
+    api = FakeAPI([msg("/halt")])
+    b = bot(s, app, api)
+    b.poll_once()
+    api.batches.append([tap(halt_buttons(api)[0])])
+    b.poll_once()
+    assert (s.state_dir / "HALT").exists() and killswitch.status(s.state_dir)["by"] == "telegram"
+    assert sent == ["[HALT] kill switch engaged"] and api.texts()[-1].startswith("⛔ <b>HALT engaged</b>\nTrading HALTED")
+    api.batches.append([msg("/buy RELIANCE 1", uid=60), msg("/halt", uid=61)])
+    b.poll_once()
+    assert api.texts()[-2].startswith("HALT is set") and "HALT is set" in api.texts()[-1]   # the ask says it is already on
