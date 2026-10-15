@@ -75,6 +75,7 @@ EDITABLE_ENV_KEYS = {
     "asm_gsm_filter": "ASM_GSM_FILTER",  # never buy stocks on NSE's ASM / GSM surveillance lists
     "results_blackout_filter": "RESULTS_BLACKOUT_FILTER",  # no new buy with results due within 5 trading days
     "pledge_filter": "PLEDGE_FILTER",  # no buy when promoter pledges are high or rising
+    "telegram_commands": "TELEGRAM_COMMANDS",  # the watch service answers /lookup, /size, ... from your private chat (practice orders only)
     "tradingview_screener": "TRADINGVIEW_SCREENER",  # screener page: extra TradingView columns (unofficial, display only)
     "auto_trade": "AUTO_TRADE",
     "notify_email_to": "NOTIFY_EMAIL_TO",
@@ -533,7 +534,7 @@ class App:
                 "notify_webhook_url": s.notify_webhook_url or "",
                 # secrets are never sent back to the page: only whether they are set
                 "telegram_token_set": bool(s.telegram_bot_token), "telegram_chat_set": bool(s.telegram_chat_id),
-                "telegram_alerts": s.telegram_alerts, "heartbeat_set": bool(s.heartbeat_url),
+                "telegram_alerts": s.telegram_alerts, "telegram_commands": s.telegram_commands, "heartbeat_set": bool(s.heartbeat_url),
                 "paper_starting_cash": s.paper_starting_cash,
                 "groww_gtt_stops": s.groww_gtt_stops, "bse_deals": s.bse_deals,
                 "flows_breadth": s.flows_breadth, "price_band_filter": s.price_band_filter,
@@ -1498,7 +1499,7 @@ class App:
                 value = parse(value) or ""
                 ops.append(lambda k=key, v=value: setattr(st, k, v or None))
             elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "asm_gsm_filter", "results_blackout_filter", "pledge_filter", "tradingview_screener", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
-                         "telegram_alerts", "integration_check", "integration_claude"):
+                         "telegram_alerts", "telegram_commands", "integration_check", "integration_claude"):
                 value = "true" if _bool_setting(key, value) else "false"
                 ops.append(lambda k=key, v=value == "true": setattr(st, k, v))
             elif key == "market":
@@ -1910,7 +1911,7 @@ def _check_type(key: str, value: Any) -> None:
         if not ok:
             raise ValueError(f"{key} must be text or a list of names")
     elif key in ("auto_trade", "groww_gtt_stops", "groww_ddpi_confirmed", "groww_sell_t1", "bse_deals", "flows_breadth", "price_band_filter", "asm_gsm_filter", "results_blackout_filter", "pledge_filter", "tradingview_screener", "digest_morning_on", "digest_evening_on", "digest_bulletin", "digest_charts",
-                 "telegram_alerts", "integration_check", "integration_claude"):
+                 "telegram_alerts", "telegram_commands", "integration_check", "integration_claude"):
         _bool_setting(key, value)
     elif key in ("telegram_bot_token", "telegram_chat_id", "heartbeat_url", "forward_start", "allowed_hosts"):
         if value is not None and not isinstance(value, str):

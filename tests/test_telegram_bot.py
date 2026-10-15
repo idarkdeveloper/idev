@@ -12,6 +12,8 @@ from trading_agent.telegram_bot import (CONFIRM_TTL_S, HALT_TTL_S, CommandBot, T
                                         take_lease)
 from trading_agent.ui import App
 
+from .test_ui import server  # noqa: F401  (a fixture: the dashboard on a temp state dir)
+
 CHAT = "4242"
 TOKEN = "123456789:AAH_fake-token-for-tests-0123456789abcd"
 
@@ -917,3 +919,22 @@ def test_bse_only_chart_and_stops_buttons_work(s):
     bot(s, ca, api).poll_once()
     assert ca.asked == [("XYZCORP.BO", "3M")] and len(api.photos()) == 1
     assert api.texts()[0].startswith("🛡️ <b>Stops · XYZCORP.BO</b>")
+
+def test_settings_page_has_a_telegram_commands_yes_no_that_saves_to_env(server):
+    from pathlib import Path
+
+    from .test_ui import _get, _post
+    base, app = server
+    status, j = _post(base + "/api/settings", {"telegram_commands": True})
+    assert status == 200 and j["applied"]["TELEGRAM_COMMANDS"] == "true"
+    assert "TELEGRAM_COMMANDS=true" in (app.settings.state_dir / ".env").read_text()
+    assert app.settings.telegram_commands is True
+    status, state = _get(base + "/api/state")
+    assert status == 200 and state["settings"]["telegram_commands"] is True
+    status, j = _post(base + "/api/settings", {"telegram_commands": False})
+    assert status == 200 and j["applied"]["TELEGRAM_COMMANDS"] == "false"
+    assert app.settings.telegram_commands is False
+    assert _post(base + "/api/settings", {"telegram_commands": "maybe"})[0] == 400
+    page = (Path(__file__).resolve().parent.parent / "trading_agent" / "ui" / "index.html").read_text(encoding="utf-8")
+    assert 'id="f-tg-cmd"' in page and "body.telegram_commands = $(\"f-tg-cmd\").checked" in page
+    assert '$("f-tg-cmd").checked = !!s.telegram_commands' in page
