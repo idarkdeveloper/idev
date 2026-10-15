@@ -258,8 +258,15 @@ def _body(category: str, text: str) -> str:
     return f"<b>{_e(category)}:</b> {_e(t)}"
 
 
+def tag_name(a: dict[str, Any]) -> str:
+    """The company tag: the NSE code, or for a BSE-only stock (a bare scrip code) its name and BSE."""
+    sym = str(a.get("symbol") or "?")
+    company = re.sub(r"\s+(Limited|Ltd\.?)$", "", str(a.get("company") or "").strip(), flags=re.I)
+    return f"{company[:32]} · BSE" if sym.upper().endswith(".BO") and company else sym
+
+
 def announcements_subject(rows: list[dict[str, Any]]) -> str:
-    syms = list(dict.fromkeys(str(a.get("symbol") or "?") for a in rows))
+    syms = list(dict.fromkeys(tag_name(a) for a in rows))
     head = ", ".join(syms[:4]) + (f" +{len(syms) - 4}" if len(syms) > 4 else "")
     return f"[NEWS] {len(rows)} new announcement{'s' if len(rows) != 1 else ''}: {head}"
 
@@ -276,7 +283,7 @@ def announcements_card(rows: list[dict[str, Any]]) -> str:
             f'<div style="width:10px;height:10px;border-radius:5px;background:{dot[pr]};"></div></td>'
             f'<td style="padding:0 0 14px 6px;border-left:1px solid {BORDER};">'
             f'<span style="display:inline-block;font-size:11px;font-weight:700;color:{c};border:1px solid {c};'
-            f'border-radius:4px;padding:1px 6px;">{_e(sym)}</span>'
+            f'border-radius:4px;padding:1px 6px;">{_e(tag_name(a))}</span>'
             f'<span style="font-size:11px;color:{MUTED};"> · {_e(_when(str(a.get("at") or "")))}</span>'
             f'<div style="font-size:13px;color:{TEXT};line-height:1.45;margin-top:4px;">'
             f'{_body(str(a.get("category") or "Announcement"), str(a.get("text") or ""))}</div></td></tr>')

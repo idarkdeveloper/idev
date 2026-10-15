@@ -126,6 +126,15 @@ prices come from Yahoo Finance for free (`trading_agent/prices.py`, NSE symbols 
 `.NS`). Pick the ₹499/month plan only if you want Groww's own real-time quotes; the agent
 will then use them automatically and keep Yahoo as a fallback.
 
+**Late Yahoo bars from Groww** (`trading_agent/groww_fill.py`): when Yahoo has not posted the last
+completed session's daily bar (it did this for NIFTYBEES on 13 and 14 Oct 2026), the missing day is read from
+Groww's daily candles (`/v1/historical/candle/range`) and added to the series, marked as from Groww, so the
+pre-market check and the trading code read the same bars. Only NSE codes and the Nifty (`^NSEI` as `NIFTY`), only in
+the Groww window, only with an already-saved token (never a new login), at most 3 missing sessions, each bar saved in
+`cache/groww_bars/`. Groww's historical data may belong to its paid *Backtesting* data: on a plan without it Groww
+refuses, the fill stops for that day, Yahoo's series is used as before, and the Health tab's *Groww daily candles* row
+shows the refusal.
+
 1. In Groww, open **Trading APIs** (https://groww.in/trade-api) and either copy the daily
    **access token** (expires 06:00 IST) or create an **API key** with a secret or TOTP.
 2. Put it in `.env` as `GROWW_ACCESS_TOKEN`, or `GROWW_API_KEY` + `GROWW_API_SECRET`
@@ -275,6 +284,11 @@ who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
 - **NSE announcements** (`NSEClient.announcements`): results, board meetings, pledges,
   regulatory orders, business updates, with text and PDF link. Claude must check them
   before a buy (`get_announcements`); the dashboard shows them in the stock lookup.
+  A BSE-only stock (`<scrip code>.BO`) has nothing at NSE, so its own BSE filings are read instead
+  (`bse_announcements.py`, when `BSE_DEALS` is on): BSE's per-company API for the last 30 days, and BSE's
+  latest-announcements RSS feed as the fallback (BSE's API refuses some cloud IPs; the feed only holds the newest
+  filings, so what it shows is kept in `cache/bse_ann/`). The Health tab's *BSE announcements* row says which one
+  answers. Alerts name the company: `[NEWS] 1 new announcement: XYZ Chemicals · BSE`.
 - **Watch mode**: `python -m trading_agent watch --every 60` (or the *Start watch* button)
   polls deals and announcements for your positions and recent recommendations every
   minute between 08:45 and 18:30 IST on weekdays, notifying on anything new. Meant for a

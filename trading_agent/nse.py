@@ -473,7 +473,11 @@ class NSEClient:
 
     # -- corporate announcements ---------------------------------------------
     def announcements(self, symbol: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
-        """Recent NSE corporate announcements, newest first, for one symbol or all equities."""
+        """Recent NSE corporate announcements, newest first, for one symbol or all equities. A BSE-only stock
+        (<scrip code>.BO) has none at NSE: its BSE filings are read instead (bse_announcements), when BSE is on."""
+        if symbol and str(symbol).strip().upper().endswith(".BO"):
+            bse = getattr(self, "bse", None)
+            return bse.announcements(symbol, limit=limit) if bse is not None else []
         params: dict[str, Any] = {"index": "equities"}
         if symbol:
             params["symbol"] = symbol.upper()
