@@ -216,3 +216,9 @@ def test_watch_sends_the_announcement_timeline(settings):
     (sent,) = rec.kw
     assert sent["subject"] == "[NEWS] 2 new announcements: VOGL, AXISCADES"
     assert "EXCHANGE FILINGS" in sent["html"] and "2026-10-03 17:21:36 VOGL [Updates]" in sent["body"]
+
+
+def test_a_bse_only_recommendation_says_so():
+    h = ac.recommendation_card({**REC, "ticker": "XYZCORP.BO"})
+    assert "BSE ONLY · NOT TRADABLE HERE" in h
+    assert "BSE ONLY" not in ac.recommendation_card(REC)

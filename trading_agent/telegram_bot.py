@@ -85,13 +85,22 @@ NAMED = ("lookup", "chart", "size", "buy", "sell")   # commands that take a comp
 GO = {"portfolio", "stops", "status"}   # the read commands the brief's buttons may run (go:<command>)
 CHART_RANGE = "3M"
 MAX_CHOICES = 5
-TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9&_-]{0,19}")   # an NSE code as it may ride in a button (M&M, BAJAJ-AUTO)
+TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9&_-]{0,19}(?:\.BO)?")   # an NSE code (M&M, BAJAJ-AUTO) or a BSE-only XYZ.BO
+BSE_RE = re.compile(r"[A-Z0-9][A-Z0-9&_-]{0,19}\.BO")
+
+
+def bse_only(ticker: str) -> bool:
+    """A BSE-only stock (no NSE listing), tracked as <code>.BO: information only, never bought."""
+    return bool(BSE_RE.fullmatch(str(ticker or "").upper()))
 
 
 def lookup_buttons(ticker: str) -> dict[str, Any] | None:
     """The /lookup reply's buttons; None for a code that cannot ride in callback data."""
     if not TICKER_RE.fullmatch(ticker or ""):
         return None
+    if bse_only(ticker):   # not tradable here: no sizing and no buy, only what is information
+        return {"inline_keyboard": [[{"text": "🛡️ Stops", "callback_data": f"st:{ticker}"},
+                                     {"text": "📈 Chart", "callback_data": f"ch:{ticker}"}]]}
     return {"inline_keyboard": [[{"text": "📏 Size (1%)", "callback_data": f"sz:{ticker}:1"},
                                  {"text": "🛡️ Stops", "callback_data": f"st:{ticker}"}],
                                 [{"text": "📈 Chart", "callback_data": f"ch:{ticker}"},
@@ -321,7 +330,16 @@ class CommandBot:
             return {}
 
     def name_of(self, symbol: str) -> str | None:
-        return self._table().get(symbol.upper())
+        sym = symbol.upper()
+        name = self._table().get(sym)
+        if name or not bse_only(sym):
+            return name
+        n = self._names()   # a BSE-only code is not in NSE's list: the Groww instrument list may know it
+        try:
+            got = n.lookup([sym.removesuffix(".BO")]) if n is not None else {}
+            return (got.get(sym.removesuffix(".BO")) or {}).get("name")
+        except Exception:  # noqa: BLE001
+            return None
 
     def _named(self, cmd: str, args: list[str]) -> None:
         got = self._split(cmd, args)
@@ -341,6 +359,8 @@ class CommandBot:
         table = self._table()
         names = self._names()
         raw = text.strip()
+        if bse_only(raw):   # a BSE-only code: not in NSE's list, taken as typed
+            return raw.upper(), self.name_of(raw)
         if not table or names is None:   # no name list (offline): the dashboard's own resolve
             return self.practice.resolve(raw)
         if raw.upper() in table:
@@ -694,6 +714,10 @@ class CommandBot:
             return
         ticker, name = target
         who = label(ticker, name)
+        if side == "buy" and bse_only(ticker):   # said before any confirmation, not after the tap
+            from .broker import BSE_ONLY_MESSAGE
+            self.reply(f"{who}: {e(BSE_ONLY_MESSAGE)}.")
+            return
         try:
             price = float(self.practice.practice_broker.latest_price(ticker))
         except Exception as ex:  # noqa: BLE001

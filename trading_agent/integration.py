@@ -55,7 +55,9 @@ STEP_TIMEOUT_S = 45.0
 # histories behind momentum and stops). NIFTYBEES.NS is only the factor backtest's benchmark, and Yahoo often posts
 # Indian ETF closes a day late: it is noted, never a failure (a late ETF bar blocked buys on 13 and 14 Oct 2026).
 YAHOO_REQUIRED = ("^NSEI", "RELIANCE.NS")
-YAHOO_NOTED = ("NIFTYBEES.NS",)
+# noted, never a failure: the backtest's benchmark, and the BSE feed (BSE-only holdings are never bought; their stops
+# and charts read it)
+YAHOO_NOTED = {"NIFTYBEES.NS": "backtest only", "RELIANCE.BO": "BSE prices: BSE-only holdings' stops and charts"}
 STALE_TRADING_DAYS = 2          # the dashboard line turns red when the last run is older than this
 
 _UNSET: Any = object()
@@ -265,13 +267,13 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
             if last_day.isoformat() not in have:
                 raise ValueError(f"{sym} has no bar for {last_day} (newest {max(have) if have else 'none'})")
         notes = []
-        for sym in YAHOO_NOTED:   # reported, never a failure: nothing that buys reads it
+        for sym, why in YAHOO_NOTED.items():   # reported, never a failure: nothing that buys reads it
             try:
                 have = {b["date"] for b in prices.history(sym, "1mo")}
                 if last_day.isoformat() not in have:
-                    notes.append(f"{sym} not posted yet (newest {max(have) if have else 'none'}; backtest only)")
+                    notes.append(f"{sym} not posted yet (newest {max(have) if have else 'none'}; {why})")
             except Exception as e:  # noqa: BLE001
-                notes.append(f"{sym} unavailable ({type(e).__name__}; backtest only)")
+                notes.append(f"{sym} unavailable ({type(e).__name__}; {why})")
         return f"{' and '.join(YAHOO_REQUIRED)} both have a daily bar for {last_day}" + "".join(f"; {n}" for n in notes)
 
     def archive_get(url: str) -> str:

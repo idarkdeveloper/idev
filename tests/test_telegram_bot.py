@@ -882,3 +882,38 @@ def test_stock_chart_png_is_small_and_needs_bars():
     png = charts.stock_daily_png("ABC · 3 months, daily", candles_payload(position={"cost": 120.0, "stop": 5.0}))
     assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) <= charts.MAX_BYTES
     assert charts.stock_daily_png("x", {"bars": []}) is None and charts.stock_daily_png("x", None) is None
+
+
+# --------------------------------------------------------------------------- #
+# BSE-only stocks (<code>.BO): looked up and charted, never bought
+# --------------------------------------------------------------------------- #
+def test_a_bse_only_code_resolves_as_typed_even_with_the_nse_list(s, app):
+    api = FakeAPI()
+    b = bot(s, app, api)
+    assert b._pick("lookup", "xyzcorp.bo", []) == ("XYZCORP.BO", None)
+    assert api.texts() == []                                                   # no "No NSE company matches"
+    assert telegram_bot.bse_only("ABC.BO") and not telegram_bot.bse_only("ABC") and not telegram_bot.bse_only("A.B.BO")
+
+
+def test_bse_only_lookup_buttons_are_information_only():
+    kb = lookup_buttons("XYZCORP.BO")["inline_keyboard"]
+    assert [b["callback_data"] for row in kb for b in row] == ["st:XYZCORP.BO", "ch:XYZCORP.BO"]
+    assert lookup_buttons("XYZ.NS") is None and lookup_buttons("XYZ.BO.BO") is None
+
+
+def test_a_bse_only_buy_is_refused_before_any_confirmation_but_a_sell_is_asked(s, app):
+    api = FakeAPI([msg("/buy XYZCORP.BO 5"), msg("/sell XYZCORP.BO 1", uid=2)])
+    b = bot(s, app, api)
+    b.poll_once()
+    buy, sell = api.sent()
+    assert "BSE-only stock, no NSE listing" in buy["text"] and "reply_markup" not in buy
+    assert "PRACTICE SELL" in sell["text"] and sell["reply_markup"]["inline_keyboard"][0][0]["text"] == "Confirm"
+    assert [p["side"] for p in b.pending.values()] == ["sell"]
+
+
+def test_bse_only_chart_and_stops_buttons_work(s):
+    ca = ChartApp(s, candles_payload())
+    api = FakeAPI([tap("ch:XYZCORP.BO"), tap("st:XYZCORP.BO", uid=51), tap("by:XYZCORP.BO", uid=52)])
+    bot(s, ca, api).poll_once()
+    assert ca.asked == [("XYZCORP.BO", "3M")] and len(api.photos()) == 1
+    assert api.texts()[0].startswith("🛡️ <b>Stops · XYZCORP.BO</b>")
