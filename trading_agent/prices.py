@@ -43,6 +43,7 @@ class YahooPrices:
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.cache_ttl = cache_ttl
         self.fill: Any | None = None   # groww_fill.GrowwFill: a daily bar Yahoo has not posted yet, from Groww
+        self.clock = time.time         # for the provisional close (tests replace it)
 
     def yahoo_symbol(self, symbol: str) -> str:
         symbol = symbol.upper()
@@ -81,7 +82,8 @@ class YahooPrices:
         """Daily bars, oldest first: {date, close, adj_close, volume}. Cached on disk. ``close`` is split-adjusted by
         Yahoo (a later split rescales old bars) but NOT dividend-adjusted: use it for every price LEVEL (stops, ATR, fills,
         sizes). ``adj_close`` is split + dividend adjusted: use it only for returns and momentum (ratios inside a window).
-        With an ``archive``, closed bars Yahoo no longer serves (or rewrites) are kept and merged in."""
+        With an ``archive``, closed bars Yahoo no longer serves (or rewrites) are kept and merged in. A bar marked
+        ``provisional`` (see ``_provisional``) is served but never archived."""
         ysym = self.yahoo_symbol(symbol)
         if self.archive is None:
             return self._filled(ysym, self._history(ysym, range_))
@@ -92,7 +94,35 @@ class YahooPrices:
             if merged:
                 return self._filled(ysym, merged)
             raise
-        return self._filled(ysym, self.archive.merge(ysym, bars, range_) or bars)
+        final = [b for b in bars if not b.get("provisional")]
+        held = [b for b in bars if b.get("provisional")]
+        merged = self.archive.merge(ysym, final, range_) or final
+        newest = merged[-1]["date"] if merged else ""
+        return self._filled(ysym, merged + [b for b in held if b["date"] > newest])
+
+    def _provisional(self, res: dict[str, Any], t: int) -> float | None:
+        """The close of the day bar starting at ``t`` when Yahoo left it empty, else None.
+
+        For hours after an Indian close Yahoo's chart API posts the day's last row with open/high/low but ``close: null``
+        (every NSE stock and index; seen on 15 Oct 2026 at 04:39 IST the next morning) while ``meta.regularMarketPrice``
+        already holds the day's last price. That price is used only when it is from the same exchange-local day as the
+        row and that day's regular session has ended, so a live price mid-session is never taken for a close."""
+        meta = res.get("meta") or {}
+        price, at = meta.get("regularMarketPrice"), meta.get("regularMarketTime")
+        if not isinstance(price, (int, float)) or not isinstance(at, (int, float)) or price <= 0:
+            return None
+        gmt = meta.get("gmtoffset")
+        off = float(gmt) if isinstance(gmt, (int, float)) else 0.0
+        day = datetime.fromtimestamp(t + off, tz=timezone.utc).date()
+        if datetime.fromtimestamp(at + off, tz=timezone.utc).date() != day:
+            return None
+        end = ((meta.get("currentTradingPeriod") or {}).get("regular") or {}).get("end")
+        if isinstance(end, (int, float)):   # the session's closing time of day, applied to the row's day
+            tod = datetime.fromtimestamp(end + off, tz=timezone.utc)
+            closes = datetime(day.year, day.month, day.day, tod.hour, tod.minute, tzinfo=timezone.utc).timestamp() - off
+        else:                               # no trading period: only once that day is over
+            closes = datetime(day.year, day.month, day.day, tzinfo=timezone.utc).timestamp() + 86400 - off
+        return float(price) if self.clock() >= closes else None
 
     def _filled(self, ysym: str, bars: list[dict[str, Any]], ohlc: bool = False) -> list[dict[str, Any]]:
         """``bars`` with a late latest session filled from Groww (groww_fill), when a fill is attached."""
@@ -113,13 +143,18 @@ class YahooPrices:
             adj = (res["indicators"].get("adjclose") or [{}])[0].get("adjclose") or quote["close"]
         except (KeyError, IndexError, TypeError) as e:
             raise LookupError(f"Yahoo returned no history for {ysym}") from e
-        bars = []
+        bars: list[dict[str, Any]] = []
         for i, t in enumerate(ts):
             close = quote["close"][i]
+            day = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d")
             if close is None:
+                p = self._provisional(res, t) if i == len(ts) - 1 and (not bars or bars[-1]["date"] < day) else None
+                if p is not None:
+                    bars.append({"date": day, "close": p, "adj_close": p, "volume": float(quote["volume"][i] or 0),
+                                 "provisional": True})
                 continue
             bars.append({
-                "date": datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d"),
+                "date": day,
                 "close": float(close),
                 "adj_close": float(adj[i] if adj[i] is not None else close),
                 "volume": float(quote["volume"][i] or 0),
@@ -152,11 +187,22 @@ class YahooPrices:
             v = q.get("volume") or [0] * len(ts)
         except (KeyError, IndexError, TypeError) as e:
             raise LookupError(f"Yahoo returned no {interval} history for {ysym}") from e
-        bars = []
+        bars: list[dict[str, Any]] = []
         for i, t in enumerate(ts):
-            if None in (o[i], h[i], lo[i], c[i]):
-                continue
             dt = datetime.fromtimestamp(t, tz=timezone.utc).astimezone(IST)
+            if None in (o[i], h[i], lo[i], c[i]):
+                p = (self._provisional(res, t) if interval == "1d" and i == len(ts) - 1 and c[i] is None
+                     and (not bars or bars[-1]["date"] < dt.date().isoformat()) else None)
+                if p is not None:   # Yahoo's empty last close (see _provisional): the day's other prices as posted
+                    meta = res.get("meta") or {}
+                    op = float(o[i]) if o[i] is not None else p
+                    hi = h[i] if h[i] is not None else meta.get("regularMarketDayHigh")
+                    lw = lo[i] if lo[i] is not None else meta.get("regularMarketDayLow")
+                    hi = max(float(hi) if isinstance(hi, (int, float)) else 0.0, op, p)
+                    lw = min(float(lw) if isinstance(lw, (int, float)) and lw > 0 else p, op, p)
+                    bars.append({"ts": dt.isoformat(timespec="seconds"), "date": dt.date().isoformat(), "open": op,
+                                 "high": hi, "low": lw, "close": p, "volume": float(v[i] or 0), "provisional": True})
+                continue
             bars.append({"ts": dt.isoformat(timespec="seconds"), "date": dt.date().isoformat(), "open": float(o[i]),
                          "high": float(h[i]), "low": float(lo[i]), "close": float(c[i]), "volume": float(v[i] or 0)})
         if interval == "1d":   # Yahoo can repeat the last day (a live bar and the settled one): keep the last of each date

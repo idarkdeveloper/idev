@@ -272,6 +272,8 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
                 raise ValueError(f"{sym} has no bar for {last_day} (newest {max(have) if have else 'none'})")
             if any(b.get("source") == "groww" and b["date"] == last_day.isoformat() for b in bars):
                 notes.append(f"{sym}'s {last_day} bar is from Groww (Yahoo has not posted it yet)")
+            elif any(b.get("provisional") and b["date"] == last_day.isoformat() for b in bars):
+                notes.append(f"{sym}'s {last_day} close is Yahoo's last price (the settled bar is not posted yet)")
         for sym, why in YAHOO_NOTED.items():   # reported, never a failure: nothing that buys reads it
             try:
                 have = {b["date"] for b in prices.history(sym, "1mo")}
