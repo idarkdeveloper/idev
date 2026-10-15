@@ -755,7 +755,7 @@ python -m trading_agent integration-check --claude   # also one 5-token Claude H
 ```
 
 Steps: the server clock (NTP synchronised, offset at most 1 s; Linux only); NSE bulk/block deals CSV for the last trading day and one announcements call; BSE deals CSV (a request flow per
-deal type, through the BSE client's throttle); Yahoo daily bars for `NIFTYBEES.NS` and `^NSEI`; NSE's price-band file and
+deal type, through the BSE client's throttle); Yahoo daily bars for `^NSEI` and `RELIANCE.NS` (what buying reads; `NIFTYBEES.NS`, the backtest's benchmark, is only noted when Yahoo posts it late, as it often does for ETFs); NSE's price-band file and
 the last trading day's bhavcopy; Groww holdings and order list **only with a token that is already cached** (a new one
 is never requested, so the 150-a-day budget is untouched; with no cached token or an active cool-down the step says
 "skipped (no cached token)"); Claude only with `INTEGRATION_CLAUDE=true`; Resend and Telegram for configuration only

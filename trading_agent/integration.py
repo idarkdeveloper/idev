@@ -51,6 +51,11 @@ OVERDUE_AFTER = dtime(9, 10)    # no run by now on a trading day: the canary cou
 FLAG_FILE = "canary_failed.json"
 LATEST = dtime(12, 0)           # after this the day is skipped: the point is to know before the market is busy
 STEP_TIMEOUT_S = 45.0
+# Yahoo bars the canary requires: what live buying reads (the regime's Nifty index, and a large stock for the stock
+# histories behind momentum and stops). NIFTYBEES.NS is only the factor backtest's benchmark, and Yahoo often posts
+# Indian ETF closes a day late: it is noted, never a failure (a late ETF bar blocked buys on 13 and 14 Oct 2026).
+YAHOO_REQUIRED = ("^NSEI", "RELIANCE.NS")
+YAHOO_NOTED = ("NIFTYBEES.NS",)
 STALE_TRADING_DAYS = 2          # the dashboard line turns red when the last run is older than this
 
 _UNSET: Any = object()
@@ -254,12 +259,20 @@ def run_check(settings: Any, *, now: datetime | None = None, holidays: Any | Non
         return f"bulk and block CSV for {last_day} has the expected header ({len(rows)} rows)"
 
     def yahoo() -> str:
-        for sym in ("NIFTYBEES.NS", "^NSEI"):
+        for sym in YAHOO_REQUIRED:
             bars = prices.history(sym, "1mo")
             have = {b["date"] for b in bars}
             if last_day.isoformat() not in have:
                 raise ValueError(f"{sym} has no bar for {last_day} (newest {max(have) if have else 'none'})")
-        return f"NIFTYBEES.NS and ^NSEI both have a daily bar for {last_day}"
+        notes = []
+        for sym in YAHOO_NOTED:   # reported, never a failure: nothing that buys reads it
+            try:
+                have = {b["date"] for b in prices.history(sym, "1mo")}
+                if last_day.isoformat() not in have:
+                    notes.append(f"{sym} not posted yet (newest {max(have) if have else 'none'}; backtest only)")
+            except Exception as e:  # noqa: BLE001
+                notes.append(f"{sym} unavailable ({type(e).__name__}; backtest only)")
+        return f"{' and '.join(YAHOO_REQUIRED)} both have a daily bar for {last_day}" + "".join(f"; {n}" for n in notes)
 
     def archive_get(url: str) -> str:
         resp = sess.get(url, headers={**HEADERS, "Accept": "*/*"}, timeout=30)
