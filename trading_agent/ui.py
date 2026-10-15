@@ -1959,6 +1959,9 @@ def _write_env(path: Path, values: dict[str, str]) -> None:
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
+MAX_LOOKUP_CHARS = 80   # /api/lookup and /api/news take a company name or an NSE code
+
+
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     index_html = (resources.files("trading_agent") / "ui" / "index.html").read_text(encoding="utf-8")
     sample = ' data-sample="1"' if app.demo_trades is not None else ""  # the offline sample dashboard
@@ -2025,18 +2028,28 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     return
                 self._bytes(data, ctype)
                 return
-            if path in ("/screener", "/screener/"):
+            if path in ("/screener", "/screener/", "/demo/screener", "/demo/screener/"):   # one page, read-only market data
                 self._bytes(screener_html.encode(), "text/html; charset=utf-8")
                 return
-            if self._replay("GET"):
-                return
-            target = app
-            if path == "/demo" or path.startswith("/demo/"):
-                target, path = app.demo, (path[5:] or "/")
-                if path in ("/", "/index.html"):
-                    self._bytes(demo_html.encode(), "text/html; charset=utf-8")
+            try:   # like _post: a failing read answers JSON, never a dropped connection with a stack trace
+                if self._replay("GET"):
                     return
-            self._get(target, path)
+                target = app
+                if path == "/demo" or path.startswith("/demo/"):
+                    target, path = app.demo, (path[5:] or "/")
+                    if path in ("/", "/index.html"):
+                        self._bytes(demo_html.encode(), "text/html; charset=utf-8")
+                        return
+                self._get(target, path)
+            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+                raise   # the browser left mid-reply: nothing can be sent; _Server.handle_error logs it quietly
+            except PermissionError as e:
+                self._json({"error": str(e)}, HTTPStatus.FORBIDDEN)
+            except (KeyError, ValueError, LookupError) as e:
+                self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+            except Exception as e:  # noqa: BLE001
+                log.exception("GET %s failed", path)
+                self._json({"error": f"{type(e).__name__}: {e}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
         def _get(self, app: App, path: str) -> None:
             if path in ("/", "/index.html"):
@@ -2084,6 +2097,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()
                 if not ticker:
                     self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
+                elif len(ticker) > MAX_LOOKUP_CHARS or not ticker.isprintable():   # a company name or an NSE code
+                    self._json({"error": f"a company name or code of at most {MAX_LOOKUP_CHARS} characters"},
+                               HTTPStatus.BAD_REQUEST)
                 else:
                     found = app.lookup(ticker)
                     app.note_bar(found)
@@ -2126,6 +2142,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()
                 if not ticker:
                     self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
+                elif len(ticker) > MAX_LOOKUP_CHARS or not ticker.isprintable():   # a company name or an NSE code
+                    self._json({"error": f"a company name or code of at most {MAX_LOOKUP_CHARS} characters"},
+                               HTTPStatus.BAD_REQUEST)
                 else:
                     self._json(app.news_for_ticker(ticker))
             elif path == "/api/screener":
@@ -2208,7 +2227,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 return 415, "POST bodies must be Content-Type: application/json"
             origin = self.headers.get("Origin")
             if origin is not None:
-                own = {f"http://{host.strip().lower()}"}
+                # the Host was checked above, so a page at http(s)://<that host> is ours: a proxy that keeps the Host
+                # header (Caddy, nginx, some tailscale serve setups) serves the dashboard at https://<host>
+                own = {f"http://{host.strip().lower()}", f"https://{host.strip().lower()}"}
                 if self.client_address[0] in ("127.0.0.1", "::1"):   # tailscale serve proxies from localhost
                     fh = (self.headers.get("X-Forwarded-Host") or "").split(",")[0].strip()
                     fp = (self.headers.get("X-Forwarded-Proto") or "https").split(",")[0].strip().lower()
@@ -2283,15 +2304,19 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 elif path == "/api/groww/refresh":
                     self._json(app.refresh_from_groww())
                 elif path == "/api/factor-backtest":
-                    job = app.start_factor_backtest(str(body.get("universe") or "NIFTY200"),
-                                                    int(body.get("top", 20)), int(body.get("years", 4)))
+                    top, years = int(body.get("top", 20)), int(body.get("years", 4))
+                    if not (1 <= top <= 100 and 1 <= years <= 10):
+                        raise ValueError("top must be 1 to 100 and years 1 to 10")
+                    job = app.start_factor_backtest(str(body.get("universe") or "NIFTY200"), top, years)
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/signal-lab":
+                    years = int(body.get("years", 5))
+                    if not 1 <= years <= 10:
+                        raise ValueError("years must be 1 to 10")
                     hs = [int(h) for h in str(body.get("horizons") or "5,20,60").split(",") if h.strip()]
                     if not hs or any(h < 1 or h > 250 for h in hs):
                         raise ValueError("horizons must be trading days between 1 and 250")
-                    job = app.start_signal_lab(str(body.get("universe") or "NIFTY50"),
-                                               int(body.get("years", 5)), hs)
+                    job = app.start_signal_lab(str(body.get("universe") or "NIFTY50"), years, hs)
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/dismiss":
                     self._json({"ok": app.dismiss(int(body["index"]))})
