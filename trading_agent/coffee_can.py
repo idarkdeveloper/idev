@@ -23,6 +23,7 @@ same days. Nothing from the sealed holdout is used unless ``--holdout`` is given
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Callable
 
 from .filing_time import usable_by
@@ -59,11 +60,15 @@ def annual_rows(records: list[dict[str, Any]], day: str, holidays: Any | None = 
     return rows
 
 
-def qualifies(rows: list[dict[str, Any]], min_years: int = MIN_YEARS) -> tuple[bool, str]:
-    """(passes, why) for the Coffee Can test on every year with a growth figure (at least ``min_years``)."""
+def qualifies(rows: list[dict[str, Any]], min_years: int = MIN_YEARS,
+              window: int | None = None) -> tuple[bool, str]:
+    """(passes, why) for the Coffee Can test on every year with a growth figure (at least ``min_years``). With
+    ``window``, only the latest ``window`` years are tested (the book's rolling ten years); older ones are ignored."""
     years = [r for r in rows if r.get("growth") is not None]
     if len(years) < min_years:
         return False, f"only {len(years)} year(s) of growth"
+    if window:
+        years = years[-window:]
     for r in years:
         if r["growth"] <= GROWTH_MIN:
             return False, f"revenue growth {r['growth'] * 100:.0f}% in FY{r['fy'][:4]}"
@@ -73,26 +78,50 @@ def qualifies(rows: list[dict[str, Any]], min_years: int = MIN_YEARS) -> tuple[b
     return True, "passes every year"
 
 
+def reason_kind(why: str) -> str:
+    """A reason from ``qualifies`` without the stock's own number, so reasons can be counted:
+    'revenue growth ≤10% in FY2020', 'ROCE ≤15% in FY2021', 'ROCE n/a in FY2022', 'only 3 year(s) of growth'."""
+    if why.startswith("revenue growth"):
+        return f"revenue growth ≤{GROWTH_MIN * 100:.0f}% in {why.rsplit(' ', 1)[-1]}"
+    if why.startswith("ROCE n/a"):
+        return why
+    if why.startswith("ROCE"):
+        return f"ROCE ≤{ROCE_MIN * 100:.0f}% in {why.rsplit(' ', 1)[-1]}"
+    return why
+
+
 def coffee_can_ranker(annual: dict[str, list[dict[str, Any]]], industries: dict[str, str], *,
-                      min_years: int = MIN_YEARS, min_turnover: float = 1e7,
-                      log: dict[str, Any] | None = None) -> Callable[[Market, int], list[str]]:
-    """The qualifying stocks on day t (liquid, not financials), highest latest ROCE first."""
+                      min_years: int = MIN_YEARS, min_turnover: float = 1e7, window: int | None = None,
+                      log: dict[str, Any] | None = None,
+                      reasons: dict[str, Counter[str]] | None = None) -> Callable[[Market, int], list[str]]:
+    """The qualifying stocks on day t (liquid, not financials), highest latest ROCE first. ``reasons`` collects, per
+    day, why the other members were turned down."""
     def rank(m: Market, t: int) -> list[str]:
         day = m.dates[t]
         stats = m.stats_on(t)
         picks = []
+        why: Counter[str] = Counter()
         for sym in m.members_on(day):
-            if is_financial(industries.get(sym, "")) or sym not in stats:
+            if is_financial(industries.get(sym, "")):
+                why["bank or finance company (left out)"] += 1
+                continue
+            if sym not in stats:
+                why["no price history that day"] += 1
                 continue
             if (stats[sym].get("avg_turnover_60d") or 0) < min_turnover:
+                why["traded under ₹1 crore a day"] += 1
                 continue
             rows = annual_rows(annual.get(sym) or [], day)
-            ok, _ = qualifies(rows, min_years)
+            ok, reason = qualifies(rows, min_years, window)
             if ok:
                 picks.append((rows[-1]["roce"] or 0.0, sym))
+            else:
+                why["no full-year filings cached" if not rows else reason_kind(reason)] += 1
         out = [s for _, s in sorted(picks, reverse=True)]
         if log is not None:
             log[day] = out
+        if reasons is not None:
+            reasons[day] = why
         return out
     return rank
 

@@ -189,6 +189,15 @@ def test_a_refusal_is_not_retried_on_the_old_endpoint_and_stops_the_fill(tmp_pat
     assert f.fill("TCS.NS", YAHOO) == YAHOO and f._refused_on == TUE_0900.date()
 
 
+def test_a_failure_reply_with_403_also_stops_the_fill_for_the_day(tmp_path):
+    body = '{"status":"FAILURE","error":{"code":"403","message":"Access forbidden for this request."}}'
+    inner = Groww({"/v1/historical/candles": (403, body)})   # what Groww actually sent on 16 Oct
+    f = fill(tmp_path, client=read_only(inner))
+    assert f.fill("TCS.NS", YAHOO) == YAHOO and f._refused_on == TUE_0900.date()
+    assert f.fill("INFY.NS", YAHOO) == YAHOO and len(inner.calls) == 1          # no second request that day
+    assert "Access forbidden" in f.last_error
+
+
 def test_a_404_on_both_paths_is_an_http_error_not_a_json_error():
     with pytest.raises(requests.HTTPError):
         read_only(Groww({})).daily_candles("TCS", date(2026, 10, 12), date(2026, 10, 12))

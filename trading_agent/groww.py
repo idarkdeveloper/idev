@@ -186,6 +186,15 @@ def _headers(token: str) -> dict[str, str]:
     }
 
 
+class GrowwAPIError(RuntimeError):
+    """Groww answered ``status: FAILURE``. ``status`` is the HTTP status (or Groww's numeric error code), so a caller
+    can tell a refusal (401 / 403) from other failures."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
 class TokenRequestError(requests.HTTPError):
     """Groww answered the token request with an error status (429, 401, 5xx ...)."""
 
@@ -682,7 +691,10 @@ class GrowwBroker:
             raise RuntimeError(f"Groww answered {path} with a non-JSON body: {str(getattr(resp, 'text', ''))[:120]!r}")
         if isinstance(data, dict) and data.get("status") == "FAILURE":
             err = data.get("error") or {}
-            raise RuntimeError(f"Groww {err.get('code')}: {err.get('message')}")
+            code = str(err.get("code") or "")
+            http = getattr(resp, "status_code", None)
+            status = http if isinstance(http, int) and http >= 400 else (int(code) if code.isdigit() else None)
+            raise GrowwAPIError(f"Groww {err.get('code')}: {err.get('message')}", status)
         try:
             resp.raise_for_status()
         except requests.HTTPError as e:

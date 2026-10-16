@@ -1216,7 +1216,10 @@ def cmd_research_coffee_can(args: argparse.Namespace) -> int:
         print("Coverage is low: run `fundamentals-history --annual --universe NIFTYMIDCAP150` and "
               "`--universe NIFTYSMALLCAP250` until nothing is left, then again.")
     picked: dict[str, Any] = {}
-    ranker = coffee_can_ranker(annual, industries, min_years=args.min_years, log=picked)
+    reasons: dict[str, Any] = {}
+    window = getattr(args, "window", None)
+    ranker = coffee_can_ranker(annual, industries, min_years=args.min_years, window=window, log=picked,
+                               reasons=reasons)
     rules = Rules(top=40, weights="equal_picks", rebalance="yearly", rebalance_month=7, tax=True)
     first = None
     for t in m.rebalance_days(0, len(m.dates) - 1, "yearly", 7):
@@ -1224,7 +1227,14 @@ def cmd_research_coffee_can(args: argparse.Namespace) -> int:
             first = t
             break
     if first is None:
-        print(f"No July with 5+ qualifying stocks (need {args.min_years} years of growth each): nothing to test yet.")
+        print(f"No July with 5+ qualifying stocks (need {args.min_years} years of growth each"
+              + (f", the latest {window} tested" if window else ", every year seen tested") + "): nothing to test yet.")
+        for day in sorted(reasons):
+            if int(day[5:7]) != 7:
+                continue
+            why = reasons[day]
+            print(f"  {day}: {len(picked.get(day) or [])} qualify, {sum(why.values())} turned down: "
+                  + "; ".join(f"{k} {n}" for k, n in why.most_common(6)))
         return 1
     end = len(m.dates) - 1
     run = simulate(m, rules, first, end, cost_model=cost_model_for("in"), ranker=ranker)
@@ -1252,7 +1262,7 @@ def cmd_research_coffee_can(args: argparse.Namespace) -> int:
     print("  ROCE uses the closing balance sheet (the book averages opening and closing); "
           f"{args.min_years} years of growth required (the book asks for 10; filings start in late 2018).")
     log_trial(settings.state_dir, "CoffeeCan-holdout" if args.holdout else "CoffeeCan",
-              {"min_years": args.min_years, "until": until}, {"return": x["total_return"], "excess": x["excess"]})
+              {"min_years": args.min_years, "window": window, "until": until}, {"return": x["total_return"], "excess": x["excess"]})
     return 0
 
 
@@ -1610,6 +1620,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--years", type=int, default=5)
     sp.add_argument("--until", default="2025-10-01", help="first date NOT used (the sealed holdout)")
     sp.add_argument("--min-years", type=int, default=4, help="years of growth every stock needs (the book: 10)")
+    sp.add_argument("--window", type=int, default=None,
+                    help="test only the latest N years of growth (the book's rolling window); default: every year seen")
     sp.add_argument("--holdout", action="store_true", help="run once on the sealed holdout; refused after that")
     sp.set_defaults(func=cmd_research_coffee_can)
     sp = sub.add_parser("insider-history", help="download NSE insider disclosures month by month (resumable)")
