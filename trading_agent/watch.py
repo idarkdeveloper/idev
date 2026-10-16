@@ -298,7 +298,7 @@ class Watcher:
                 self._story_thread.start()
 
     def _story_worker(self) -> None:
-        from .news_story import basic_card
+        from .news_story import basic_card, contradicts_headline
         news = self._news
         assert news is not None
         while True:
@@ -311,6 +311,10 @@ class Watcher:
             except Exception:  # noqa: BLE001 - the alert still goes out, with the headline alone
                 log.exception("news story failed for %s", item.get("symbol"))
                 card = basic_card(item, item["symbol"], None, ctx, getattr(news.tagger, "name", None))
+            if contradicts_headline(card):   # the article read in full disagrees with the headline tag
+                log.info("news alert for %s not sent: headline tagged %s, the article reads %s",
+                         item.get("symbol"), card.get("sentiment"), card.get("impact"))
+                continue
             try:
                 self._send_news_card(card)
             except Exception:  # noqa: BLE001

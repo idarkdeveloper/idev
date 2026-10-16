@@ -326,7 +326,7 @@ def test_hostile_text_is_escaped_and_only_http_links_become_buttons():
 
 def test_text_part_and_telegram():
     t = ns.render_text(card())
-    assert t.startswith("JUBLPHARMA · Jubilant Pharmova\nHIGH IMPACT · INSTITUTIONAL EXIT · CONFIDENCE: HIGH")
+    assert t.startswith("JUBLPHARMA · Jubilant Pharmova\nNEGATIVE · HIGH IMPACT · INSTITUTIONAL EXIT · CONFIDENCE: HIGH")
     assert "KEY TAKEAWAYS\n• Quant Mutual Fund sold 12,50,000 shares" in t and "FULL STORY\n" in t
     assert f"Read the original on Rediff MoneyWiz: {REDIFF}" in t
     tg, plain, button = ns.render_telegram(card())
@@ -436,3 +436,34 @@ def test_a_failing_story_still_sends_the_headline_card(settings):
     (sent,) = rec.kw
     assert "recently recommended by the agent (watch list)" in sent["body"]
     assert "Read the original on Rediff MoneyWiz" in sent["html"] and "article not read" in sent["body"]
+
+
+def test_an_alert_whose_article_disagrees_with_its_headline_tag_is_not_sent(settings):
+    """16 Oct 2026: 'HDFC Bank shares edge up on Friday' was tagged negative from the headline; the model that read
+    the article rated it otherwise, and the card went out contradicting itself. Now it is dropped."""
+    from trading_agent.news_story import contradicts_headline
+    from trading_agent.notify import Notifier
+    from trading_agent.watch import Watcher
+    base = {"sentiment": "negative", "writer": "ollama:qwen2.5:3b", "impact": "NEGATIVE", "impact_level": "MEDIUM"}
+    assert not contradicts_headline(base)
+    assert contradicts_headline({**base, "impact": "POSITIVE"}) and contradicts_headline({**base, "impact": "NEUTRAL"})
+    assert not contradicts_headline({**base, "impact": "POSITIVE", "writer": None})   # no article read: alert stands
+    assert contradicts_headline({**base, "sentiment": "positive", "impact": "NEUTRAL"})
+
+    sent = []
+
+    class Svc:
+        tagger = type("T", (), {"name": "fake"})()
+
+        def story(self, item, symbol, ctx):
+            return {"symbol": symbol, "title": item["title"], "headline": item["title"], "source": "BusinessLine",
+                    "url": "https://example.com/a", "sentiment": "negative", "confidence": "high",
+                    "writer": "fake", "impact": "POSITIVE" if item["id"] == "up" else "NEGATIVE",
+                    "impact_level": "MEDIUM", "label": None, "takeaways": [], "story": "s", "story_kind": "summary"}
+
+    w = Watcher(settings, every=60, notifier=Notifier(), news=Svc())
+    w._send_news_card = lambda card: sent.append(card["title"])
+    w._story_jobs.extend([({"id": "up", "title": "shares edge up", "symbol": "HDFCBANK"}, "held"),
+                          ({"id": "down", "title": "shares slump on fraud probe", "symbol": "HDFCBANK"}, "held")])
+    w._story_worker()
+    assert sent == ["shares slump on fraud probe"]
