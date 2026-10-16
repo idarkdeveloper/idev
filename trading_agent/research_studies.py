@@ -348,3 +348,105 @@ def format_robustness(r: dict[str, Any]) -> str:
                  + f"; the hardest case (next-day fills + costs x2) is {pct(worst['excess'])} against it. "
                  f"Skill odds need 0.95 to count as proven; the holdout stays sealed.")
     return "\n".join(lines)
+
+
+
+# --------------------------------------------------------------------------- #
+# regimes: how the adopted rules behave in different markets (a diagnostic, not a filter)
+# --------------------------------------------------------------------------- #
+REGIMES = ("bull", "sideways", "bear", "high volatility")
+TREND_BAND = 0.03       # the fund's 3-month move beyond +-3% (with the 200-day average) is a trend
+VOL_PCTL = 0.80         # 20-day volatility above the 80th percentile of the past year's readings is "high"
+
+
+def _vol20(adj: list[float | None], t: int) -> float | None:
+    rets = []
+    for i in range(max(1, t - 19), t + 1):
+        a, b = adj[i], adj[i - 1]
+        if a and b:
+            rets.append(a / b - 1)
+    return statistics.pstdev(rets) * 252 ** 0.5 if len(rets) >= 15 else None
+
+
+def regime_of(m: Market, t: int) -> str | None:
+    """The market's state as known at day t's close, from the index fund alone: high volatility first (its 20-day
+    volatility above the 80th percentile of its readings over the past year), else bull (above the 200-day average and
+    up more than 3% over 3 months), bear (below it and down more than 3%) or sideways. None without enough history."""
+    adj = m.fund_adj
+    now, then, c, e = adj[t] if t >= 0 else None, adj[t - 63] if t >= 63 else None, m.fund_close[t], m.fund_ema200[t]
+    if t < 252 + 63 or not now or not then or c is None or e is None:
+        return None
+    v = _vol20(adj, t)
+    past = [x for x in (_vol20(adj, k) for k in range(t - 252, t, 5)) if x is not None]
+    if v is not None and len(past) >= 20 and v > sorted(past)[int(VOL_PCTL * (len(past) - 1))]:
+        return "high volatility"
+    move = now / then - 1
+    if c >= e and move > TREND_BAND:
+        return "bull"
+    if c < e and move < -TREND_BAND:
+        return "bear"
+    return "sideways"
+
+
+def regime_diagnostic(m: Market, *, cost_model: Any, capital: float = 500_000.0,
+                      rules: Rules | None = None) -> dict[str, Any]:
+    """The adopted rules run once; each month (rebalance to rebalance) labelled by the regime known the day before it
+    began, then the strategy against the index fund per regime: average month, share of months ahead, worst month,
+    worst fall inside a month, turnover a month."""
+    from .research_sim import fund_curve
+    rules = rules or FINALIST
+    start = _first_ranked_day(m)
+    end = len(m.dates) - 1
+    run = simulate(m, rules, start, end, capital=capital, cost_model=cost_model)
+    curve, fund, cum = run["curve"], fund_curve(m, start, end, capital), run["traded_cum"]
+    edges = [t for t in m.rebalance_days(start, end) if t >= start] + [end]
+    months: list[dict[str, Any]] = []
+    for a, b in zip(edges, edges[1:]):
+        if b <= a:
+            continue
+        i, j = a - start, b - start
+        f0, f1 = fund[i], fund[j]
+        if not curve[i] or f0 is None or f1 is None:
+            continue
+        seg = curve[i:j + 1]
+        peak, worst = seg[0], 0.0
+        for v in seg:
+            peak = max(peak, v)
+            worst = min(worst, v / peak - 1)
+        r, fr = curve[j] / curve[i] - 1, f1 / f0 - 1
+        avg = statistics.fmean(seg)
+        months.append({"start": m.dates[a], "regime": regime_of(m, a - 1), "return": r, "fund": fr, "excess": r - fr,
+                       "worst_fall": worst, "turnover": (cum[j] - cum[i]) / avg / 2 if avg else 0.0})
+    by: dict[str, dict[str, Any]] = {}
+    for name in REGIMES + ("unlabelled",):
+        ms = [x for x in months if (x["regime"] or "unlabelled") == name]
+        if not ms:
+            continue
+        by[name] = {"months": len(ms), "avg_return": statistics.fmean(x["return"] for x in ms),
+                    "avg_fund": statistics.fmean(x["fund"] for x in ms),
+                    "avg_excess": statistics.fmean(x["excess"] for x in ms),
+                    "ahead_share": sum(x["excess"] > 0 for x in ms) / len(ms),
+                    "worst_month": min(x["return"] for x in ms), "worst_fall": min(x["worst_fall"] for x in ms),
+                    "turnover": statistics.fmean(x["turnover"] for x in ms)}
+    return {"start": m.dates[start], "end": m.dates[end], "rules": rules.label(), "months": months, "by_regime": by}
+
+
+def format_regimes(r: dict[str, Any]) -> str:
+    def pct(v: Any, f: str = "+.1f") -> str:
+        return "n/a" if v is None else f"{v * 100:{f}}%"
+    lines = [f"Regimes ({r['rules']}, after charges and tax), {r['start']} to {r['end']}: each month labelled by the "
+             "index fund's state the day before it began.",
+             f"  {'regime':<17}{'months':>7}{'avg month':>10}{'fund':>8}{'vs fund':>9}{'ahead':>7}{'worst month':>12}"
+             f"{'worst fall':>11}{'turnover':>9}"]
+    for name, x in r["by_regime"].items():
+        lines.append(f"  {name:<17}{x['months']:>7}{pct(x['avg_return']):>10}{pct(x['avg_fund']):>8}"
+                     f"{pct(x['avg_excess']):>9}{pct(x['ahead_share'], '.0f'):>7}{pct(x['worst_month']):>12}"
+                     f"{pct(x['worst_fall']):>11}{pct(x['turnover'], '.0f'):>9}")
+    small = [k for k, x in r["by_regime"].items() if x["months"] < 6]
+    lines.append("  Regimes: high volatility = the fund's 20-day volatility above the 80th percentile of the past year; "
+                 "else bull / bear = above / below its 200-day average with a 3-month move beyond +-3%; else sideways.")
+    if small:
+        lines.append(f"  Fewer than 6 months in: {', '.join(small)}; read those rows as anecdotes.")
+    lines.append("  A diagnostic: nothing here changes a rule. A filter built on this table would be a new trial, "
+                 "judged on months it never saw.")
+    return "\n".join(lines)

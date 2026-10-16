@@ -544,7 +544,7 @@ HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum",
                 "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
-                "research-model", "research-robustness"}
+                "research-model", "research-robustness", "research-regimes"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -1003,6 +1003,19 @@ def cmd_model_paper(args: argparse.Namespace) -> int:
               ", after the close, from the watch service).")
         return 0
     print(format_model_paper({**mp.ft.summary(), "rebalanced": None, "model": mp.model()}, forward_return(settings)))
+    return 0
+
+
+def cmd_research_regimes(args: argparse.Namespace) -> int:
+    """How the adopted rules did in bull, sideways, bear and high-volatility months (a diagnostic, not a filter)."""
+    from .costs import cost_model_for
+    from .research_studies import format_regimes, regime_diagnostic
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    r = regime_diagnostic(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash)
+    print(format_regimes(r))
+    if args.json:
+        print(json.dumps(r, default=str))
     return 0
 
 
@@ -1664,7 +1677,9 @@ def build_parser() -> argparse.ArgumentParser:
                           ("research-portfolio", cmd_research_portfolio,
                            "research B2-B4: rank buffer, drawdown brake, inverse-volatility weights"),
                           ("research-robustness", cmd_research_robustness,
-                           "the adopted rules with next-day fills and 1.5x / 2x costs, and the survivorship count")):
+                           "the adopted rules with next-day fills and 1.5x / 2x costs, and the survivorship count"),
+                          ("research-regimes", cmd_research_regimes,
+                           "the adopted rules month by month in bull, sideways, bear and high-volatility markets")):
         sp = sub.add_parser(name, help=hlp)
         sp.add_argument("--universe", default="NIFTYMIDCAP150")
         sp.add_argument("--years", type=int, default=5, help="years before --until (plus a lookback year)")

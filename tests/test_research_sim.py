@@ -276,3 +276,41 @@ def test_research_robustness_command(synthetic, tmp_path, monkeypatch, capsys):
     assert "Robustness of the adopted rules" in out and "next-day fills + costs x2" in out and "Verdict:" in out
     log = [_json.loads(x) for x in (tmp_path / "research" / "trials.jsonl").read_text().splitlines()]
     assert len(log) == 6 and all(x["study"] == "robustness" for x in log)
+
+
+# --------------------------------------------------------------------------- #
+# regimes (a diagnostic)
+# --------------------------------------------------------------------------- #
+def test_regime_labels_from_the_index_fund():
+    from trading_agent.research_studies import regime_of
+    n = 400
+    calm = [100 * (1 + 0.002 * (-1) ** i) for i in range(n)]               # flat, tiny wiggle
+    rising = [100 * 1.002 ** i * (1 + 0.002 * (-1) ** i) for i in range(n)]
+    falling = [100 * 0.998 ** i * (1 + 0.002 * (-1) ** i) for i in range(n)]
+    wild = calm[:-20] + [100 * (1 + 0.04 * (-1) ** i) for i in range(20)]    # the last 20 days swing 4% a day
+    for fund, want in ((calm, "sideways"), (rising, "bull"), (falling, "bear"), (wild, "high volatility")):
+        m = market({"A": [100.0] * n}, fund=fund)
+        assert regime_of(m, n - 1) == want, want
+    assert regime_of(market({"A": [100.0] * n}, fund=rising), 200) is None   # not enough history yet
+
+
+def test_regime_diagnostic_end_to_end(synthetic):
+    from trading_agent import research_studies as rs
+    r = rs.regime_diagnostic(synthetic, cost_model=IndianDeliveryCosts())
+    months = r["months"]
+    assert len(months) > 20 and all(x["regime"] in rs.REGIMES or x["regime"] is None for x in months)
+    assert sum(x["months"] for x in r["by_regime"].values()) == len(months)
+    assert all(x["turnover"] >= 0 and x["worst_fall"] <= 0 for x in months)
+    assert "floor25%" in r["rules"] and "buffer35" in r["rules"]
+    text = rs.format_regimes(r)
+    assert "avg month" in text and "A diagnostic: nothing here changes a rule" in text
+
+
+def test_research_regimes_command(synthetic, tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from trading_agent import cli
+    monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path, paper_starting_cash=500_000.0))
+    monkeypatch.setattr(cli, "_research_market", lambda a, s: synthetic)
+    assert cli.cmd_research_regimes(SimpleNamespace(json=False)) == 0
+    assert "Regimes (" in capsys.readouterr().out
