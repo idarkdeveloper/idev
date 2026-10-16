@@ -150,9 +150,26 @@ class Watcher:
                   if r.get("ticker") and r["ticker"] != "PORTFOLIO"]
         return held, recent
 
+    def real_holdings(self) -> list[str]:
+        """Your real Groww shares, from the holdings snapshot the dashboard and the daily emails save (no Groww call
+        here). In practice mode the watch's broker is the practice account, so without this a filing by a company
+        you really own (a dividend, results) was never polled. Shares only: funds and bonds have no NSE filings. A
+        BSE-only holding is read as SYMBOL.BO, whose filings come from BSE."""
+        from .runner import load_groww_snapshot
+        snap = load_groww_snapshot(self.settings) if getattr(self.settings, "market", "in") == "in" else None
+        out: list[str] = []
+        for r in (snap or {}).get("holdings", []):
+            if (r.get("kind") or "equity") != "equity":
+                continue
+            sym = str(r["symbol"]).strip().upper()
+            if str(r.get("exchange") or "").upper() == "BSE" and not sym.endswith(".BO"):
+                sym += ".BO"
+            out.append(sym)
+        return out
+
     def interesting_tickers(self) -> list[str]:
         held, recent = self._tickers_by_reason()
-        return list(dict.fromkeys(held + recent))  # de-duplicated, first-seen order
+        return list(dict.fromkeys(held + self.real_holdings() + recent))  # de-duplicated, first-seen order
 
     def poll_announcements(self) -> list[dict[str, Any]]:
         if self._data is None or not hasattr(self._data, "announcements"):
@@ -161,25 +178,36 @@ class Watcher:
         seen = st.data.setdefault("seen_announcements", {})
         fresh: list[dict[str, Any]] = []
         tickers = self.interesting_tickers()
-        got, errors = 0, []
+        # A real holding polled for the first time has its existing filings recorded as seen without an alert, so
+        # linking Groww (or buying a share) does not send weeks of old filings at once; from then on each new one alerts.
+        polled = set(st.data.get("announcement_tickers", []))
+        first_time = {t for t in self.real_holdings() if t not in polled}
+        got, errors, changed = 0, [], False
         for t in tickers:
             try:
-                rows = self._data.announcements(t, limit=5)
+                rows = self._data.announcements(t, limit=20)   # 20, not 5: results days bring a burst of filings
             except Exception as e:  # noqa: BLE001
                 log.warning("announcements for %s failed: %s", t, e)
                 errors.append(f"{t}: {type(e).__name__}: {e}")
                 continue
             got += len(rows)
+            if t not in polled:
+                polled.add(t)
+                changed = True
             for a in rows:
                 if a["id"] and a["id"] not in seen:
                     seen[a["id"]] = a["at"]
-                    fresh.append(a)
+                    changed = True
+                    if t not in first_time:
+                        fresh.append(a)
         if tickers:   # the Health tab's record: a success when at least one stock could be read
             from . import health
             health.note_run(self.settings.state_dir, "announcements", ok=len(errors) < len(tickers), rows=got,
                             error="; ".join(errors[:3]) or None)
-        if fresh:
+        if changed:
+            st.data["announcement_tickers"] = sorted(polled)[-1000:]
             st.save()
+        if fresh:
             if self._notifier is not None:
                 from .agent import send_with_html
                 from .alert_cards import announcements_card, announcements_subject
