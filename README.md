@@ -487,6 +487,16 @@ It ends with one verdict: likely skill (only against the universe's own index fu
 least 3 full out-of-sample years), could be luck, or no edge. The signal lab applies
 the same deflation to every signal and horizon, shown as "Real-edge odds".
 
+**Why did the screen trail its index fund?** (research step A)
+`python -m trading_agent research-gap --universe NIFTYMIDCAP150` re-runs the monthly screen for the 5 years before
+the sealed holdout (nothing from 1 Oct 2025 on is used) and splits its gap to the index fund into three parts that
+add up exactly: *cash timing* (the trend filter leaving slots in cash: the fund held with the same invested share,
+minus the fund), *stock selection* (the picks before charges, minus that same-share fund) and *charges*. Each is
+shown with cash earning nothing and with cash in a liquid fund (6.5% a year), plus the split in months the fund rose
+or fell, the yearly turnover and how long a stock stays held. The verdict follows a rule set before the run: if
+selection added nothing, post-results drift is researched before the drawdown brake and the weights. Every run is
+appended to `state/research/trials.jsonl`, the trial log later deflated-Sharpe checks count.
+
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.

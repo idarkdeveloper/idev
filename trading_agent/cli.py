@@ -509,7 +509,7 @@ def cmd_kill_switch(args: argparse.Namespace) -> int:
 # the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
 # reach Groww.
 HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
-                "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
+                "factor-backtest", "research-gap", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data"}
 
 
@@ -821,6 +821,46 @@ def cmd_factor_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research_gap(args: argparse.Namespace) -> int:
+    """Research A: split the screen's shortfall to its index fund into cash timing, stock selection and charges."""
+    from .costs import cost_model_for
+    from .factor_backtest import INDEX_FUNDS, run_factor_backtest
+    from .gap_diagnosis import format_diagnosis, diagnose, log_trial
+    from .index_history import point_in_time
+    from .runner import free_prices
+    from .screen import load_universe
+
+    from .gap_diagnosis import HOLDOUT_START, LIQUID_RATE
+    args.until = args.until or HOLDOUT_START
+    args.liquid_rate = LIQUID_RATE if args.liquid_rate is None else args.liquid_rate
+    settings = _settings(args)
+    universe = args.universe.upper()
+    if universe not in INDEX_FUNDS:
+        print(f"{universe} has no index fund to compare with; use one of {', '.join(INDEX_FUNDS)}")
+        return 2
+    members = load_universe(universe)
+    print(f"Research A: top {args.top} of {universe}, {args.years} years ending before {args.until} (monthly)…")
+    membership = point_in_time(universe, [m["symbol"] for m in members], settings.state_dir, progress=print)
+    r = run_factor_backtest(members, free_prices(settings), top=args.top, years=args.years,
+                            cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                            membership=membership, index_fund=INDEX_FUNDS[universe], until=args.until)
+    try:
+        d = diagnose(r, liquid_rate=args.liquid_rate)
+    except ValueError as e:
+        print(f"Cannot split the gap: {e}")
+        return 1
+    if not r.get("point_in_time"):
+        print(f"Note: {r['caveat']}")
+    print(format_diagnosis(d))
+    path = log_trial(settings.state_dir, "A-gap", {"universe": universe, "top": args.top, "years": args.years,
+                                                   "until": args.until, "liquid_rate": args.liquid_rate},
+                     {k: d["cash_at_zero"][k] for k in ("strategy", "index_fund", "timing", "selection", "charges")})
+    print(f"Logged in {path}")
+    if args.json:
+        print(json.dumps(d, indent=2, default=str))
+    return 0
+
+
 def cmd_costs(args: argparse.Namespace) -> int:
     from .costs import FlatCosts, cost_model_for
     settings = _settings(args)
@@ -1115,6 +1155,15 @@ def build_parser() -> argparse.ArgumentParser:
                          "Monte Carlo); re-runs the backtest for 2 more portfolio sizes")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_factor_backtest)
+    sp = sub.add_parser("research-gap", help="research A: why the screen trailed its index fund (timing, "
+                                             "selection, charges)")
+    sp.add_argument("--universe", default="NIFTYMIDCAP150")
+    sp.add_argument("--top", type=int, default=20)
+    sp.add_argument("--years", type=int, default=5, help="test years before --until (one more is fetched)")
+    sp.add_argument("--until", default=None, help="first date NOT used (default: the sealed holdout, 2025-10-01)")
+    sp.add_argument("--liquid-rate", type=float, default=None, help="yearly interest on cash (default 0.065)")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_research_gap)
     sp = sub.add_parser("fundamentals-history", help="download NSE quarterly results for a universe (resumable)")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--years", type=int, default=5, help="also cover stocks that were members this far back")
