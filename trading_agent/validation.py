@@ -89,6 +89,44 @@ def newey_west_t(values: list[float], lags: int) -> float | None:
     return mu / math.sqrt(var / n)
 
 
+def pbo(series: dict[str, list[float]], blocks: int = 10) -> dict[str, Any] | None:
+    """Probability of backtest overfitting by combinatorially symmetric cross-validation (Bailey, Borwein,
+    López de Prado and Zhu): the periods are cut into ``blocks`` equal slices; for every way of picking half of them as
+    the in-sample part, the variant with the best in-sample Sharpe is ranked out of sample on the other half. PBO is the
+    share of splits where that winner ranks at or below the median out of sample: near 0 means picking the best variant
+    works, 0.5 or more means it is no better than chance. None with fewer than 2 variants or too few periods."""
+    import itertools
+    names = [k for k, v in series.items() if v]
+    if len(names) < 2:
+        return None
+    t = min(len(series[k]) for k in names)
+    if blocks < 2 or blocks % 2 or t < blocks * 2:
+        return None
+    size = t // blocks
+    chunks = [range(i * size, (i + 1) * size) for i in range(blocks)]
+
+    def sr(xs: list[float]) -> float:
+        sd = statistics.pstdev(xs)
+        return statistics.fmean(xs) / sd if sd > 0 else 0.0
+
+    below = total = 0
+    logits = []
+    for ins in itertools.combinations(range(blocks), blocks // 2):
+        in_idx = [i for b in ins for i in chunks[b]]
+        out_idx = [i for b in range(blocks) if b not in ins for i in chunks[b]]
+        ins_sr = {k: sr([series[k][i] for i in in_idx]) for k in names}
+        best = max(names, key=lambda k: ins_sr[k])
+        oos = {k: sr([series[k][i] for i in out_idx]) for k in names}
+        rank = 1 + sum(1 for k in names if oos[k] < oos[best])      # 1 = worst ... N = best
+        w = rank / (len(names) + 1)
+        lam = math.log(w / (1 - w))
+        logits.append(lam)
+        below += lam <= 0
+        total += 1
+    return {"pbo": below / total, "splits": total, "variants": len(names), "periods": t,
+            "median_logit": statistics.median(logits)}
+
+
 def deflated_sharpe(rets: list[float], n_trials: int, trial_srs: list[float]) -> dict[str, Any]:
     sr = sharpe(rets)
     var = statistics.pvariance(trial_srs) if len(trial_srs) >= 2 else 0.0

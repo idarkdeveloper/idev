@@ -187,6 +187,8 @@ def test_stop_race_end_to_end(synthetic, monkeypatch):
                                                    "clears the skill bar"}
     text = rs.format_stop_race(r)
     assert "Recommendation:" in text and "two_stage" in text and "close-to-close ATR" in text
+    assert r["pbo"] is None or 0 <= r["pbo"]["pbo"] <= 1
+    assert "Probability of backtest overfitting" in text
 
 
 def test_portfolio_controls_end_to_end(synthetic):
@@ -201,6 +203,7 @@ def test_portfolio_controls_end_to_end(synthetic):
     assert all(x["tax_paid"] >= 0 for x in res.values())
     text = rs.format_controls(r)
     assert "baseline" in text and "inverse_vol" in text and "after Indian capital-gains tax" in text
+    assert r["pbo"] is not None and r["pbo"]["variants"] >= 7 and "Probability of backtest overfitting" in text
     assert rs.prior_trials(None) == 0
 
 

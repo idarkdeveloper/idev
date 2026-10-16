@@ -211,13 +211,27 @@ def test_parse_candles_with_timestamp_strings():
     assert rows[0] == {"date": "2026-10-12", "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10.0}
 
 
-def test_make_fill_only_with_groww_in_india(settings):
+def test_make_fill_reads_nse_daily_file_in_india_without_groww(settings, tmp_path):
     settings.market, settings.broker = "in", "local"
-    assert gf.make_fill(settings) is None
-    settings.broker = "groww"
-    assert isinstance(gf.make_fill(settings), gf.GrowwFill)
+    f = gf.make_fill(settings, cache_dir=tmp_path / "cache")
+    assert isinstance(f, gf.GrowwFill) and f.source == "nse" and f.min_interval == 0.0
+    assert isinstance(f.groww_fn(), gf.NseDailyFile) and f.window_fn(TUE_0900)
     settings.market = "us"
     assert gf.make_fill(settings) is None
+
+
+def test_a_late_bar_from_nse_daily_file_is_marked_nse(tmp_path):
+    import json as _json
+    bhav = tmp_path / "cache" / "nse_bhav"
+    bhav.mkdir(parents=True)
+    (bhav / "2026-10-12.json").write_text(_json.dumps({"TCS": [101.5, 104.0, 100.5, 103.25, 5000.0]}))
+    src = gf.NseDailyFile(tmp_path / "cache")
+    f = gf.GrowwFill(lambda: src, lambda n: True, lambda n: SESSIONS, cache_dir=tmp_path / "cache", source="nse",
+                     clock=lambda: TUE_0900, min_interval=0.0, sleep=lambda s: (_ for _ in ()).throw(AssertionError))
+    out = f.fill("TCS.NS", YAHOO)
+    assert out[-1] == {"date": "2026-10-12", "close": 103.25, "adj_close": 103.25, "volume": 5000.0, "source": "nse"}
+    assert (tmp_path / "cache" / "nse_bars" / "TCS.json").exists()
+    assert f.fill("INFY.NS", YAHOO) == YAHOO                       # not in the file: Yahoo's series as it was
 
 
 def test_the_pre_market_check_says_when_a_bar_came_from_groww(settings):
@@ -234,3 +248,17 @@ def test_the_pre_market_check_says_when_a_bar_came_from_groww(settings):
     step = by_name(r)["Yahoo prices"]
     assert r["ok"] is True and step["ok"] is True
     assert f"^NSEI's {LAST} bar is from Groww (Yahoo has not posted it yet)" in step["detail"]
+
+
+def test_the_pre_market_check_says_when_a_bar_came_from_nse(settings):
+    from tests.test_integration import LAST, by_name, good
+
+    class Filled:
+        def history(self, symbol, range_="1mo"):
+            last = {"date": LAST, "close": 2.0}
+            if symbol == "^NSEI":
+                last["source"] = "nse"
+            return [{"date": "2026-10-08", "close": 1.0}, last]
+    settings.market = "in"
+    step = by_name(good(settings, prices=Filled()))["Yahoo prices"]
+    assert f"^NSEI's {LAST} bar is from NSE's daily file (Yahoo has not posted it yet)" in step["detail"]

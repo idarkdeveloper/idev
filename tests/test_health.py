@@ -195,7 +195,7 @@ def test_failing_first_and_counts(s):
     assert order == sorted(order, key=rank.get) and order[0] == "failing"
     assert rep["counts"]["failing"] == order.count("failing") and sum(rep["counts"].values()) == len(order)
     ids = {r["id"] for r in rep["sources"]}
-    assert ids == {"deals", "bse", "insider", "announcements", "bse_ann", "yahoo", "groww_fill", "flows", "breadth", "bands", "filters", "corp_actions", "clearing", "news", "groww", "canary", "watch", "telegram_commands"}
+    assert ids == {"deals", "bse", "insider", "announcements", "bse_ann", "yahoo", "nse_fill", "flows", "breadth", "bands", "filters", "corp_actions", "clearing", "news", "groww", "canary", "watch", "telegram_commands"}
     for r in rep["sources"]:
         assert r["feeds"] and r["schedule"] and r["status_text"]
 
@@ -260,15 +260,12 @@ def test_the_health_tab_badge_palette_command_and_portfolio_buttons_are_on_the_l
     assert not re.findall(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(", block)                    # tokens only
 
 
-def test_a_403_from_groww_candles_reads_as_not_on_your_plan_not_failing(s):
-    s.broker = "groww"
-    health.note_run(s.state_dir, "groww_fill", ok=False, error="BIRET: GrowwAPIError: Groww 403: Access forbidden for this request.")
-    r = by_id(health.report(s, MON_11, Cal()))["groww_fill"]
-    assert r["status"] == "off" and r["status_text"] == "not on your Groww plan" and r["error"] is None
-    assert "paid data plan" in r["detail"] and "403" in r["detail"]
-    health.note_run(s.state_dir, "groww_fill", ok=False, error="TCS: JSONDecodeError: Extra data: line 1 column 5")
-    r = by_id(health.report(s, MON_11, Cal()))["groww_fill"]
-    assert r["status"] == "failing" and r["status_text"] == "failing"          # any other fault is still a failure
-    health.note_run(s.state_dir, "groww_fill", ok=True, rows=2)
-    r = by_id(health.report(s, MON_11 + timedelta(hours=1), Cal()))["groww_fill"]
-    assert r["status"] == "ok" and r["status_text"] == "ok"                      # and a later fill clears it
+def test_the_late_bar_row_reads_the_nse_fill(s):
+    s.market = "in"
+    r = by_id(health.report(s, MON_11, Cal()))["nse_fill"]
+    assert r["name"] == "NSE daily file (late Yahoo bars)" and "bhavcopy" in r["schedule"]
+    health.note_run(s.state_dir, "nse_fill", ok=False, error="TCS: OSError: disk")
+    assert by_id(health.report(s, MON_11, Cal()))["nse_fill"]["status"] == "failing"
+    health.note_run(s.state_dir, "nse_fill", ok=True, rows=2)
+    r = by_id(health.report(s, MON_11 + timedelta(hours=1), Cal()))["nse_fill"]
+    assert r["status"] == "ok"                                                    # a later fill clears it

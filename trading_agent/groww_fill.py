@@ -1,19 +1,21 @@
-"""Groww daily candles as a fallback for a daily bar Yahoo has not posted yet.
+"""A daily bar Yahoo has not posted yet, filled from NSE's own daily file (or, in principle, Groww's candles).
 
 Yahoo sometimes posts an Indian close a day late (it did for the NIFTYBEES fund on 13 and 14 Oct 2026). Every daily
 series (``YahooPrices.history`` and the daily ``_ohlc``) passes through ``GrowwFill.fill``: when the series stops
-before the latest completed NSE session, the missing session(s) are read from Groww's historical candles
-(``GrowwBroker.daily_candles``) and appended, marked ``"source": "groww"``. The pre-market check and the trading code
-read the same series, so the check never passes on data the agent would not see.
+before the latest completed NSE session, the missing session(s) are appended, marked with their source. The
+pre-market check and the trading code read the same series, so the check never passes on data the agent would not see.
 
-Limits, so this can never cost a Groww login or flood Groww:
+The source (``make_fill``) is NSE's full bhavcopy: the official open, high, low, close and volume of every NSE stock,
+which the breadth job downloads each evening after 19:00 IST and keeps per day in ``cache/nse_bhav/<date>.json``
+(``NseDailyFile``, disk only, marked ``"source": "nse"``). Groww's historical candles (``GrowwBroker.daily_candles``)
+were the first source, but Groww's plan refuses them (403); the class still accepts such a client.
 
-* only Indian NSE codes (``XYZ.NS``) and the Nifty index (``^NSEI`` as ``NIFTY``); never BSE-only codes;
-* only inside the Groww window (08:30–16:00 IST on trading days), and only with a token that is already saved
-  (``integration.cached_groww``): a new token is never requested;
-* at most ``MAX_GAP`` missing sessions; each fetched bar is kept in ``cache/groww_bars/<code>.json`` and never asked for
-  again; at most one request per ``MIN_INTERVAL_S``; a code that failed is left alone for ``RETRY_S``; a refusal
-  (401 / 403: the plan or the token) stops every fill until the next day.
+Limits:
+
+* only Indian NSE codes (``XYZ.NS``); the Nifty index (``^NSEI``) is not in the bhavcopy and is not filled;
+* at most ``MAX_GAP`` missing sessions; each filled bar is kept in ``cache/<source>_bars/<code>.json``; with a network
+  source, at most one request per ``min_interval``, a code that failed is left alone for ``RETRY_S``, and a refusal
+  (401 / 403) stops every fill until the next day.
 
 Yahoo's own bar replaces the filled one as soon as Yahoo posts it (a filled bar is never written to the price archive).
 """
@@ -28,7 +30,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-import requests
 
 from .timezones import IST
 
@@ -59,9 +60,11 @@ class GrowwFill:
     def __init__(self, groww_fn: Callable[[], Any], window_fn: Callable[[datetime], bool],
                  sessions_fn: Callable[[datetime], list[date]], cache_dir: Path | None = None,
                  clock: Callable[[], datetime] | None = None, monotonic: Callable[[], float] = time.monotonic,
-                 sleep: Callable[[float], None] = time.sleep):
+                 sleep: Callable[[float], None] = time.sleep, source: str = "groww",
+                 min_interval: float = MIN_INTERVAL_S):
         self.groww_fn, self.window_fn, self.sessions_fn = groww_fn, window_fn, sessions_fn
-        self.cache_dir = Path(cache_dir) / "groww_bars" if cache_dir else None
+        self.source, self.min_interval = source, min_interval   # "nse": NSE's daily file, read from disk
+        self.cache_dir = Path(cache_dir) / f"{source}_bars" if cache_dir else None
         self.clock = clock or (lambda: datetime.now(IST))
         self.monotonic, self.sleep = monotonic, sleep
         self._lock = threading.Lock()
@@ -101,7 +104,7 @@ class GrowwFill:
         if self.cache_dir is None or self.cache_dir.parent.name != "cache":
             return
         from .health import note_run
-        note_run(self.cache_dir.parent.parent, "groww_fill", ok=ok, rows=rows, error=error)
+        note_run(self.cache_dir.parent.parent, f"{self.source}_fill", ok=ok, rows=rows, error=error)
 
     # -- the fill -------------------------------------------------------------
     def missing(self, last: str | None, now: datetime) -> list[date]:
@@ -119,7 +122,7 @@ class GrowwFill:
         client = self.groww_fn()
         if client is None:
             return
-        wait = MIN_INTERVAL_S - (self.monotonic() - self._last)
+        wait = self.min_interval - (self.monotonic() - self._last)
         if wait > 0:
             self.sleep(wait)
         self._last = self.monotonic()
@@ -165,10 +168,10 @@ class GrowwFill:
         for b in extra:
             if ohlc:
                 out.append({"ts": f"{b['date']}T15:30:00+05:30", "date": b["date"], "open": b["open"], "high": b["high"],
-                            "low": b["low"], "close": b["close"], "volume": b["volume"], "source": "groww"})
+                            "low": b["low"], "close": b["close"], "volume": b["volume"], "source": self.source})
             else:   # the newest bar's dividend-adjusted close is its close: Yahoo adjusts only older bars
                 out.append({"date": b["date"], "close": b["close"], "adj_close": b["close"], "volume": b["volume"],
-                            "source": "groww"})
+                            "source": self.source})
         return out
 
 
@@ -212,19 +215,39 @@ def sessions_for(holidays: Any) -> Callable[[datetime], list[date]]:
     return sessions
 
 
+class NseDailyFile:
+    """Daily bars from NSE's full bhavcopy (``sec_bhavdata_full``), the official close of every NSE stock, which the
+    breadth job already downloads each evening after 19:00 IST and keeps per day in ``cache/nse_bhav/<date>.json``.
+    Read from disk only: no request here. Indices (``NIFTY``) are not in that file and get nothing."""
+
+    def __init__(self, cache_dir: Path):
+        self.dir = Path(cache_dir) / "nse_bhav"
+
+    def daily_candles(self, symbol: str, start: Any, end: Any) -> list[dict[str, Any]]:
+        out = []
+        d, last = date.fromisoformat(str(start)[:10]), date.fromisoformat(str(end)[:10])
+        while d <= last:
+            path = self.dir / f"{d.isoformat()}.json"
+            if path.exists():
+                try:
+                    bar = json.loads(path.read_text(encoding="utf-8")).get(str(symbol).upper())
+                except (OSError, ValueError):
+                    bar = None
+                if bar:
+                    out.append({"date": d.isoformat(), "open": bar[0], "high": bar[1], "low": bar[2], "close": bar[3],
+                                "volume": bar[4]})
+            d += timedelta(days=1)
+        return out
+
+
 def make_fill(settings: Any, cache_dir: Path | None = None) -> GrowwFill | None:
-    """The fill for Indian settings with Groww linked, else None."""
-    if getattr(settings, "market", "in") != "in" or not getattr(settings, "use_groww", False):
+    """The fill for Indian settings: a late Yahoo bar is taken from NSE's own daily file (the bhavcopy the breadth job
+    keeps), read from disk at any hour. Groww's daily candles are not used: Groww's plan refuses them (403)."""
+    if getattr(settings, "market", "in") != "in":
         return None
     from . import groww_hours
-    from .integration import cached_groww
     holidays = groww_hours.default_calendar(settings)
-
-    def client() -> Any:
-        try:
-            return cached_groww(settings)
-        except (requests.RequestException, OSError, ValueError) as e:
-            log.info("Groww fill: no client (%s)", e)
-            return None
-    return GrowwFill(client, lambda now: groww_hours.window_open(settings, now, holidays), sessions_for(holidays),
-                     cache_dir=cache_dir if cache_dir is not None else Path(settings.state_dir) / "cache")
+    cache = cache_dir if cache_dir is not None else Path(settings.state_dir) / "cache"
+    source = NseDailyFile(cache)
+    return GrowwFill(lambda: source, lambda now: True, sessions_for(holidays), cache_dir=cache, source="nse",
+                     min_interval=0.0)

@@ -345,3 +345,26 @@ def test_newey_west_t_is_the_plain_t_without_lags_and_smaller_when_months_overla
     smooth = [0.02 + 0.01 * math.sin(i / 3) for i in range(40)]           # neighbours alike, as overlapping trades
     assert abs(newey_west_t(smooth, 3)) < abs(newey_west_t(smooth, 0))
     assert newey_west_t([0.01, 0.02], 2) is None and newey_west_t([0.01] * 5, 1) is None
+
+
+def test_pbo_is_low_for_a_real_winner_and_about_half_for_noise():
+    import random as _random
+
+    from trading_agent.validation import pbo
+    rng = _random.Random(3)
+    real = {"good": [0.02 + rng.gauss(0, 0.01) for _ in range(60)]}
+    real.update({f"v{i}": [rng.gauss(0, 0.01) for _ in range(60)] for i in range(5)})
+    r = pbo(real)
+    assert r["pbo"] < 0.1 and r["splits"] == 252 and r["variants"] == 6 and r["periods"] == 60
+    noise = {f"v{i}": [rng.gauss(0, 0.01) for _ in range(60)] for i in range(8)}
+    assert 0.25 < pbo(noise)["pbo"] < 0.8
+    assert pbo({"one": [0.1] * 60}) is None and pbo({"a": [0.1] * 10, "b": [0.2] * 10}) is None
+
+
+def test_trial_log_records_the_code_version(tmp_path):
+    import json as _json
+
+    from trading_agent import gap_diagnosis as gd
+    path = gd.log_trial(tmp_path, "X", {"a": 1}, {"b": 2})
+    row = _json.loads(path.read_text().splitlines()[0])
+    assert "code" in row and (row["code"] is None or len(row["code"]) == 12)

@@ -152,10 +152,11 @@ class ForwardTest:
                  capital: float = 500_000.0, benchmark: str | None = None,
                  price_fn: Callable[[str], float] | None, cost_model: Any | None = None,
                  now: Callable[[], datetime] | None = None, holidays: Any | None = None,
-                 rules: dict[str, Any] | None = RULES):
+                 rules: dict[str, Any] | None = RULES, name: str | None = None):
         self.universe = universe.upper()
         self.dir = Path(state_dir) / "forward"
-        self.path = self.dir / f"{self.universe.lower()}.json"
+        self.name = (name or self.universe).lower()   # another account (e.g. model_niftymidcap150) keeps its own files
+        self.path = self.dir / f"{self.name}.json"
         self.price_fn: Callable[[str], float] = price_fn  # type: ignore[assignment]  # start/rebalance/mark need it
         self.cost_model = cost_model
         self.now = now or (lambda: _now())  # looked up at call time, so tests can patch it
@@ -167,7 +168,7 @@ class ForwardTest:
                          "benchmark": (benchmark or INDEX_FUNDS.get(self.universe) or "^NSEI").upper(),
                          "started": None, "bench_units": None, "bench_cost": None,
                          "last_rebalance": None, "rebalances": [], "history": []}
-        self.broker = LocalPaperBroker(self.dir / f"{self.universe.lower()}_broker.json",
+        self.broker = LocalPaperBroker(self.dir / f"{self.name}_broker.json",
                                        starting_cash=self.data["capital"], price_fn=price_fn,
                                        currency="INR", whole_shares=True, cost_model=cost_model,
                                        now_fn=lambda: self.now().astimezone(timezone.utc).isoformat(timespec="seconds"),

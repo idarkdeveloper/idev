@@ -256,6 +256,17 @@ def test_breadth_fetch_day_stores_and_retries(tmp_path):
     row = store.tick(client, at(19, 1), lambda: ["20MICRONS", "21STCENMGM", "360ONE"])
     assert row["date"] == "2026-10-09" and row["n"] == 3 and row["advances"] >= 1
     assert store.tick(client, at(19, 40), lambda: ["20MICRONS"]) is None and len(sess.calls) == 1   # done
+    # every stock's bar is kept for the late-bar fill, and read back from disk without a request
+    import json as _json
+
+    from trading_agent.groww_fill import NseDailyFile
+    kept = _json.loads((tmp_path / "cache" / "nse_bhav" / "2026-10-09.json").read_text())
+    o, h, lo, c, v = kept["20MICRONS"]
+    assert lo <= o <= h and lo <= c <= h and v > 0
+    got = NseDailyFile(tmp_path / "cache").daily_candles("20microns", "2026-10-08", "2026-10-09")
+    assert got == [{"date": "2026-10-09", "open": o, "high": h, "low": lo, "close": c, "volume": v}]
+    assert NseDailyFile(tmp_path / "cache").daily_candles("NIFTY", "2026-10-09", "2026-10-09") == []
+    assert len(sess.calls) == 1
     # not posted yet (404): tried again later, at most every 20 minutes
     s2, st2 = Session({}), breadth.BreadthStore(tmp_path / "b")
     st2.add_many(_prior_rows())
