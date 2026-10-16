@@ -317,7 +317,13 @@ def test_agent_live_sell_cancels_gtt(settings, tmp_path):
     assert "RELIANCE" not in State(settings.state_dir / "state.json").data["gtt_stops"]
 
 
-def test_agent_live_rejection_is_notified(settings):
+def test_agent_live_rejection_is_notified(settings, monkeypatch):
+    from datetime import datetime
+
+    from trading_agent import day_brake
+    from trading_agent.timezones import IST
+    # after the close: the day brake only measures in market hours, which would need real prices (and no network here)
+    monkeypatch.setattr(day_brake, "_now", lambda: datetime(2026, 10, 16, 18, 0, tzinfo=IST))
     settings.auto_trade = True
     sess = FakeSession(routes({("GET", "/order/status/GMK1"): ok({"order_status": "REJECTED",
                                                                      "remark": "price band"})}))

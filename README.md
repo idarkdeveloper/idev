@@ -334,8 +334,12 @@ article text is never stored (an alert reads its article once, see below).
   `NEWS_TAGGER=claude` (then `NEWS_CLAUDE_MODEL` is billed to your API key).
 - `python -m trading_agent news SYMBOL` prints the tagged headlines;
   `python -m trading_agent news --check-tagger` shows which tagger is active and whether Ollama is ready.
-- Watch mode sends `[NEWS] SYMBOL: headline` once per headline that is negative with medium or high
-  confidence, for stocks you hold or were recently recommended. The alert is a card you can read without
+- Watch mode sends `[NEWS] SYMBOL: headline` once per headline tagged with medium or high confidence that is
+  negative, or positive about a company event (results, order win, deal, rating, guidance, dividend or buyback,
+  management; not "shares rise" chatter), for the practice account's stocks, your real Groww holdings (from the
+  saved holdings snapshot; a holding's existing headlines and filings are recorded silently the first time, so no
+  backlog arrives) and recent recommendations. NSE filings by the same stocks alert too (BSE's for a BSE-only
+  holding; a company listed on both files the same disclosure with each, so NSE's is read). The alert is a card you can read without
   leaving the email: the Google News link is decoded to the publisher's address, the article is read
   (trafilatura: no ads, menus or cookie notices) and the tagger's own model writes a headline, impact and
   event labels, 2-3 key takeaways with the article's numbers and a two-paragraph story; a "Read the

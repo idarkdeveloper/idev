@@ -88,3 +88,28 @@ When `GROWW_ALLOWED_IP` is set, every call that could place, change or cancel an
 looks up the machine's public IP (through the same proxy as the Groww calls, cached for ten
 minutes). If it doesn't match, or can't be found, the order is not sent and you get a clear
 message instead of a rejection from Groww. With `GROWW_ALLOWED_IP` unset, nothing changes.
+
+## Upgrading Python (to 3.15)
+
+The code is tested on Python 3.12 and 3.15 (CI runs both); 3.15 is the target. Every dependency ships ready-made
+3.15 builds for the server (ARM or x86) and for Windows.
+
+**Server.** From the repo folder, after the usual `git pull`:
+
+    sudo sh deploy/upgrade-python.sh
+
+It installs Python 3.15 with `uv` for the `agent` user only, builds a new environment beside the running one, installs
+the requirements and runs the whole offline test suite with it. Only when every test passes does it swap the new
+environment in and restart both services; otherwise nothing changes. The old environment stays as `.venv-prev`:
+`sudo sh deploy/upgrade-python.sh --rollback` puts it back. `.env` and `state/` are not touched. The usual update
+command keeps working afterwards.
+
+**Laptop (Windows).** Install Python 3.15 from python.org, then in the repo folder:
+
+    Rename-Item .venv .venv-prev
+    py -3.15 -m venv .venv
+    .venv\Scripts\pip install -r requirements.txt
+    .venv\Scripts\python -m pytest -q
+
+If the tests fail, delete `.venv` and rename `.venv-prev` back. The autostart task points at `.venv`, so it picks up the
+new Python on its next start.
