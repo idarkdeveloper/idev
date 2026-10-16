@@ -78,17 +78,28 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
                         cost_model: Any | None = None, capital: float = 500_000.0,
                         workers: int = 8, min_turnover: float = 1e7, require_above_200dma: bool = True,
                         membership: Membership | None = None, index_fund: str | None = None,
-                        fundamentals: Any | None = None, quality: float = 0.0, value: float = 0.0
-                        ) -> dict[str, Any]:
+                        fundamentals: Any | None = None, quality: float = 0.0, value: float = 0.0,
+                        until: str | None = None) -> dict[str, Any]:
     """Monthly-rebalanced factor portfolio. With ``fundamentals`` (a ResultsHistory) and a
     quality and/or value weight, each rebalance also ranks on NSE results filings that had
-    been broadcast by that day (point-in-time)."""
+    been broadcast by that day (point-in-time).
+
+    ``until`` (ISO date): nothing on or after it is used. The last rebalance is the last month start before it and
+    the final mark the last trading day before it, so a sealed holdout stays unopened.
+
+    The result's ``diagnostics`` record, per month, the share of the portfolio invested after that month's trades
+    (``invested``), the gross return of the stocks held (``picks_ret``), and the charges as a share of the value
+    before trading (``cost_frac``); plus the traded value and completed holding periods (research.gap_diagnosis)."""
     universe = list(universe)
     # ``value`` is also the name of the portfolio's rupee value below: keep the weight apart
     quality_w, value_w = float(quality), float(value)
     industries = {m["symbol"]: m.get("industry", "") for m in universe}
     current = [m["symbol"] for m in universe]
-    rng = _yahoo_range(years)
+    since_until = 0
+    if until:   # the window ends at ``until``: fetch far enough back from today to cover it and its lookback
+        from datetime import date
+        since_until = max(0, math.ceil((date.today() - date.fromisoformat(until[:10])).days / 365.25))
+    rng = _yahoo_range(years + since_until)
     bench = prices.history(benchmark, rng)
     bench_dates = [b["date"] for b in bench]
     # all stocks that were members at any time in the window (including the lookback year)
@@ -107,6 +118,11 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
     # rebalance on month starts that have a full lookback and fall within the test window
     first_ok = bench_dates[min(MIN_BARS, len(bench_dates) - 1)] if bench_dates else ""
     rebal = [d for d in _month_starts(bench_dates) if d >= first_ok]
+    if until:
+        rebal = [d for d in rebal if d < until]
+        last = next((d for d in reversed(bench_dates) if d < until), None)
+        if rebal and last and last > rebal[-1]:
+            rebal.append(last)   # the final mark only: no trades on it
     if len(rebal) > years * 12 + 1:
         rebal = rebal[-(years * 12 + 1):]
     if len(rebal) < 2:
@@ -135,18 +151,25 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
     ew_value = capital
     curve, ew_curve, bench_curve, picks_log = [], [], [], []
     costs_paid, trades, cash_months = 0.0, 0, 0
+    months_log: list[dict[str, Any]] = []
+    traded_value, held_since, holding_months = 0.0, {}, []
+    invested_frac, cost_frac = 0.0, 0.0
     b0 = _price_at(bench, bench_dates, rebal[0])
 
     for k, day in enumerate(rebal):
         # 1. mark existing holdings to market from the previous rebalance date
         if k > 0:
             prev = rebal[k - 1]
+            held_before = sum(holdings_prev.values())
             for sym in list(holdings):
                 p0 = _price_at(hist[sym], dates_of[sym], prev)
                 p1 = _price_at(hist[sym], dates_of[sym], day)
                 if p0 and p1:
                     holdings[sym] *= p1 / p0
             cash = value - sum(holdings_prev.values())
+            months_log.append({"start": prev, "end": day, "invested": round(invested_frac, 6),
+                               "picks_ret": (sum(holdings.values()) / held_before - 1) if held_before else None,
+                               "cost_frac": round(cost_frac, 8)})
             value = cash + sum(holdings.values())
             # equal-weight universe, rebalanced monthly, no costs
             rets = []
@@ -199,6 +222,10 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
         picks_log.append({"date": day, "picks": picks, "eligible": sum(1 for r in ranked if r["eligible"])})
 
         # 3. trade to equal weight (1/top each; unfilled slots stay in cash)
+        for sym in picks:
+            held_since.setdefault(sym, k)
+        for sym in [s for s in held_since if s not in picks]:
+            holding_months.append(k - held_since.pop(sym))
         target = value / top
         new_holdings: dict[str, float] = {}
         cost = 0.0
@@ -211,14 +238,17 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
                     new_holdings[sym] = cur
                 continue
             trades += 1
+            traded_value += abs(diff)
             if cost_model is not None:
                 cost += cost_model.breakdown("buy" if diff > 0 else "sell", abs(diff))["total"]
             if tgt:
                 new_holdings[sym] = tgt
         costs_paid += cost
+        cost_frac = cost / value if value else 0.0
         value -= cost
         holdings = new_holdings
         holdings_prev = dict(holdings)
+        invested_frac = sum(holdings.values()) / value if value else 0.0
 
     s_stats, b_stats, e_stats = (_stats(curve, rebal), _stats([v for v in bench_curve if v], rebal),
                                  _stats(ew_curve, rebal))
@@ -259,6 +289,10 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
         "missing_history": [{"symbol": m, "why": DELISTED.get(m, "no price history found")} for m in missing],
         "index_changes": membership.changes_between(rebal[0], rebal[-1]) if membership else [],
         "caveat": _caveat(benchmark, membership, point_in_time, dropped, missing),
+        "until": until,
+        "diagnostics": {"months": months_log, "traded_value": round(traded_value, 2),
+                        "holding_months": holding_months,
+                        "open_holding_months": [len(rebal) - 1 - k for k in held_since.values()]},
         "fundamentals": ({"quality": quality_w, "value": value_w, "source": "NSE results filings, point-in-time",
                           "avg_coverage": round(statistics.fmean(fund_cover), 3) if fund_cover else 0.0,
                           "note": "Valued on today's share count with split-adjusted prices, so later share "

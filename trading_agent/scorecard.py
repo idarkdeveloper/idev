@@ -5,6 +5,12 @@ then the stock's return over 5 / 20 / 60 trading days and its excess over its ow
 benchmark. A buy counts as right when the excess beats the round-trip cost; a sell
 when the stock then lagged its benchmark. Watch and hold calls are reported, not scored.
 
+Expectancy in R: a 70% hit rate loses money if the misses are much bigger than the hits, so each scored call is
+also measured in R, the risk unit the agent sizes on: 1R = 2 x ATR(14) at the entry close (the move a position is
+sized to lose 1% of equity on; ATR from the bars up to the entry day only). A buy's result is its excess after the
+round-trip cost, a sell's the excess it avoided, divided by 1R. Expectancy is the average result in R: above zero,
+the calls make money on average whatever the hit rate. A result above zero is exactly a call counted as right.
+
 Which benchmark: a mid-cap pick carries more market risk than a large cap, so in a rally
 a mediocre mid-cap looks like alpha against the NIFTY 50. Each Indian recommendation is
 therefore scored against the index fund of the index the stock belonged to ON THE DAY OF
@@ -22,6 +28,9 @@ from typing import Any, Iterable
 
 from .backtest import _forward
 from .factor_backtest import INDEX_FUNDS
+from .risk import atr
+
+ATR_N, ATR_MULT = 14, 2.0   # 1R, the agent's sizing risk unit (risk.position_size)
 
 HORIZONS = (5, 20, 60)
 
@@ -112,6 +121,29 @@ def pick_benchmark(ticker: str, day: str, memberships: dict[str, Any] | None) ->
     return NIFTY_FUND, ASSUMED_NOTE if assumed else None
 
 
+def risk_unit(bars: list[dict[str, Any]], entry_date: str | None) -> float | None:
+    """1R as a fraction of the entry close: 2 x ATR(14) from the bars up to and including the entry day (nothing
+    later is read). None when there are not enough bars before the entry or no entry yet."""
+    if not entry_date:
+        return None
+    upto = [b for b in bars if b["date"] <= entry_date]
+    a = atr(upto[-(ATR_N + 1):], ATR_N) if upto else None
+    close = upto[-1]["close"] if upto else None
+    if not a or not close or a <= 0 or close <= 0:
+        return None
+    return ATR_MULT * a / close
+
+
+def _expectancy(rs: list[float]) -> dict[str, Any]:
+    """Expectancy (mean result in R) with the average win and loss and how many calls had a 1R. {} when none."""
+    if not rs:
+        return {}
+    wins, losses = [x for x in rs if x > 0], [x for x in rs if x <= 0]
+    return {"n_r": len(rs), "expectancy_r": statistics.fmean(rs),
+            "avg_win_r": statistics.fmean(wins) if wins else None,
+            "avg_loss_r": statistics.fmean(losses) if losses else None}
+
+
 def _aggregate(rows: list[dict[str, Any]], horizons: tuple[int, ...]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for action in ("buy", "sell", "watch", "hold"):
@@ -126,6 +158,8 @@ def _aggregate(rows: list[dict[str, Any]], horizons: tuple[int, ...]) -> dict[st
                      and r["correct"].get(str(h)) is not None]
             if calls:
                 item["hit_rate"] = sum(calls) / len(calls)
+            item.update(_expectancy([r["r"][str(h)] for r in rows if r["action"] == action
+                                     and r.get("r", {}).get(str(h)) is not None]))
             per_h[str(h)] = item
         if per_h:
             out[action] = per_h
@@ -162,7 +196,8 @@ def score_recommendations(recs: Iterable[dict[str, Any]], prices: Any, *, horizo
                                "confidence": r.get("confidence"), "headline": r.get("headline"),
                                "investor": r.get("investor") or "",
                                "dismissed": bool(r.get("dismissed")), "returns": {}, "excess": {},
-                               "excess_nifty": {}, "correct": {}, "error": None, "benchmark": benchmark}
+                               "excess_nifty": {}, "correct": {}, "r": {}, "risk": None, "error": None,
+                               "benchmark": benchmark}
         try:
             bench_sym = benchmark
             if per_universe:
@@ -200,6 +235,7 @@ def score_recommendations(recs: Iterable[dict[str, Any]], prices: Any, *, horizo
             notional = float(r.get("suggested_notional_usd") or 0) or default_notional
             cost = (cost_model.round_trip_bps(notional) / 10_000) if cost_model is not None else 0.0
             row["cost"] = cost
+            risk = row["risk"] = risk_unit(bars, entry_date)
             for h in horizons:
                 ret, b, nb_ret = rets.get(h), b_rets.get(h), n_rets.get(h)
                 row["returns"][str(h)] = ret
@@ -212,6 +248,10 @@ def score_recommendations(recs: Iterable[dict[str, Any]], prices: Any, *, horizo
                     row["correct"][str(h)] = ex - cost > 0
                 else:
                     row["correct"][str(h)] = ex < 0
+                if ex is None or action in {"watch", "hold"} or not risk:
+                    row["r"][str(h)] = None
+                else:   # in R: a buy keeps its excess after charges, a sell the excess it avoided
+                    row["r"][str(h)] = ((ex - cost) if action == "buy" else -ex) / risk
             if entry_date is None:
                 row["error"] = "no trading day after the recommendation yet"
         except Exception as e:  # noqa: BLE001
@@ -240,6 +280,14 @@ def score_recommendations(recs: Iterable[dict[str, Any]], prices: Any, *, horizo
     return {"summary": summary, "rows": rows}
 
 
+def _r_text(r: dict[str, Any]) -> str:
+    if r.get("expectancy_r") is None:
+        return ""
+    w, lo = r.get("avg_win_r"), r.get("avg_loss_r")
+    parts = [f"win {w:+.2f}R" if w is not None else None, f"loss {lo:+.2f}R" if lo is not None else None]
+    return f"  expectancy {r['expectancy_r']:+.2f}R ({', '.join(x for x in parts if x)})"
+
+
 def format_scorecard(result: dict[str, Any]) -> str:
     s = result["summary"]
     if s.get("per_universe"):
@@ -257,7 +305,7 @@ def format_scorecard(result: dict[str, Any]) -> str:
             for h, r in per_h.items():
                 hit = f"  right {r['hit_rate']*100:4.0f}%" if "hit_rate" in r else ""
                 lines.append(f"{indent}  {h:>3}d  n={r['n']:<4} mean excess {r['mean_excess']*100:+6.2f}%  "
-                             f"median {r['median_excess']*100:+6.2f}%{hit}")
+                             f"median {r['median_excess']*100:+6.2f}%{hit}{_r_text(r)}")
 
     block(s["by_action"], "  ")
     if s.get("per_universe") and len(s.get("by_benchmark", {})) > 0:
@@ -270,4 +318,7 @@ def format_scorecard(result: dict[str, Any]) -> str:
         lines.append(f"  {s['assumed_membership']} call(s): {ASSUMED_NOTE}.")
     for w in s.get("membership_warnings") or []:
         lines.append(f"  Note: {w}")
+    if any(r.get("expectancy_r") is not None for per_h in s["by_action"].values() for r in per_h.values()):
+        lines.append("  1R = 2 x ATR(14) at entry (the sizing rule's risk unit); expectancy = average result per call "
+                     "in R, after charges for buys. Above 0R the calls make money on average, whatever the hit rate.")
     return "\n".join(lines)

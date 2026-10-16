@@ -487,6 +487,16 @@ It ends with one verdict: likely skill (only against the universe's own index fu
 least 3 full out-of-sample years), could be luck, or no edge. The signal lab applies
 the same deflation to every signal and horizon, shown as "Real-edge odds".
 
+**Why did the screen trail its index fund?** (research step A)
+`python -m trading_agent research-gap --universe NIFTYMIDCAP150` re-runs the monthly screen for the 5 years before
+the sealed holdout (nothing from 1 Oct 2025 on is used) and splits its gap to the index fund into three parts that
+add up exactly: *cash timing* (the trend filter leaving slots in cash: the fund held with the same invested share,
+minus the fund), *stock selection* (the picks before charges, minus that same-share fund) and *charges*. Each is
+shown with cash earning nothing and with cash in a liquid fund (6.5% a year), plus the split in months the fund rose
+or fell, the yearly turnover and how long a stock stays held. The verdict follows a rule set before the run: if
+selection added nothing, post-results drift is researched before the drawdown brake and the weights. Every run is
+appended to `state/research/trials.jsonl`, the trial log later deflated-Sharpe checks count.
+
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.
@@ -678,7 +688,7 @@ treated as missing (no filtering).
 | `NOTIFY_WEBHOOK_URL` | POST `{"text": ...}` to Slack/Discord/n8n/etc. |
 | `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` | Mirror every alert and daily email to Telegram (`TELEGRAM_ALERTS=false` = off). Runbook section 13. |
 | `TELEGRAM_COMMANDS` | `false` (default). `true` = the watch service answers commands from `TELEGRAM_CHAT_ID` only (your private chat with the bot): `/lookup`, `/size`, `/portfolio`, `/brief`, `/stops`, `/status`, `/help`, and **practice** `/buy NAME QTY` (or `₹AMOUNT`) / `/sell NAME QTY`. A company name works everywhere (`/size tata steel 1 10`); a name that fits several companies gets "Did you mean…" buttons. Orders show "Company (CODE)" and each with a Confirm / Cancel button that expires after 2 minutes. Orders go through the dashboard's practice path (Indian filters, price bands, collar time rule, day brake, HALT); there is no path to a live order. `/lookup` replies with **📏 Size (1%)**, **🛡️ Stops**, **📈 Chart** and **🟢 Practice Buy** buttons (the last only shows the `/buy` line to send). `/chart NAME` sends a picture of 3 months of daily candles with the 20/50-day EMAs and your cost and stop. A BSE-only stock is typed as its code with `.BO` (`/lookup XYZ.BO`, `/chart XYZ.BO`); it gets Stops and Chart buttons only, and `/buy` of it is refused at once (it is information only; a practice sell still works). The daily brief on Telegram gets **💼 Portfolio / 🛡️ Stops / 🩺 Status** buttons that run those read commands. `/halt` is the emergency kill switch: an **⛔ ENGAGE HALT** / Cancel prompt good for 60 seconds, then the dashboard's own kill switch (state/HALT, the watch stops, an alert); it is never rate-limited, and HALT is released from the dashboard or the CLI only. 20 commands a minute; Health tab row. |
-| `HEARTBEAT_URL` | https ping URL called every 5 minutes by the watch service (healthchecks.io style dead-man's switch). Runbook section 12. |
+| `HEARTBEAT_URL` | https ping URL called every minute by the watch service (healthchecks.io style dead-man's switch). Runbook section 12. |
 | `TA_ALLOWED_HOSTS` | Extra Host names the dashboard answers to besides localhost, as a comma list of exact names (for phone access over Tailscale: `box.tail1234.ts.net`). Any other Host gets HTTP 421. Runbook section 15. |
 | `TRADINGVIEW_SCREENER`, `TA_ROLE` | Screener page (`/screener`): `TRADINGVIEW_SCREENER=true` (default `false`, also a Settings switch) adds a few display-only TradingView columns from its unofficial scanner endpoint, whose terms restrict automated access. One request per list at most every 15 minutes; any error or HTTP 403/429 pauses it for 24 hours. `TA_ROLE=server` (set it in the cloud server's `.env`) makes the code refuse to call TradingView from that box. |
 | `INTEGRATION_CHECK`, `INTEGRATION_CLAUDE` | `true` / `false` (defaults). The daily read-only check of the live services at 08:30 IST, and whether it also makes one 5-token Claude call. See *Development*. |
@@ -691,7 +701,7 @@ treated as missing (no filtering).
 The Oracle server's `trading-agent-watch` service is the only engine: it checks deals,
 stops, announcements and news every minute in market hours, sends the daily emails, runs
 the paper forward test after the close, and (optionally) pings a dead-man's-switch URL
-every 5 minutes (`HEARTBEAT_URL`) and mirrors every alert to Telegram
+every minute (`HEARTBEAT_URL`) and mirrors every alert to Telegram
 (`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`). See `docs/runbook.md` sections 11 to 14.
 
 `.github/workflows/routine.yml` used to run a second engine every 30 minutes. It no longer
