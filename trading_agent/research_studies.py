@@ -649,3 +649,60 @@ def format_momentum_robustness(r: dict[str, Any]) -> str:
                  "the run; the best variant is not adopted (that would be a new trial). Skill odds need 0.95; the "
                  "holdout stays sealed.")
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# the sealed holdout: the adopted rules on the months they have never seen, once
+# --------------------------------------------------------------------------- #
+HOLDOUT_STUDY = "Adopted-holdout"
+HOLDOUT_FALL_MARGIN = 0.10   # the rules' worst fall may be at most 10 points deeper than the fund's
+HOLDOUT_RULE = ("passes when the adopted rules (no stop, tax-aware buffer 35/50, 25% floor, same-close fills) beat "
+                "MID150BEES after charges and tax over the sealed months AND their worst fall is no more than 10 points "
+                "deeper than the fund's; set on 16 Oct 2026 before the run")
+
+
+def holdout(m: Market, *, cost_model: Any, capital: float = 500_000.0) -> dict[str, Any]:
+    """The adopted rules, unchanged, from the first month start on or after the holdout's first day to the latest
+    session. Judged only by HOLDOUT_RULE; the hardest robustness case (next-day fills, costs x2) is shown beside it
+    for information. Too few months for skill odds: one year out of sample is a check, not a proof."""
+    start = _first_ranked_day(m)
+    end = len(m.dates) - 1
+    if m.dates[start] < HOLDOUT_START:
+        raise ValueError(f"the window starts {m.dates[start]}, before the holdout ({HOLDOUT_START})")
+    runs = {"adopted": simulate(m, FINALIST, start, end, capital=capital, cost_model=cost_model),
+            "next-day fills + costs x2": simulate(m, with_rules(FINALIST, lag=1, cost_mult=2.0), start, end,
+                                                  capital=capital, cost_model=cost_model)}
+    results = {k: summarize(r, m, start, end) for k, r in runs.items()}
+    months = {k: [x for x in _excess_monthly(r, m, start, end) if x is not None] for k, r in runs.items()}
+    for k, x in results.items():
+        x["months"] = len(months[k])
+        x["months_ahead"] = sum(1 for v in months[k] if v > 0)
+    a = results["adopted"]
+    beats = a["excess"] is not None and a["excess"] > 0
+    fall_ok = (a["max_drawdown"] is not None and a["fund_max_drawdown"] is not None
+               and a["max_drawdown"] >= a["fund_max_drawdown"] - HOLDOUT_FALL_MARGIN)
+    return {"start": m.dates[start], "end": m.dates[end], "results": results, "beats_fund": beats,
+            "fall_ok": fall_ok, "passes": beats and fall_ok, "rule": HOLDOUT_RULE}
+
+
+def format_holdout(r: dict[str, Any]) -> str:
+    def pct(v: Any, f: str = "+.1f") -> str:
+        return "n/a" if v is None else f"{v * 100:{f}}%"
+    lines = [f"THE SEALED HOLDOUT, opened once: the adopted rules, unchanged, {r['start']} to {r['end']} "
+             "(after charges and tax).",
+             f"  Rule: {r['rule']}.",
+             f"  {'variant':<30}{'return':>9}{'fund':>9}{'vs fund':>9}{'worst fall':>11}{'fund fall':>10}"
+             f"{'months ahead':>14}{'turnover':>9}"]
+    for name, x in r["results"].items():
+        lines.append(f"  {name:<30}{pct(x['total_return']):>9}{pct(x['fund_total_return']):>9}{pct(x['excess']):>9}"
+                     f"{pct(x['max_drawdown']):>11}{pct(x['fund_max_drawdown']):>10}"
+                     f"{str(x['months_ahead']) + ' of ' + str(x['months']):>14}"
+                     f"{pct(x['turnover'], '.0f'):>9}")
+    a = r["results"]["adopted"]
+    lines.append(f"  Beats the fund: {'yes' if r['beats_fund'] else 'NO'} ({pct(a['excess'])}). Worst fall within 10 points "
+                 f"of the fund's: {'yes' if r['fall_ok'] else 'NO'} ({pct(a['max_drawdown'])} vs {pct(a['fund_max_drawdown'])}).")
+    lines.append("  Verdict: " + ("PASSED: the edge survived months it never saw." if r["passes"] else
+                                  "FAILED: the adopted rules did not meet the rule on months they never saw.")
+                 + " One year out of sample is a check, not a proof; the forward test keeps running either way. "
+                 "The holdout is now spent and cannot be used again.")
+    return "\n".join(lines)
