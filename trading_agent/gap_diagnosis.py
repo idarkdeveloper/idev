@@ -90,7 +90,10 @@ def diagnose(result: dict[str, Any], *, liquid_rate: float = LIQUID_RATE) -> dic
     avg_value = statistics.fmean(result["strategy"]) if result.get("strategy") else 0.0
     done, still = diag.get("holding_months") or [], diag.get("open_holding_months") or []
     turnover = diag.get("traded_value", 0.0) / avg_value / years if avg_value and years else None
-    check = abs(split0["strategy"] - (result["strategy"][-1] / result["strategy"][0] - 1))
+    # the backtest stores its monthly figures rounded (shares to 6 decimals, values to paise), so the rebuilt growth
+    # can differ by rounding; anything above 1 part in 100,000 of the final value is a real mismatch
+    growth = result["strategy"][-1] / result["strategy"][0]
+    check = abs(split0["strategy"] + 1 - growth) / max(growth, 1.0)
     sel = split0["selection"]
     if sel > 0.005:
         verdict = ("Stock selection added value; the shortfall comes from cash timing and charges. Next: the stop "
@@ -110,7 +113,7 @@ def diagnose(result: dict[str, Any], *, liquid_rate: float = LIQUID_RATE) -> dic
         "holding_months": {"completed": len(done), "median": statistics.median(done) if done else None,
                            "mean": statistics.fmean(done) if done else None,
                            "still_open": len(still), "median_open": statistics.median(still) if still else None},
-        "reconciles_to_backtest": check < 1e-6,
+        "reconciles_to_backtest": check < 1e-5,
         "verdict": verdict,
     }
 

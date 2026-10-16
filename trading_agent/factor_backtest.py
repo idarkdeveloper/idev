@@ -246,6 +246,9 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
         costs_paid += cost
         cost_frac = cost / value if value else 0.0
         value -= cost
+        held = sum(new_holdings.values())
+        if held > value > 0:   # the charges come out of the positions, not a negative cash balance (no leverage)
+            new_holdings = {k: v * value / held for k, v in new_holdings.items()}
         holdings = new_holdings
         holdings_prev = dict(holdings)
         invested_frac = sum(holdings.values()) / value if value else 0.0

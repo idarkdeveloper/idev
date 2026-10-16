@@ -81,3 +81,19 @@ def test_no_index_fund_is_an_error_and_trials_are_logged(tmp_path):
     log_trial(tmp_path, "A-gap", {"top": 30}, {"selection": -0.01})
     rows = [json.loads(x) for x in path.read_text().splitlines()]
     assert [x["params"]["top"] for x in rows] == [20, 30] and rows[0]["study"] == "A-gap"
+
+
+def test_charges_never_leave_cash_negative_and_rounding_does_not_break_the_check():
+    r = run()
+    assert all(m["invested"] <= 1.0 + 1e-9 for m in r["diagnostics"]["months"])   # no borrowing to pay charges
+    # a strategy that grew 7x with rounded monthly figures still reconciles; a real 0.1% mismatch does not
+    months = [{"start": f"2020-{i + 1:02d}-01", "end": f"2020-{i + 2:02d}-01", "invested": 0.999999,
+               "picks_ret": 0.215, "cost_frac": 0.00012345} for i in range(10)]
+    fund = [100.0 * 1.01 ** i for i in range(11)]
+    exact = _paths(months, [fund[i + 1] / fund[i] - 1 for i in range(10)], 0.0)["net"]
+    curve = [round(100_000 * v, 2) for v in exact]
+    ok = diagnose({"index_fund": fund, "diagnostics": {"months": months}, "strategy": curve})
+    assert curve[-1] / curve[0] > 6 and ok["reconciles_to_backtest"] is True
+    curve[-1] *= 1.001
+    bad = diagnose({"index_fund": fund, "diagnostics": {"months": months}, "strategy": curve})
+    assert bad["reconciles_to_backtest"] is False
