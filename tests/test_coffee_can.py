@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 
 from trading_agent.coffee_can import (UnionMembership, annual_rows, coffee_can_ranker, filing_coverage, is_financial,
-                                      qualifies, reason_kind)
+                                      qualifies, reason_kind, rebuilt_equity_check)
 from trading_agent.fundamentals_history import ResultsHistory, parse_results_xbrl
 from trading_agent.research_sim import Market, Rules, simulate
 
@@ -61,7 +61,7 @@ def test_roce_n_a_says_what_is_missing_and_coverage_counts_it():
     assert qualifies(annual_rows(no_pbt, "2024-06-01"), 4)[1] == "ROCE n/a (no profit before tax) in FY2020"
     assert reason_kind("ROCE n/a (no balance sheet) in FY2021") == "ROCE n/a (no balance sheet) in FY2021"
     cov = dict((fy, rest) for fy, *rest in filing_coverage({"A": no_bs, "B": GROWER}))
-    assert cov["2021"] == [2, 2, 2, 1] and cov["2019"] == [2, 2, 2, 2]
+    assert cov["2021"] == [2, 2, 2, 1, 0] and cov["2019"] == [2, 2, 2, 2, 0]
 
 
 def test_reasons_are_counted_without_the_numbers():
@@ -130,4 +130,34 @@ def test_xbrl_full_year_fields_and_the_annual_reader(tmp_path):
         {"period_end": "2024-06-30", "available": "2024-08-10T18:00:00", "consolidated": True, "xbrl": "q.xml"}]
     out = h.annual("X")
     assert len(out) == 1 and out[0]["consolidated"] is True and out[0]["pbt_ytd"] == 900.0
-    assert h.session.urls == ["c.xml"] and (tmp_path / "nse_results" / "filings_v3" / "c.json").exists()
+    assert h.session.urls == ["c.xml"] and (tmp_path / "nse_results" / "filings_v4" / "c.json").exists()
+
+
+def test_old_filings_rebuild_equity_and_estimate_borrowings_only_when_asked():
+    old = [dict(r, equity=r["equity"] + r["borrowings"] * 0, equity_source="rebuilt", borrowings=None)
+           if r["period_end"] < "2022" else dict(r, equity_source="balance_sheet") for r in GROWER]
+    strict = annual_rows(old, "2024-06-01")
+    assert strict[0]["roce"] is None and strict[0]["roce_missing"] == "no borrowings before FY2023"
+    assert strict[-1]["roce"] is not None and not strict[-1]["estimated"]
+    est = annual_rows(old, "2024-06-01", debt_rate=0.09)
+    assert est[0]["estimated"] and est[0]["capital"] == pytest.approx(GROWER[0]["equity"] + 2 / 0.09)
+    assert not est[-1]["estimated"]
+    assert qualifies(strict, 4)[1].startswith("ROCE n/a (no borrowings before FY2023)")
+    assert qualifies(est, 4) == (True, "passes every year")
+
+
+def test_rebuilt_equity_from_a_filing_and_the_agreement_check():
+    from trading_agent.fundamentals_history import parse_results_xbrl
+    old = xbrl([("PaidUpValueOfEquityShareCapital", "FourD", "3700000000"),
+                ("ReserveExcludingRevaluationReserves", "FourD", "867380000000"),
+                ("ProfitBeforeTax", "FourD", "100")])
+    r = parse_results_xbrl(old, date(2021, 3, 31))
+    assert r["equity"] == pytest.approx(871_080_000_000) and r["equity_source"] == "rebuilt"
+    q = parse_results_xbrl(old, date(2021, 12, 31))          # a quarter's reserves are last year's: not used
+    assert q["equity"] is None and q["equity_rebuilt"] == pytest.approx(871_080_000_000)
+    new = xbrl([("Equity", "OneI", "1000"), ("PaidUpValueOfEquityShareCapital", "FourD", "10"),
+                ("ReserveExcludingRevaluationReserves", "FourD", "985")])
+    n = parse_results_xbrl(new, date(2024, 3, 31))
+    assert n["equity"] == 1000 and n["equity_source"] == "balance_sheet" and n["equity_rebuilt"] == 995
+    far = dict(n, equity_rebuilt=900.0)
+    assert rebuilt_equity_check({"A": [n], "B": [far], "C": [r]}) == (2, 1)
