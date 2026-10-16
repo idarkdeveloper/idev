@@ -326,7 +326,7 @@
         const chip = s ? `<span class="pill ${s[0]}" title="${esc((i.event || "").replace(/_/g, " "))}, ${esc(i.confidence || "")} confidence">${s[1]}</span> ` : "";
         return `<div class="ann"><div class="meta">${esc(istStamp(i.published))} · ${esc(i.source)}${i.event ? " · " + esc(i.event.replace(/_/g, " ")) : ""}</div><div>${chip}${href ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(i.title)}</a>` : esc(i.title)}</div></div>`; }).join("");
       const errs = (n.errors || []).length ? `<div class="sub" style="font-size:12px">Some sources failed: ${esc(n.errors.join("; "))}</div>` : "";
-      const note = !items.length ? "" : n.tagger === "none" ? "Headlines are not labelled: start Ollama or set NEWS_TAGGER (see the README)."
+      const note = !items.length ? "" : n.tagger === "none" ? "Headlines are not labelled: start Ollama or set NEWS_TAGGER (see docs/guide.md)."
         : TA.newsNeedsLabels(n) ? (n.tagger && n.tagger !== "pending" ? `Labelling with ${n.tagger}…` : "Labelling headlines…")
         : "Labels come from a language model and can be wrong.";
       return `<h3 style="margin-top:6px">News, last 7 days</h3>${rows || `<div class="sub">none found</div>`}${errs}${note ? `<div class="sub" style="font-size:12px">${esc(note)}</div>` : ""}`;

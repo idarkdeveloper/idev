@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-label="idev25: a Claude trading agent for NSE and Groww. 1,944 offline tests, about 50 commands, two switches before any real order, a five-year after-tax backtest, one sealed holdout, no keys needed for the demo.">
+  <defs>
+    <radialGradient id="glow" cx="18%" cy="0%" r="75%">
+      <stop offset="0" stop-color="#8b7cf6" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#8b7cf6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="95%" cy="100%" r="55%">
+      <stop offset="0" stop-color="#2dd4bf" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#2dd4bf" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#ffffff" stroke-opacity="0.035"/>
+    </pattern>
+    <linearGradient id="bar" x1="0" x2="1">
+      <stop offset="0" stop-color="#8b7cf6"/>
+      <stop offset="1" stop-color="#2dd4bf"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="440" rx="18" fill="#12131c"/>
+  <rect width="1200" height="440" rx="18" fill="url(#grid)"/>
+  <rect width="1200" height="440" rx="18" fill="url(#glow)"/>
+  <rect width="1200" height="440" rx="18" fill="url(#glow2)"/>
+  <rect x="0.5" y="0.5" width="1199" height="439" rx="18" fill="none" stroke="#2a2c3d"/>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="2.4" fill="#8a8ca8">
+    <text x="56" y="56">IDEV25 · CLAUDE TRADING AGENT · NSE + GROWW</text>
+    <text x="1144" y="56" text-anchor="end">PAPER FIRST</text>
+  </g>
+
+  <g font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+    <text x="54" y="122" font-size="50" font-weight="700" fill="#f2f2f8">Follow the big money<tspan fill="#8b7cf6">.</tspan></text>
+    <text x="56" y="160" font-size="19" fill="#c9cae0">India's big investors disclose their trades. The agent reads them, checks your Groww</text>
+    <text x="56" y="186" font-size="19" fill="#c9cae0">portfolio, and Claude tells you what it would do, <tspan font-weight="700" fill="#2dd4bf">in practice money</tspan> until you say otherwise.</text>
+    <text x="56" y="214" font-size="13" fill="#8a8ca8">NSE + BSE bulk and block deals · insider filings · momentum screen · research that counts every try</text>
+  </g>
+
+  <g font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+    <rect x="56" y="240" width="1088" height="62" rx="10" fill="#1a1b28" stroke="#2a2c3d"/>
+    <text x="78" y="266" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="10.5" letter-spacing="2" fill="#8a8ca8">SAFETY · BY DEFAULT</text>
+    <text x="78" y="288" font-size="15" font-weight="600" fill="#f2f2f8">Real orders are off. Two switches must both be on, and a kill switch stops everything.</text>
+    <rect x="808" y="280" width="316" height="6" rx="3" fill="#2a2c3d"/>
+    <rect x="808" y="280" width="316" height="6" rx="3" fill="url(#bar)"/>
+    <text x="1124" y="268" text-anchor="end" font-size="12" fill="#8a8ca8">GROWW_LIVE_ORDERS=false · AUTO_TRADE=false</text>
+  </g>
+
+  <g font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif" text-anchor="middle">
+    <g transform="translate(56 326)">
+      <rect width="168" height="78" rx="10" fill="#151626" stroke="#8b7cf6" stroke-opacity="0.55"/>
+      <text x="84" y="38" font-size="24" font-weight="700" fill="#b9adff">1,944</text>
+      <text x="84" y="60" font-size="10.5" letter-spacing="1.2" fill="#8a8ca8">OFFLINE TESTS</text>
+    </g>
+    <g transform="translate(240 326)">
+      <rect width="168" height="78" rx="10" fill="#151626" stroke="#2dd4bf" stroke-opacity="0.55"/>
+      <text x="84" y="38" font-size="24" font-weight="700" fill="#5eead4">~50</text>
+      <text x="84" y="60" font-size="10.5" letter-spacing="1.2" fill="#8a8ca8">COMMANDS</text>
+    </g>
+    <g transform="translate(424 326)">
+      <rect width="168" height="78" rx="10" fill="#151626" stroke="#f472b6" stroke-opacity="0.5"/>
+      <text x="84" y="38" font-size="24" font-weight="700" fill="#f9a8d4">2</text>
+      <text x="84" y="60" font-size="10.5" letter-spacing="1.2" fill="#8a8ca8">SWITCHES TO GO LIVE</text>
+    </g>
+    <g transform="translate(608 326)">
+      <rect width="168" height="78" rx="10" fill="#151626" stroke="#fbbf24" stroke-opacity="0.5"/>
+      <text x="84" y="38" font-size="24" font-weight="700" fill="#fcd34d">5 yrs</text>
+      <text x="84" y="60" font-size="10.5" letter-spacing="1.2" fill="#8a8ca8">BACKTEST, AFTER TAX</text>
+    </g>
+    <g transform="translate(792 326)">
+      <rect width="168" height="78" rx="10" fill="#151626" stroke="#60a5fa" stroke-opacity="0.5"/>
+      <text x="84" y="38" font-size="24" font-weight="700" fill="#93c5fd">1</text>
+      <text x="84" y="60" font-size="10.5" letter-spacing="1.2" fill="#8a8ca8">SEALED HOLDOUT</text>
+    </g>
+    <g transform="translate(976 326)">
+      <rect width="168" height="78" rx="10" fill="#151626" stroke="#a3e635" stroke-opacity="0.5"/>
+      <text x="84" y="38" font-size="24" font-weight="700" fill="#bef264">0</text>
+      <text x="84" y="60" font-size="10.5" letter-spacing="1.2" fill="#8a8ca8">KEYS FOR THE DEMO</text>
+    </g>
+  </g>
+</svg>
