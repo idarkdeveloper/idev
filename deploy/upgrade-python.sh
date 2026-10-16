@@ -37,6 +37,7 @@ sudo -u "$USER_NAME" -H "$UV" python install "$VERSION"
 rm -rf .venv-next
 sudo -u "$USER_NAME" -H "$UV" venv --seed -p "$VERSION" .venv-next
 sudo -u "$USER_NAME" -H "$UV" pip install -q -p .venv-next/bin/python -r requirements.txt
+sudo -u "$USER_NAME" -H .venv-next/bin/python -m pip --version >/dev/null   # the update command needs python -m pip
 echo "Testing with $(.venv-next/bin/python --version) (offline; takes a few minutes)..."
 if ! sudo -u "$USER_NAME" -H .venv-next/bin/python -m pytest -q -p no:cacheprovider; then
   echo "Tests failed on Python $VERSION: nothing was switched. The services still run $(.venv/bin/python --version)."

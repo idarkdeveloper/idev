@@ -188,11 +188,25 @@ df -h / && free -h
 systemctl status ollama --no-pager && ollama list
 ```
 
-**Update the server to the latest code** (from the laptop, one line):
+**Update the server to the latest code.** One click (recommended):
 
 ```powershell
-ssh -i $HOME\.ssh\oracle_agent ubuntu@130.210.18.7 "cd /opt/trading-agent && sudo -u agent git pull && sudo -u agent .venv/bin/pip install -q -r requirements.txt && sudo systemctl restart trading-agent-watch trading-agent-dashboard"
+powershell -ExecutionPolicy Bypass -File "C:\projects\Share Trade\deploy\windows\update-server.ps1"
 ```
+
+It pulls the latest code, installs new requirements, restarts both services, shows whether they are running and the
+commit they run, and waits for Enter. To make a desktop icon: right-click the desktop → New → Shortcut → paste
+`powershell -ExecutionPolicy Bypass -File "C:\projects\Share Trade\deploy\windows\update-server.ps1"` → name it
+*Update server*.
+
+The same as one line:
+
+```powershell
+ssh -i $HOME\.ssh\oracle_agent ubuntu@130.210.18.7 "cd /opt/trading-agent && sudo -u agent git pull && sudo -u agent .venv/bin/python -m pip install -q -r requirements.txt && sudo systemctl restart trading-agent-watch trading-agent-dashboard"
+```
+
+Use `.venv/bin/python -m pip`, not `.venv/bin/pip`: the Python 3.15 environment made by `deploy/upgrade-python.sh` has
+no `pip` script, so the old form stops before the restart.
 
 **Copy a file to the server** (example: a holdings snapshot):
 
@@ -310,7 +324,7 @@ prints what a check would do, with no Groww login, no Claude call, no email and 
 1. On the server, update and restart:
    ```bash
    cd /opt/trading-agent && sudo -u agent git pull
-   sudo -u agent .venv/bin/pip install -r requirements.txt
+   sudo -u agent .venv/bin/python -m pip install -r requirements.txt
    sudo systemctl restart trading-agent-watch trading-agent-dashboard
    ```
 2. Recreate the forward test (its state used to live only in the GitHub Actions cache), once:
