@@ -544,7 +544,7 @@ HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum",
                 "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
-                "research-model"}
+                "research-model", "research-robustness"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -967,6 +967,26 @@ def cmd_research_portfolio(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research_robustness(args: argparse.Namespace) -> int:
+    """The forward test's rules under harder assumptions: next-day fills, 1.5x and 2x costs; survivorship count."""
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .research_studies import format_robustness, prior_trials, robustness
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    r = robustness(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                   extra_trials=prior_trials(settings.state_dir), progress=print)
+    print(format_robustness(r))
+    for name, x in r["results"].items():
+        log_trial(settings.state_dir, "robustness", {"variant": name, "until": args.until},
+                  {"return": x["total_return"], "excess": x["excess"], "max_drawdown": x["max_drawdown"],
+                   "skill": x["skill"].get("probability")})
+    if args.json:
+        print(json.dumps({**r, "results": {k: {kk: vv for kk, vv in v.items() if kk != "skill"}
+                                           for k, v in r["results"].items()}}, default=str))
+    return 0
+
+
 def cmd_insider_history(args: argparse.Namespace) -> int:
     """Download NSE insider (PIT) disclosures month by month into the cache (resumable)."""
     from datetime import date as _date
@@ -1027,14 +1047,20 @@ def cmd_research_barrier(args: argparse.Namespace) -> int:
     r = barrier_study(m, start, len(m.dates) - 1, rule=args.stop, cost=cost, target_r=args.target, max_days=args.days)
     print(f"Triple barrier ({args.stop} stop, target +{args.target:g}R, at most {args.days} days), top fifth at each "
           f"month start, {m.dates[start]} to {m.dates[-1]}; after a {cost * 100:.2f}% round trip and the liquid fund:")
-    print(f"  {'signal':<22}{'per trade':>10}{'t':>7}{'hit rate':>9}{'avg days':>9}  {'exits t/s/time':<16}verdict")
+    print(f"  {'signal':<22}{'per trade':>10}{'t':>7}{'t adj':>7}{'hit rate':>9}{'avg days':>9}  "
+          f"{'exits t/s/time':<16}verdict")
     for k, x in sorted(r.items(), key=lambda kv: -(kv[1]["mean_net"] if kv[1]["mean_net"] is not None else -9)):
         e = x["exits"]
         print(f"  {k:<22}" + _num(None if x["mean_net"] is None else x["mean_net"] * 100, "+.2f", 9) + "%"
-              + _num(x["t"], "+.1f", 7) + _num(None if x["hit_rate"] is None else x["hit_rate"] * 100, ".0f", 8) + "%"
+              + _num(x["t"], "+.1f", 7) + _num(x.get("t_overlap"), "+.1f", 7)
+              + _num(None if x["hit_rate"] is None else x["hit_rate"] * 100, ".0f", 8) + "%"
               + _num(x["avg_days"], ".0f", 9) + f"  {e['target']}/{e['stop']}/{e['time']}".ljust(18) + x["verdict"])
         log_trial(settings.state_dir, "signal-barrier", {"signal": k, "stop": args.stop, "target": args.target,
-                                                         "days": args.days}, {"mean_net": x["mean_net"], "t": x["t"]})
+                                                         "days": args.days},
+                  {"mean_net": x["mean_net"], "t": x["t"], "t_overlap": x.get("t_overlap")})
+    lags = next((x.get("overlap_lags") for x in r.values()), None)
+    print(f"  t adj = Newey-West over {lags} months of overlap (trades last up to {args.days} days but start monthly); "
+          f"the verdict uses it. It does not correct for the {len(r)} signals tried.")
     return 0
 
 
@@ -1601,7 +1627,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_research_gap)
     for name, fn, hlp in (("research-stops", cmd_research_stops, "research B1: race six stop rules"),
                           ("research-portfolio", cmd_research_portfolio,
-                           "research B2-B4: rank buffer, drawdown brake, inverse-volatility weights")):
+                           "research B2-B4: rank buffer, drawdown brake, inverse-volatility weights"),
+                          ("research-robustness", cmd_research_robustness,
+                           "the adopted rules with next-day fills and 1.5x / 2x costs, and the survivorship count")):
         sp = sub.add_parser(name, help=hlp)
         sp.add_argument("--universe", default="NIFTYMIDCAP150")
         sp.add_argument("--years", type=int, default=5, help="years before --until (plus a lookback year)")

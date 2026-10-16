@@ -72,6 +72,23 @@ def expected_max_sharpe(n_trials: int, var_trial_sr: float) -> float:
                                       + _GAMMA * _N.inv_cdf(1 - 1 / (n_trials * math.e)))
 
 
+def newey_west_t(values: list[float], lags: int) -> float | None:
+    """The t-statistic of the mean with Newey-West (Bartlett) standard errors: for overlapping holding periods, where
+    neighbouring observations share days and a plain t overstates the evidence. ``lags`` = 0 gives the plain t."""
+    n = len(values)
+    if n < 3:
+        return None
+    mu = statistics.fmean(values)
+    dev = [v - mu for v in values]
+    var = sum(x * x for x in dev) / n
+    for j in range(1, min(lags, n - 1) + 1):
+        cov = sum(dev[i] * dev[i - j] for i in range(j, n)) / n
+        var += 2 * (1 - j / (lags + 1)) * cov
+    if var <= 0:
+        return None
+    return mu / math.sqrt(var / n)
+
+
 def deflated_sharpe(rets: list[float], n_trials: int, trial_srs: list[float]) -> dict[str, Any]:
     sr = sharpe(rets)
     var = statistics.pvariance(trial_srs) if len(trial_srs) >= 2 else 0.0

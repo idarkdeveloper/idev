@@ -144,7 +144,8 @@ class Features:
 def barrier_study(m: Market, start: int, end: int, *, rule: str, cost: float, target_r: float = 3.0,
                   max_days: int = 60, liquid_rate: float = 0.065) -> dict[str, Any]:
     """Each price signal's top fifth at every month start, exited by the triple barrier; the average result per
-    trade after charges, slippage and the liquid fund, its t-statistic over months, and the exits by reason."""
+    trade after charges, slippage and the liquid fund, its t-statistic over months (plain, and Newey-West for the
+    months whose trades overlap; the verdict uses the latter), and the exits by reason."""
     from .signal_lab import _verdict
     feats = Features(m)
     out: dict[str, Any] = {}
@@ -171,16 +172,20 @@ def barrier_study(m: Market, start: int, end: int, *, rule: str, cost: float, ta
                 trades[k].append({**ex, "net": net})
             if nets:
                 per[k].append(statistics.fmean(nets))
+    from .validation import newey_west_t
+    lags = math.ceil(max_days / 21)   # a trade lasts up to this many months, so neighbouring months overlap
     for k, months in per.items():
         mean = statistics.fmean(months) if months else None
         sd = statistics.pstdev(months) if len(months) > 2 else 0.0
         tstat = mean / (sd / math.sqrt(len(months))) if mean is not None and sd > 0 else None
+        t_nw = newey_west_t(months, lags) if len(months) > 2 else None
         tr = trades[k]
-        out[k] = {"months": len(months), "mean_net": mean, "t": tstat,
+        out[k] = {"months": len(months), "mean_net": mean, "t": tstat, "t_overlap": t_nw, "overlap_lags": lags,
                   "hit_rate": sum(x["net"] > 0 for x in tr) / len(tr) if tr else None,
                   "avg_days": statistics.fmean(x["days"] for x in tr) if tr else None,
                   "exits": {r: sum(x["reason"] == r for x in tr) for r in ("target", "stop", "time")},
-                  "verdict": _verdict(tstat, mean, 0.0) if months else "no data"}
+                  # judged on the overlap-adjusted t: the plain t treats overlapping months as independent
+                  "verdict": _verdict(t_nw, mean, 0.0) if months else "no data"}
     return out
 
 

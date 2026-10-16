@@ -333,3 +333,15 @@ def test_a_jan_to_dec_final_year_is_partial_and_nifty50_fund_is_exact():
     assert label["kind"] == "other benchmark"  # BANKBEES is not the NIFTY 50 fund
     run["benchmark_symbol"] = "NIFTYBEES"
     assert _comparison(run, universe="NIFTY50")[1]["kind"] == "index fund"
+
+
+def test_newey_west_t_is_the_plain_t_without_lags_and_smaller_when_months_overlap():
+    import statistics
+
+    from trading_agent.validation import newey_west_t
+    vals = [0.01, -0.02, 0.03, 0.0, 0.02, -0.01, 0.04, 0.01]
+    plain = statistics.fmean(vals) / (statistics.pstdev(vals) / math.sqrt(len(vals)))
+    assert newey_west_t(vals, 0) == pytest.approx(plain)
+    smooth = [0.02 + 0.01 * math.sin(i / 3) for i in range(40)]           # neighbours alike, as overlapping trades
+    assert abs(newey_west_t(smooth, 3)) < abs(newey_west_t(smooth, 0))
+    assert newey_west_t([0.01, 0.02], 2) is None and newey_west_t([0.01] * 5, 1) is None
