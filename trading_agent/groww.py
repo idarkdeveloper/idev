@@ -675,7 +675,11 @@ class GrowwBroker:
     def _req(self, method: str, path: str, **kw: Any) -> dict[str, Any]:
         resp = self.session.request(method, f"{self.base_url}/{path.lstrip('/')}",
                                     headers=_headers(self.token), timeout=self.timeout, **kw)
-        data = resp.json() if resp.content else {}
+        try:
+            data = resp.json() if resp.content else {}
+        except ValueError:   # not JSON (a plain "404 page not found"): the status says what went wrong
+            resp.raise_for_status()
+            raise RuntimeError(f"Groww answered {path} with a non-JSON body: {str(getattr(resp, 'text', ''))[:120]!r}")
         if isinstance(data, dict) and data.get("status") == "FAILURE":
             err = data.get("error") or {}
             raise RuntimeError(f"Groww {err.get('code')}: {err.get('message')}")
@@ -812,11 +816,23 @@ class GrowwBroker:
 
     def daily_candles(self, symbol: str, start: Any, end: Any) -> list[dict[str, Any]]:
         """Daily candles for an NSE code (or NIFTY) from ``start`` to ``end`` (dates, inclusive), from Groww's
-        historical API: a GET, nothing else. [{date, open, high, low, close, volume}], oldest first."""
+        historical API: a GET, nothing else. [{date, open, high, low, close, volume}], oldest first.
+
+        Asks the current endpoint (``historical/candles``, ``groww_symbol`` NSE-<code>, ``candle_interval`` 1day; at
+        most 180 days a request) first, and the deprecated ``historical/candle/range`` only when that one is not
+        found (404)."""
         from .groww_fill import parse_candles
-        data = self._req("GET", "v1/historical/candle/range", params={
-            "exchange": "NSE", "segment": "CASH", "trading_symbol": str(symbol).upper(),
-            "start_time": f"{start} 09:15:00", "end_time": f"{end} 15:30:00", "interval_in_minutes": 1440})
+        sym = str(symbol).upper()
+        window = {"start_time": f"{start} 09:15:00", "end_time": f"{end} 15:30:00"}
+        try:
+            data = self._req("GET", "historical/candles", params={
+                "exchange": "NSE", "segment": "CASH", "groww_symbol": f"NSE-{sym}", **window,
+                "candle_interval": "1day"})
+        except requests.HTTPError as e:
+            if getattr(getattr(e, "response", None), "status_code", None) != 404:
+                raise
+            data = self._req("GET", "historical/candle/range", params={
+                "exchange": "NSE", "segment": "CASH", "trading_symbol": sym, **window, "interval_in_minutes": 1440})
         return sorted(parse_candles(data), key=lambda b: b["date"])
 
     def ltp_many(self, symbols: list[str]) -> dict[str, float]:

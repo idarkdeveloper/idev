@@ -173,22 +173,31 @@ class GrowwFill:
 
 
 def parse_candles(payload: Any) -> list[dict[str, Any]]:
-    """Groww's ``candles`` ([epoch, open, high, low, close, volume] rows; seconds or milliseconds) as daily bars
-    {date, open, high, low, close, volume} with IST dates. Rows with a missing price are dropped."""
+    """Groww's ``candles`` as daily bars {date, open, high, low, close, volume} with IST dates. A row is
+    [time, open, high, low, close, volume(, open interest)]; the time is epoch seconds or milliseconds (the old
+    endpoint) or an IST timestamp string "yyyy-MM-ddTHH:mm:ss" / "yyyy-MM-dd HH:mm:ss" (the current one). Rows with
+    a missing price or an unreadable time are dropped."""
     rows = payload.get("candles") if isinstance(payload, dict) else None
     out = []
     for c in rows if isinstance(rows, list) else []:
         if not isinstance(c, (list, tuple)) or len(c) < 5:
             continue
         try:
-            ts = float(c[0])
             o, h, lo, cl = (float(x) for x in c[1:5])
             v = float(c[5]) if len(c) > 5 and c[5] is not None else 0.0
-        except (TypeError, ValueError):
+            d = _candle_date(c[0])
+        except (TypeError, ValueError, OverflowError, OSError):
             continue
-        d = datetime.fromtimestamp(ts / 1000 if ts > 1e11 else ts, tz=IST).date()
-        out.append({"date": d.isoformat(), "open": o, "high": h, "low": lo, "close": cl, "volume": v})
+        out.append({"date": d, "open": o, "high": h, "low": lo, "close": cl, "volume": v})
     return out
+
+
+def _candle_date(t: Any) -> str:
+    """The IST date of a candle's time: epoch seconds / milliseconds, or an IST timestamp string."""
+    if isinstance(t, str) and not t.strip().lstrip("-").replace(".", "", 1).isdigit():
+        return date.fromisoformat(t.strip()[:10]).isoformat()
+    ts = float(t)
+    return datetime.fromtimestamp(ts / 1000 if ts > 1e11 else ts, tz=IST).date().isoformat()
 
 
 def sessions_for(holidays: Any) -> Callable[[datetime], list[date]]:
