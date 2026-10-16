@@ -349,3 +349,70 @@ def test_research_capacity_command(synthetic, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_research_market", lambda a, s: synthetic)
     assert cli.cmd_research_capacity(SimpleNamespace(json=False)) == 0
     assert "Capacity of the adopted rules" in capsys.readouterr().out
+
+
+def test_bimonthly_and_quarterly_rebalance_days():
+    m = market({"A": [100.0] * 260})
+    months = m.rebalance_days(0, 259)
+    two, three = m.rebalance_days(0, 259, "bimonthly"), m.rebalance_days(0, 259, "quarterly")
+    assert two[0] == three[0] == 0 and set(two) < set(months) and set(three) < set(months)
+    assert [m.dates[t][5:7] for t in three] == ["01", "04", "07", "10"]
+    assert [m.dates[t][5:7] for t in two] == ["01", "03", "05", "07", "09", "11"]
+
+
+def test_return_ranker_ranks_the_eligible_names_by_one_return(synthetic):
+    from bisect import bisect_right
+
+    from trading_agent import research_studies as rs
+    m, t = synthetic, 900
+    ranked = rs.return_ranker(6)(m, t)
+    assert sorted(ranked) == sorted(m.momentum_ranking(t))   # every eligible name, no others
+
+    def r61(s):
+        i = bisect_right(m.raw_dates[s], m.dates[t])
+        return m.raw[s][i - 22]["adj_close"] / m.raw[s][i - 22 - 105]["adj_close"] - 1
+    assert ranked == sorted(ranked, key=lambda s: -r61(s))
+
+
+def test_size_halves_split_the_ranking(synthetic):
+    from trading_agent import research_studies as rs
+    m, t = synthetic, 900
+    big, small = rs.size_ranker("larger")(m, t), rs.size_ranker("smaller")(m, t)
+    assert not set(big) & set(small) and sorted(big + small) == sorted(m.momentum_ranking(t))
+    order = m.momentum_ranking(t)
+    assert big == [s for s in order if s in big]          # each half keeps the screen's order
+
+
+def test_new_rankers_pass_the_leakage_test(synthetic):
+    from trading_agent import research_leakage as rl
+    from trading_agent import research_studies as rs
+    for ranker in (rs.return_ranker(3), rs.return_ranker(12), rs.size_ranker("smaller")):
+        r = rl.leakage_check(synthetic, ranker=ranker, ranking_days=2, simulation_days=1, holdout_start="2099-01-01")
+        assert r["ok"], rl.format_leakage(r)
+
+
+def test_momentum_robustness_end_to_end(synthetic):
+    from trading_agent import research_studies as rs
+    r = rs.momentum_robustness(synthetic, cost_model=IndianDeliveryCosts())
+    assert list(r["results"])[0] == rs.ADOPTED and len(r["results"]) == 1 + len(rs.MOMENTUM_VARIANTS)
+    assert {x["group"] for x in r["results"].values()} == {"adopted", "lookback", "rebalance", "size"}
+    assert r["holds"] == all(x["excess"] > 0 for x in r["results"].values())
+    q, mth = r["results"]["every 3 months"], r["results"][rs.ADOPTED]
+    assert q["turnover"] < mth["turnover"]                   # fewer rebalances, less trading
+    text = rs.format_momentum_robustness(r)
+    assert "[lookback]" in text and "12-1 month return" in text and "Verdict:" in text
+    assert "the best variant is not adopted" in text and "overfitting" in text
+
+
+def test_research_momentum_command_logs_every_variant(synthetic, tmp_path, monkeypatch, capsys):
+    import json
+    from types import SimpleNamespace
+
+    from trading_agent import cli
+    from trading_agent import research_studies as rs
+    monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path, paper_starting_cash=500_000.0))
+    monkeypatch.setattr(cli, "_research_market", lambda a, s: synthetic)
+    assert cli.cmd_research_momentum(SimpleNamespace(json=False, until="2025-10-01")) == 0
+    assert "Momentum robustness" in capsys.readouterr().out
+    rows = [json.loads(x) for x in (tmp_path / "research" / "trials.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 + len(rs.MOMENTUM_VARIANTS) and "research-momentum" in cli.HALT_ALLOWED

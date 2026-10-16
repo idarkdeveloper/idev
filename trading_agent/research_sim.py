@@ -58,7 +58,7 @@ class Rules:
     w_min: float = 0.025
     w_max: float = 0.08
     min_names_for_ivol: int = 13
-    rebalance: str = "monthly"      # monthly | yearly
+    rebalance: str = "monthly"      # monthly | bimonthly | quarterly | yearly
     rebalance_month: int = 1        # yearly: the month of the yearly rebalance
     tax: bool = False
     liquid_rate: float = LIQUID_RATE
@@ -272,13 +272,17 @@ class Market:
         return self._rank_detail[t].get(sym)
 
     def rebalance_days(self, start: int, end: int, every: str = "monthly", month: int = 1) -> list[int]:
-        """Month starts; or with ``every="yearly"`` the start day plus the first trading day of ``month`` each year."""
+        """Month starts; every second or third month start (``bimonthly`` / ``quarterly``); or with ``every="yearly"``
+        the start day plus the first trading day of ``month`` each year."""
         out, seen = [], set()
         for t in range(start, end + 1):
             d = self.dates[t]
             if every == "yearly":
                 y, mth = int(d[:4]), int(d[5:7])
                 key = str(y if mth >= month else y - 1)
+            elif every in ("bimonthly", "quarterly"):   # every 2 / 3 calendar months (Jan, Mar, ... / Jan, Apr, ...)
+                k = 2 if every == "bimonthly" else 3
+                key = f"{d[:4]}-{(int(d[5:7]) - 1) // k}"
             else:
                 key = d[:7]
             if key not in seen:

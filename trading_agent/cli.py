@@ -545,7 +545,8 @@ HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum",
                 "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
                 "research-model", "research-robustness", "research-regimes",
-                "research-capacity", "research-leakage"}
+                "research-capacity", "research-leakage",
+                "research-momentum"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -942,6 +943,26 @@ def _leakage_guard(m: Any) -> None:
     except LeakageError as e:
         print(str(e))
         raise SystemExit("Stopped: a decision used data published after it. Fix the leak before trusting this run.") from e
+
+
+def cmd_research_momentum(args: argparse.Namespace) -> int:
+    """Momentum robustness: other lookbacks, rebalance spacings and size halves of the adopted rules."""
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .research_studies import format_momentum_robustness, momentum_robustness, prior_trials
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    r = momentum_robustness(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                            extra_trials=prior_trials(settings.state_dir), progress=print)
+    print(format_momentum_robustness(r))
+    for name, x in r["results"].items():
+        log_trial(settings.state_dir, "momentum_robustness", {"variant": name, "until": args.until},
+                  {"return": x["total_return"], "excess": x["excess"], "max_drawdown": x["max_drawdown"],
+                   "skill": x["skill"].get("probability")})
+    if args.json:
+        print(json.dumps({**r, "results": {k: {kk: vv for kk, vv in v.items() if kk != "skill"}
+                                           for k, v in r["results"].items()}}, default=str))
+    return 0
 
 
 def cmd_research_leakage(args: argparse.Namespace) -> int:
@@ -1725,6 +1746,8 @@ def build_parser() -> argparse.ArgumentParser:
                            "the adopted rules month by month in bull, sideways, bear and high-volatility markets"),
                           ("research-capacity", cmd_research_capacity,
                            "how much capital the adopted rules can run before their own orders move prices"),
+                          ("research-momentum", cmd_research_momentum,
+                           "the adopted rules with other lookbacks, rebalance spacings and size halves"),
                           ("research-leakage", cmd_research_leakage,
                            "check that no decision used data published after its day (cut the data and re-decide)")):
         sp = sub.add_parser(name, help=hlp)

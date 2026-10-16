@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import json
 import statistics
+from bisect import bisect_right
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -528,4 +530,122 @@ def format_capacity(r: dict[str, Any]) -> str:
     lines.append("  Impact is a rough square-root estimate (daily volatility x sqrt(order / daily value)), on top of the "
                  "brokerage and taxes already in the backtest; real fills can be worse in thin stocks and fast markets.")
     lines.append("  Orders are assumed to fill in one session; splitting a large order over days lowers its impact.")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# momentum robustness: is the edge momentum's, or our settings'?
+# --------------------------------------------------------------------------- #
+SKIP = 21   # every lookback skips the latest month (short-term reversal), as 12-1 does
+
+
+def return_ranker(months: int) -> Callable[[Market, int], list[str]]:
+    """Rank the screen's ELIGIBLE names (same trend and liquidity filters) by their ``months``-1 return alone:
+    the return over ``months`` months ending one month before day t."""
+    look = 21 * months - SKIP
+
+    def rank(m: Market, t: int) -> list[str]:
+        day = m.dates[t]
+        scores: dict[str, float] = {}
+        for sym in m.momentum_ranking(t):
+            bars = m.raw[sym]
+            i = bisect_right(m.raw_dates[sym], day)          # bars up to and including day t only
+            if i > look + SKIP:
+                end, begin = bars[i - 1 - SKIP]["adj_close"], bars[i - 1 - SKIP - look]["adj_close"]
+                if begin:
+                    scores[sym] = end / begin - 1
+        return sorted(scores, key=lambda s: -scores[s])
+    return rank
+
+
+def size_ranker(half: str) -> Callable[[Market, int], list[str]]:
+    """The screen's own ranking restricted to the larger or smaller half of that day's ranked members by 60-day
+    average traded value (a stand-in for size: the price history carries no market capitalisation)."""
+    def rank(m: Market, t: int) -> list[str]:
+        tv = {s: st.get("avg_turnover_60d") or 0.0 for s, st in m.stats_on(t).items()}
+        if not tv:
+            return []
+        cut = statistics.median(tv.values())
+        return [s for s in m.momentum_ranking(t) if (tv.get(s, 0.0) >= cut) == (half == "larger")]
+    return rank
+
+
+# group, name, rules overrides, ranker (None = the screen's composite ranking); written before the run
+MOMENTUM_VARIANTS: tuple[tuple[str, str, dict[str, Any], Callable[[Market, int], list[str]] | None], ...] = (
+    ("lookback", "3-1 month return", {}, return_ranker(3)),
+    ("lookback", "6-1 month return", {}, return_ranker(6)),
+    ("lookback", "9-1 month return", {}, return_ranker(9)),
+    ("lookback", "12-1 month return", {}, return_ranker(12)),
+    ("rebalance", "every 2 months", {"rebalance": "bimonthly"}, None),
+    ("rebalance", "every 3 months", {"rebalance": "quarterly"}, None),
+    ("size", "larger half by traded value", {}, size_ranker("larger")),
+    ("size", "smaller half by traded value", {}, size_ranker("smaller")),
+)
+ADOPTED = "adopted (composite score, monthly, all members)"
+
+
+def momentum_robustness(m: Market, *, cost_model: Any, capital: float = 500_000.0, extra_trials: int = 0,
+                        progress: Any = None) -> dict[str, Any]:
+    """The adopted rules with one momentum setting changed at a time: the lookback (3/6/9/12 months, each skipping
+    the latest month, instead of the composite score), the rebalance spacing (2 and 3 months) and the size half.
+    Rule set before the run: it holds when EVERY variant beats the index fund after charges and tax (a plateau, not
+    a lone spike at our settings). The best variant is NOT adopted: switching to it would be a new trial."""
+    start = _first_ranked_day(m)
+    end = len(m.dates) - 1
+    runs: dict[str, dict[str, Any]] = {}
+    groups: dict[str, str] = {ADOPTED: "adopted"}
+    if progress:
+        progress(f"momentum robustness: {ADOPTED}")
+    runs[ADOPTED] = simulate(m, FINALIST, start, end, capital=capital, cost_model=cost_model)
+    for group, name, kw, ranker in MOMENTUM_VARIANTS:
+        if progress:
+            progress(f"momentum robustness: {name}")
+        runs[name] = simulate(m, with_rules(FINALIST, **kw), start, end, capital=capital, cost_model=cost_model,
+                              ranker=ranker)
+        groups[name] = group
+    results = {k: summarize(r, m, start, end) for k, r in runs.items()}
+    skill = _skill(runs, m, start, end, extra_trials)
+    for k, x in results.items():
+        x["skill"] = skill[k]
+        x["group"] = groups[k]
+    others = [x["excess"] for k, x in results.items() if k != ADOPTED and x["excess"] is not None]
+    adopted = results[ADOPTED]["excess"]
+    median_other = statistics.median(others) if others else None
+    return {"start": m.dates[start], "end": m.dates[end], "results": results, "pbo": _pbo(runs, m, start, end),
+            "holds": all(x["excess"] is not None and x["excess"] > 0 for x in results.values()),
+            "median_variant_excess": median_other,
+            "spike": adopted is not None and median_other is not None and median_other <= 0 < adopted}
+
+
+def format_momentum_robustness(r: dict[str, Any]) -> str:
+    def pct(v: Any, f: str = "+.1f") -> str:
+        return "n/a" if v is None else f"{v * 100:{f}}%"
+    lines = [f"Momentum robustness of the adopted rules (one setting changed at a time, after charges and tax), "
+             f"{r['start']} to {r['end']}:",
+             f"  {'variant':<48}{'return':>9}{'vs fund':>9}{'a year':>8}{'worst fall':>11}{'turnover':>9}"
+             f"{'invested':>9}{'skill odds':>11}"]
+    group = None
+    for name, x in r["results"].items():
+        if x["group"] != group:
+            group = x["group"]
+            lines.append(f"  [{group}]")
+        p = x["skill"].get("probability")
+        lines.append(f"  {name:<48}{pct(x['total_return']):>9}{pct(x['excess']):>9}{pct(x['cagr']):>8}"
+                     f"{pct(x['max_drawdown']):>11}{pct(x['turnover'], '.0f'):>9}{pct(x['avg_invested'], '.0f'):>9}"
+                     f"{'n/a' if p is None else f'{p:.2f}':>11}")
+    first = next(iter(r["results"].values()))
+    lines.append(f"  MID150BEES on the same days: {pct(first['fund_total_return'])}, worst fall "
+                 f"{pct(first['fund_max_drawdown'])}.")
+    lines.append(pbo_line(r["pbo"]))
+    lines.append("  Lookback variants rank the same eligible names (above their 200-day average, liquid) by one return "
+                 "alone; size halves split each day's members by 60-day traded value (no market-cap history).")
+    beat = sum(1 for x in r["results"].values() if x["excess"] is not None and x["excess"] > 0)
+    verdict = ("holds: every variant beats the fund, so the edge is momentum's, not one lucky setting's"
+               if r["holds"] else f"fragile: {len(r['results']) - beat} of {len(r['results'])} variants do not beat "
+               "the fund")
+    if r["spike"]:
+        verdict += "; the adopted settings look like a lone spike (the typical variant does not beat the fund)"
+    lines.append(f"  Verdict: {verdict}. Median variant vs fund: {pct(r['median_variant_excess'])}. Rule set before "
+                 "the run; the best variant is not adopted (that would be a new trial). Skill odds need 0.95; the "
+                 "holdout stays sealed.")
     return "\n".join(lines)
