@@ -119,29 +119,87 @@ def test_yahoo_prices_pass_their_daily_series_through_the_fill(tmp_path):
     assert [b["date"] for b in p.history("RELIANCE", "1mo")] == ["2026-10-09"]
 
 
-def test_groww_daily_candles_is_one_get(tmp_path):
+class Resp:
+    def __init__(self, status, body):
+        self.status_code, self.content, self.text = status, body.encode(), body
+
+    def json(self):
+        import json
+        return json.loads(self.text)
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code}", response=self)
+
+
+class Groww:
+    """A fake Groww: ``answers`` maps a URL path to (status, body); every request is recorded."""
+
+    def __init__(self, answers):
+        self.answers, self.calls = answers, []
+
+    def request(self, method, url, **kw):
+        self.calls.append((method, url, kw.get("params")))
+        path = url.split("api.groww.in", 1)[1]
+        return Resp(*self.answers.get(path, (404, "404 page not found")))
+
+
+def read_only(inner):
     from trading_agent.groww import GrowwBroker
-    from trading_agent.integration import OrderBlocked, ReadOnlyGroww, ReadOnlySession
+    from trading_agent.integration import ReadOnlyGroww, ReadOnlySession
+    return ReadOnlyGroww(GrowwBroker("tok", live_orders=False, session=ReadOnlySession(inner)))
 
-    class Inner:
-        def __init__(self):
-            self.calls = []
 
-        def request(self, method, url, **kw):
-            self.calls.append((method, url, kw.get("params")))
-            body = b'{"status":"SUCCESS","payload":{"candles":[[1791776700,10,12,9,11,500]]}}'
-            return type("R", (), {"content": body, "json": lambda s: __import__("json").loads(body),
-                                  "raise_for_status": lambda s: None, "text": ""})()
-    inner = Inner()
-    g = ReadOnlyGroww(GrowwBroker("tok", live_orders=False, session=ReadOnlySession(inner)))
+NEW = '{"status":"SUCCESS","payload":{"candles":[["2026-10-12T09:15:00",10,12,9,11,500,null]],"closing_price":11}}'
+
+
+def test_groww_daily_candles_is_one_get_to_the_current_endpoint():
+    from trading_agent.integration import OrderBlocked
+    inner = Groww({"/v1/historical/candles": (200, NEW)})
+    g = read_only(inner)
     assert g.daily_candles("nifty", date(2026, 10, 12), date(2026, 10, 12)) == [
         {"date": "2026-10-12", "open": 10.0, "high": 12.0, "low": 9.0, "close": 11.0, "volume": 500.0}]
+    assert len(inner.calls) == 1
     method, url, params = inner.calls[0]
-    assert method == "GET" and url.endswith("/v1/historical/candle/range")
-    assert params == {"exchange": "NSE", "segment": "CASH", "trading_symbol": "NIFTY", "start_time": "2026-10-12 09:15:00",
-                      "end_time": "2026-10-12 15:30:00", "interval_in_minutes": 1440}
+    assert method == "GET" and url == "https://api.groww.in/v1/historical/candles"     # one /v1, not /v1/v1
+    assert params == {"exchange": "NSE", "segment": "CASH", "groww_symbol": "NSE-NIFTY",
+                      "start_time": "2026-10-12 09:15:00", "end_time": "2026-10-12 15:30:00", "candle_interval": "1day"}
     with pytest.raises(OrderBlocked):
         g.submit_order("TCS", "buy", qty=1)
+
+
+def test_falls_back_to_the_old_endpoint_when_the_new_one_is_not_found():
+    old = '{"status":"SUCCESS","payload":{"candles":[[1791776700,10,12,9,11,500]]}}'
+    inner = Groww({"/v1/historical/candle/range": (200, old)})       # the new path answers a plain-text 404
+    assert [b["close"] for b in read_only(inner).daily_candles("TCS", date(2026, 10, 12), date(2026, 10, 12))] == [11.0]
+    assert [c[1] for c in inner.calls] == ["https://api.groww.in/v1/historical/candles",
+                                          "https://api.groww.in/v1/historical/candle/range"]
+    assert inner.calls[1][2] == {"exchange": "NSE", "segment": "CASH", "trading_symbol": "TCS",
+                                 "start_time": "2026-10-12 09:15:00", "end_time": "2026-10-12 15:30:00",
+                                 "interval_in_minutes": 1440}
+
+
+def test_a_refusal_is_not_retried_on_the_old_endpoint_and_stops_the_fill(tmp_path):
+    inner = Groww({"/v1/historical/candles": (403, "forbidden")})      # plain text, not JSON
+    g = read_only(inner)
+    with pytest.raises(requests.HTTPError) as e:
+        g.daily_candles("TCS", date(2026, 10, 12), date(2026, 10, 12))
+    assert e.value.response.status_code == 403 and len(inner.calls) == 1
+    f = fill(tmp_path, client=g)
+    assert f.fill("TCS.NS", YAHOO) == YAHOO and f._refused_on == TUE_0900.date()
+
+
+def test_a_404_on_both_paths_is_an_http_error_not_a_json_error():
+    with pytest.raises(requests.HTTPError):
+        read_only(Groww({})).daily_candles("TCS", date(2026, 10, 12), date(2026, 10, 12))
+
+
+def test_parse_candles_with_timestamp_strings():
+    rows = gf.parse_candles({"candles": [["2026-10-12T09:15:00", 1, 2, 0.5, 1.5, 10, None],
+                                         ["2026-10-13 00:00:00", 2, 3, 1, 2.5, None, None],
+                                         ["not a time", 1, 1, 1, 1, 1], ["1791949500", 3, 3, 3, 3, 3]]})
+    assert [r["date"] for r in rows] == ["2026-10-12", "2026-10-13", "2026-10-14"]
+    assert rows[0] == {"date": "2026-10-12", "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 10.0}
 
 
 def test_make_fill_only_with_groww_in_india(settings):
