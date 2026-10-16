@@ -52,8 +52,8 @@ JUDGE = ("You also get two arguments written by other analysts from the same dat
 
 def _argue(client: Any, model: str, date_label: str, ctx: dict[str, Any], side: str, name: str) -> dict[str, Any]:
     system = SYSTEM.format(date=date_label) + "\n" + ROLE[side].format(name=name)
-    resp = client.messages.create(model=model, max_tokens=1500, system=system, tools=[ARGUMENT_TOOL],
-                                  tool_choice={"type": "tool", "name": ARGUMENT_TOOL["name"]},
+    from ..claude_tools import one_tool_call
+    resp = client.messages.create(model=model, **one_tool_call(ARGUMENT_TOOL, system),
                                   messages=[{"role": "user", "content": json.dumps(ctx, default=str)}])
     block = next((b for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
     if block is None or not isinstance(block.input, dict):
@@ -70,8 +70,8 @@ def debate_view(client: Any, model: str, date_label: str, ctx: dict[str, Any], n
     judged = {**ctx, "debate_note": JUDGE,
               "argument_for_buying": wrap_json(bull, "argument_for"),
               "argument_against_buying": wrap_json(bear, "argument_against")}
-    resp = client.messages.create(model=model, max_tokens=4000, system=SYSTEM.format(date=date_label) + "\n" + JUDGE,
-                                  tools=[TOOL], tool_choice={"type": "tool", "name": TOOL["name"]},
+    from ..claude_tools import one_tool_call
+    resp = client.messages.create(model=model, **one_tool_call(TOOL, SYSTEM.format(date=date_label) + "\n" + JUDGE),
                                   messages=[{"role": "user", "content": json.dumps(judged, default=str)}])
     block = next((b for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
     if block is None or not isinstance(block.input, dict):

@@ -24,7 +24,7 @@ class Debater:
 
     def create(self, **kw):
         self.calls.append(kw)
-        name = kw["tool_choice"]["name"]
+        name = kw["tools"][0]["name"]
         if name == "record_argument":
             side = "for" if "AGAINST" not in kw["system"] else "against"
             return SimpleNamespace(content=[SimpleNamespace(type="tool_use", input={
@@ -40,7 +40,7 @@ def test_four_calls_per_case_and_the_judge_gets_wrapped_arguments():
     r = debate.run_debate_test([Case("t", "2022-03-15", TICKER)], [pair()], client=c, model="m", source=src(),
                                cost=0.004)
     assert len(c.calls) == 4
-    tools = [k["tool_choice"]["name"] for k in c.calls]
+    tools = [k["tools"][0]["name"] for k in c.calls]
     assert tools == [TOOL["name"], "record_argument", "record_argument", TOOL["name"]]
     judge = json.loads(c.calls[-1]["messages"][0]["content"])
     assert "UNTRUSTED" in judge["argument_for_buying"].upper() and "the case for" in judge["argument_for_buying"]

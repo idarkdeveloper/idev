@@ -402,9 +402,9 @@ class ClaudeTagger(_Tagger):
         self.name = f"claude:{model}"
 
     def _batch(self, batch: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+        from .claude_tools import one_tool_call
         msg = self.client.messages.create(
-            model=self.model, max_tokens=2000, tools=[self.TOOL], system=UNTRUSTED_RULE,
-            tool_choice={"type": "tool", "name": self.TOOL["name"]},
+            model=self.model, **one_tool_call(self.TOOL, UNTRUSTED_RULE),
             messages=[{"role": "user", "content": build_prompt(batch)}])
         out: dict[str, dict[str, str]] = {}
         for block in msg.content:
