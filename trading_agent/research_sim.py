@@ -361,6 +361,37 @@ def inverse_vol_weights(vols: dict[str, float | None], w_min: float, w_max: floa
     return w
 
 
+def stop_triggered(m: Market, sym: str, p: Position, t: int, rule: str) -> bool:
+    """Does ``rule`` sell position ``p`` at day t's close? Updates the position's high and break-even flag."""
+    c = m.close[sym][t]
+    a = m.atr(sym)[t]
+    if c is None:
+        return False
+    p.high = max(p.high, c)
+    if rule == "none":
+        return False
+    if rule in ("atr3", "atr5", "grace20"):
+        if rule == "grace20" and t - p.entry_t < 20:
+            return False
+        mult = 5.0 if rule == "atr5" else 3.0
+        return a is not None and c < p.high - mult * a
+    if rule == "ema50":
+        e = m.ema50(sym)[t]
+        return e is not None and c < e
+    if rule == "two_stage":
+        ea = p.entry_atr or a
+        if ea is None:
+            return False
+        risk = 2.5 * ea
+        if c >= p.entry_px + 1.5 * risk:
+            p.breakeven = True
+        level = p.entry_px - risk
+        if p.breakeven:
+            level = max(p.entry_px, p.high - 3.5 * (a or ea))
+        return c < level
+    raise ValueError(f"unknown stop rule {rule}")
+
+
 def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 500_000.0,
              cost_model: Any | None = None, ranker: Callable[[Market, int], list[str]] | None = None) -> dict[str, Any]:
     """Run ``rules`` from day ``start`` to day ``end`` (indices into ``m.dates``, inclusive)."""
@@ -424,34 +455,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                                 bought=m.dates[t])
 
     def stop_hit(sym: str, p: Position, t: int) -> bool:
-        c = m.close[sym][t]
-        a = m.atr(sym)[t]
-        if c is None:
-            return False
-        p.high = max(p.high, c)
-        rule = rules.stop
-        if rule == "none":
-            return False
-        if rule in ("atr3", "atr5", "grace20"):
-            if rule == "grace20" and t - p.entry_t < 20:
-                return False
-            mult = 5.0 if rule == "atr5" else 3.0
-            return a is not None and c < p.high - mult * a
-        if rule == "ema50":
-            e = m.ema50(sym)[t]
-            return e is not None and c < e
-        if rule == "two_stage":
-            ea = p.entry_atr or a
-            if ea is None:
-                return False
-            risk = 2.5 * ea
-            if c >= p.entry_px + 1.5 * risk:
-                p.breakeven = True
-            level = p.entry_px - risk
-            if p.breakeven:
-                level = max(p.entry_px, p.high - 3.5 * (a or ea))
-            return c < level
-        raise ValueError(f"unknown stop rule {rule}")
+        return stop_triggered(m, sym, p, t, rules.stop)
 
     def brake_level(t: int) -> float:
         nonlocal low_breadth

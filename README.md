@@ -536,6 +536,22 @@ every year of at least four years of growth are bought equal-weight and held for
 and tax is compared with MID150BEES and NIFTYBEES; `--holdout` runs once on the sealed holdout. Filings start in
 late 2018, so it can ask for 4 to 6 years of history, not the book's 10 (`--min-years`).
 
+**Signal lab extensions and the prediction model** (`research_ml.py`; every run goes in the trial log):
+- `research-barrier [--stop RULE --target 3 --days 60]`: a fourth horizon. Each signal's top fifth at every month
+  start is exited by a triple barrier (profit target of 3R with R = 2.5×ATR, the stop rule, a 60-day limit), and
+  scored after a round trip of charges and slippage and after the liquid fund.
+- `research-cpcv`: the walk-forward ridge model under combinatorial purged cross-validation (6 blocks, 2 tested per
+  split, 15 splits, a 1-month embargo, overlap weights); the 5 out-of-sample paths are drawn as a fan of account
+  curves (`state/research/cpcv_fan.png`).
+- `research-meta [--stop RULE]`: meta-labeling. A small logistic model only SIZES the momentum screen's picks (0 to
+  full); a pick succeeds if its triple-barrier trade beat the index fund after charges. It is fitted three ways on
+  the same purged splits (plain log loss, a fee-penalised asymmetric loss, a direct Sharpe surrogate) and compared
+  with two simple rules (all picks at full size; only the top 10). Fan and calibration charts go in
+  `state/research/`.
+- `research-model --stop RULE [--holdout]`: the prediction model, the same sizing model with the earnings-surprise
+  and promoter-buying features added and the winning stop rule's labels. It must beat the best simple rule on every
+  path with skill odds of 0.95; only then does `--holdout` run it once on the sealed holdout.
+
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.

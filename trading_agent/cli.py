@@ -509,8 +509,10 @@ def cmd_kill_switch(args: argparse.Namespace) -> int:
 # the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
 # reach Groww.
 HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
-                "factor-backtest", "research-gap", "research-stops", "research-portfolio", "research-pead", "insider-history", "research-coffee-can", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
-                "market-data"}
+                "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
+                "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
+                "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
+                "research-model"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -942,11 +944,170 @@ def cmd_insider_history(args: argparse.Namespace) -> int:
     return 0 if not r["failed"] else 1
 
 
+def _event_data(m: Any, settings: Any) -> Any:
+    """Earnings and insider signals for the market's stocks, from the caches only (no downloads here)."""
+    from .event_signals import EventData, InsiderHistory
+    from .fundamentals_history import ResultsHistory
+    src = ResultsHistory(settings.state_dir / "cache", max_new_downloads=0)
+    results: dict[str, Any] = {}
+    for sym in m.raw:
+        try:
+            results[sym] = src.history(sym)
+        except Exception:  # noqa: BLE001 - no cached listing: no earnings signals for it
+            results[sym] = []
+    covered = sum(1 for v in results.values() if v)
+    insider = InsiderHistory(settings.state_dir / "cache").trades(m.dates[0], m.dates[-1])
+    print(f"Results filings cached for {covered} of {len(results)} stocks; {len(insider)} insider trades cached.")
+    if covered < 0.8 * len(results):
+        print("Coverage is low: run `fundamentals-history --universe NIFTYMIDCAP150` until nothing is left, then again.")
+    if not insider:
+        print("No insider history: run `insider-history` first; the promoter signals are empty without it.")
+    return EventData(m, results, insider)
+
+
+def _research_dir(settings: Any) -> Any:
+    d = settings.state_dir / "research"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _num(v: Any, fmt: str, width: int) -> str:
+    return ("n/a" if v is None else format(v, fmt)).rjust(width)
+
+
+def cmd_research_barrier(args: argparse.Namespace) -> int:
+    """Signal lab, fourth horizon: each signal's top fifth exited by the triple barrier, after charges and cash."""
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .research_ml import barrier_study
+    from .research_studies import _first_ranked_day
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    cost = cost_model_for("in").round_trip_bps(25_000) / 10_000
+    start = _first_ranked_day(m)
+    r = barrier_study(m, start, len(m.dates) - 1, rule=args.stop, cost=cost, target_r=args.target, max_days=args.days)
+    print(f"Triple barrier ({args.stop} stop, target +{args.target:g}R, at most {args.days} days), top fifth at each "
+          f"month start, {m.dates[start]} to {m.dates[-1]}; after a {cost * 100:.2f}% round trip and the liquid fund:")
+    print(f"  {'signal':<22}{'per trade':>10}{'t':>7}{'hit rate':>9}{'avg days':>9}  {'exits t/s/time':<16}verdict")
+    for k, x in sorted(r.items(), key=lambda kv: -(kv[1]["mean_net"] if kv[1]["mean_net"] is not None else -9)):
+        e = x["exits"]
+        print(f"  {k:<22}" + _num(None if x["mean_net"] is None else x["mean_net"] * 100, "+.2f", 9) + "%"
+              + _num(x["t"], "+.1f", 7) + _num(None if x["hit_rate"] is None else x["hit_rate"] * 100, ".0f", 8) + "%"
+              + _num(x["avg_days"], ".0f", 9) + f"  {e['target']}/{e['stop']}/{e['time']}".ljust(18) + x["verdict"])
+        log_trial(settings.state_dir, "signal-barrier", {"signal": k, "stop": args.stop, "target": args.target,
+                                                         "days": args.days}, {"mean_net": x["mean_net"], "t": x["t"]})
+    return 0
+
+
+def cmd_research_cpcv(args: argparse.Namespace) -> int:
+    """The signal lab's ridge model under combinatorial purged cross-validation: 5 out-of-sample account curves."""
+    import itertools as _it
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .research_ml import cpcv_signal_model
+    from .research_studies import _first_ranked_day
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    cost = cost_model_for("in").round_trip_bps(25_000) / 10_000
+    start = _first_ranked_day(m)
+    r = cpcv_signal_model(m, start, len(m.dates) - 1, cost=cost, horizon=args.horizon, progress=print)
+    print(f"Walk-forward ridge model, purged cross-validation: {r['samples']} stock-months, {r['splits']} splits, "
+          f"{len(r['paths'])} out-of-sample paths, {args.horizon}-day holding, top fifth, after a round trip:")
+    for i, (sr, tot) in enumerate(zip(r["sharpe"], r["total"]), 1):
+        print(f"  path {i}: monthly Sharpe {sr:+.3f}, sum of monthly results above the fund {tot * 100:+.1f}%")
+    out = _research_dir(settings) / "cpcv_fan.png"
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(8, 4.5), dpi=110)
+    for c in r["paths"]:
+        ax.plot(list(_it.accumulate(c)), color="#3b6fd8", alpha=0.6)
+    ax.axhline(0, color="#999", lw=0.8)
+    ax.set_title("Ridge model: 5 out-of-sample paths (purged CV)")
+    ax.set_xlabel("month")
+    ax.set_ylabel("cumulative result above the index fund")
+    fig.tight_layout()
+    fig.savefig(out)
+    plt.close(fig)
+    print(f"  The fan of account curves: {out}")
+    log_trial(settings.state_dir, "signal-cpcv", {"horizon": args.horizon}, {"sharpe": r["sharpe"]})
+    return 0
+
+
+def _meta_run(args: argparse.Namespace, *, with_events: bool, study: str) -> int:
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .research_ml import (calibration_chart, evaluate_cpcv, fan_chart, fit_final, format_meta, meta_samples,
+                              monthly_sized, predict, verdict)
+    from .research_studies import HOLDOUT_START, _first_ranked_day, prior_trials
+    settings = _settings(args)
+    log_path = settings.state_dir / "research" / "trials.jsonl"
+    if getattr(args, "holdout", False) and log_path.exists() and any(
+            f'"study": "{study}-holdout"' in line for line in log_path.read_text(encoding="utf-8").splitlines()):
+        print("The sealed holdout was already opened for this study (see the trial log): it is used once only.")
+        return 2
+    m = _research_market(args, settings)
+    ev = _event_data(m, settings) if with_events else None
+    cost = cost_model_for("in").round_trip_bps(25_000) / 10_000
+    start = _first_ranked_day(m)
+    samples, feats = meta_samples(m, start, len(m.dates) - 1, rule=args.stop, cost=cost, ev=ev)
+    if len({s["month"] for s in samples}) < 12:
+        print("Fewer than 12 months of samples: not enough for purged cross-validation.")
+        return 1
+    r = evaluate_cpcv(samples, cost=cost, progress=print)
+    v = verdict(r, prior_trials(settings.state_dir))
+    print(f"{study}: sizing the momentum screen's picks ({args.stop} stop, target +3R, 60 days; success = beat the "
+          f"index fund after charges), {m.dates[start]} to {m.dates[-1]}")
+    print(format_meta(r, v, feats))
+    d = _research_dir(settings)
+    fan_chart(r, v["best_objective"], d / f"{study.lower()}_fan.png",
+              f"{study}: {v['best_objective']} sizing, 5 out-of-sample paths")
+    if r.get("calibration"):
+        calibration_chart(r["calibration"], d / f"{study.lower()}_calibration.png", f"{study}: calibration")
+    print(f"  Charts: {d / (study.lower() + '_fan.png')} and {d / (study.lower() + '_calibration.png')}")
+    for obj, x in r["objectives"].items():
+        log_trial(settings.state_dir, study, {"objective": obj, "stop": args.stop},
+                  {"sharpe": x["sharpe"], "passes": v["passes"] and obj == v["best_objective"]})
+    if not getattr(args, "holdout", False):
+        if with_events:
+            print("  Next: " + ("passes on the development years; run once on the sealed holdout with --holdout."
+                                if v["passes"] else "does not pass; the holdout stays sealed."))
+        return 0
+    if not v["passes"]:
+        print("Not opening the holdout: the model did not pass on the development years.")
+        return 2
+    beta = fit_final(v["best_objective"], samples, cost)
+    args.until, args.years = None, 2
+    hm = _research_market(args, settings)
+    hm.start_day = HOLDOUT_START
+    hev = _event_data(hm, settings) if with_events else None
+    hs, _ = meta_samples(hm, _first_ranked_day(hm), len(hm.dates) - 1, rule=args.stop, cost=cost, ev=hev)
+    sized = monthly_sized(hs, predict(beta, [s["x"] for s in hs]))
+    simple = monthly_sized(hs, [1.0] * len(hs))
+    top10 = monthly_sized(hs, [1.0 if s["rank"] <= 10 else 0.0 for s in hs])
+    best_simple = max(sum(simple), sum(top10))
+    print(f"THE SEALED HOLDOUT ({hm.dates[_first_ranked_day(hm)]} to {hm.dates[-1]}, opened once): model "
+          f"{sum(sized) * 100:+.1f}% above the fund vs the best simple rule {best_simple * 100:+.1f}% "
+          f"({len(sized)} months). " + ("The model WINS." if sum(sized) > best_simple else "The model does NOT win."))
+    log_trial(settings.state_dir, f"{study}-holdout", {"objective": v["best_objective"], "stop": args.stop},
+              {"model": sum(sized), "best_simple": best_simple})
+    return 0
+
+
+def cmd_research_meta(args: argparse.Namespace) -> int:
+    """Signal lab: meta-labeling with three fitting objectives on purged splits (price features only)."""
+    return _meta_run(args, with_events=False, study="Meta-labeling")
+
+
+def cmd_research_model(args: argparse.Namespace) -> int:
+    """The prediction model: the sizing model with earnings and promoter features; one sealed-holdout run."""
+    return _meta_run(args, with_events=True, study="Prediction-model")
+
+
 def cmd_research_pead(args: argparse.Namespace) -> int:
     """Research: post-results drift and who-traded signals (IC study + portfolio), optionally the sealed holdout once."""
     from .costs import cost_model_for
-    from .event_signals import EventData, InsiderHistory, format_signal_study, pead_ranker, signal_study
-    from .fundamentals_history import ResultsHistory
+    from .event_signals import format_signal_study, pead_ranker, signal_study
     from .gap_diagnosis import log_trial
     from .research_sim import Rules, simulate, summarize
     from .research_studies import HOLDOUT_START, SKILL_BAR, _first_ranked_day, _skill, prior_trials
@@ -962,21 +1123,7 @@ def cmd_research_pead(args: argparse.Namespace) -> int:
     m = _research_market(args, settings)
     if args.holdout:
         m.start_day = HOLDOUT_START
-    results_src = ResultsHistory(settings.state_dir / "cache", max_new_downloads=0)
-    results: dict[str, Any] = {}
-    for sym in m.raw:
-        try:
-            results[sym] = results_src.history(sym)
-        except Exception:  # noqa: BLE001 - no cached listing: no earnings signals for it
-            results[sym] = []
-    covered = sum(1 for v in results.values() if v)
-    insider = InsiderHistory(settings.state_dir / "cache").trades(m.dates[0], m.dates[-1])
-    print(f"Results filings cached for {covered} of {len(results)} stocks; {len(insider)} insider trades cached.")
-    if covered < 0.8 * len(results):
-        print("Coverage is low: run `fundamentals-history --universe NIFTYMIDCAP150` until nothing is left, then again.")
-    if not insider:
-        print("No insider history: run `insider-history` first; the promoter signals are empty without it.")
-    ev = EventData(m, results, insider)
+    ev = _event_data(m, settings)
     start, end = _first_ranked_day(m), len(m.dates) - 1
     print(f"Window {m.dates[start]} to {m.dates[end]}" + (" (THE SEALED HOLDOUT, opened once)" if args.holdout else ""))
     if not args.holdout:
@@ -1417,6 +1564,31 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--holdout", action="store_true",
                     help="run once on the sealed holdout (1 Oct 2025 to today); refused after the first time")
     sp.set_defaults(func=cmd_research_pead)
+    from .research_sim import STOP_RULES as _RULES
+    for name, fn, hlp in (("research-barrier", cmd_research_barrier,
+                           "signal lab: triple-barrier exits for every signal's top fifth"),
+                          ("research-cpcv", cmd_research_cpcv,
+                           "signal lab: the ridge model under purged cross-validation (5 paths)"),
+                          ("research-meta", cmd_research_meta,
+                           "signal lab: meta-labeling, three fitting objectives"),
+                          ("research-model", cmd_research_model,
+                           "the prediction model (sizes the momentum picks); --holdout once")):
+        sp = sub.add_parser(name, help=hlp)
+        sp.add_argument("--universe", default="NIFTYMIDCAP150")
+        sp.add_argument("--years", type=int, default=5)
+        sp.add_argument("--until", default="2025-10-01", help="first date NOT used (the sealed holdout)")
+        if name != "research-cpcv":
+            sp.add_argument("--stop", default="two_stage", choices=_RULES,
+                            help="stop rule for the barrier (use the B1 winner)")
+        if name == "research-barrier":
+            sp.add_argument("--target", type=float, default=3.0, help="profit target in R (R = 2.5 x ATR)")
+            sp.add_argument("--days", type=int, default=60, help="time limit in trading days")
+        if name == "research-cpcv":
+            sp.add_argument("--horizon", type=int, default=20)
+        if name == "research-model":
+            sp.add_argument("--holdout", action="store_true",
+                            help="after a pass on the development years, run once on the sealed holdout")
+        sp.set_defaults(func=fn)
     sp = sub.add_parser("research-coffee-can", help="research C: the Coffee Can screen, held a year at a time")
     sp.add_argument("--years", type=int, default=5)
     sp.add_argument("--until", default="2025-10-01", help="first date NOT used (the sealed holdout)")
