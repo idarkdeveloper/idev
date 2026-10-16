@@ -514,6 +514,20 @@ computed once a month and shared by every variant; nothing from 1 Oct 2025 on is
   (variants: a 100-day average, + 3 days of breadth below 35%, + 5 days of FII/DII selling once that history exists)
   and inverse-volatility weights (2.5%-8% a stock). The changes that pass are combined and judged once more.
 
+**Post-results drift and who-traded signals** (`python -m trading_agent research-pead`). Needs the results cache
+(`fundamentals-history --universe NIFTYMIDCAP150`, repeated until nothing is left) and the insider cache
+(`insider-history`, NSE's disclosures month by month, resumable). At each month start, with only what had been
+broadcast by then (a filing at or after 15:00 IST counts from the next trading day):
+- earnings surprise (SUE: this quarter's EPS minus a year ago, over that change's spread in the last 8 quarters), its
+  change, and margin acceleration × sales surprise, from filings of the last 95 days;
+- promoters' net buying in the last 90 days × 6-month momentum, and promoter buying in a quiet base
+  (ATR20 / ATR120 ≤ 0.70).
+It reports each signal's rank IC with the next 5 / 20 / 60 days' return above MID150BEES and the top fifth's excess
+after charges, then runs the portfolio (after charges and tax) with the screen's score plus the earnings composite
+("post-results drift instead of static quality"), with and without the promoter signals. If it passes on the
+development years, `--holdout` runs it once on the sealed holdout (1 Oct 2025 to today); a second `--holdout` is
+refused, because the trial log shows it was opened.
+
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.

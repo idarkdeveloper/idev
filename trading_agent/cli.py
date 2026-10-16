@@ -509,7 +509,7 @@ def cmd_kill_switch(args: argparse.Namespace) -> int:
 # the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
 # reach Groww.
 HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
-                "factor-backtest", "research-gap", "research-stops", "research-portfolio", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
+                "factor-backtest", "research-gap", "research-stops", "research-portfolio", "research-pead", "insider-history", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data"}
 
 
@@ -926,6 +926,88 @@ def cmd_research_portfolio(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_insider_history(args: argparse.Namespace) -> int:
+    """Download NSE insider (PIT) disclosures month by month into the cache (resumable)."""
+    from datetime import date as _date
+    from .event_signals import InsiderHistory
+    from .nse import NSEClient
+    settings = _settings(args)
+    cache = settings.state_dir / "cache"
+    nse = NSEClient(cache_dir=cache)
+    end = _date.today()
+    start = _date(end.year - args.years, end.month, 1)
+    r = InsiderHistory(cache, nse._get).download(start, end, progress=print, max_months=args.max_months)
+    print(f"Insider history: {r['cached']} month(s) already cached, {r['fetched']} downloaded, {r['failed']} failed."
+          + (" Run again to continue." if r["failed"] or r["fetched"] >= args.max_months else ""))
+    return 0 if not r["failed"] else 1
+
+
+def cmd_research_pead(args: argparse.Namespace) -> int:
+    """Research: post-results drift and who-traded signals (IC study + portfolio), optionally the sealed holdout once."""
+    from .costs import cost_model_for
+    from .event_signals import EventData, InsiderHistory, format_signal_study, pead_ranker, signal_study
+    from .fundamentals_history import ResultsHistory
+    from .gap_diagnosis import log_trial
+    from .research_sim import Rules, simulate, summarize
+    from .research_studies import HOLDOUT_START, SKILL_BAR, _first_ranked_day, _skill, prior_trials
+    settings = _settings(args)
+    log_path = settings.state_dir / "research" / "trials.jsonl"
+    if args.holdout:
+        opened = log_path.exists() and any('"study": "PEAD-holdout"' in line
+                                           for line in log_path.read_text(encoding="utf-8").splitlines())
+        if opened:
+            print("The sealed holdout was already opened for this study (see the trial log): it is used once only.")
+            return 2
+        args.until, args.years = None, 2   # a year of holdout plus the ranking's lookback
+    m = _research_market(args, settings)
+    if args.holdout:
+        m.start_day = HOLDOUT_START
+    results_src = ResultsHistory(settings.state_dir / "cache", max_new_downloads=0)
+    results: dict[str, Any] = {}
+    for sym in m.raw:
+        try:
+            results[sym] = results_src.history(sym)
+        except Exception:  # noqa: BLE001 - no cached listing: no earnings signals for it
+            results[sym] = []
+    covered = sum(1 for v in results.values() if v)
+    insider = InsiderHistory(settings.state_dir / "cache").trades(m.dates[0], m.dates[-1])
+    print(f"Results filings cached for {covered} of {len(results)} stocks; {len(insider)} insider trades cached.")
+    if covered < 0.8 * len(results):
+        print("Coverage is low: run `fundamentals-history --universe NIFTYMIDCAP150` until nothing is left, then again.")
+    if not insider:
+        print("No insider history: run `insider-history` first; the promoter signals are empty without it.")
+    ev = EventData(m, results, insider)
+    start, end = _first_ranked_day(m), len(m.dates) - 1
+    print(f"Window {m.dates[start]} to {m.dates[end]}" + (" (THE SEALED HOLDOUT, opened once)" if args.holdout else ""))
+    if not args.holdout:
+        print(format_signal_study(signal_study(m, ev, start, end)))
+    cm = cost_model_for("in")
+    base = Rules(tax=True)
+    runs = {"momentum (today)": simulate(m, base, start, end, cost_model=cm),
+            "momentum + post-results drift": simulate(m, base, start, end, cost_model=cm, ranker=pead_ranker(ev)),
+            "  + promoter buying": simulate(m, base, start, end, cost_model=cm,
+                                            ranker=pead_ranker(ev, with_promoters=True))}
+    skill = _skill(runs, m, start, end, prior_trials(settings.state_dir))
+    print(f"  {'portfolio (after charges and tax)':<34}{'return':>9}{'vs fund':>9}{'worst fall':>11}{'skill odds':>11}")
+    for name, run in runs.items():
+        x = summarize(run, m, start, end)
+        p = skill[name]["probability"]
+        print(f"  {name:<34}{x['total_return'] * 100:>+8.1f}%{x['excess'] * 100:>+8.1f}%{x['max_drawdown'] * 100:>+10.1f}%"
+              f"{('n/a' if p is None else f'{p:.2f}'):>11}")
+        log_trial(settings.state_dir, "PEAD-holdout" if args.holdout else "PEAD",
+                  {"variant": name.strip(), "until": args.until}, {"return": x["total_return"], "excess": x["excess"]})
+    pead = summarize(runs["momentum + post-results drift"], m, start, end)
+    if args.holdout:
+        print("  Verdict: " + ("post-results drift BEAT MID150BEES after charges on the holdout."
+                               if (pead["excess"] or 0) > 0 else
+                               "post-results drift did NOT beat MID150BEES after charges on the holdout."))
+    else:
+        ok = (pead["excess"] or 0) > 0 and (skill["momentum + post-results drift"]["probability"] or 0) >= SKILL_BAR
+        print("  Next: " + ("passes on the development years; open the sealed holdout once with --holdout."
+                            if ok else "does not pass on the development years; the holdout stays sealed."))
+    return 0
+
+
 def cmd_costs(args: argparse.Namespace) -> int:
     from .costs import FlatCosts, cost_model_for
     settings = _settings(args)
@@ -1242,6 +1324,17 @@ def build_parser() -> argparse.ArgumentParser:
                             help="stop rule for every variant (the B1 winner, once chosen)")
         sp.add_argument("--json", action="store_true")
         sp.set_defaults(func=fn)
+    sp = sub.add_parser("research-pead", help="research: post-results drift and promoter-buying signals")
+    sp.add_argument("--universe", default="NIFTYMIDCAP150")
+    sp.add_argument("--years", type=int, default=5)
+    sp.add_argument("--until", default="2025-10-01", help="first date NOT used (the sealed holdout)")
+    sp.add_argument("--holdout", action="store_true",
+                    help="run once on the sealed holdout (1 Oct 2025 to today); refused after the first time")
+    sp.set_defaults(func=cmd_research_pead)
+    sp = sub.add_parser("insider-history", help="download NSE insider disclosures month by month (resumable)")
+    sp.add_argument("--years", type=int, default=7)
+    sp.add_argument("--max-months", type=int, default=120)
+    sp.set_defaults(func=cmd_insider_history)
     sp = sub.add_parser("fundamentals-history", help="download NSE quarterly results for a universe (resumable)")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--years", type=int, default=5, help="also cover stocks that were members this far back")

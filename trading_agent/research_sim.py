@@ -165,6 +165,8 @@ class Market:
         self._breadth: list[float | None] | None = None
         self._rank: dict[int, list[str]] = {}
         self._rank_detail: dict[int, dict[str, int]] = {}
+        self._scores: dict[int, dict[str, float]] = {}
+        self._stats: dict[int, dict[str, dict[str, Any]]] = {}
 
     def _align(self, bars: list[dict[str, Any]]) -> tuple[list[float | None], list[float | None]]:
         by = {b["date"]: b for b in bars}
@@ -232,8 +234,20 @@ class Market:
                 stats[sym] = st
             ranked = score_universe(stats, min_turnover=self.min_turnover)
             self._rank[t] = [r["symbol"] for r in ranked if r["eligible"]]
+            self._scores[t] = {r["symbol"]: r["score"] for r in ranked if r["eligible"]}
+            self._stats[t] = stats
             self._rank_detail[t] = {s: i + 1 for i, s in enumerate(self._rank[t])}
         return self._rank[t]
+
+    def momentum_scores(self, t: int) -> dict[str, float]:
+        """The screen's composite score of each ELIGIBLE name on day t (trend and liquidity filters passed)."""
+        self.momentum_ranking(t)
+        return self._scores[t]
+
+    def stats_on(self, t: int) -> dict[str, dict[str, Any]]:
+        """momentum_stats of every ranked member on day t (6-month return, ...)."""
+        self.momentum_ranking(t)
+        return self._stats[t]
 
     def rank_of(self, t: int, sym: str) -> int | None:
         self.momentum_ranking(t)
