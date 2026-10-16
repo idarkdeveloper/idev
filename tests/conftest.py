@@ -115,3 +115,64 @@ class FakeSession:
 
     def post(self, url, **kw):
         return self.request("POST", url, **kw)
+
+
+# -- no real secrets, no real .env, no real network ------------------------------------------------------------------
+# On a machine with a real .env (the server, the laptop) a test that read it put the real Resend, Telegram and Groww
+# keys into os.environ, where a later test's notifier picked them up: on 16 Oct a kill-switch test sent a real
+# "[HALT] kill switch engaged" / "[HALT released]" pair. These three guards make that impossible.
+SECRET_ENV = ("ANTHROPIC_API_KEY", "RESEND_API_KEY", "NOTIFY_EMAIL_TO", "NOTIFY_EMAIL_FROM", "NOTIFY_WEBHOOK_URL",
+              "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_COMMANDS", "TELEGRAM_ALERTS", "HEARTBEAT_URL",
+              "GROWW_ACCESS_TOKEN", "GROWW_API_KEY", "GROWW_API_SECRET", "GROWW_TOTP_SECRET", "GROWW_LIVE_ORDERS",
+              "GROWW_GTT_STOPS", "AUTO_TRADE", "QUIVER_API_KEY", "ALPACA_KEY_ID", "ALPACA_SECRET", "STATE_DIR",
+              "TA_ROLE")
+
+
+@pytest.fixture(autouse=True)
+def no_real_secrets(monkeypatch, tmp_path_factory):
+    """Each test starts without any credential in the environment and ends with the environment it started with
+    (``config._load_dotenv`` writes os.environ directly, which monkeypatch would not undo). A .env file is only read
+    when it is one a test wrote under pytest's temporary folder: the repository's own .env never is."""
+    import os
+
+    import trading_agent.config as config
+    saved = dict(os.environ)
+    for k in SECRET_ENV:
+        monkeypatch.delenv(k, raising=False)
+    base = Path(tmp_path_factory.getbasetemp()).resolve()
+    real_loader = config._load_dotenv
+
+    def guarded(path):
+        try:
+            inside = Path(path).resolve().is_relative_to(base)
+        except (OSError, ValueError):
+            inside = False
+        if inside:
+            real_loader(path)
+    monkeypatch.setattr(config, "_load_dotenv", guarded)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
+def no_real_network(monkeypatch):
+    """Any connection to a non-loopback address fails at once: tests use fakes, and a local test server on 127.0.0.1
+    still works. A real email, Telegram message, Groww or NSE call from a test is a bug this turns into an error."""
+    import socket
+
+    real_connect = socket.socket.connect
+
+    def connect(self, address):
+        host = address[0] if isinstance(address, tuple) else None
+        if host is not None and host not in ("127.0.0.1", "::1", "localhost"):
+            raise OSError(f"network access in tests is blocked (tried {host})")
+        return real_connect(self, address)
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    real_getaddrinfo = socket.getaddrinfo
+
+    def getaddrinfo(host, *a, **k):
+        if host not in (None, "127.0.0.1", "::1", "localhost", ""):
+            raise OSError(f"network access in tests is blocked (tried {host})")
+        return real_getaddrinfo(host, *a, **k)
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
