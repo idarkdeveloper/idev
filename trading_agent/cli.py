@@ -987,6 +987,25 @@ def cmd_research_robustness(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_model_paper(args: argparse.Namespace) -> int:
+    """The prediction model's paper account: show it, or with --run do today's after-close run now (paper only)."""
+    from .model_paper import ModelPaper, format_model_paper, forward_return, run_model_paper_due
+    from .runner import free_prices
+    settings = _settings(args)
+    prices = free_prices(settings)
+    if args.run:
+        print(run_model_paper_due(settings, prices, _market_holidays(settings)))
+        return 0
+    mp = ModelPaper(settings.state_dir, universe=settings.forward_universe, capital=settings.paper_starting_cash,
+                    price_fn=prices.latest_price)
+    if not mp.ft.started:
+        print(f"Model paper account: not started (starts {settings.model_paper_start or 'never: MODEL_PAPER_START=off'}"
+              ", after the close, from the watch service).")
+        return 0
+    print(format_model_paper({**mp.ft.summary(), "rebalanced": None, "model": mp.model()}, forward_return(settings)))
+    return 0
+
+
 def cmd_insider_history(args: argparse.Namespace) -> int:
     """Download NSE insider (PIT) disclosures month by month into the cache (resumable)."""
     from datetime import date as _date
@@ -1423,8 +1442,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
         close_snapshot = CloseSnapshot(
             settings, lambda day: read_groww_portfolio(settings, close_prices, datetime.now(IST).isoformat(timespec="seconds"),
                                                        force=True, close_session=day), holidays)
-    forward = ForwardScheduler(settings.state_dir, lambda: print(run_forward_due(settings, forward_prices, holidays, notifier)),
-                               holidays=holidays)
+    def after_close() -> None:
+        print(run_forward_due(settings, forward_prices, holidays, notifier))
+        from .model_paper import run_model_paper_due   # the prediction model's own paper account (never raises)
+        print(run_model_paper_due(settings, forward_prices, holidays))
+    forward = ForwardScheduler(settings.state_dir, after_close, holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
                 integration=make_integration_scheduler(settings, notifier, holidays),
                 backup=make_backup_scheduler(settings, holidays), close_snapshot=close_snapshot,
@@ -1653,6 +1675,9 @@ def build_parser() -> argparse.ArgumentParser:
                             help="stop rule for every variant (the B1 winner, once chosen)")
         sp.add_argument("--json", action="store_true")
         sp.set_defaults(func=fn)
+    sp = sub.add_parser("model-paper", help="the prediction model's own paper account (practice money only)")
+    sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly sizing, mark)")
+    sp.set_defaults(func=cmd_model_paper)
     sp = sub.add_parser("research-pead", help="research: post-results drift and promoter-buying signals")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--years", type=int, default=5)
