@@ -40,18 +40,32 @@ def is_financial(industry: str) -> bool:
     return any(k in i for k in FINANCIAL_INDUSTRIES)
 
 
-def annual_rows(records: list[dict[str, Any]], day: str, holidays: Any | None = None) -> list[dict[str, Any]]:
-    """Per financial year known by ``day``: revenue, EBIT, capital employed, ROCE and growth (oldest first)."""
+def annual_rows(records: list[dict[str, Any]], day: str, holidays: Any | None = None,
+                debt_rate: float | None = None) -> list[dict[str, Any]]:
+    """Per financial year known by ``day``: revenue, EBIT, capital employed, ROCE and growth (oldest first).
+
+    A filing without a balance sheet (before about FY2023) has its equity rebuilt from paid-up capital and reserves
+    but no borrowings. Then ROCE is n/a, unless ``debt_rate`` is given: borrowings are estimated as finance costs /
+    ``debt_rate`` (0.09 = a typical Indian corporate rate), and the row is marked ``estimated``."""
     known = sorted((r for r in records if usable_by(r["available"], day, holidays)), key=lambda r: r["period_end"])
     rows: list[dict[str, Any]] = []
     for r in known:
         rev, pbt, fin = r.get("revenue_ytd"), r.get("pbt_ytd"), r.get("finance_ytd")
         eq, debt = r.get("equity"), r.get("borrowings")
+        rebuilt = r.get("equity_source") == "rebuilt"
+        estimated = False
+        no_debt = False
+        if rebuilt and debt is None:
+            if debt_rate:
+                debt, estimated = (fin or 0.0) / debt_rate, True
+            else:
+                no_debt = True
         ebit = pbt + (fin or 0.0) if pbt is not None else None
-        ce = eq + (debt or 0.0) if eq is not None else None
+        ce = eq + (debt or 0.0) if eq is not None and not no_debt else None
         missing = ("no profit before tax" if pbt is None else "no balance sheet" if eq is None
+                   else "no borrowings before FY2023" if no_debt
                    else "capital ≤0" if not ce or ce <= 0 else None)
-        rows.append({"fy": r["period_end"], "revenue": rev, "ebit": ebit, "capital": ce,
+        rows.append({"fy": r["period_end"], "revenue": rev, "ebit": ebit, "capital": ce, "estimated": estimated,
                      "roce": ebit / ce if ebit is not None and ce and ce > 0 else None, "roce_missing": missing})
     for prev, cur in zip(rows, rows[1:]):
         consecutive = int(cur["fy"][:4]) - int(prev["fy"][:4]) == 1
@@ -80,18 +94,32 @@ def qualifies(rows: list[dict[str, Any]], min_years: int = MIN_YEARS,
     return True, "passes every year"
 
 
-def filing_coverage(annual: dict[str, list[dict[str, Any]]]) -> list[tuple[str, int, int, int, int]]:
-    """Per financial year (March filings): (FY, filings, with revenue, with profit before tax, with a balance sheet),
-    to tell missing data from companies that fail the test."""
+def filing_coverage(annual: dict[str, list[dict[str, Any]]]) -> list[tuple[str, int, int, int, int, int]]:
+    """Per financial year (March filings): (FY, filings, with revenue, with profit before tax, with a balance sheet,
+    with equity rebuilt from paid-up capital and reserves), to tell missing data from companies that fail the test."""
     by: dict[str, list[int]] = {}
     for recs in annual.values():
         for r in recs:
-            c = by.setdefault(r["period_end"][:4], [0, 0, 0, 0])
+            c = by.setdefault(r["period_end"][:4], [0, 0, 0, 0, 0])
             c[0] += 1
             c[1] += r.get("revenue_ytd") is not None
             c[2] += r.get("pbt_ytd") is not None
-            c[3] += r.get("equity") is not None
+            c[3] += r.get("equity") is not None and r.get("equity_source") != "rebuilt"
+            c[4] += r.get("equity_source") == "rebuilt"
     return [(fy, *c) for fy, c in sorted(by.items())]  # type: ignore[misc]
+
+
+def rebuilt_equity_check(annual: dict[str, list[dict[str, Any]]], tolerance: float = 0.02) -> tuple[int, int]:
+    """(filings with both a balance-sheet equity and a rebuilt one, how many agree within ``tolerance``): whether
+    paid-up capital + reserves can stand in for equity in the years without a balance sheet."""
+    both = agree = 0
+    for recs in annual.values():
+        for r in recs:
+            eq, rb = r.get("equity"), r.get("equity_rebuilt")
+            if r.get("equity_source") == "balance_sheet" and eq and rb:
+                both += 1
+                agree += abs(rb / eq - 1) <= tolerance
+    return both, agree
 
 
 def reason_kind(why: str) -> str:
@@ -108,6 +136,7 @@ def reason_kind(why: str) -> str:
 
 def coffee_can_ranker(annual: dict[str, list[dict[str, Any]]], industries: dict[str, str], *,
                       min_years: int = MIN_YEARS, min_turnover: float = 1e7, window: int | None = None,
+                      debt_rate: float | None = None,
                       log: dict[str, Any] | None = None,
                       reasons: dict[str, Counter[str]] | None = None) -> Callable[[Market, int], list[str]]:
     """The qualifying stocks on day t (liquid, not financials), highest latest ROCE first. ``reasons`` collects, per
@@ -127,7 +156,7 @@ def coffee_can_ranker(annual: dict[str, list[dict[str, Any]]], industries: dict[
             if (stats[sym].get("avg_turnover_60d") or 0) < min_turnover:
                 why["traded under ₹1 crore a day"] += 1
                 continue
-            rows = annual_rows(annual.get(sym) or [], day)
+            rows = annual_rows(annual.get(sym) or [], day, debt_rate=debt_rate)
             ok, reason = qualifies(rows, min_years, window)
             if ok:
                 picks.append((rows[-1]["roce"] or 0.0, sym))

@@ -1268,8 +1268,16 @@ def cmd_research_coffee_can(args: argparse.Namespace) -> int:
     picked: dict[str, Any] = {}
     reasons: dict[str, Any] = {}
     window = getattr(args, "window", None)
+    debt_rate = 0.09 if getattr(args, "estimate_debt", False) else None
     ranker = coffee_can_ranker(annual, industries, min_years=args.min_years, window=window, log=picked,
-                               reasons=reasons)
+                               reasons=reasons, debt_rate=debt_rate)
+    from .coffee_can import rebuilt_equity_check
+    both, agree = rebuilt_equity_check(annual)
+    print(f"Equity rebuilt from paid-up capital + reserves (years without a balance sheet): it matches the balance "
+          f"sheet within 2% in {agree} of {both} filings that have both"
+          + ("" if not both else f" ({agree / both * 100:.0f}%)") + ". "
+          + ("Borrowings before FY2023 estimated as finance costs / 9%." if debt_rate else
+             "Without --estimate-debt, years before FY2023 have no ROCE (no borrowings figure)."))
     rules = Rules(top=40, weights="equal_picks", rebalance="yearly", rebalance_month=7, tax=True)
     first = None
     for t in m.rebalance_days(0, len(m.dates) - 1, "yearly", 7):
@@ -1286,9 +1294,10 @@ def cmd_research_coffee_can(args: argparse.Namespace) -> int:
             print(f"  {day}: {len(picked.get(day) or [])} qualify, {sum(why.values())} turned down: "
                   + "; ".join(f"{k} {n}" for k, n in why.most_common(6)))
         from .coffee_can import filing_coverage
-        print("  March filings cached, by financial year (filings / revenue / profit before tax / balance sheet):")
-        for fy, n, rev, pbt, bs in filing_coverage(annual):
-            print(f"    FY{fy}: {n} / {rev} / {pbt} / {bs}")
+        print("  March filings cached, by financial year "
+              "(filings / revenue / profit before tax / balance sheet / equity rebuilt):")
+        for fy, n, rev, pbt, bs, rb in filing_coverage(annual):
+            print(f"    FY{fy}: {n} / {rev} / {pbt} / {bs} / {rb}")
         return 1
     end = len(m.dates) - 1
     run = simulate(m, rules, first, end, cost_model=cost_model_for("in"), ranker=ranker)
@@ -1315,8 +1324,12 @@ def cmd_research_coffee_can(args: argparse.Namespace) -> int:
               else "the holdout stays sealed."))))
     print("  ROCE uses the closing balance sheet (the book averages opening and closing); "
           f"{args.min_years} years of growth required (the book asks for 10; filings start in late 2018).")
+    if debt_rate:
+        print("  INDICATIVE ONLY: before FY2023 equity is rebuilt from paid-up capital + reserves and borrowings are "
+              "estimated from finance costs at 9%, so a ROCE near 15% may be misjudged either way.")
     log_trial(settings.state_dir, "CoffeeCan-holdout" if args.holdout else "CoffeeCan",
-              {"min_years": args.min_years, "window": window, "until": until}, {"return": x["total_return"], "excess": x["excess"]})
+              {"min_years": args.min_years, "window": window, "until": until, "debt_rate": debt_rate},
+              {"return": x["total_return"], "excess": x["excess"]})
     return 0
 
 
@@ -1676,6 +1689,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--years", type=int, default=5)
     sp.add_argument("--until", default="2025-10-01", help="first date NOT used (the sealed holdout)")
     sp.add_argument("--min-years", type=int, default=4, help="years of growth every stock needs (the book: 10)")
+    sp.add_argument("--estimate-debt", action="store_true",
+                    help="before FY2023 (no balance sheet): borrowings = finance costs / 9%%, marked estimated")
     sp.add_argument("--window", type=int, default=None,
                     help="test only the latest N years of growth (the book's rolling window); default: every year seen")
     sp.add_argument("--holdout", action="store_true", help="run once on the sealed holdout; refused after that")

@@ -116,6 +116,17 @@ def parse_results_xbrl(xml_text: str, period_end: date) -> dict[str, Any]:
     if equity is None:  # banks: capital + reserves
         cap, res = pick(("Capital", "EquityShareCapital"), "OneI"), pick(("ReservesAndSurplus", "OtherEquity"), "OneI")
         equity = cap + res if cap is not None and res is not None else None
+    # Filings before about FY2023 carry no balance sheet, but a year's results state the paid-up capital and the
+    # reserves (excluding revaluation reserves): together, the equity. Kept beside the balance sheet's own figure so
+    # the two can be compared where both exist.
+    paid = pick(("PaidUpValueOfEquityShareCapital",), "FourD", "OneD")
+    reserves = pick(("ReserveExcludingRevaluationReserves",), "FourD", "OneD", "OneI")
+    rebuilt = paid + reserves if paid is not None and reserves is not None else None
+    # only a full-year (March) filing's reserves are that year's; a quarter's may repeat the last year-end's
+    use_rebuilt = equity is None and rebuilt is not None and period_end.month == 3
+    source = "balance_sheet" if equity is not None else ("rebuilt" if use_rebuilt else None)
+    if use_rebuilt:
+        equity = rebuilt
     bc, bn = pick(("BorrowingsCurrent",), "OneI"), pick(("BorrowingsNoncurrent",), "OneI")
     borrowings = (bc or 0.0) + (bn or 0.0) if bc is not None or bn is not None else pick(("Borrowings",), "OneI")
     paid_up = pick(("PaidUpValueOfEquityShareCapital",), "OneD", "FourD")
@@ -126,7 +137,7 @@ def parse_results_xbrl(xml_text: str, period_end: date) -> dict[str, Any]:
         profit_ytd = profit_q
     return {"period_end": period_end.isoformat(), "profit_q": profit_q, "profit_ytd": profit_ytd,
             "revenue_q": pick(REVENUE_TAGS, "OneD"), "eps_q": pick(EPS_TAGS, "OneD"),
-            "equity": equity, "borrowings": borrowings,
+            "equity": equity, "borrowings": borrowings, "equity_source": source, "equity_rebuilt": rebuilt,
             "shares": paid_up / face if paid_up and face else None,
             # for return on capital (Coffee Can research): year to date, the full year in a March filing
             "revenue_ytd": pick(REVENUE_TAGS, "FourD"), "pbt_ytd": pick(PBT_TAGS, "FourD"),
@@ -273,7 +284,7 @@ class ResultsHistory:
 
     def annual(self, symbol: str, *, since: str = "2018-01-01") -> list[dict[str, Any]]:
         """One record per financial year (the March filing, consolidated when filed, first version broadcast) with
-        the full-year revenue, profit before tax and finance costs. Read into ``filings_v3`` (records cached before
+        the full-year revenue, profit before tax and finance costs. Read into ``filings_v4`` (records cached before
         those fields existed are read again once, within this run's download budget)."""
         chosen: dict[str, dict[str, Any]] = {}
         for f in self.filings(symbol):
@@ -286,7 +297,7 @@ class ResultsHistory:
         out = []
         for pe in sorted(chosen):
             f = chosen[pe]
-            rec = self.record(f, version="filings_v3")
+            rec = self.record(f, version="filings_v4")
             if rec and "error" not in rec:
                 out.append({**rec, "available": f["available"], "consolidated": f["consolidated"]})
         return out
