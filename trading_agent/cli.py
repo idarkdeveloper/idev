@@ -546,7 +546,8 @@ HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
                 "research-model", "research-robustness", "research-regimes",
                 "research-capacity", "research-leakage",
-                "research-momentum", "research-holdout"}
+                "research-momentum", "research-holdout",
+                "research-macro"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -993,6 +994,28 @@ def cmd_research_holdout(args: argparse.Namespace) -> int:
     print(format_holdout(r))
     if args.json:
         print(json.dumps(r, default=str))
+    return 0
+
+
+def cmd_research_macro(args: argparse.Namespace) -> int:
+    """Macro diagnostic: the adopted rules around oil moves, rupee moves and RBI rate changes (not a filter)."""
+    from .costs import cost_model_for
+    from .research_macro import OIL, RUPEE, format_macro, macro_diagnostic
+    from .runner import free_prices
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    prices = free_prices(settings)
+    try:
+        oil, rupee = prices.history(OIL, "10y"), prices.history(RUPEE, "10y")
+    except Exception as e:  # noqa: BLE001 - say which quote is missing instead of a traceback
+        print(f"Could not load Brent ({OIL}) or USD/INR ({RUPEE}) history: {type(e).__name__}: {e}")
+        return 1
+    until = args.until or "9999-12-31"
+    oil, rupee = [b for b in oil if b["date"] < until], [b for b in rupee if b["date"] < until]   # holdout stays sealed
+    r = macro_diagnostic(m, oil, rupee, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash)
+    print(format_macro(r))
+    if args.json:
+        print(json.dumps({k: v for k, v in r.items() if k != "months"}, default=str))
     return 0
 
 
@@ -1784,6 +1807,8 @@ def build_parser() -> argparse.ArgumentParser:
                            "how much capital the adopted rules can run before their own orders move prices"),
                           ("research-momentum", cmd_research_momentum,
                            "the adopted rules with other lookbacks, rebalance spacings and size halves"),
+                          ("research-macro", cmd_research_macro,
+                           "the adopted rules around oil moves, rupee moves and RBI rate changes (a diagnostic)"),
                           ("research-leakage", cmd_research_leakage,
                            "check that no decision used data published after its day (cut the data and re-decide)")):
         sp = sub.add_parser(name, help=hlp)

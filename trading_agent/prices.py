@@ -53,8 +53,8 @@ class YahooPrices:
         if "/" in symbol:  # crypto pair like BTC/USD
             base, quote = symbol.split("/", 1)
             return f"{base}-{quote}"
-        if "." in symbol or symbol.startswith("^") or not self.suffix:
-            return symbol  # already qualified, or an index like ^NSEI
+        if "." in symbol or "=" in symbol or symbol.startswith("^") or not self.suffix:
+            return symbol  # already qualified, an index like ^NSEI, or a future / currency like BZ=F, INR=X
         return f"{symbol}{self.suffix}"
 
     def __call__(self, symbol: str) -> float:
