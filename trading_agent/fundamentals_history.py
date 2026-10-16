@@ -133,6 +133,36 @@ def parse_results_xbrl(xml_text: str, period_end: date) -> dict[str, Any]:
             "finance_ytd": pick(FINANCE_TAGS, "FourD")}
 
 
+BALANCE_WORDS = ("equity", "capital", "reserve", "borrowing", "asset", "liabilit", "networth", "net_worth")
+
+
+def inspect_xbrl(xml_text: str) -> dict[str, Any]:
+    """What one filing holds, to find where a balance sheet is: every context (id and its dates) with the number of
+    facts in it, and every fact whose tag looks like a balance-sheet item (equity, capital, reserves, borrowings,
+    assets, liabilities), with its context. Reading only; nothing is cached."""
+    if re.search(r"<!(DOCTYPE|ENTITY)", xml_text, re.I):
+        raise ValueError("refusing XML with a DOCTYPE/ENTITY declaration")
+    root = ET.fromstring(xml_text.encode("utf-8"))
+    contexts: dict[str, str] = {}
+    for el in root.iter():
+        if _local(el.tag) == "context" and el.get("id"):
+            dates = [(_local(d.tag), (d.text or "").strip()) for d in el.iter()
+                     if _local(d.tag) in ("instant", "startDate", "endDate")]
+            contexts[el.get("id") or ""] = " ".join(f"{k}={v}" for k, v in dates)
+    counts: dict[str, int] = {}
+    balance: list[tuple[str, str, str]] = []
+    for el in root.iter():
+        cid = el.get("contextRef")
+        if not cid or el.text is None:
+            continue
+        counts[cid] = counts.get(cid, 0) + 1
+        tag = _local(el.tag)
+        if any(w in tag.lower() for w in BALANCE_WORDS):
+            balance.append((tag, cid, el.text.strip()[:30]))
+    return {"contexts": {c: (contexts.get(c, "(not declared)"), n) for c, n in sorted(counts.items())},
+            "balance": balance}
+
+
 class ResultsHistory:
     """Lists and caches quarterly results filings per symbol, then answers point-in-time."""
 
@@ -188,6 +218,13 @@ class ResultsHistory:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(out), encoding="utf-8")
         return out
+
+    def fetch_xml(self, filing: dict[str, Any]) -> str:
+        """One filing's XBRL text, downloaded now (not cached): for inspecting what a filing holds."""
+        r = self.session.get(filing["xbrl"], headers={"User-Agent": UA, "Accept": "application/xml,*/*"},
+                             timeout=self.timeout)
+        r.raise_for_status()
+        return str(r.content.decode("utf-8-sig", errors="replace"))
 
     # -- one filing ---------------------------------------------------------------
     def _record_path(self, url: str, version: str = "filings_v2") -> Path:
