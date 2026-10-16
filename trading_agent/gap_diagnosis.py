@@ -153,12 +153,29 @@ def format_diagnosis(d: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+_CODE: list[str | None] = []
+
+
+def code_version() -> str | None:
+    """The git commit the research code runs from (short), so a logged trial can be traced to the code that made it."""
+    if not _CODE:
+        import subprocess
+        try:
+            out = subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], cwd=Path(__file__).resolve().parent,
+                                 capture_output=True, text=True, timeout=5)
+            _CODE.append(out.stdout.strip() or None if out.returncode == 0 else None)
+        except (OSError, subprocess.SubprocessError):
+            _CODE.append(None)
+    return _CODE[0]
+
+
 def log_trial(state_dir: Path, study: str, params: dict[str, Any], summary: dict[str, Any]) -> Path:
-    """Append one line to the research trial log, so every variant tried counts in later deflated-Sharpe checks."""
+    """Append one line to the research trial log, so every variant tried counts in later deflated-Sharpe checks. Each
+    line carries the code's git commit, so a result can be traced to the code that produced it."""
     path = Path(state_dir) / "research" / "trials.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "study": study, "params": params,
-           "summary": summary}
+           "summary": summary, "code": code_version()}
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, default=str) + "\n")
     return path

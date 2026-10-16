@@ -42,7 +42,7 @@ class YahooPrices:
         self.timeout = timeout
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.cache_ttl = cache_ttl
-        self.fill: Any | None = None   # groww_fill.GrowwFill: a daily bar Yahoo has not posted yet, from Groww
+        self.fill: Any | None = None   # groww_fill.GrowwFill: a daily bar Yahoo has not posted yet, from NSE's daily file
         self.clock = time.time         # for the provisional close (tests replace it)
 
     def yahoo_symbol(self, symbol: str) -> str:
@@ -125,7 +125,7 @@ class YahooPrices:
         return float(price) if self.clock() >= closes else None
 
     def _filled(self, ysym: str, bars: list[dict[str, Any]], ohlc: bool = False) -> list[dict[str, Any]]:
-        """``bars`` with a late latest session filled from Groww (groww_fill), when a fill is attached."""
+        """``bars`` with a late latest session filled from NSE's daily file (groww_fill), when a fill is attached."""
         return self.fill.fill(ysym, bars, ohlc=ohlc) if self.fill is not None else bars
 
     def _history(self, ysym: str, range_: str) -> list[dict[str, Any]]:

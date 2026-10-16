@@ -79,6 +79,20 @@ def _excess_monthly(run: dict[str, Any], m: Market, start: int, end: int) -> lis
     return excess_returns(monthly(run["curve"], dates), monthly(fund_curve(m, start, end, run["capital"]), dates))
 
 
+def _pbo(runs: dict[str, dict[str, Any]], m: Market, start: int, end: int) -> dict[str, Any] | None:
+    """Probability of backtest overfitting across these variants, on their monthly returns above the fund."""
+    from .validation import pbo
+    return pbo({k: [x for x in _excess_monthly(r, m, start, end) if x is not None] for k, r in runs.items()})
+
+
+def pbo_line(p: dict[str, Any] | None) -> str:
+    if not p:
+        return "  Probability of backtest overfitting: not enough months or variants to measure."
+    return (f"  Probability of backtest overfitting: {p['pbo']:.2f} ({p['variants']} variants, {p['splits']} splits of "
+            f"{p['periods']} months): the chance the variant that looks best is at or below the median on months it "
+            "was not picked on; 0.5 or more = picking the best here is no better than chance.")
+
+
 def _skill(runs: dict[str, dict[str, Any]], m: Market, start: int, end: int, extra_trials: int) -> dict[str, Any]:
     ex = {k: _excess_monthly(r, m, start, end) for k, r in runs.items()}
     srs = [s for s in (sharpe(v) for v in ex.values()) if s is not None]
@@ -113,6 +127,7 @@ def stop_race(m: Market, *, cost_model: Any, capital: float = 500_000.0, extra_t
             if per else None,
             "median_stops_per_window": statistics.median(x["stops"] for x in per) if per else None}
     skill = _skill(full_runs, m, *whole, extra_trials)
+    out["pbo"] = _pbo(full_runs, m, *whole)
     current = out["rules"]["atr3"]
     accepted = []
     for rule, r in out["rules"].items():
@@ -202,6 +217,7 @@ def portfolio_controls(m: Market, *, cost_model: Any, stop: str = "none", capita
     for k in res:
         res[k]["skill"] = skill[k]
     return {"window": (m.dates[start], m.dates[end]), "stop": stop, "results": res, "passed": passed,
+            "pbo": _pbo(runs, m, start, end),
             "notes": notes, "combined": combined,
             "combined_clears_skill_bar": bool(combined and (skill["combined"]["probability"] or 0) >= SKILL_BAR)}
 
@@ -233,6 +249,7 @@ def format_stop_race(r: dict[str, Any]) -> str:
     lines.append("  Accepted = median hold 60+ days, median worst fall no worse than 3xATR, skill odds 0.95+ "
                  "(deflated Sharpe of the monthly excess over MID150BEES, counting every trial).")
     lines.append(f"  Recommendation: {r['recommendation']}")
+    lines.append(pbo_line(r.get("pbo")))
     lines.append(f"  {SIMPLIFICATIONS}")
     return "\n".join(lines)
 
@@ -258,6 +275,7 @@ def format_controls(r: dict[str, Any]) -> str:
                      + ("clears the bar." if r["combined_clears_skill_bar"] else "does not clear the 0.95 bar."))
     else:
         lines.append("  Fewer than two changes passed, so there is no combination to test.")
+    lines.append(pbo_line(r.get("pbo")))
     lines.append(f"  {SIMPLIFICATIONS}")
     return "\n".join(lines)
 

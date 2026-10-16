@@ -72,6 +72,32 @@ def parse_bhavcopy(text: str) -> tuple[str, dict[str, tuple[float, float]]]:
     return day, out
 
 
+def parse_bhavcopy_bars(text: str) -> tuple[str, dict[str, list[float]]]:
+    """(ISO date, {symbol: [open, high, low, close, volume]}) for the EQ series of a full bhavcopy."""
+    rdr = csv.reader(io.StringIO(text.lstrip("\ufeff")))
+    head = [h.strip().upper() for h in next(rdr, [])]
+    cols = ("SYMBOL", "SERIES", "DATE1", "OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "TTL_TRD_QNTY")
+    try:
+        idx = [head.index(c) for c in cols]
+    except ValueError:
+        raise ValueError("not an NSE bhavcopy (header columns missing)") from None
+    day, out = None, {}
+    for r in rdr:
+        if len(r) <= max(idx) or r[idx[1]].strip() != "EQ":
+            continue
+        try:
+            o, h, lo, c, v = (float(r[i]) for i in idx[3:])
+            d, m, y = r[idx[2]].strip().split("-")
+            day = day or date(int(y), _MONTHS[m.upper()[:3]], int(d)).isoformat()
+        except (ValueError, KeyError):
+            continue
+        if c > 0:
+            out[r[idx[0]].strip().upper()] = [o, h, lo, c, v]
+    if day is None or not out:
+        raise ValueError("bhavcopy has no EQ rows")
+    return day, out
+
+
 def above_ma(bars: list[dict[str, Any]], asof: str, n: int = MA_DAYS) -> bool | None:
     """Is the last close on or before ``asof`` above the mean of the last ``n`` closes (dividend-adjusted)? None with
     fewer than ``n`` bars."""
@@ -210,6 +236,15 @@ class BreadthStore:
             raise ValueError(f"bhavcopy is for {got_day}, not {day}")
         row = compute_day(got_day, closes, members, bars_fn)
         self.add_many([row], overwrite=True)
+        try:   # every stock's bar for the day: the fill for a close Yahoo has not posted yet (groww_fill.NseDailyFile)
+            _, bars = parse_bhavcopy_bars(resp.content.decode("utf-8-sig", errors="replace"))
+            out = self.path.parent / "cache" / "nse_bhav"
+            out.mkdir(parents=True, exist_ok=True)
+            atomic_write(out / f"{got_day}.json", json.dumps(bars))
+            for old_file in sorted(out.glob("*.json"))[:-40]:   # about two months is plenty for a late bar
+                old_file.unlink(missing_ok=True)
+        except (OSError, ValueError) as e:
+            log.info("bhavcopy bars for %s not kept: %s", got_day, e)
         return row
 
     def tick(self, client: Any, now: datetime, members_fn: Callable[[], Iterable[str]],
