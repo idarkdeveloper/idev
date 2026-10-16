@@ -209,7 +209,7 @@ are readable. Every run also prints a **manual DDPI check** (below). With
 orders, any not placed by the agent), then places **real** but harmless orders: a 1-share limit
 buy 3% below the last price (`--offset-pct`), read back by id and by reference, its limit moved up
 0.5% through Groww's modify-order endpoint (still at least 2% below the price, so it cannot
-fill) and read back, then cancelled (the cancel runs even if the modify fails).
+fill) and read back, then cancelled (the cancel runs even if the modify fails). While the forward test's friction gate is tripped it also needs `--confirm-friction-override`.
 If you hold a free share of SYMBOL, it also creates a 1-share GTT 20% below the price,
 raises it once and cancels it. Results go to `state/state.json` (`groww_checks`). If
 anything fails to cancel, the output says so and names the id to cancel in the Groww app.
@@ -588,6 +588,16 @@ recreated (it used to live in the GitHub Actions cache), `forward --rebuild-from
 --universe NIFTYMIDCAP150` rebuilds it as the first run made it on that date (top 20 of the
 screen as of that day, same charges, fills at that day's close) and refuses if one already
 exists unless `--force`. Give it several months before reading anything into the gap.
+
+**Friction telemetry.** `forward --status`, the daily report and the forward card measure what trading the screen
+costs, against fixed targets: turnover (under 120% a year, from the monthly rebalances after the first build),
+approximate active share against the fund (75–90%; the fund's weights approximated by the members' market caps from
+Yahoo, or equal weights when too few are known), slippage a side (15 bps or less; the paper account fills at the close,
+so this is measured on real Groww fills against the last price when placed, and shows the cost model's assumption
+until there are some) and charges as a share of the return above the fund before charges (under 15%). Once two
+monthly rebalances have followed the start, charges above **20%** of that return, or no return above the fund at all,
+trip the **friction gate**: one Telegram and email alert a month, an amber banner on the Live and Demo pages, and
+`groww-check --live-test` refuses without `--confirm-friction-override`. The gate never changes a setting by itself.
 
 ## Can algo trading predict a share? The signal lab
 

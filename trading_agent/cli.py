@@ -369,7 +369,9 @@ def cmd_forward(args: argparse.Namespace) -> int:
         print(f"Ranking {len(members)} {ft.universe} members for this month's rebalance…")
         from .bands import book_for
         from .indian_filters import filters_for
-        return run_screen(members, prices, top=ft.data["top"], bands=book_for(settings), filters=filters_for(settings))
+        from .forward_schedule import with_caps
+        return with_caps(settings, run_screen(members, prices, top=ft.data["top"], bands=book_for(settings),
+                                              filters=filters_for(settings)))
 
     print(format_forward(ft.run(screen, force_rebalance=args.rebalance)))
     return 0
@@ -428,6 +430,12 @@ def cmd_groww_check(args: argparse.Namespace) -> int:
         print("Refusing the live test: it places a REAL 1-share limit order (and a GTT) on Groww. "
               "It needs GROWW_LIVE_ORDERS=true and --i-understand-real-orders.")
         return 1
+    if args.live_test:
+        from .forward_telemetry import gate
+        g = gate(settings.state_dir)
+        if g and g.get("tripped") and not args.confirm_friction_override:
+            print("Refusing the live test: " + g["text"] + " Add --confirm-friction-override to go ahead anyway.")
+            return 1
     cache = token_cache(settings)
     if settings.groww_access_token:
         source = "GROWW_ACCESS_TOKEN in .env"
@@ -1481,6 +1489,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--symbol", help="the stock for --live-test (overrides SYMBOL; default ITC)")
     sp.add_argument("--offset-pct", type=float, default=3.0, help="how far below the last price to rest the buy")
     sp.add_argument("--i-understand-real-orders", action="store_true")
+    sp.add_argument("--confirm-friction-override", action="store_true",
+                    help="run --live-test even though the forward test's friction gate is tripped")
     sp.add_argument("--force", action="store_true",
                     help="ask Groww for a token even while waiting after a refusal (may extend Groww's wait)")
     sp.add_argument("--ip", action="store_true",

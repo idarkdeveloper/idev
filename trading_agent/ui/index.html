@@ -70,6 +70,7 @@
       <span id="demo-confirm" hidden><span id="demo-confirm-text" style="font-weight:400"></span> <button type="button" class="small danger" id="btn-demo-yes">Yes, reset</button> <button type="button" class="small" id="btn-demo-no">Cancel</button></span>
     </span></div>
   <div id="canary-banner" role="alert" hidden></div>
+  <div id="friction-banner" role="alert" hidden></div>
 
   <!-- ===================== Overview ===================== -->
   <section class="ws-panel" id="ws-overview" data-ws="overview" role="tabpanel" aria-labelledby="wst-overview">
@@ -1166,8 +1167,22 @@
     catch(e){ toast(e.message); b.disabled = false; b.textContent = "Refresh from Groww"; }
   });
 
+  function renderFriction(f){   // the forward test's friction gate: a banner on Live and Demo, never a setting change
+    const b = $("friction-banner"); if(!b) return;
+    const g = f && f.telemetry && f.telemetry.gate;
+    b.hidden = !(g && g.tripped);
+    b.textContent = g && g.tripped ? g.text : "";
+  }
+  function frictionRows(t){
+    if(!t || !t.checks) return "";
+    const cls = {ok: "ck-pass", warn: "ck-warn"};
+    return `<div class="fw-friction"><div class="sub" style="font-weight:600">Friction (targets in brackets)</div>`
+      + t.checks.map(c => `<div class="sub"><span class="${cls[c.status] || ""}">${c.status === "ok" ? "ok" : c.status === "warn" ? "warning" : "not yet"}</span> · ${esc(c.name)} [${esc(c.target)}]: ${esc(c.text)}</div>`).join("")
+      + `<div class="sub ${t.gate && t.gate.tripped ? "ck-warn" : ""}">${esc(t.gate ? t.gate.text : "")}</div></div>`;
+  }
   function renderForward(){
     const f = S.forward, el = $("fw-body");
+    renderFriction(f);
     if(!f || f.error){
       el.innerHTML = `<div class="sub">${f && f.error ? "Forward test unreadable: " + esc(f.error) + ". " : ""}Not started. Run <b>python -m trading_agent forward</b> once after the 15:30 close: it buys the top 20 of the Midcap 150 in a separate paper account, puts the same money in MID150BEES, and then rebalances on the first weekday after the close each month (the scheduled routine does this by itself).</div>`;
       return;
@@ -1183,7 +1198,7 @@
         ${stat("Gap", pct(f.gap, 2), "strategy minus fund", toneOf(f.gap))}
         ${stat("Charges paid", money(f.charges_paid), `${f.rebalances} rebalance${f.rebalances === 1 ? "" : "s"} · last ${esc(f.last_rebalance || "none")}`)}
       </div>
-      <div class="sub">${h.length < 60 ? "Give it several months before reading anything into the gap. " : ""}Holding ${f.holdings.length} names${f.holdings.length ? ": " + f.holdings.slice(0, 8).map(x => esc(x.symbol)).join(", ") + (f.holdings.length > 8 ? ` and ${f.holdings.length - 8} more` : "") : ""}.</div></div></div>`;
+      <div class="sub">${h.length < 60 ? "Give it several months before reading anything into the gap. " : ""}Holding ${f.holdings.length} names${f.holdings.length ? ": " + f.holdings.slice(0, 8).map(x => esc(x.symbol)).join(", ") + (f.holdings.length > 8 ? ` and ${f.holdings.length - 8} more` : "") : ""}.</div>${frictionRows(f.telemetry)}</div></div>`;
     lineChart($("fw-chart"), {x: h.map(p => p.date), legend: true, endLabels: false, height: 180, left: 64, yFmt: rupeesShort,
       series: [{name: "Strategy", color: C.s1, values: h.map(p => p.equity)}, {name: esc(f.benchmark), color: C.s2, values: h.map(p => p.bench)}],
       refs: [{y: f.capital, label: "Capital"}], label: "Forward test value over time",

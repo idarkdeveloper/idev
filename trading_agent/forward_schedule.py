@@ -284,7 +284,46 @@ def run_forward_due(settings: Any, prices: Any, holidays: Any, notifier: Any = N
     def screen() -> dict[str, Any]:
         from .bands import book_for   # registered change: 2% / 5% band stocks are not picked (date kept in the forward state)
         from .indian_filters import filters_for   # registered change: ASM/GSM, results blackout, pledges (date kept too)
-        return run_screen(load_universe(ft.universe), prices, top=ft.data["top"], bands=book_for(settings),
-                          filters=filters_for(settings))
+        result = run_screen(load_universe(ft.universe), prices, top=ft.data["top"], bands=book_for(settings),
+                            filters=filters_for(settings))
+        return with_caps(settings, result)
 
-    return prefix + format_forward(ft.run(screen))
+    summary = ft.run(screen)
+    friction_alert(settings, ft, summary, notifier)
+    return prefix + format_forward(summary)
+
+
+def with_caps(settings: Any, result: dict[str, Any], provider: Any = None) -> dict[str, Any]:
+    """Add the index members' market caps (Yahoo, cached a day) for the approximate active share; a failure leaves
+    them out and the telemetry falls back to equal weights."""
+    from .forward_telemetry import member_caps
+    try:
+        if provider is None:
+            from .fundamentals import YahooFundamentals
+            provider = YahooFundamentals(settings.state_dir / "cache")
+        result["caps"] = member_caps([r["symbol"] for r in result.get("all", []) if r.get("symbol")], provider)
+    except Exception as e:  # noqa: BLE001
+        log.warning("market caps for the active share unavailable: %s", e)
+    return result
+
+
+def friction_alert(settings: Any, ft: Any, summary: dict[str, Any], notifier: Any) -> bool:
+    """One Telegram and email alert a month while the friction gate is tripped. Changes no setting."""
+    g = (summary.get("telemetry") or {}).get("gate") or {}
+    month = ft.now().strftime("%Y-%m")
+    if not g.get("tripped") or ft.data.get("friction_alert") == month:
+        return False
+    ft.data["friction_alert"] = month
+    ft.save()
+    if notifier is not None:
+        from .forward_telemetry import format_telemetry
+        try:
+            subject = "[FORWARD] friction gate: charges are eating the return above the fund"
+            body = g["text"] + "\n\n" + format_telemetry(summary["telemetry"])
+            try:
+                notifier.send(subject, body, idempotency_key=f"friction:{month}")
+            except TypeError:   # a plain notifier without idempotency keys
+                notifier.send(subject, body)
+        except Exception:  # noqa: BLE001
+            log.warning("could not send the friction alert")
+    return True
