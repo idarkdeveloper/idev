@@ -414,6 +414,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
     pos: dict[str, Position] = {}
     curve, exposure_log, trades, events = [], [], [], {"stops": 0, "brake_trades": 0, "tax_waits": 0, "floors": 0}
     costs = traded = 0.0
+    traded_cum: list[float] = []   # traded notional so far, at each day's close (turnover by period)
     tax = TaxBook()
     stopped: set[str] = set()
     exposure = 1.0
@@ -594,6 +595,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                         buy(s, t, min(cash, target - cur))
         total = cash + sum(p.value for p in pos.values())
         curve.append(total)
+        traded_cum.append(traded)
         exposure_log.append(sum(p.value for p in pos.values()) / total if total else 0.0)
     if rules.tax:   # the open financial year's realised gains
         due = tax_due(tax.st, tax.lt, m.dates[end])
@@ -603,6 +605,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
     open_days = [end - p.entry_t for p in pos.values()]
     return {"rules": rules, "label": rules.label(), "dates": m.dates[start:end + 1], "curve": curve,
             "exposure": exposure_log, "trades": trades, "open_days": open_days, "costs": costs, "traded": traded,
+            "traded_cum": traded_cum,
             "tax_paid": tax.paid, "tax_by_fy": tax.by_fy, "events": events, "capital": capital}
 
 
