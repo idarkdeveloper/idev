@@ -63,7 +63,8 @@ def test_ask_uses_one_forced_tool_and_saves_the_answer(tmp_path):
     client = FakeClient()
     entry = ask(t, client, "claude-x", FakeNews())
     kw = client.calls[0]
-    assert [x["name"] for x in kw["tools"]] == [TOOL["name"]] and kw["tool_choice"] == {"type": "tool", "name": TOOL["name"]}
+    assert [x["name"] for x in kw["tools"]] == [TOOL["name"]] and kw["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+    assert f"calling the {TOOL['name']} tool exactly once" in kw["system"]
     assert "2021-03-15" in kw["system"] and "only" in kw["system"].lower()
     assert entry["date"] == "2021-03-15" and entry["hindsight"] is True and entry["recommendations"][0]["ticker"] == "D"
     assert t.data["claude"][-1] == entry and t.data["claude_presses"] == 1

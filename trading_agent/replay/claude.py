@@ -77,8 +77,8 @@ def build_context(trial: Any, news: Any, lookup: str | None = None, deals: str |
 
 def request_view(client: Any, model: str, date_label: str, ctx: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     """The one record_view call (forced tool, no order tool): (response, the recorded view)."""
-    resp = client.messages.create(model=model, max_tokens=4000, system=SYSTEM.format(date=date_label),
-                                  tools=[TOOL], tool_choice={"type": "tool", "name": TOOL["name"]},
+    from ..claude_tools import one_tool_call
+    resp = client.messages.create(model=model, **one_tool_call(TOOL, SYSTEM.format(date=date_label)),
                                   messages=[{"role": "user", "content": json.dumps(ctx, default=str)}])
     block = next((b for b in resp.content if getattr(b, "type", None) == "tool_use"), None)
     if block is None or not isinstance(block.input, dict):

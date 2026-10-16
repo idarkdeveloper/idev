@@ -221,7 +221,8 @@ def test_claude_tagger_forces_one_tool_and_validates():
                 return type("M", (), {"content": [block]})()
     out = news.ClaudeTagger(Client, "claude-haiku-4-5").tag(items(2))
     kw = calls[0]
-    assert kw["tool_choice"] == {"type": "tool", "name": "tag_headlines"} and len(kw["tools"]) == 1
+    assert kw["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True} and len(kw["tools"]) == 1
+    assert "calling the tag_headlines tool" in kw["system"] and kw["max_tokens"] >= 16000   # no forced tool on Opus 5.5
     assert "temperature" not in kw and out == {"id0": {"sentiment": "positive", "event": "order_win", "confidence": "medium"}}
 
 

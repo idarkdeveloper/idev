@@ -323,9 +323,9 @@ class ClaudeStoryWriter(StoryWriter):
         self.name = f"claude:{model}"
 
     def write(self, article: str, symbol: str, name: str | None) -> dict[str, Any]:
+        from .claude_tools import one_tool_call
         msg = self.client.messages.create(
-            model=self.model, max_tokens=1500, tools=[self.TOOL], system=UNTRUSTED_RULE,
-            tool_choice={"type": "tool", "name": self.TOOL["name"]},
+            model=self.model, **one_tool_call(self.TOOL, UNTRUSTED_RULE),
             messages=[{"role": "user", "content": story_prompt(article, symbol, name)}])
         for block in msg.content:
             if getattr(block, "type", None) == "tool_use" and isinstance(block.input, dict):

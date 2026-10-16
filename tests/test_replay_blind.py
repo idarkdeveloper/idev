@@ -94,7 +94,7 @@ def test_both_runs_go_through_the_one_record_view_path_with_no_order_tool():
     rep = run_blind_test([Case("t", DAY, TICKER)], [pair()], client=client, model="m", source=source())
     assert len(client.calls) == 4
     for kw in client.calls:
-        assert kw["tools"] == [TOOL] and kw["tool_choice"] == {"type": "tool", "name": "record_view"}
+        assert kw["tools"] == [TOOL] and kw["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
     assert [ALIAS in kw["messages"][0]["content"] for kw in client.calls] == [False, False, True, True]
     r = rep["results"][0]
     assert r["unmasked"]["action"] == "buy" and r["masked"]["action"] == "hold" and r["stance_flip"]
