@@ -42,6 +42,8 @@ MIN_BARS = 274          # 12-1 momentum needs 252 + 21 bars
 STOP_RULES = ("none", "atr3", "atr5", "two_stage", "grace20", "ema50")
 BRAKES = ("none", "ema", "sma100", "ema_breadth", "ema_flows")
 TAX_CHANGE = "2024-07-23"
+LTCG_START = "2018-04-01"      # long-term gains on listed shares were exempt before this (Finance Act 2018)
+GRANDFATHER_DAY = "2018-01-31" # shares bought before 1 Feb 2018: cost is at least their value on this day
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,7 @@ class Rules:
     floor: float | None = None      # sell when a holding is this fraction below its cost (0.25 in the forward test)
     lag: int = 0                    # sessions between a decision and its trade (1 = the next session's close)
     cost_mult: float = 1.0          # charges times this (a stress test)
+    industry_cap: int | None = None # with a buffer: no new buy while this many holdings share its industry
 
     def label(self) -> str:
         parts = [f"stop={self.stop}"] if self.stop != "none" else []
@@ -82,6 +85,8 @@ class Rules:
             parts.append(f"fills +{self.lag} day" + ("s" if self.lag > 1 else ""))
         if self.cost_mult != 1.0:
             parts.append(f"costs x{self.cost_mult:g}")
+        if self.industry_cap:
+            parts.append(f"at most {self.industry_cap} per industry")
         return ", ".join(parts) or "baseline"
 
 
@@ -336,6 +341,7 @@ class Position:
     high: float
     bought: str                # date of the first buy (holding period for tax)
     breakeven: bool = False
+    grandfathered: float | None = None   # value on 31 Jan 2018 for shares held then (plus later top-ups at cost)
 
 
 @dataclass
@@ -352,8 +358,12 @@ def fy_of(day: str) -> str:
 
 
 def tax_due(st: float, lt: float, day: str) -> float:
+    """Tax for a financial year ending on ``day``: 20% / 12.5% above Rs 1.25 lakh from 23 Jul 2024; 15% / 10% above
+    Rs 1 lakh before; and before 1 Apr 2018 long-term gains on listed shares were exempt (short-term 15%)."""
     old = day < TAX_CHANGE
     st_rate, lt_rate, exempt = (0.15, 0.10, 100_000.0) if old else (0.20, 0.125, 125_000.0)
+    if day < LTCG_START:
+        lt_rate = 0.0
     if st < 0:              # a short-term loss is set off against long-term gains too
         lt, st = lt + st, 0.0
     return st_rate * max(st, 0.0) + lt_rate * max(lt - exempt, 0.0)
@@ -381,6 +391,31 @@ def inverse_vol_weights(vols: dict[str, float | None], w_min: float, w_max: floa
         for s in out:
             fixed[s] = min(max(w[s], w_min), w_max)
     return w
+
+
+def capped_picks(ranked: list[str], keep: list[str], slots: int, top: int, cap: int,
+                 industries: dict[str, str]) -> list[str]:
+    """New buys as the buffer rule picks them (from the top ``top`` names not already held), except that a name whose
+    industry already has ``cap`` holdings is skipped and the next name in the ranking takes its slot."""
+    counts: dict[str, int] = {}
+    for s in keep:
+        if industries.get(s):
+            counts[industries[s]] = counts.get(industries[s], 0) + 1
+    new: list[str] = []
+    skipped = 0
+    for i, s in enumerate(ranked):
+        if len(new) >= slots or i >= top + skipped:
+            break
+        if s in keep:
+            continue
+        ind = industries.get(s)
+        if ind and counts.get(ind, 0) >= cap:
+            skipped += 1
+            continue
+        new.append(s)
+        if ind:
+            counts[ind] = counts.get(ind, 0) + 1
+    return new
 
 
 def stop_triggered(m: Market, sym: str, p: Position, t: int, rule: str) -> bool:
@@ -415,8 +450,10 @@ def stop_triggered(m: Market, sym: str, p: Position, t: int, rule: str) -> bool:
 
 
 def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 500_000.0,
-             cost_model: Any | None = None, ranker: Callable[[Market, int], list[str]] | None = None) -> dict[str, Any]:
-    """Run ``rules`` from day ``start`` to day ``end`` (indices into ``m.dates``, inclusive)."""
+             cost_model: Any | None = None, ranker: Callable[[Market, int], list[str]] | None = None,
+             industries: dict[str, str] | None = None) -> dict[str, Any]:
+    """Run ``rules`` from day ``start`` to day ``end`` (indices into ``m.dates``, inclusive). ``industries`` maps a
+    symbol to its industry for ``rules.industry_cap`` (names with no industry are never capped)."""
     rank = ranker or (lambda mk, t: mk.momentum_ranking(t))
     rebal = set(m.rebalance_days(start, end, rules.rebalance, rules.rebalance_month))
     daily_rate = (1 + rules.liquid_rate) ** (1 / 365.0) - 1
@@ -450,12 +487,14 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
         fills.append((t, sym, proceeds))
         basis = p.cost * frac
         if rules.tax:
-            gain = proceeds - basis
             held = (date.fromisoformat(m.dates[t]) - date.fromisoformat(p.bought)).days
             if held > 365:
-                tax.lt += gain
+                tax_basis = basis
+                if p.grandfathered is not None and m.dates[t] >= LTCG_START:   # cost = max(cost, min(31 Jan 2018 value, sale))
+                    tax_basis = max(basis, min(p.grandfathered * frac, proceeds))
+                tax.lt += proceeds - tax_basis
             else:
-                tax.st += gain
+                tax.st += proceeds - basis
         if frac >= 0.999999:
             c = m.close[sym][t]
             trades.append({"symbol": sym, "entry": m.dates[p.entry_t], "exit": m.dates[t], "days": t - p.entry_t,
@@ -464,6 +503,8 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
         else:
             p.value -= proceeds
             p.cost -= basis
+            if p.grandfathered is not None:
+                p.grandfathered *= 1 - frac
 
     def buy(sym: str, t: int, amount: float) -> None:
         nonlocal cash
@@ -474,8 +515,12 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
         fills.append((t, sym, amount))
         px = m.close[sym][t] or 0.0
         if sym in pos:
-            pos[sym].value += amount
-            pos[sym].cost += amount + c
+            p = pos[sym]
+            p.value += amount
+            p.cost += amount + c
+            gf = p.grandfathered
+            if gf is not None:   # a later top-up keeps its own cost
+                p.grandfathered = gf + amount + c
         else:
             a = m.atr(sym)[t]
             pos[sym] = Position(value=amount, cost=amount + c, entry_t=t, entry_px=px, entry_atr=a, high=px,
@@ -524,6 +569,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
         return p.value * a_d / a_t <= (1 - rules.floor) * p.cost
 
     last_fy = fy_of(m.dates[start])
+    grandfather_done = m.dates[start] > GRANDFATHER_DAY   # windows that start after 31 Jan 2018 never need it
     for t in range(start, end + 1):
         day = m.dates[t]
         d = t - rules.lag   # the decision day: everything decided on d's close is traded at t's close
@@ -534,6 +580,14 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                 if a0 and a1:
                     p.value *= a1 / a0
             cash *= (1 + daily_rate) ** ((date.fromisoformat(day) - date.fromisoformat(m.dates[t - 1])).days)
+        # shares held on 31 Jan 2018 keep that day's value as their minimum cost for long-term gains
+        if rules.tax and not grandfather_done and day >= GRANDFATHER_DAY:
+            grandfather_done = True
+            for sym, p in pos.items():
+                if p.bought <= GRANDFATHER_DAY:
+                    a0, a1 = m.adj[sym][t - 1] if t > start else None, m.adj[sym][t]
+                    on_day = day == GRANDFATHER_DAY or not (a0 and a1)
+                    p.grandfathered = p.value if on_day else p.value * a0 / a1   # type: ignore[operator]
         # tax for the financial year that just ended is paid on its last day
         if rules.tax and fy_of(day) != last_fy:
             due = tax_due(tax.st, tax.lt, m.dates[t - 1])
@@ -587,7 +641,10 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                 for s in [s for s in list(pos) if s not in keep]:
                     sell(s, t, 1.0, "rank")
                 slots = rules.top - len(keep)
-                new = [s for s in ranked[:rules.top] if s not in keep][:max(slots, 0)]
+                if rules.industry_cap and industries is not None:
+                    new = capped_picks(ranked, keep, slots, rules.top, rules.industry_cap, industries)
+                else:
+                    new = [s for s in ranked[:rules.top] if s not in keep][:max(slots, 0)]
                 w = weights_for(keep + new, t)
                 for s in new:
                     buy(s, t, min(cash, exposure * total * w.get(s, 1 / rules.top)))

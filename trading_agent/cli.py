@@ -547,7 +547,7 @@ HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum",
                 "research-model", "research-robustness", "research-regimes",
                 "research-capacity", "research-leakage",
                 "research-momentum", "research-holdout",
-                "research-macro", "research-sectors"}
+                "research-macro", "research-sectors", "research-backward"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -1036,6 +1036,64 @@ def cmd_research_sectors(args: argparse.Namespace) -> int:
     print(format_sectors(r))
     if args.json:
         print(json.dumps({k: v for k, v in r.items() if k != "rebalances"}, default=str))
+    return 0
+
+
+def cmd_research_backward(args: argparse.Namespace) -> int:
+    """The pre-registered backward check (Apr 2017 to Sep 2020), ONCE: the adopted rules and four variants. Refused
+    without --confirm and after the first time (the trial log records it)."""
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .index_history import build_history
+    from .membership import membership_for
+    from .research_backward import (PREREGISTRATION, STUDY, TRADING_FROM, WINDOW_END, backward_batch, fetch_tri,
+                                    format_backward, load_backward_market, tri_from_csv)
+    from .research_sectors import industry_map
+    from .research_studies import prior_trials
+    from .runner import free_prices
+    from .screen import load_universe
+    settings = _settings(args)
+    log_path = settings.state_dir / "research" / "trials.jsonl"
+    if log_path.exists() and any(f'"study": "{STUDY}"' in line
+                                 for line in log_path.read_text(encoding="utf-8").splitlines()):
+        print("The backward check was already run (see the trial log): it is used once only.")
+        return 2
+    if not args.confirm:
+        print(f"This runs the pre-registered backward check ({PREREGISTRATION}) on Apr 2017 to Sep 2020, ONCE. The "
+              "result is final and the window is spent. Run again with --confirm to run it.")
+        return 2
+    universe = "NIFTYMIDCAP150"
+    current = [x["symbol"] for x in load_universe(universe)]
+    print("Rebuilding the Midcap 150's members since 2016 from NSE's index notices (downloaded once)…")
+    meta = build_history(universe, current, settings.state_dir / "backward", since="2016-01-01", progress=print)
+    membership = membership_for(universe, current, meta["path"])
+    if membership is None or membership.known_since > TRADING_FROM:
+        print(f"Membership is only known from {membership.known_since if membership else 'never'}; the window starts "
+              f"{TRADING_FROM}. Not running.")
+        return 1
+    notes = [f"rebuilt from {meta['changes']} index changes since {membership.known_since}."]
+    if meta["problems"]:
+        notes.append(f"{len(meta['problems'])} inconsistencies remain (the latest at "
+                     f"{max(p['date'] for p in meta['problems'])}): a stock or two may be counted wrongly there.")
+    print("Loading the Nifty Midcap 150 total return index…")
+    tri = tri_from_csv(args.tri_csv) if args.tri_csv else fetch_tri(settings.state_dir / "cache")
+    print("Loading prices for every member since 2016 (this takes a few minutes)…")
+    m = load_backward_market(membership, free_prices(settings), tri)
+    _leakage_guard(m, holdout_start=WINDOW_END)
+    industries, failed = industry_map(load_universe)
+    if failed:
+        print(f"Could not load NSE's {', '.join(failed)} list(s); industries come from the rest.")
+    r = backward_batch(m, industries, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                       extra_trials=prior_trials(settings.state_dir))
+    for vid, x in r["results"].items():   # logged before printing: once run, the window is spent
+        log_trial(settings.state_dir, STUDY, {"variant": vid, "name": x["name"], "from": r["start"], "to": r["end"]},
+                  {"return": x["total_return"], "excess": x["excess"], "cagr": x["cagr"],
+                   "max_drawdown": x["max_drawdown"], "turnover": x["turnover"], "passes": x["passes"],
+                   "skill": x["skill"].get("probability")})
+    print(format_backward(r, notes))
+    if args.json:
+        print(json.dumps({**r, "results": {k: {kk: vv for kk, vv in v.items() if kk != "skill"}
+                                           for k, v in r["results"].items()}}, default=str))
     return 0
 
 
@@ -1802,6 +1860,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "Monte Carlo); re-runs the backtest for 2 more portfolio sizes")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_factor_backtest)
+    sp = sub.add_parser("research-backward", help="the pre-registered backward check on Apr 2017 to Sep 2020, ONCE "
+                                                  "(needs --confirm)")
+    sp.add_argument("--confirm", action="store_true", help="really run it: the result is final and the window is spent")
+    sp.add_argument("--tri-csv", default=None, help="a Nifty Midcap 150 total return CSV downloaded from niftyindices.com "
+                                                    "(instead of fetching it)")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_research_backward)
     sp = sub.add_parser("research-holdout", help="open the sealed holdout ONCE for the adopted rules (needs --confirm)")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--confirm", action="store_true", help="really open it: the result is final and the holdout is spent")
