@@ -143,7 +143,11 @@ def vol60(adj: list[float | None]) -> list[float | None]:
                 rets.pop(0)
         if v is not None:
             prev = v
-        out.append(statistics.pstdev(rets) * math.sqrt(252) if len(rets) == 60 else None)
+        if len(rets) == 60:   # population sd with fsum: equal to statistics.pstdev to ~1e-15, far faster
+            mu = math.fsum(rets) / 60
+            out.append(math.sqrt(math.fsum((x - mu) ** 2 for x in rets) / 60) * math.sqrt(252))
+        else:
+            out.append(None)
     return out
 
 
@@ -171,6 +175,7 @@ class Market:
         self.fund_sma100 = sma(self.fund_close, 100)
         self.flows = flows or {}
         self.missing: list[str] = []
+        self.point_in_time = False   # membership taken at each date (load_market with a membership history)
         self.start_day = calendar[0] if calendar else ""   # the test window's first day (load_market sets it)
         self._atr: dict[str, list[float | None]] = {}
         self._ema50: dict[str, list[float | None]] = {}
@@ -307,6 +312,7 @@ def load_market(members: list[str], prices: Any, *, regime: str, years: int, unt
     members_on = (lambda d: membership.members_on(d)) if membership is not None else (lambda d: set(members))
     m = Market(calendar, series, reg, members_on, flows=flows)
     m.missing = sorted(set(universe) - set(series))
+    m.point_in_time = membership is not None
     if until:   # the test starts ``years`` before the cutoff; earlier bars are only the ranking's lookback
         end = date.fromisoformat(until[:10])
         m.start_day = max(m.start_day, end.replace(year=end.year - years).isoformat())
