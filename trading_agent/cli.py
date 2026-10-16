@@ -967,6 +967,33 @@ def cmd_research_momentum(args: argparse.Namespace) -> int:
     return 0
 
 
+def _once_used(settings: Any, study: str) -> bool:
+    """A one-time study already run (in the trial log) or claimed (its marker exists)? Prints why when it was."""
+    from .gap_diagnosis import once_marker, trial_logged
+    if trial_logged(settings.state_dir, study):
+        print(f"{study} was already run (see the trial log): it is used once only.")
+        return True
+    marker = once_marker(settings.state_dir, study)
+    if marker.exists():
+        print(f"{study} was already claimed ({marker}): it is used once only. If that run crashed before a result, "
+              "the window is spent; only you can decide to delete the marker.")
+        return True
+    return False
+
+
+def _claim_once(settings: Any, study: str) -> bool:
+    """Claim a one-time study before it runs (exclusive create); False, with the reason printed, if it was claimed."""
+    from .gap_diagnosis import claim_once
+    try:
+        path = claim_once(settings.state_dir, study)
+    except FileExistsError:
+        _once_used(settings, study)
+        return False
+    print(f"Claimed {study} ({path}): this is the only run. If it stops before printing a result, the window is "
+          "still spent.")
+    return True
+
+
 def cmd_research_holdout(args: argparse.Namespace) -> int:
     """Open the sealed holdout ONCE: the adopted rules, unchanged, on the months since 1 Oct 2025. Refused after the
     first time (the trial log records it) and without --confirm."""
@@ -974,10 +1001,7 @@ def cmd_research_holdout(args: argparse.Namespace) -> int:
     from .gap_diagnosis import log_trial
     from .research_studies import HOLDOUT_START, HOLDOUT_STUDY, format_holdout, holdout
     settings = _settings(args)
-    log_path = settings.state_dir / "research" / "trials.jsonl"
-    if log_path.exists() and any(f'"study": "{HOLDOUT_STUDY}"' in line
-                                 for line in log_path.read_text(encoding="utf-8").splitlines()):
-        print("The sealed holdout was already opened for the adopted rules (see the trial log): it is used once only.")
+    if _once_used(settings, HOLDOUT_STUDY):
         return 2
     if not args.confirm:
         print("This opens the sealed holdout (1 Oct 2025 to today) for the adopted rules. It can be done ONCE and the "
@@ -986,6 +1010,8 @@ def cmd_research_holdout(args: argparse.Namespace) -> int:
     args.until, args.years, args.opening_holdout = None, 2, True   # the holdout plus the ranking's lookback year
     m = _research_market(args, settings)
     m.start_day = HOLDOUT_START
+    if not _claim_once(settings, HOLDOUT_STUDY):   # after the data loaded: a refused download does not spend it
+        return 2
     r = holdout(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash)
     for name, x in r["results"].items():   # logged before printing: once opened, it is spent
         log_trial(settings.state_dir, HOLDOUT_STUDY, {"variant": name, "from": r["start"], "to": r["end"]},
@@ -1053,10 +1079,7 @@ def cmd_research_backward(args: argparse.Namespace) -> int:
     from .runner import free_prices
     from .screen import load_universe
     settings = _settings(args)
-    log_path = settings.state_dir / "research" / "trials.jsonl"
-    if log_path.exists() and any(f'"study": "{STUDY}"' in line
-                                 for line in log_path.read_text(encoding="utf-8").splitlines()):
-        print("The backward check was already run (see the trial log): it is used once only.")
+    if _once_used(settings, STUDY):
         return 2
     if not args.confirm:
         print(f"This runs the pre-registered backward check ({PREREGISTRATION}) on Apr 2017 to Sep 2020, ONCE. The "
@@ -1083,6 +1106,8 @@ def cmd_research_backward(args: argparse.Namespace) -> int:
     industries, failed = industry_map(load_universe)
     if failed:
         print(f"Could not load NSE's {', '.join(failed)} list(s); industries come from the rest.")
+    if not _claim_once(settings, STUDY):   # after the data loaded: a refused download does not spend it
+        return 2
     r = backward_batch(m, industries, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
                        extra_trials=prior_trials(settings.state_dir))
     for vid, x in r["results"].items():   # logged before printing: once run, the window is spent
@@ -1334,10 +1359,7 @@ def _meta_run(args: argparse.Namespace, *, with_events: bool, study: str) -> int
                               monthly_sized, predict, verdict)
     from .research_studies import HOLDOUT_START, _first_ranked_day, prior_trials
     settings = _settings(args)
-    log_path = settings.state_dir / "research" / "trials.jsonl"
-    if getattr(args, "holdout", False) and log_path.exists() and any(
-            f'"study": "{study}-holdout"' in line for line in log_path.read_text(encoding="utf-8").splitlines()):
-        print("The sealed holdout was already opened for this study (see the trial log): it is used once only.")
+    if getattr(args, "holdout", False) and _once_used(settings, f"{study}-holdout"):
         return 2
     m = _research_market(args, settings)
     ev = _event_data(m, settings) if with_events else None
@@ -1373,6 +1395,8 @@ def _meta_run(args: argparse.Namespace, *, with_events: bool, study: str) -> int
     args.until, args.years = None, 2
     hm = _research_market(args, settings)
     hm.start_day = HOLDOUT_START
+    if not _claim_once(settings, f"{study}-holdout"):
+        return 2
     hev = _event_data(hm, settings) if with_events else None
     hs, _ = meta_samples(hm, _first_ranked_day(hm), len(hm.dates) - 1, rule=args.stop, cost=cost, ev=hev)
     sized = monthly_sized(hs, predict(beta, [s["x"] for s in hs]))
@@ -1405,17 +1429,15 @@ def cmd_research_pead(args: argparse.Namespace) -> int:
     from .research_sim import Rules, simulate, summarize
     from .research_studies import HOLDOUT_START, SKILL_BAR, _first_ranked_day, _skill, prior_trials
     settings = _settings(args)
-    log_path = settings.state_dir / "research" / "trials.jsonl"
     if args.holdout:
-        opened = log_path.exists() and any('"study": "PEAD-holdout"' in line
-                                           for line in log_path.read_text(encoding="utf-8").splitlines())
-        if opened:
-            print("The sealed holdout was already opened for this study (see the trial log): it is used once only.")
+        if _once_used(settings, "PEAD-holdout"):
             return 2
         args.until, args.years = None, 2   # a year of holdout plus the ranking's lookback
     m = _research_market(args, settings)
     if args.holdout:
         m.start_day = HOLDOUT_START
+        if not _claim_once(settings, "PEAD-holdout"):
+            return 2
     ev = _event_data(m, settings)
     start, end = _first_ranked_day(m), len(m.dates) - 1
     print(f"Window {m.dates[start]} to {m.dates[end]}" + (" (THE SEALED HOLDOUT, opened once)" if args.holdout else ""))
@@ -1460,12 +1482,9 @@ def cmd_research_coffee_can(args: argparse.Namespace) -> int:
     from .runner import free_prices
     from .screen import load_universe
     settings = _settings(args)
-    log_path = settings.state_dir / "research" / "trials.jsonl"
     until, years = args.until, args.years
     if args.holdout:
-        if log_path.exists() and any('"study": "CoffeeCan-holdout"' in line
-                                     for line in log_path.read_text(encoding="utf-8").splitlines()):
-            print("The sealed holdout was already opened for this study (see the trial log): it is used once only.")
+        if _once_used(settings, "CoffeeCan-holdout"):
             return 2
         until, years = None, 2
     members, industries, parts = [], {}, []
@@ -1481,6 +1500,8 @@ def cmd_research_coffee_can(args: argparse.Namespace) -> int:
                     membership=membership if membership.parts else None)
     if args.holdout:
         m.start_day = HOLDOUT_START
+        if not _claim_once(settings, "CoffeeCan-holdout"):
+            return 2
     src = ResultsHistory(settings.state_dir / "cache", max_new_downloads=0)
     annual: dict[str, Any] = {}
     for sym in m.raw:
