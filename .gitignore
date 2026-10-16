@@ -14,3 +14,6 @@ state/
 graphify-out/
 **/graphify-out/
 .graphify_python
+.venv-next/
+.venv-prev/
+.venv-failed/
