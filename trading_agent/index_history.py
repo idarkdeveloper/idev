@@ -254,6 +254,13 @@ def current_symbol(sym: str, as_of: str, renames: list[tuple[str, str, str]]) ->
     return sym
 
 
+# Index changes that were announced but never took effect. The semi-annual and quarterly reviews announced on
+# 18 Feb, 12 Mar and 19 Mar 2020 for 27 Mar 2020 were deferred (press releases of 23 and 25 Mar 2020, COVID-19)
+# and then replaced by a fresh review effective 26 Jun 2020 (press release of 13 May 2020).
+WITHDRAWN = {"2020-03-27": "deferred on 23-25 Mar 2020 and replaced by the 26 Jun 2020 review"}
+WITHDRAWN_EXCEPT = {"NIFTY50", "NIFTYBANK"}   # these two were rebalanced on 19 Mar 2020 and kept
+
+
 def changes_for(changes: Iterable[dict[str, Any]], index: str,
                 renames: list[tuple[str, str, str]] | None = None) -> list[tuple[str, tuple[str, ...], tuple[str, ...]]]:
     """Merge one index's changes per effective date in today's tickers, cancelling a symbol
@@ -262,7 +269,7 @@ def changes_for(changes: Iterable[dict[str, Any]], index: str,
     fix = (lambda s, d: current_symbol(s, d, renames)) if renames else (lambda s, d: s)
     by_date: dict[str, dict[str, set[str]]] = {}
     for c in changes:
-        if c["index"] != key:
+        if c["index"] != key or (c["date"] in WITHDRAWN and key not in WITHDRAWN_EXCEPT):
             continue
         d = by_date.setdefault(c["date"], {"added": set(), "removed": set(), "unadd": set(), "unremove": set()})
         for k in ("added", "removed", "unadd", "unremove"):
