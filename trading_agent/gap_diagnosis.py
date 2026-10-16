@@ -29,6 +29,7 @@ Rules agreed before the run (written here so the verdict cannot be tuned afterwa
 from __future__ import annotations
 
 import json
+import os
 import statistics
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -178,4 +179,36 @@ def log_trial(state_dir: Path, study: str, params: dict[str, Any], summary: dict
            "summary": summary, "code": code_version()}
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, default=str) + "\n")
+    return path
+
+
+def trial_logged(state_dir: Path, study: str) -> bool:
+    """Has the trial log any row for ``study``? Read as JSON lines (a malformed line is skipped), so a change in how
+    rows are spaced can never hide a run."""
+    path = Path(state_dir) / "research" / "trials.jsonl"
+    if not path.exists():
+        return False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            if json.loads(line).get("study") == study:
+                return True
+        except (ValueError, AttributeError):
+            continue
+    return False
+
+
+def once_marker(state_dir: Path, study: str) -> Path:
+    return Path(state_dir) / "research" / "once" / f"{study}.claimed"
+
+
+def claim_once(state_dir: Path, study: str) -> Path:
+    """Claim a one-time study BEFORE it runs: the marker is created exclusively (O_CREAT | O_EXCL), so two runs
+    started together cannot both pass. Raises FileExistsError when it was claimed before. A run that crashes after
+    the claim leaves the study spent; the marker records when and by which code it was claimed."""
+    path = once_marker(state_dir, study)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"study": study, "claimed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                            "code": code_version(), "pid": os.getpid()}) + "\n")
     return path

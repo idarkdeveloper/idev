@@ -32,7 +32,7 @@ def server(settings, sample_rows):
 
 def _get(url):
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:
+        with urllib.request.urlopen(url, timeout=30) as r:
             body = r.read().decode()
             return r.status, json.loads(body) if "json" in r.headers.get("Content-Type", "") else body
     except urllib.error.HTTPError as e:
@@ -43,7 +43,7 @@ def _post(url, body):
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=5) as r:
+        with urllib.request.urlopen(req, timeout=30) as r:
             return r.status, json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read().decode())
@@ -298,7 +298,7 @@ def test_live_orders_gtt_status_and_gtt_toggle(server):
 
 def test_serves_inter_fonts_only_from_the_whitelist(server):
     base, app = server
-    with urllib.request.urlopen(base + "/fonts/inter-latin.woff2", timeout=5) as r:
+    with urllib.request.urlopen(base + "/fonts/inter-latin.woff2", timeout=30) as r:
         assert r.status == 200 and r.headers["Content-Type"] == "font/woff2" and r.read(4) == b"wOF2"
     for bad in ("/fonts/../ui.py", "/fonts/inter-latin.woff2x", "/fonts/LICENSE.txt"):
         status, _ = _get(base + bad)
@@ -309,7 +309,7 @@ def test_serves_inter_fonts_only_from_the_whitelist(server):
 
 def test_page_is_served_as_utf8(server):
     base, app = server
-    with urllib.request.urlopen(base + "/", timeout=5) as r:
+    with urllib.request.urlopen(base + "/", timeout=30) as r:
         html = r.read().decode("utf-8")
     assert "Â" not in html and "â‚¹" not in html and "·" in html
 

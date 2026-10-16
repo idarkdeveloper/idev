@@ -70,7 +70,7 @@ def test_the_command_needs_confirm_runs_once_and_logs_first(tmp_path, monkeypatc
     rows = [json.loads(x) for x in (tmp_path / "research" / "trials.jsonl").read_text().splitlines()]
     assert [r["study"] for r in rows] == ["Adopted-holdout"] * 2 and rows[0]["summary"]["passes"] in (True, False)
     assert cli.cmd_research_holdout(SimpleNamespace(json=False, confirm=True, until=None, years=2)) == 2
-    assert "already opened" in capsys.readouterr().out
+    assert "already run" in capsys.readouterr().out
     assert "research-holdout" in cli.HALT_ALLOWED
 
 
@@ -82,3 +82,33 @@ def test_the_leakage_guard_still_runs_but_allows_the_sealed_months(monkeypatch):
     assert got["holdout_start"] == "9999-12-31"
     cli._leakage_guard(object())
     assert got["holdout_start"] is None                     # every other run keeps the holdout check
+
+
+def test_the_claim_is_exclusive_and_survives_a_crashed_run(tmp_path, monkeypatch, capsys):
+    from trading_agent.gap_diagnosis import claim_once, once_marker, trial_logged
+    path = claim_once(tmp_path, rs.HOLDOUT_STUDY)
+    assert path == once_marker(tmp_path, rs.HOLDOUT_STUDY) and json.loads(path.read_text())["study"] == rs.HOLDOUT_STUDY
+    with pytest.raises(FileExistsError):                  # a second run started at the same time cannot claim it
+        claim_once(tmp_path, rs.HOLDOUT_STUDY)
+    assert not trial_logged(tmp_path, rs.HOLDOUT_STUDY)   # the first run "crashed": no result in the log
+    monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path, paper_starting_cash=500_000.0))
+    assert cli.cmd_research_holdout(SimpleNamespace(json=False, confirm=True, until=None, years=2)) == 2
+    out = capsys.readouterr().out
+    assert "already claimed" in out and "only you can decide to delete the marker" in out
+
+
+def test_the_trial_log_is_read_as_json(tmp_path):
+    from trading_agent.gap_diagnosis import trial_logged
+    log = tmp_path / "research" / "trials.jsonl"
+    log.parent.mkdir(parents=True)
+    log.write_text('not json\n{"study":"Adopted-holdout","params":{}}\n')   # no space after the colon
+    assert trial_logged(tmp_path, "Adopted-holdout") and not trial_logged(tmp_path, "Backward-batch")
+
+
+def test_a_failed_download_does_not_spend_the_holdout(tmp_path, monkeypatch):
+    from trading_agent.gap_diagnosis import once_marker
+    monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path, paper_starting_cash=500_000.0))
+    monkeypatch.setattr(cli, "_research_market", lambda a, s: (_ for _ in ()).throw(OSError("Yahoo refused")))
+    with pytest.raises(OSError):
+        cli.cmd_research_holdout(SimpleNamespace(json=False, confirm=True, until="2025-10-01", years=5))
+    assert not once_marker(tmp_path, rs.HOLDOUT_STUDY).exists()

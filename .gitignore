@@ -17,3 +17,6 @@ graphify-out/
 .venv-next/
 .venv-prev/
 .venv-failed/
+
+# editor settings
+.idea/
