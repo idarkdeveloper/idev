@@ -101,8 +101,8 @@ The code is tested on Python 3.12 and 3.15 (CI runs both); 3.15 is the target. E
 It installs Python 3.15 with `uv` for the `agent` user only, builds a new environment beside the running one, installs
 the requirements and runs the whole offline test suite with it. Only when every test passes does it swap the new
 environment in and restart both services; otherwise nothing changes. The old environment stays as `.venv-prev`:
-`sudo sh deploy/upgrade-python.sh --rollback` puts it back. `.env` and `state/` are not touched. The usual update
-command keeps working afterwards.
+`sudo sh deploy/upgrade-python.sh --rollback` puts it back. `.env` and `state/` are not touched. After the switch, update with
+`.venv/bin/python -m pip` (or `deploy/windows/update-server.ps1`): the new environment has no `bin/pip` script.
 
 **Laptop (Windows).** Install Python 3.15 from python.org, then in the repo folder:
 
