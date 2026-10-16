@@ -21,7 +21,7 @@ from .timezones import IST
 
 NOTE = "Readings of past prices and fixed rules, not a forecast. Watch levels are earlier turning points, not targets."
 
-# -- thresholds (also quoted in the README) -----------------------------------------------------
+# -- thresholds (also quoted in docs/guide.md) --------------------------------------------------
 EMA_PERIOD = 21           # on 15-minute closes
 ADX_PERIOD = 14           # Wilder, on daily bars (and on 4-hour bars for the chart panel)
 RSI_PERIOD = 14           # Wilder, on daily closes

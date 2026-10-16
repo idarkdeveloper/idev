@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="Research so far, 1 Oct 2020 to 30 Sep 2025, after charges and tax: the adopted momentum rules made 363.8 percent against 230.8 percent for the Midcap 150 index fund, with a worst fall of about 31 percent against 21 percent. Skill odds 0.43 against a 0.95 bar: not proven.">
+  <defs>
+    <radialGradient id="g" cx="85%" cy="0%" r="70%">
+      <stop offset="0" stop-color="#8b7cf6" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#8b7cf6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="300" rx="18" fill="#12131c"/>
+  <rect width="1200" height="300" rx="18" fill="url(#g)"/>
+  <rect x="0.5" y="0.5" width="1199" height="299" rx="18" fill="none" stroke="#2a2c3d"/>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="2.4" fill="#8a8ca8">
+    <text x="48" y="48">RESEARCH SO FAR · 1 OCT 2020 – 30 SEP 2025 · AFTER CHARGES AND TAX</text>
+  </g>
+  <g font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
+    <text x="48" y="104" font-size="44" font-weight="700" fill="#f2f2f8">+363.8%</text>
+    <text x="50" y="132" font-size="14" fill="#c9cae0">adopted momentum rules</text>
+    <text x="300" y="104" font-size="44" font-weight="700" fill="#8a8ca8">+230.8%</text>
+    <text x="302" y="132" font-size="14" fill="#8a8ca8">Midcap 150 index fund</text>
+
+    <g transform="translate(48 160)">
+      <text y="0" font-size="12" fill="#8a8ca8">GROWTH OF ₹1 (scaled)</text>
+      <rect y="12" width="480" height="14" rx="7" fill="#1f2133"/>
+      <rect y="12" width="480" height="14" rx="7" fill="#8b7cf6"/>
+      <rect y="34" width="480" height="14" rx="7" fill="#1f2133"/>
+      <rect y="34" width="342" height="14" rx="7" fill="#4b4d66"/>
+      <text y="76" font-size="12" fill="#8a8ca8">WORST FALL</text>
+      <rect y="86" width="480" height="10" rx="5" fill="#1f2133"/>
+      <rect y="86" width="152" height="10" rx="5" fill="#f472b6"/>
+      <rect y="102" width="480" height="10" rx="5" fill="#1f2133"/>
+      <rect y="102" width="102" height="10" rx="5" fill="#4b4d66"/>
+      <text x="492" y="96" font-size="12" fill="#f9a8d4">−31.5%</text>
+      <text x="492" y="112" font-size="12" fill="#8a8ca8">−21.2%</text>
+    </g>
+
+    <g transform="translate(640 70)">
+      <rect width="512" height="196" rx="12" fill="#1a1b28" stroke="#2a2c3d"/>
+      <text x="24" y="34" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="11" letter-spacing="2" fill="#8a8ca8">THE HONEST MATH</text>
+      <text x="24" y="68" font-size="15" fill="#f2f2f8">Skill odds <tspan font-weight="700" fill="#fcd34d">0.43</tspan> <tspan fill="#8a8ca8">· the bar is 0.95, every try counted</tspan></text>
+      <text x="24" y="96" font-size="15" fill="#f2f2f8">Momentum robustness: <tspan font-weight="700" fill="#f9a8d4">fragile</tspan> <tspan fill="#8a8ca8">· 7 of 9 variants beat the fund</tspan></text>
+      <text x="24" y="124" font-size="15" fill="#f2f2f8">Leakage test: <tspan font-weight="700" fill="#5eead4">passed</tspan> <tspan fill="#8a8ca8">· 60 decision days, no look-ahead</tspan></text>
+      <text x="24" y="152" font-size="15" fill="#f2f2f8">Prediction model: <tspan font-weight="700" fill="#f9a8d4">rejected</tspan> <tspan fill="#8a8ca8">· simple rules beat it</tspan></text>
+      <text x="24" y="180" font-size="13" fill="#8a8ca8">Not proven. A sealed year and a pre-registered 2017–2020 check decide.</text>
+    </g>
+  </g>
+</svg>
