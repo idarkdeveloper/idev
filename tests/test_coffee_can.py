@@ -3,7 +3,8 @@ from datetime import date
 
 import pytest
 
-from trading_agent.coffee_can import UnionMembership, annual_rows, coffee_can_ranker, is_financial, qualifies
+from trading_agent.coffee_can import (UnionMembership, annual_rows, coffee_can_ranker, is_financial, qualifies,
+                                      reason_kind)
 from trading_agent.fundamentals_history import ResultsHistory, parse_results_xbrl
 from trading_agent.research_sim import Market, Rules, simulate
 
@@ -41,6 +42,24 @@ def test_qualifies_needs_every_year():
     assert annual_rows(gap, "2024-06-01")[2]["growth"] is None
 
 
+def test_a_rolling_window_ignores_older_years():
+    covid = [dict(r) for r in GROWER]
+    covid[1]["revenue_ytd"] = covid[0]["revenue_ytd"] * 0.9          # FY2020 fell, every later year grew 20%+
+    for k in range(2, 6):
+        covid[k]["revenue_ytd"] = covid[1]["revenue_ytd"] * 1.2 ** (k - 1)
+    rows = annual_rows(covid, "2024-06-01")
+    assert qualifies(rows, 4)[0] is False and "FY2020" in qualifies(rows, 4)[1]   # every year seen: the fall counts
+    assert qualifies(rows, 4, window=4) == (True, "passes every year")            # the latest 4 years only
+    assert qualifies(annual_rows(covid, "2023-06-01"), 4, window=4)[0] is False    # FY2020 still inside the window
+
+
+def test_reasons_are_counted_without_the_numbers():
+    assert reason_kind("revenue growth -12% in FY2021") == "revenue growth ≤10% in FY2021"
+    assert reason_kind("ROCE 9% in FY2020") == "ROCE ≤15% in FY2020"
+    assert reason_kind("ROCE n/a in FY2022") == "ROCE n/a in FY2022"
+    assert reason_kind("only 2 year(s) of growth") == "only 2 year(s) of growth"
+
+
 def test_financials_are_left_out():
     assert is_financial("Financial Services") and is_financial("Banks") and not is_financial("Capital Goods")
 
@@ -54,10 +73,12 @@ def test_ranker_and_a_yearly_portfolio():
                min_turnover=0)
     slow = [dict(r, revenue_ytd=100.0) for r in GROWER]
     annual = {"GOOD": GROWER, "BANK": GROWER, "SLOW": slow}
-    log = {}
-    rank = coffee_can_ranker(annual, {"BANK": "Financial Services"}, min_years=4, min_turnover=0, log=log)
+    log, reasons = {}, {}
+    rank = coffee_can_ranker(annual, {"BANK": "Financial Services"}, min_years=4, min_turnover=0, log=log,
+                             reasons=reasons)
     july = next(t for t, d in enumerate(dates) if d >= "2024-07-01")
     assert rank(m, july) == ["GOOD"] and log[dates[july]] == ["GOOD"]
+    assert reasons[dates[july]] == {"bank or finance company (left out)": 1, "revenue growth ≤10% in FY2020": 1}
     r = simulate(m, Rules(top=40, weights="equal_picks", rebalance="yearly", rebalance_month=7, liquid_rate=0.0),
                  july, n - 1, ranker=rank)
     assert r["exposure"][5] == pytest.approx(1.0)                         # one name, the whole portfolio

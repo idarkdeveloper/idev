@@ -126,7 +126,7 @@ class GrowwFill:
         try:
             got = client.daily_candles(sym, days[0], days[-1])
         except Exception as e:  # noqa: BLE001 - a fill is a nicety: Yahoo's series is returned as it was
-            status = getattr(getattr(e, "response", None), "status_code", None)
+            status = getattr(getattr(e, "response", None), "status_code", None) or getattr(e, "status", None)
             if status in (401, 403):
                 self._refused_on = now.date()
             self._failed[sym] = self.monotonic()
