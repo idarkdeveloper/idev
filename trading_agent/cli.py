@@ -546,7 +546,7 @@ HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
                 "research-model", "research-robustness", "research-regimes",
                 "research-capacity", "research-leakage",
-                "research-momentum"}
+                "research-momentum", "research-holdout"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -929,17 +929,18 @@ def _research_market(args: argparse.Namespace, settings: Any) -> Any:
         print(f"No price history for {len(m.missing)} past member(s): {', '.join(m.missing[:12])}"
               + (" …" if len(m.missing) > 12 else ""))
     if not getattr(args, "skip_leakage_guard", False):
-        _leakage_guard(m)
+        # the one sanctioned holdout run loads the sealed months on purpose; every other look-ahead check still runs
+        _leakage_guard(m, holdout_start="9999-12-31" if getattr(args, "opening_holdout", False) else None)
     return m
 
 
-def _leakage_guard(m: Any) -> None:
+def _leakage_guard(m: Any, holdout_start: str | None = None) -> None:
     """Stop the run if a quick leakage check finds a decision that used data from after its day."""
     from .costs import cost_model_for
     from .research_leakage import LeakageError, guard
     print("Checking for look-ahead (six decision days, two simulation cuts)…")
     try:
-        guard(m, cost_model=cost_model_for("in"))
+        guard(m, cost_model=cost_model_for("in"), holdout_start=holdout_start)
     except LeakageError as e:
         print(str(e))
         raise SystemExit("Stopped: a decision used data published after it. Fix the leak before trusting this run.") from e
@@ -962,6 +963,36 @@ def cmd_research_momentum(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps({**r, "results": {k: {kk: vv for kk, vv in v.items() if kk != "skill"}
                                            for k, v in r["results"].items()}}, default=str))
+    return 0
+
+
+def cmd_research_holdout(args: argparse.Namespace) -> int:
+    """Open the sealed holdout ONCE: the adopted rules, unchanged, on the months since 1 Oct 2025. Refused after the
+    first time (the trial log records it) and without --confirm."""
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .research_studies import HOLDOUT_START, HOLDOUT_STUDY, format_holdout, holdout
+    settings = _settings(args)
+    log_path = settings.state_dir / "research" / "trials.jsonl"
+    if log_path.exists() and any(f'"study": "{HOLDOUT_STUDY}"' in line
+                                 for line in log_path.read_text(encoding="utf-8").splitlines()):
+        print("The sealed holdout was already opened for the adopted rules (see the trial log): it is used once only.")
+        return 2
+    if not args.confirm:
+        print("This opens the sealed holdout (1 Oct 2025 to today) for the adopted rules. It can be done ONCE and the "
+              "result is final. Run again with --confirm to open it.")
+        return 2
+    args.until, args.years, args.opening_holdout = None, 2, True   # the holdout plus the ranking's lookback year
+    m = _research_market(args, settings)
+    m.start_day = HOLDOUT_START
+    r = holdout(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash)
+    for name, x in r["results"].items():   # logged before printing: once opened, it is spent
+        log_trial(settings.state_dir, HOLDOUT_STUDY, {"variant": name, "from": r["start"], "to": r["end"]},
+                  {"return": x["total_return"], "excess": x["excess"], "max_drawdown": x["max_drawdown"],
+                   "fund_max_drawdown": x["fund_max_drawdown"], "passes": r["passes"] if name == "adopted" else None})
+    print(format_holdout(r))
+    if args.json:
+        print(json.dumps(r, default=str))
     return 0
 
 
@@ -1728,6 +1759,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "Monte Carlo); re-runs the backtest for 2 more portfolio sizes")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_factor_backtest)
+    sp = sub.add_parser("research-holdout", help="open the sealed holdout ONCE for the adopted rules (needs --confirm)")
+    sp.add_argument("--universe", default="NIFTYMIDCAP150")
+    sp.add_argument("--confirm", action="store_true", help="really open it: the result is final and the holdout is spent")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_research_holdout)
     sp = sub.add_parser("research-gap", help="research A: why the screen trailed its index fund (timing, "
                                              "selection, charges)")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
