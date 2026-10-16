@@ -488,9 +488,22 @@ def _when(iso: Any, short: bool = False) -> str:
     return f"{d.day} {d.strftime('%b %Y')} · {d.strftime('%H:%M')} IST"
 
 
+def contradicts_headline(card: dict[str, Any]) -> bool:
+    """True when the model that read the whole article rates the impact differently from the headline tag that
+    triggered the alert (a headline tagged negative whose article reads POSITIVE or NEUTRAL, and the reverse). The
+    article is the better evidence, so such an alert is not sent. Without a model-written story there is nothing to
+    compare and the alert stands."""
+    tag = str(card.get("sentiment") or "").upper()
+    if not card.get("writer") or tag not in ("NEGATIVE", "POSITIVE"):
+        return False
+    return card.get("impact") in IMPACTS and card.get("impact") != tag
+
+
 def _chips(card: dict[str, Any]) -> list[str]:
     out = []
-    if card.get("impact_level"):
+    if card.get("impact_level") and card.get("impact"):
+        out.append(f"{card['impact']} · {card['impact_level']} IMPACT")
+    elif card.get("impact_level"):
         out.append(f"{card['impact_level']} IMPACT")
     elif card.get("impact"):
         out.append(str(card["impact"]))
