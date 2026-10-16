@@ -1235,6 +1235,10 @@ def cmd_research_coffee_can(args: argparse.Namespace) -> int:
             why = reasons[day]
             print(f"  {day}: {len(picked.get(day) or [])} qualify, {sum(why.values())} turned down: "
                   + "; ".join(f"{k} {n}" for k, n in why.most_common(6)))
+        from .coffee_can import filing_coverage
+        print("  March filings cached, by financial year (filings / revenue / profit before tax / balance sheet):")
+        for fy, n, rev, pbt, bs in filing_coverage(annual):
+            print(f"    FY{fy}: {n} / {rev} / {pbt} / {bs}")
         return 1
     end = len(m.dates) - 1
     run = simulate(m, rules, first, end, cost_model=cost_model_for("in"), ranker=ranker)

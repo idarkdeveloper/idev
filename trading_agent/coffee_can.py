@@ -49,8 +49,10 @@ def annual_rows(records: list[dict[str, Any]], day: str, holidays: Any | None = 
         eq, debt = r.get("equity"), r.get("borrowings")
         ebit = pbt + (fin or 0.0) if pbt is not None else None
         ce = eq + (debt or 0.0) if eq is not None else None
+        missing = ("no profit before tax" if pbt is None else "no balance sheet" if eq is None
+                   else "capital ≤0" if not ce or ce <= 0 else None)
         rows.append({"fy": r["period_end"], "revenue": rev, "ebit": ebit, "capital": ce,
-                     "roce": ebit / ce if ebit is not None and ce and ce > 0 else None})
+                     "roce": ebit / ce if ebit is not None and ce and ce > 0 else None, "roce_missing": missing})
     for prev, cur in zip(rows, rows[1:]):
         consecutive = int(cur["fy"][:4]) - int(prev["fy"][:4]) == 1
         cur["growth"] = (cur["revenue"] / prev["revenue"] - 1
@@ -73,9 +75,23 @@ def qualifies(rows: list[dict[str, Any]], min_years: int = MIN_YEARS,
         if r["growth"] <= GROWTH_MIN:
             return False, f"revenue growth {r['growth'] * 100:.0f}% in FY{r['fy'][:4]}"
         if r["roce"] is None or r["roce"] <= ROCE_MIN:
-            shown = "n/a" if r["roce"] is None else f"{r['roce'] * 100:.0f}%"
+            shown = f"n/a ({r.get('roce_missing') or 'missing'})" if r["roce"] is None else f"{r['roce'] * 100:.0f}%"
             return False, f"ROCE {shown} in FY{r['fy'][:4]}"
     return True, "passes every year"
+
+
+def filing_coverage(annual: dict[str, list[dict[str, Any]]]) -> list[tuple[str, int, int, int, int]]:
+    """Per financial year (March filings): (FY, filings, with revenue, with profit before tax, with a balance sheet),
+    to tell missing data from companies that fail the test."""
+    by: dict[str, list[int]] = {}
+    for recs in annual.values():
+        for r in recs:
+            c = by.setdefault(r["period_end"][:4], [0, 0, 0, 0])
+            c[0] += 1
+            c[1] += r.get("revenue_ytd") is not None
+            c[2] += r.get("pbt_ytd") is not None
+            c[3] += r.get("equity") is not None
+    return [(fy, *c) for fy, c in sorted(by.items())]  # type: ignore[misc]
 
 
 def reason_kind(why: str) -> str:

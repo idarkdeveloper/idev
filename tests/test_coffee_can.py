@@ -3,8 +3,8 @@ from datetime import date
 
 import pytest
 
-from trading_agent.coffee_can import (UnionMembership, annual_rows, coffee_can_ranker, is_financial, qualifies,
-                                      reason_kind)
+from trading_agent.coffee_can import (UnionMembership, annual_rows, coffee_can_ranker, filing_coverage, is_financial,
+                                      qualifies, reason_kind)
 from trading_agent.fundamentals_history import ResultsHistory, parse_results_xbrl
 from trading_agent.research_sim import Market, Rules, simulate
 
@@ -53,10 +53,20 @@ def test_a_rolling_window_ignores_older_years():
     assert qualifies(annual_rows(covid, "2023-06-01"), 4, window=4)[0] is False    # FY2020 still inside the window
 
 
+def test_roce_n_a_says_what_is_missing_and_coverage_counts_it():
+    no_bs = [dict(r, equity=None) if r["period_end"].startswith("2021") else r for r in GROWER]
+    ok, why = qualifies(annual_rows(no_bs, "2024-06-01"), 4)
+    assert not ok and why == "ROCE n/a (no balance sheet) in FY2021"
+    no_pbt = [dict(r, pbt_ytd=None) if r["period_end"].startswith("2020") else r for r in GROWER]
+    assert qualifies(annual_rows(no_pbt, "2024-06-01"), 4)[1] == "ROCE n/a (no profit before tax) in FY2020"
+    assert reason_kind("ROCE n/a (no balance sheet) in FY2021") == "ROCE n/a (no balance sheet) in FY2021"
+    cov = dict((fy, rest) for fy, *rest in filing_coverage({"A": no_bs, "B": GROWER}))
+    assert cov["2021"] == [2, 2, 2, 1] and cov["2019"] == [2, 2, 2, 2]
+
+
 def test_reasons_are_counted_without_the_numbers():
     assert reason_kind("revenue growth -12% in FY2021") == "revenue growth ≤10% in FY2021"
     assert reason_kind("ROCE 9% in FY2020") == "ROCE ≤15% in FY2020"
-    assert reason_kind("ROCE n/a in FY2022") == "ROCE n/a in FY2022"
     assert reason_kind("only 2 year(s) of growth") == "only 2 year(s) of growth"
 
 
