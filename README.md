@@ -497,6 +497,68 @@ or fell, the yearly turnover and how long a stock stays held. The verdict follow
 selection added nothing, post-results drift is researched before the drawdown brake and the weights. Every run is
 appended to `state/research/trials.jsonl`, the trial log later deflated-Sharpe checks count.
 
+**Stop rules and portfolio controls** (research steps B1 to B4) run on a daily simulator (`research_sim.py`) that marks
+the portfolio every trading day, so stops and the drawdown brake act between the monthly rebalances. Rankings are
+computed once a month and shared by every variant; nothing from 1 Oct 2025 on is read; cash earns a liquid-fund rate
+(6.5% a year); trades happen at the close; ATR is close-to-close (Yahoo has no daily high/low).
+
+- `python -m trading_agent research-stops`: six stop rules (none, 3×ATR trail as today, 5×ATR, two-stage,
+  20-day grace, close below the 50-day EMA) on twelve one-year windows (Jan, May and Sep starts, 2021 to 2024) and
+  over the whole 5 years. A rule is accepted when its median hold is 60+ days, its median worst fall is no worse
+  than today's 3×ATR rule, and the deflated Sharpe of its monthly excess over MID150BEES is 0.95 or more, counting
+  every trial in the log. The report recommends; you decide.
+- `python -m trading_agent research-portfolio [--stop RULE]`: after Indian capital-gains tax (STCG and LTCG at the
+  rates of each sale date, paid each April), each change alone against the baseline: a rank buffer of 35 (passes
+  if turnover falls 35%+ without a lower return), a tax-aware buffer (a profitable holding aged 335-364 days waits
+  for day 366; passes if it beats the plain buffer after tax), the drawdown brake on the index fund's 50/200-day EMA
+  (variants: a 100-day average, + 3 days of breadth below 35%, + 5 days of FII/DII selling once that history exists)
+  and inverse-volatility weights (2.5%-8% a stock). The changes that pass are combined and judged once more.
+
+**Post-results drift and who-traded signals** (`python -m trading_agent research-pead`). Needs the results cache
+(`fundamentals-history --universe NIFTYMIDCAP150`, repeated until nothing is left) and the insider cache
+(`insider-history`, NSE's disclosures month by month, resumable). At each month start, with only what had been
+broadcast by then (a filing at or after 15:00 IST counts from the next trading day):
+- earnings surprise (SUE: this quarter's EPS minus a year ago, over that change's spread in the last 8 quarters), its
+  change, and margin acceleration × sales surprise, from filings of the last 95 days;
+- promoters' net buying in the last 90 days × 6-month momentum, and promoter buying in a quiet base
+  (ATR20 / ATR120 ≤ 0.70).
+It reports each signal's rank IC with the next 5 / 20 / 60 days' return above MID150BEES and the top fifth's excess
+after charges, then runs the portfolio (after charges and tax) with the screen's score plus the earnings composite
+("post-results drift instead of static quality"), with and without the promoter signals. If it passes on the
+development years, `--holdout` runs it once on the sealed holdout (1 Oct 2025 to today); a second `--holdout` is
+refused, because the trial log shows it was opened.
+
+**Coffee Can screen** (research step C, `python -m trading_agent research-coffee-can`). First fill the full-year
+cache: `fundamentals-history --annual --universe NIFTYMIDCAP150` and the same for `NIFTYSMALLCAP250` (repeat until
+nothing is left). Each July, the Midcap 150 and Smallcap 250 stocks (banks and NBFCs left out) whose revenue grew more
+than 10% and whose ROCE (EBIT ÷ (equity + borrowings), from the March filings known by then) stayed above 15% in
+every year of at least four years of growth are bought equal-weight and held for a year. The result after charges
+and tax is compared with MID150BEES and NIFTYBEES; `--holdout` runs once on the sealed holdout. Filings start in
+late 2018, so it can ask for 4 to 6 years of history, not the book's 10 (`--min-years`).
+
+**Signal lab extensions and the prediction model** (`research_ml.py`; every run goes in the trial log):
+- `research-barrier [--stop RULE --target 3 --days 60]`: a fourth horizon. Each signal's top fifth at every month
+  start is exited by a triple barrier (profit target of 3R with R = 2.5×ATR, the stop rule, a 60-day limit), and
+  scored after a round trip of charges and slippage and after the liquid fund.
+- `research-cpcv`: the walk-forward ridge model under combinatorial purged cross-validation (6 blocks, 2 tested per
+  split, 15 splits, a 1-month embargo, overlap weights); the 5 out-of-sample paths are drawn as a fan of account
+  curves (`state/research/cpcv_fan.png`).
+- `research-meta [--stop RULE]`: meta-labeling. A small logistic model only SIZES the momentum screen's picks (0 to
+  full); a pick succeeds if its triple-barrier trade beat the index fund after charges. It is fitted three ways on
+  the same purged splits (plain log loss, a fee-penalised asymmetric loss, a direct Sharpe surrogate) and compared
+  with two simple rules (all picks at full size; only the top 10). Fan and calibration charts go in
+  `state/research/`.
+- `research-model --stop RULE [--holdout]`: the prediction model, the same sizing model with the earnings-surprise
+  and promoter-buying features added and the winning stop rule's labels. It must beat the best simple rule on every
+  path with skill odds of 0.95; only then does `--holdout` run it once on the sealed holdout.
+
+**Bull-vs-bear debate** (`python -m trading_agent replay debate-test SLUG [--cases 10] [--since 2025-10-01] --yes`,
+paid API calls). On the blind-ticker test's masked inputs (the company and dates hidden, so neither arm can lean on
+hindsight), today's single Ask-Claude call is compared with a debate: one call argues for buying, one against, a
+third reads the data and both arguments and decides. Both are scored like the track record over the next 20 trading
+days against NIFTYBEES after charges (hit rate and expectancy in R). The debate is kept only if it beats the single
+call on both, on months the model was not tuned on. Without `--yes` it only shows the number of calls and the cost.
+
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.

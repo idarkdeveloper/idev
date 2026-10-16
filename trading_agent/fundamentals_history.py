@@ -49,6 +49,8 @@ PROFIT_TAGS = ("ProfitOrLossAttributableToOwnersOfParent", "ProfitLossForPeriod"
                "NetProfitLossForThePeriod", "ProfitLossForThePeriod")
 REVENUE_TAGS = ("RevenueFromOperations", "Income")
 EQUITY_TAGS = ("EquityAttributableToOwnersOfParent", "Equity")
+PBT_TAGS = ("ProfitBeforeTax", "ProfitLossBeforeTax", "ProfitBeforeTaxAndExceptionalItems")
+FINANCE_TAGS = ("FinanceCosts", "FinanceCost", "InterestExpended")
 EPS_TAGS = ("BasicEarningsLossPerShareFromContinuingAndDiscontinuedOperations",
             "BasicEarningsLossPerShareFromContinuingOperations", "BasicEarningsPerShareAfterExtraordinaryItems")
 MONTHS = {m: i for i, m in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
@@ -125,7 +127,10 @@ def parse_results_xbrl(xml_text: str, period_end: date) -> dict[str, Any]:
     return {"period_end": period_end.isoformat(), "profit_q": profit_q, "profit_ytd": profit_ytd,
             "revenue_q": pick(REVENUE_TAGS, "OneD"), "eps_q": pick(EPS_TAGS, "OneD"),
             "equity": equity, "borrowings": borrowings,
-            "shares": paid_up / face if paid_up and face else None}
+            "shares": paid_up / face if paid_up and face else None,
+            # for return on capital (Coffee Can research): year to date, the full year in a March filing
+            "revenue_ytd": pick(REVENUE_TAGS, "FourD"), "pbt_ytd": pick(PBT_TAGS, "FourD"),
+            "finance_ytd": pick(FINANCE_TAGS, "FourD")}
 
 
 class ResultsHistory:
@@ -185,13 +190,13 @@ class ResultsHistory:
         return out
 
     # -- one filing ---------------------------------------------------------------
-    def _record_path(self, url: str) -> Path:
+    def _record_path(self, url: str, version: str = "filings_v2") -> Path:
         name = re.sub(r"[^A-Za-z0-9_.-]", "_", url.rsplit("/", 1)[-1])
-        return self.dir / "filings_v2" / (re.sub(r"\.xml$", "", name, flags=re.I) + ".json")
+        return self.dir / version / (re.sub(r"\.xml$", "", name, flags=re.I) + ".json")
 
-    def record(self, filing: dict[str, Any]) -> dict[str, Any] | None:
+    def record(self, filing: dict[str, Any], version: str = "filings_v2") -> dict[str, Any] | None:
         """Parsed filing from cache, else downloaded (unless this run's budget is spent)."""
-        path = self._record_path(filing["xbrl"])
+        path = self._record_path(filing["xbrl"], version)
         if path.exists():
             try:
                 return json.loads(path.read_text(encoding="utf-8"))
@@ -228,6 +233,26 @@ class ResultsHistory:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(rec), encoding="utf-8")
         return rec
+
+    def annual(self, symbol: str, *, since: str = "2018-01-01") -> list[dict[str, Any]]:
+        """One record per financial year (the March filing, consolidated when filed, first version broadcast) with
+        the full-year revenue, profit before tax and finance costs. Read into ``filings_v3`` (records cached before
+        those fields existed are read again once, within this run's download budget)."""
+        chosen: dict[str, dict[str, Any]] = {}
+        for f in self.filings(symbol):
+            if f["period_end"] < since or f["period_end"][5:7] != "03":
+                continue
+            cur = chosen.get(f["period_end"])
+            if cur is None or (f["consolidated"] and not cur["consolidated"]) or \
+                    (f["consolidated"] == cur["consolidated"] and f["available"] < cur["available"]):
+                chosen[f["period_end"]] = f
+        out = []
+        for pe in sorted(chosen):
+            f = chosen[pe]
+            rec = self.record(f, version="filings_v3")
+            if rec and "error" not in rec:
+                out.append({**rec, "available": f["available"], "consolidated": f["consolidated"]})
+        return out
 
     def history(self, symbol: str, *, since: str = "2018-01-01") -> list[dict[str, Any]]:
         """One record per quarter: consolidated when filed, else standalone; the first
