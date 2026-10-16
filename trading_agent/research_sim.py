@@ -426,6 +426,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
     costs = traded = 0.0
     traded_cum: list[float] = []   # traded notional so far, at each day's close (turnover by period)
     fills: list[tuple[int, str, float]] = []   # (day, symbol, notional) of every buy and sell (capacity)
+    held: list[tuple[int, list[str]]] = []      # (decision day, holdings after that rebalance) (macro exposure)
     tax = TaxBook()
     stopped: set[str] = set()
     exposure = 1.0
@@ -606,6 +607,8 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                     cur = pos[s].value if s in pos else 0.0
                     if target > cur + 1.0:
                         buy(s, t, min(cash, target - cur))
+        if d in rebal and d >= start and t < end:
+            held.append((d, sorted(pos)))
         total = cash + sum(p.value for p in pos.values())
         curve.append(total)
         traded_cum.append(traded)
@@ -618,7 +621,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
     open_days = [end - p.entry_t for p in pos.values()]
     return {"rules": rules, "label": rules.label(), "dates": m.dates[start:end + 1], "curve": curve,
             "exposure": exposure_log, "trades": trades, "open_days": open_days, "costs": costs, "traded": traded,
-            "traded_cum": traded_cum, "fills": fills,
+            "traded_cum": traded_cum, "fills": fills, "held": held,
             "tax_paid": tax.paid, "tax_by_fy": tax.by_fy, "events": events, "capital": capital}
 
 
