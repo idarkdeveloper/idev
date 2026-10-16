@@ -733,6 +733,13 @@ def cmd_replay_blind_test(args: argparse.Namespace) -> int:
     return run_cli(args, _settings(args))
 
 
+def cmd_replay_debate_test(args: argparse.Namespace) -> int:
+    """Research: a bull-vs-bear debate before the recommendation vs today's single call, on blind cases (costs API money)."""
+    from .replay.debate import run_cli
+
+    return run_cli(args, _settings(args))
+
+
 def cmd_signal_lab(args: argparse.Namespace) -> int:
     """Test whether common algo-trading signals predicted next-period returns."""
     from .costs import cost_model_for
@@ -1653,6 +1660,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--yes", action="store_true", help="really send the calls (without it, only the estimate)")
     sp.add_argument("--fresh", action="store_true", help="start a new run instead of resuming today's unfinished one")
     sp.set_defaults(func=cmd_replay_blind_test)
+    sp = rsub.add_parser("debate-test", help="research: bull-vs-bear debate vs the single call (costs API money)")
+    sp.add_argument("slug", help="the replay's name (its folder under state/replay)")
+    sp.add_argument("--cases", type=int, default=10, help="how many blind cases")
+    sp.add_argument("--since", default="2025-10-01", help="prefer cases from this date on (months not tuned on)")
+    sp.add_argument("--model", help="Claude model (default: CLAUDE_MODEL)")
+    sp.add_argument("--yes", action="store_true", help="really send the calls (without it, only the estimate)")
+    sp.set_defaults(func=cmd_replay_debate_test)
     sp = sub.add_parser("ui", help="open the local web dashboard")
     sp.add_argument("--host", default="127.0.0.1")
     sp.add_argument("--port", type=int, default=8787)

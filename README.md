@@ -552,6 +552,13 @@ late 2018, so it can ask for 4 to 6 years of history, not the book's 10 (`--min-
   and promoter-buying features added and the winning stop rule's labels. It must beat the best simple rule on every
   path with skill odds of 0.95; only then does `--holdout` run it once on the sealed holdout.
 
+**Bull-vs-bear debate** (`python -m trading_agent replay debate-test SLUG [--cases 10] [--since 2025-10-01] --yes`,
+paid API calls). On the blind-ticker test's masked inputs (the company and dates hidden, so neither arm can lean on
+hindsight), today's single Ask-Claude call is compared with a debate: one call argues for buying, one against, a
+third reads the data and both arguments and decides. Both are scored like the track record over the next 20 trading
+days against NIFTYBEES after charges (hit rate and expectancy in R). The debate is kept only if it beats the single
+call on both, on months the model was not tuned on. Without `--yes` it only shows the number of calls and the cost.
+
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.
