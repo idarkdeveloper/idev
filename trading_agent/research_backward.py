@@ -30,8 +30,11 @@ VARIANT_FALL_MARGIN = 0.05      # a variant: worst fall within 5 points of the c
 MAX_TURNOVER_RATIO = 1.5        # a variant: turnover at most 1.5x the control's
 INDUSTRY_CAP = 5
 SECTOR_MIN_NAMES = 3
+RESIDUAL_WINDOW = 252           # variant E (preregistered-batch-2026-10-16b.md): sessions t-252 .. t-21
+RESIDUAL_SKIP = 21
+RESIDUAL_MIN_DAYS = 150
 STUDY = "Backward-batch"
-PREREGISTRATION = "docs/research/preregistered-batch-2026-10-16.md"
+PREREGISTRATION = "docs/research/preregistered-batch-2026-10-16.md (+ batch 2, -16b, variant E)"
 # ------------------------------------------------------------------------------------------------------------------ #
 
 TRI_URL = "https://www.niftyindices.com/BackPage/getTotalReturnIndexString"
@@ -178,6 +181,36 @@ def sector_relative_ranker(industries: dict[str, str]) -> Callable[[Market, int]
     return rank
 
 
+def residual_momentum_ranker() -> Callable[[Market, int], list[str]]:
+    """Variant E (preregistered-batch-2026-10-16b.md): the eligible names ranked by the t-statistic of their residual
+    daily returns over sessions t-252 .. t-21, after an OLS fit through the origin on the benchmark's daily returns (an
+    intercept fitted on the same days would absorb each stock's excess return and make every residual sum zero)."""
+    def score(stock: list[float | None], bench: list[float | None], t: int) -> float | None:
+        xs, ys = [], []
+        for k in range(max(1, t - RESIDUAL_WINDOW + 1), t - RESIDUAL_SKIP + 1):
+            s0, s1, b0, b1 = stock[k - 1], stock[k], bench[k - 1], bench[k]
+            if s0 and s1 and b0 and b1:
+                xs.append(math.log(b1 / b0))
+                ys.append(math.log(s1 / s0))
+        n = len(xs)
+        if n < RESIDUAL_MIN_DAYS:
+            return None
+        sxx = sum(x * x for x in xs)
+        b = sum(x * y for x, y in zip(xs, ys)) / sxx if sxx else 0.0   # through the origin: alpha stays in e
+        e = [y - b * x for x, y in zip(xs, ys)]
+        sd = statistics.pstdev(e)
+        return sum(e) / (sd * math.sqrt(n)) if sd else None
+
+    def rank(m: Market, t: int) -> list[str]:
+        scores = {}
+        for sym in m.momentum_ranking(t):
+            v = score(m.adj[sym], m.fund_adj, t)
+            if v is not None:
+                scores[sym] = v
+        return sorted(scores, key=lambda s: (-scores[s], s))
+    return rank
+
+
 def variants(industries: dict[str, str]) -> list[tuple[str, str, Rules, Callable[[Market, int], list[str]] | None]]:
     """(id, name, rules, ranker) exactly as pre-registered; A0 is the adopted rules."""
     from .research_studies import FINALIST, size_ranker
@@ -185,7 +218,8 @@ def variants(industries: dict[str, str]) -> list[tuple[str, str, Rules, Callable
             ("A", "larger half by traded value", FINALIST, size_ranker("larger")),
             ("B", "top 10", with_rules(FINALIST, top=10, buffer=18, tax_aware_floor=25), None),
             ("C", "sector-relative strength", FINALIST, sector_relative_ranker(industries)),
-            ("D", f"at most {INDUSTRY_CAP} per industry", with_rules(FINALIST, industry_cap=INDUSTRY_CAP), None)]
+            ("D", f"at most {INDUSTRY_CAP} per industry", with_rules(FINALIST, industry_cap=INDUSTRY_CAP), None),
+            ("E", "residual momentum", FINALIST, residual_momentum_ranker())]
 
 
 def backward_batch(m: Market, industries: dict[str, str], *, cost_model: Any, capital: float = 500_000.0,
