@@ -38,10 +38,67 @@ from .timezones import IST
 log = logging.getLogger(__name__)
 CLOSE_DONE = dtime(15, 40)  # NSE closes 15:30; prices settle a few minutes later
 TRIM_ABOVE = 1.25  # trim a kept name only above 125% of its target weight
+# The rules research steps A, B1 and B2-B4 chose (16 Oct 2026; research_sim): no stop-loss, a rank buffer that keeps a
+# holding while it ranks 35 or better among the eligible names, a tax-aware wait (a profitable holding aged 335-365
+# days is kept while it ranks 50 or better, so the gain becomes long-term) and, as disaster protection only, a sale
+# when a holding closes 25% or more below its average buy price.
+RULES = {"buffer": 35, "tax_aware_floor": 50, "floor": 0.25}
 
 
 def _now() -> datetime:
     return datetime.now(IST)
+
+
+def buffered_rebalance(broker: Any, ranked: list[str], *, top: int, price_fn: Callable[[str], float],
+                       cost_model: Any | None, today: str, buffer: int, tax_aware_floor: int | None
+                       ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    """The rank-buffer rebalance (research_sim's rule): keep each holding ranked ``buffer`` or better in ``ranked``
+    (the eligible names, best first); with ``tax_aware_floor``, also keep a profitable holding aged 335-365 days
+    ranked that or better; sell the rest; buy new names from the top ``top`` for the empty slots at 1/top of the
+    account each while cash lasts. Kept names are not trimmed or topped up. Returns (trades, kept, tax waits)."""
+    rank = {s.upper(): i + 1 for i, s in enumerate(ranked)}
+    held = {p.symbol: p for p in broker.positions()}
+    keep = [s for s in held if rank.get(s, 10 ** 6) <= buffer]
+    waits: list[str] = []
+    if tax_aware_floor:
+        day = datetime.fromisoformat(today[:10]).date()
+        for s, p in held.items():
+            if s in keep or not p.opened_at or not p.current_price:
+                continue
+            age = (day - datetime.fromisoformat(p.opened_at[:10]).date()).days
+            if 335 <= age <= 365 and p.current_price > p.avg_entry_price and rank.get(s, 10 ** 6) <= tax_aware_floor:
+                keep.append(s)
+                waits.append(s)
+    trades: list[dict[str, Any]] = []
+
+    def trade(sym: str, side: str, qty: int) -> None:
+        if qty < 1:
+            return
+        try:
+            o = broker.submit_order(sym, side, qty=qty)
+            trades.append({"symbol": sym, "side": side, "qty": o["qty"], "price": o["filled_avg_price"]})
+        except Exception as e:  # noqa: BLE001 - a missing price or cash skips one trade
+            trades.append({"symbol": sym, "side": side, "qty": qty, "error": str(e)})
+
+    for sym, p in held.items():
+        if sym not in keep:
+            trade(sym, "sell", int(p.qty))
+    new = [s.upper() for s in ranked[:top] if s.upper() not in keep][:max(top - len(keep), 0)]
+    target = broker.account().equity / top
+    cash = broker.account().cash
+    for sym in new:
+        try:
+            price = float(price_fn(sym))
+        except Exception as e:  # noqa: BLE001
+            trades.append({"symbol": sym, "side": "buy", "qty": 0, "error": f"no price: {e}"})
+            continue
+        budget = min(target, cash)
+        charges = float(cost_model.charges("buy", budget)) if cost_model else 0.0
+        qty = int(math.floor((budget - charges) / price))
+        if qty >= 1:
+            trade(sym, "buy", qty)
+            cash = broker.account().cash
+    return trades, keep, waits
 
 
 def rebalance_to(broker: Any, picks: list[str], *, top: int, price_fn: Callable[[str], float],
@@ -94,7 +151,8 @@ class ForwardTest:
     def __init__(self, state_dir: Path, *, universe: str = "NIFTYMIDCAP150", top: int = 20,
                  capital: float = 500_000.0, benchmark: str | None = None,
                  price_fn: Callable[[str], float] | None, cost_model: Any | None = None,
-                 now: Callable[[], datetime] | None = None, holidays: Any | None = None):
+                 now: Callable[[], datetime] | None = None, holidays: Any | None = None,
+                 rules: dict[str, Any] | None = RULES):
         self.universe = universe.upper()
         self.dir = Path(state_dir) / "forward"
         self.path = self.dir / f"{self.universe.lower()}.json"
@@ -102,6 +160,7 @@ class ForwardTest:
         self.cost_model = cost_model
         self.now = now or (lambda: _now())  # looked up at call time, so tests can patch it
         self.holidays = holidays  # NSEHolidays: nothing is due on an exchange holiday
+        self.new_rules = dict(rules) if rules else None   # recorded, with its date, on the next run (see run())
         self.data: dict[str, Any] = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
         if not self.data:
             self.data = {"universe": self.universe, "top": int(top), "capital": float(capital),
@@ -152,17 +211,28 @@ class ForwardTest:
                          bench_start_price=price)
 
     def rebalance(self, picks: list[str], *, eligible: int | None = None, members: list[str] | None = None,
-                  caps: dict[str, float | None] | None = None) -> dict[str, Any]:
+                  caps: dict[str, float | None] | None = None, ranked: list[str] | None = None) -> dict[str, Any]:
         """Trade the paper account to equal weights in ``picks``. With the index ``members`` (and their market
         ``caps``) the approximate active share after the trades is kept for the friction telemetry."""
         top = self.data["top"]
         fees_before = self.broker.performance()["fees_paid"]
         equity_before = self.broker.account().equity
-        trades = rebalance_to(self.broker, picks, top=top, price_fn=self.price_fn, cost_model=self.cost_model)
+        rules = self.data.get("rules") or {}
+        kept: list[str] = []
+        waits: list[str] = []
+        if rules.get("buffer"):
+            trades, kept, waits = buffered_rebalance(
+                self.broker, ranked or picks, top=top, price_fn=self.price_fn, cost_model=self.cost_model,
+                today=self.now().date().isoformat(), buffer=int(rules["buffer"]),
+                tax_aware_floor=rules.get("tax_aware_floor"))
+        else:
+            trades = rebalance_to(self.broker, picks, top=top, price_fn=self.price_fn, cost_model=self.cost_model)
         entry = {"date": self.now().date().isoformat(), "month": self._month(),
                  "picks": [p.upper() for p in picks][:top], "eligible": eligible, "trades": trades,
                  "charges": round(self.broker.performance()["fees_paid"] - fees_before, 2),
                  "equity": round(equity_before, 2)}
+        if rules.get("buffer"):
+            entry["kept"], entry["tax_waits"] = sorted(kept), sorted(waits)
         if members:
             values = {p.symbol: float(p.market_value or 0.0) for p in self.broker.positions()}
             share = active_share(values, self.broker.account().equity, members, caps)
@@ -191,6 +261,11 @@ class ForwardTest:
         """Start if needed, rebalance if due (or forced), record today's point."""
         if not self.started:
             self.start()
+        if self.new_rules is not None and "rules" not in self.data:
+            # registered change: from this date the forward test follows the rules research chose (RULES); earlier
+            # rebalances were the plain monthly top 20, so results before and after are not comparable one to one
+            self.data["rules"] = {**self.new_rules, "since": self.now().date().isoformat()}
+        floor_sales = self.apply_floor()
         rebalanced = None
         if (force_rebalance or self.rebalance_due()) and screen_fn is not None:
             result = screen_fn()
@@ -204,10 +279,34 @@ class ForwardTest:
                 self.data["indian_filters_since"] = self.now().date().isoformat()
             picks = [r["symbol"] for r in result.get("top", [])]
             members = [r["symbol"] for r in result.get("all", []) if r.get("symbol")]
-            rebalanced = self.rebalance(picks, eligible=result.get("eligible"), members=members, caps=result.get("caps"))
+            ranked = [r["symbol"] for r in result.get("all", []) if r.get("symbol") and r.get("eligible")] or picks
+            rebalanced = self.rebalance(picks, eligible=result.get("eligible"), members=members, caps=result.get("caps"),
+                                        ranked=ranked)
         self.mark()
         self.save()
-        return {**self.summary(), "rebalanced": rebalanced}
+        return {**self.summary(), "rebalanced": rebalanced, "floor_sales": floor_sales}
+
+    def apply_floor(self) -> list[dict[str, Any]]:
+        """Disaster protection under the research rules: sell a holding whose latest close is 25% (RULES["floor"]) or
+        more below its average buy price. Checked once a day after the close; the slot stays in cash until the next
+        monthly rebalance. Not a trailing stop: research B1 found every trailing stop cost far more than it saved."""
+        floor = (self.data.get("rules") or {}).get("floor")
+        if not floor:
+            return []
+        sold: list[dict[str, Any]] = []
+        for p in self.broker.positions():
+            if p.current_price and p.avg_entry_price and p.current_price <= p.avg_entry_price * (1 - float(floor)):
+                row = {"date": self.now().date().isoformat(), "symbol": p.symbol, "qty": p.qty,
+                       "avg": p.avg_entry_price, "price": p.current_price}
+                try:
+                    o = self.broker.submit_order(p.symbol, "sell", qty=int(p.qty))
+                    row["price"] = o["filled_avg_price"]
+                except Exception as e:  # noqa: BLE001 - reported, tried again tomorrow
+                    row["error"] = str(e)
+                sold.append(row)
+        if sold:
+            self.data["floor_sales"] = (self.data.get("floor_sales", []) + sold)[-200:]
+        return sold
 
     # -- reporting ----------------------------------------------------------------
     def summary(self) -> dict[str, Any]:
@@ -237,7 +336,8 @@ class ForwardTest:
             holdings.sort(key=lambda h: -h["value"])
         return {"universe": d["universe"], "top": d["top"], "benchmark": d["benchmark"], "capital": cap,
                 "started": d.get("started"), "band_filter_since": d.get("band_filter_since"),
-                "indian_filters_since": d.get("indian_filters_since"), "days": len(hist), "strategy_return": strat, "benchmark_return": bench,
+                "indian_filters_since": d.get("indian_filters_since"), "rules": d.get("rules"),
+                "floor_sales": d.get("floor_sales", [])[-10:], "days": len(hist), "strategy_return": strat, "benchmark_return": bench,
                 "gap": (strat - bench) if strat is not None and bench is not None else None,
                 "strategy_max_drawdown": dd("equity"), "benchmark_max_drawdown": dd("bench"),
                 "charges_paid": self.broker.performance()["fees_paid"], "last_rebalance": d.get("last_rebalance"),
@@ -257,12 +357,26 @@ def format_forward(s: dict[str, Any]) -> str:
     if s.get("indian_filters_since"):
         lines.append(f"ASM/GSM, results-blackout and pledge filters on since {s['indian_filters_since']}: such stocks are not "
                      "picked (earlier rebalances were made without them).")
+    rules = s.get("rules")
+    if rules and rules.get("since"):
+        lines.append(f"Research rules since {rules['since']}: no stop-loss; keep a holding while it ranks "
+                     f"{rules.get('buffer')} or better (a profitable one aged 335-365 days while it ranks "
+                     f"{rules.get('tax_aware_floor')} or better, for long-term tax); sell one that closes "
+                     f"{float(rules.get('floor') or 0) * 100:.0f}% below its buy price. Earlier rebalances were the plain "
+                     "top 20, so results before and after are not comparable one to one.")
+    for f in s.get("floor_sales") or []:
+        if f.get("date") == (s.get("history") or [{}])[-1].get("date"):
+            lines.append(f"Disaster floor: sold {f['symbol']} at {f.get('price')} "
+                         f"({(f['price'] / f['avg'] - 1) * 100:+.1f}% from its buy price)"
+                         + (f" (failed: {f['error']})" if f.get("error") else ""))
     if s.get("rebalanced"):
         r = s["rebalanced"]
         ok = [t for t in r["trades"] if "error" not in t]
         lines.append(f"Rebalanced {r['date']}: {len(r['picks'])} picks of {r.get('eligible')} eligible, "
                      f"{len(ok)} trades, charges ₹{r['charges']:,.2f}"
-                     + (f", {len(r['trades']) - len(ok)} skipped" if len(ok) < len(r["trades"]) else ""))
+                     + (f", {len(r['trades']) - len(ok)} skipped" if len(ok) < len(r["trades"]) else "")
+                     + (f"; kept {len(r['kept'])} still ranked within the buffer" if r.get("kept") is not None else "")
+                     + (f", {len(r['tax_waits'])} waiting for long-term tax" if r.get("tax_waits") else ""))
     lines.append(f"Strategy {pct(s['strategy_return'])} (worst fall {pct(s['strategy_max_drawdown'])}) · "
                  f"{s['benchmark']} {pct(s['benchmark_return'])} (worst fall {pct(s['benchmark_max_drawdown'])}) · "
                  f"gap {pct(s['gap'])} · charges paid ₹{s['charges_paid']:,.2f}")
