@@ -265,3 +265,68 @@ def format_controls(r: dict[str, Any]) -> str:
 def compact(r: dict[str, Any]) -> str:
     """A JSON-safe copy (Rules objects as labels)."""
     return json.dumps(r, default=lambda o: getattr(o, "label", lambda: str(o))(), indent=2)
+
+
+# --------------------------------------------------------------------------- #
+# robustness: the adopted strategy under harder assumptions
+# --------------------------------------------------------------------------- #
+FINALIST = Rules(stop="none", buffer=35, tax_aware=True, tax_aware_floor=50, tax=True, floor=0.25)
+ROBUSTNESS: tuple[tuple[str, dict[str, Any]], ...] = (
+    ("as researched (same-close fills, no floor)", {"floor": None}),
+    ("adopted (+ 25% floor)", {}),
+    ("next-day fills", {"lag": 1}),
+    ("costs x1.5", {"cost_mult": 1.5}),
+    ("costs x2", {"cost_mult": 2.0}),
+    ("next-day fills + costs x2", {"lag": 1, "cost_mult": 2.0}),
+)
+
+
+def robustness(m: Market, *, cost_model: Any, capital: float = 500_000.0, extra_trials: int = 0,
+               progress: Any = None) -> dict[str, Any]:
+    """The forward test's rules (no stop, tax-aware buffer, 25% floor, after tax) re-run with the trades one session
+    later and with charges raised, each against the index fund on the same days. It holds when every variant still
+    beats the fund; the skill odds count every variant here plus every earlier trial in the log."""
+    start = _first_ranked_day(m)
+    end = len(m.dates) - 1
+    runs: dict[str, dict[str, Any]] = {}
+    results: dict[str, dict[str, Any]] = {}
+    for name, kw in ROBUSTNESS:
+        if progress:
+            progress(f"robustness: {name}")
+        run = simulate(m, with_rules(FINALIST, **kw), start, end, capital=capital, cost_model=cost_model)
+        runs[name] = run
+        results[name] = summarize(run, m, start, end)
+    skill = _skill(runs, m, start, end, extra_trials)
+    for name, x in results.items():
+        x["skill"] = skill[name]
+    missing = sorted(getattr(m, "missing", []) or [])
+    return {"start": m.dates[start], "end": m.dates[end], "results": results,
+            "holds": all(x["excess"] is not None and x["excess"] > 0 for x in results.values()),
+            "missing": missing, "members": len(m.raw) + len(missing)}
+
+
+def format_robustness(r: dict[str, Any]) -> str:
+    def pct(v: Any, f: str = "+.1f") -> str:
+        return "n/a" if v is None else f"{v * 100:{f}}%"
+    lines = [f"Robustness of the adopted rules (no stop, tax-aware buffer 35/50, 25% floor, after charges and tax), "
+             f"{r['start']} to {r['end']}:",
+             f"  {'variant':<44}{'return':>9}{'vs fund':>9}{'a year':>8}{'worst fall':>11}{'turnover':>9}"
+             f"{'skill odds':>11}"]
+    for name, x in r["results"].items():
+        p = x["skill"].get("probability")
+        lines.append(f"  {name:<44}{pct(x['total_return']):>9}{pct(x['excess']):>9}{pct(x['cagr']):>8}"
+                     f"{pct(x['max_drawdown']):>11}{pct(x['turnover'], '.0f'):>9}"
+                     f"{'n/a' if p is None else f'{p:.2f}':>11}")
+    first = next(iter(r["results"].values()))
+    lines.append(f"  MID150BEES on the same days: {pct(first['fund_total_return'])}, worst fall "
+                 f"{pct(first['fund_max_drawdown'])}.")
+    n, k = r["members"], len(r["missing"])
+    lines.append(f"  Survivorship: {k} of {n} index members in the window have no price history and are left out"
+                 + (f" ({', '.join(r['missing'][:10])}{' …' if k > 10 else ''})" if k else "")
+                 + ". Delisted stocks are the usual reason, so the returns above may be flattered by that much.")
+    worst = r["results"].get("next-day fills + costs x2", first)
+    lines.append("  Verdict: " + ("holds: every variant still beats the fund" if r["holds"] else
+                                  "fragile: at least one variant does not beat the fund")
+                 + f"; the hardest case (next-day fills + costs x2) is {pct(worst['excess'])} against it. "
+                 f"Skill odds need 0.95 to count as proven; the holdout stays sealed.")
+    return "\n".join(lines)

@@ -121,6 +121,8 @@ def test_barrier_study_and_meta_samples_run_on_a_market(market30):
     r = barrier_study(m, 400, len(m.dates) - 1, rule="two_stage", cost=0.004, max_days=40)
     assert "composite" in r and r["momentum_12_1"]["months"] > 10
     assert sum(r["momentum_12_1"]["exits"].values()) > 0
+    x = r["momentum_12_1"]
+    assert x["overlap_lags"] == 2 and (x["t_overlap"] is None or isinstance(x["t_overlap"], float))
     s, names = meta_samples(m, 400, len(m.dates) - 1, rule="two_stage", cost=0.004)
     assert len(s) > 100 and len(s[0]["x"]) == len(names) and names[-2:] == ["regime_above_ema50", "breadth"]
     assert all(x["t_out"] >= x["t_in"] > x["t"] for x in s)

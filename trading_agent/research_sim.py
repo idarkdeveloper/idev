@@ -20,8 +20,11 @@ Everything a decision uses is known on that day's close: rankings use bars up to
 Rankings are computed once per rebalance day (``Market.ranking``) and shared by every variant, so variants differ only
 in their rules.
 
-Simplifications, stated in every report: sales and purchases at the close; one cost basis and one holding date per
-position (a top-up keeps the first buy date); Yahoo's history has no daily high/low, so ATR is close-to-close.
+Simplifications, stated in every report: sales and purchases at the close (with ``Rules.lag`` = 1, at the close of
+the session after the decision, as the agent trades); one cost basis and one holding date per position (a top-up keeps
+the first buy date); Yahoo's history has no daily high/low, so ATR is close-to-close. ``Rules.floor`` sells a holding
+whose value has fallen that far below its cost (charges included), the forward test's disaster floor;
+``Rules.cost_mult`` scales every charge, for stress tests.
 """
 
 from __future__ import annotations
@@ -59,9 +62,14 @@ class Rules:
     rebalance_month: int = 1        # yearly: the month of the yearly rebalance
     tax: bool = False
     liquid_rate: float = LIQUID_RATE
+    floor: float | None = None      # sell when a holding is this fraction below its cost (0.25 in the forward test)
+    lag: int = 0                    # sessions between a decision and its trade (1 = the next session's close)
+    cost_mult: float = 1.0          # charges times this (a stress test)
 
     def label(self) -> str:
         parts = [f"stop={self.stop}"] if self.stop != "none" else []
+        if self.floor:
+            parts.append(f"floor{self.floor * 100:.0f}%")
         if self.buffer:
             parts.append(f"buffer{self.buffer}" + ("+tax-aware" if self.tax_aware else ""))
         if self.brake != "none":
@@ -70,6 +78,10 @@ class Rules:
             parts.append(self.weights)
         if self.rebalance != "monthly":
             parts.append(self.rebalance)
+        if self.lag:
+            parts.append(f"fills +{self.lag} day" + ("s" if self.lag > 1 else ""))
+        if self.cost_mult != 1.0:
+            parts.append(f"costs x{self.cost_mult:g}")
         return ", ".join(parts) or "baseline"
 
 
@@ -400,7 +412,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
     daily_rate = (1 + rules.liquid_rate) ** (1 / 365.0) - 1
     cash = capital
     pos: dict[str, Position] = {}
-    curve, exposure_log, trades, events = [], [], [], {"stops": 0, "brake_trades": 0, "tax_waits": 0}
+    curve, exposure_log, trades, events = [], [], [], {"stops": 0, "brake_trades": 0, "tax_waits": 0, "floors": 0}
     costs = traded = 0.0
     tax = TaxBook()
     stopped: set[str] = set()
@@ -413,7 +425,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
         if notional <= 0:
             return 0.0
         traded += notional
-        c = cost_model.breakdown(side, notional)["total"] if cost_model is not None else 0.0
+        c = cost_model.breakdown(side, notional)["total"] * rules.cost_mult if cost_model is not None else 0.0
         costs += c
         return c
 
@@ -487,9 +499,19 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
             return {s: 1 / len(names) for s in names}
         return {s: 1 / rules.top for s in names}
 
+    def below_floor(sym: str, p: Position, d: int, t: int) -> bool:
+        """Was the holding at least ``rules.floor`` below its cost on day d's close (d = t when fills are same-day)?"""
+        if not rules.floor or p.cost <= 0:
+            return False
+        a_d, a_t = m.adj[sym][d], m.adj[sym][t]
+        if not a_d or not a_t:
+            return False
+        return p.value * a_d / a_t <= (1 - rules.floor) * p.cost
+
     last_fy = fy_of(m.dates[start])
     for t in range(start, end + 1):
         day = m.dates[t]
+        d = t - rules.lag   # the decision day: everything decided on d's close is traded at t's close
         # 1. mark to market and accrue interest
         if t > start:
             for sym, p in pos.items():
@@ -505,13 +527,18 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
             tax.by_fy[last_fy] = due
             tax.st = tax.lt = 0.0
             last_fy = fy_of(day)
-        # 2. stops
-        for sym in [s for s, p in pos.items() if stop_hit(s, p, t)]:
-            sell(sym, t, 1.0, "stop")
-            stopped.add(sym)
-            events["stops"] += 1
+        # 2. stops and the floor, decided on day d's close
+        if d >= start:
+            for sym in [s for s, p in pos.items() if p.entry_t <= d and stop_hit(s, p, d)]:
+                sell(sym, t, 1.0, "stop")
+                stopped.add(sym)
+                events["stops"] += 1
+            for sym in [s for s, p in pos.items() if p.entry_t <= d and below_floor(s, p, d, t)]:
+                sell(sym, t, 1.0, "floor")
+                stopped.add(sym)
+                events["floors"] += 1
         # 3. brake
-        new_level = brake_level(t)
+        new_level = brake_level(d) if d >= start else exposure
         if new_level != exposure:
             total = cash + sum(p.value for p in pos.values())
             invested = sum(p.value for p in pos.values())
@@ -528,9 +555,9 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                 events["brake_trades"] += 1
         exposure = new_level
         # 4. rebalance
-        if t in rebal and t < end:
+        if d in rebal and d >= start and t < end:
             stopped.clear()
-            ranked = rank(m, t)
+            ranked = rank(m, d)
             rank_pos = {s: i + 1 for i, s in enumerate(ranked)}
             total = cash + sum(p.value for p in pos.values())
             if rules.buffer:
@@ -538,7 +565,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                 if rules.tax_aware:
                     for s in [s for s in pos if s not in keep]:
                         p = pos[s]
-                        age = (date.fromisoformat(day) - date.fromisoformat(p.bought)).days
+                        age = (date.fromisoformat(m.dates[d]) - date.fromisoformat(p.bought)).days
                         if 335 <= age <= 365 and p.value > p.cost and rank_pos.get(s, 10 ** 6) <= rules.tax_aware_floor:
                             keep.append(s)
                             events["tax_waits"] += 1
@@ -624,6 +651,7 @@ def summarize(run: dict[str, Any], m: Market, start: int, end: int) -> dict[str,
             "turnover": run["traded"] / avg / years / 2 if avg else None,   # one-way, a year
             "median_hold_days": statistics.median(held) if held else None,
             "completed_trades": len(run["trades"]), "stops": run["events"]["stops"],
+            "floors": run["events"].get("floors", 0),
             "brake_trades": run["events"]["brake_trades"], "tax_waits": run["events"]["tax_waits"],
             "costs": run["costs"], "tax_paid": run["tax_paid"],
             "avg_invested": statistics.fmean(run["exposure"]) if run["exposure"] else None}

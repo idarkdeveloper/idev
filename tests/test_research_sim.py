@@ -202,3 +202,74 @@ def test_portfolio_controls_end_to_end(synthetic):
     text = rs.format_controls(r)
     assert "baseline" in text and "inverse_vol" in text and "after Indian capital-gains tax" in text
     assert rs.prior_trials(None) == 0
+
+
+# --------------------------------------------------------------------------- #
+# robustness: next-day fills, cost stress, the 25% floor
+# --------------------------------------------------------------------------- #
+def test_next_day_fills_trade_one_session_after_the_decision():
+    m = market({"A": [100.0 + i for i in range(60)]})
+    same = simulate(m, Rules(top=1, liquid_rate=0.0), 0, 59, ranker=fixed("A"))
+    late = simulate(m, Rules(top=1, liquid_rate=0.0, lag=1), 0, 59, ranker=fixed("A"))
+    assert same["exposure"][0] > 0.99 and late["exposure"][0] == 0.0 and late["exposure"][1] > 0.99
+    assert late["curve"][-1] < same["curve"][-1]            # a rising stock bought a day later costs more
+    seen = []
+    simulate(m, Rules(top=1, liquid_rate=0.0, lag=1), 0, 59,
+             ranker=lambda mk, t: seen.append(t) or ["A"])
+    assert seen and seen[0] == 0                             # ranked on the decision day, not the fill day
+
+
+def test_cost_multiplier_scales_every_charge():
+    m = market({"A": [100.0] * 80, "B": [100.0] * 80})
+    flip = lambda mk, t: ["A"] if mk.dates[t][5:7] in ("01", "03") else ["B"]   # noqa: E731 - trades each month
+    one = simulate(m, Rules(top=1, liquid_rate=0.0), 0, 79, cost_model=IndianDeliveryCosts(), ranker=flip)
+    two = simulate(m, Rules(top=1, liquid_rate=0.0, cost_mult=2.0), 0, 79, cost_model=IndianDeliveryCosts(),
+                   ranker=flip)
+    assert one["costs"] > 0 and two["costs"] == pytest.approx(2 * one["costs"], rel=0.02)
+    assert Rules(cost_mult=2.0, lag=1, floor=0.25).label() == "floor25%, fills +1 day, costs x2"
+
+
+def test_floor_sells_after_a_25_percent_fall_and_waits_for_the_next_rebalance():
+    crash = [100.0] * 5 + [100 - 3 * k for k in range(1, 15)] + [58.0] * 21
+    m = market({"A": crash})
+    end = len(crash) - 1
+    kept = simulate(m, Rules(top=1, liquid_rate=0.0), 0, end, ranker=fixed("A"))
+    floor = simulate(m, Rules(top=1, liquid_rate=0.0, floor=0.25), 0, end, ranker=fixed("A"))
+    assert kept["events"]["floors"] == 0 and floor["events"]["floors"] == 1
+    sold = floor["trades"][0]
+    assert sold["reason"] == "floor" and -0.30 < sold["return"] <= -0.25
+    assert floor["curve"][-1] > kept["curve"][-1]
+    late = simulate(m, Rules(top=1, liquid_rate=0.0, floor=0.25, lag=1), 0, end, ranker=fixed("A"))
+    assert late["trades"][0]["exit"] > sold["exit"]          # decided on the close, sold the next session
+
+
+def test_robustness_end_to_end(synthetic):
+    from trading_agent import research_studies as rs
+    synthetic.missing = ["GONE1", "GONE2"]
+    r = rs.robustness(synthetic, cost_model=IndianDeliveryCosts(), extra_trials=4)
+    res = r["results"]
+    assert list(res) == [name for name, _ in rs.ROBUSTNESS]
+    assert res["costs x2"]["costs"] > res["adopted (+ 25% floor)"]["costs"] * 1.8
+    assert res["costs x2"]["total_return"] < res["adopted (+ 25% floor)"]["total_return"]
+    assert res["adopted (+ 25% floor)"]["skill"]["trials"] == len(rs.ROBUSTNESS) + 4
+    assert r["missing"] == ["GONE1", "GONE2"] and r["members"] == len(synthetic.raw) + 2
+    assert r["holds"] == all(x["excess"] > 0 for x in res.values())
+    text = rs.format_robustness(r)
+    assert "next-day fills + costs x2" in text and "Survivorship: 2 of" in text and "GONE1" in text
+    assert "Verdict:" in text and "holdout stays sealed" in text
+
+
+def test_research_robustness_command(synthetic, tmp_path, monkeypatch, capsys):
+    import json as _json
+    from types import SimpleNamespace
+
+    from trading_agent import cli
+    settings = SimpleNamespace(state_dir=tmp_path, paper_starting_cash=500_000.0)
+    monkeypatch.setattr(cli, "_settings", lambda a: settings)
+    monkeypatch.setattr(cli, "_research_market", lambda a, s: synthetic)
+    args = SimpleNamespace(universe="NIFTYMIDCAP150", years=5, until="2025-10-01", json=False)
+    assert cli.cmd_research_robustness(args) == 0
+    out = capsys.readouterr().out
+    assert "Robustness of the adopted rules" in out and "next-day fills + costs x2" in out and "Verdict:" in out
+    log = [_json.loads(x) for x in (tmp_path / "research" / "trials.jsonl").read_text().splitlines()]
+    assert len(log) == 6 and all(x["study"] == "robustness" for x in log)
