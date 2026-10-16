@@ -415,6 +415,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
     curve, exposure_log, trades, events = [], [], [], {"stops": 0, "brake_trades": 0, "tax_waits": 0, "floors": 0}
     costs = traded = 0.0
     traded_cum: list[float] = []   # traded notional so far, at each day's close (turnover by period)
+    fills: list[tuple[int, str, float]] = []   # (day, symbol, notional) of every buy and sell (capacity)
     tax = TaxBook()
     stopped: set[str] = set()
     exposure = 1.0
@@ -435,6 +436,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
         p = pos[sym]
         proceeds = p.value * frac
         cash += proceeds - charge("sell", proceeds)
+        fills.append((t, sym, proceeds))
         basis = p.cost * frac
         if rules.tax:
             gain = proceeds - basis
@@ -458,6 +460,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
             return
         c = charge("buy", amount)
         cash -= amount + c
+        fills.append((t, sym, amount))
         px = m.close[sym][t] or 0.0
         if sym in pos:
             pos[sym].value += amount
@@ -605,7 +608,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
     open_days = [end - p.entry_t for p in pos.values()]
     return {"rules": rules, "label": rules.label(), "dates": m.dates[start:end + 1], "curve": curve,
             "exposure": exposure_log, "trades": trades, "open_days": open_days, "costs": costs, "traded": traded,
-            "traded_cum": traded_cum,
+            "traded_cum": traded_cum, "fills": fills,
             "tax_paid": tax.paid, "tax_by_fy": tax.by_fy, "events": events, "capital": capital}
 
 

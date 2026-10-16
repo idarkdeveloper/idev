@@ -314,3 +314,38 @@ def test_research_regimes_command(synthetic, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_research_market", lambda a, s: synthetic)
     assert cli.cmd_research_regimes(SimpleNamespace(json=False)) == 0
     assert "Regimes (" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# capacity
+# --------------------------------------------------------------------------- #
+def test_average_daily_value_uses_the_sessions_before():
+    from trading_agent.research_studies import _adv
+    m = market({"A": [100.0] * 100})                       # volume 1e6 a day: Rs 10 crore a day
+    assert _adv(m, "A", 80) == pytest.approx(1e8) and _adv(m, "A", 10) is None   # too few sessions before day 10
+    assert _adv(m, "MISSING", 80) is None
+
+
+def test_capacity_end_to_end(synthetic):
+    from trading_agent import research_studies as rs
+    r = rs.capacity(synthetic, cost_model=IndianDeliveryCosts(), capital=500_000.0)
+    assert r["fills"] > 50 and 0 < r["median_ratio"] <= r["p95_ratio"]
+    assert r["capacity"][0.10] == pytest.approx(2 * r["capacity"][0.05])
+    assert r["capacity"][0.05] == pytest.approx(500_000.0 * 0.05 / r["p95_ratio"])
+    imp = [x["impact_bps"] for x in r["table"]]
+    assert imp == sorted(imp) and imp[-1] > imp[0] > 0                 # bigger money, bigger impact
+    first, last = r["table"][0], r["table"][-1]
+    assert last["median_participation"] == pytest.approx(first["median_participation"] * 1e9 / 5e5)
+    assert last["impact_bps"] == pytest.approx(first["impact_bps"] * (1e9 / 5e5) ** 0.5, rel=1e-6)   # square root
+    text = rs.format_capacity(r)
+    assert "Capital at which 95% of orders stay under 5%" in text and "Rs 100.0 crore" in text and "square-root" in text
+
+
+def test_research_capacity_command(synthetic, tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from trading_agent import cli
+    monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path, paper_starting_cash=500_000.0))
+    monkeypatch.setattr(cli, "_research_market", lambda a, s: synthetic)
+    assert cli.cmd_research_capacity(SimpleNamespace(json=False)) == 0
+    assert "Capacity of the adopted rules" in capsys.readouterr().out

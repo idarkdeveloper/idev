@@ -544,7 +544,8 @@ HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum",
                 "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
-                "research-model", "research-robustness", "research-regimes"}
+                "research-model", "research-robustness", "research-regimes",
+                "research-capacity"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -1014,6 +1015,19 @@ def cmd_research_regimes(args: argparse.Namespace) -> int:
     m = _research_market(args, settings)
     r = regime_diagnostic(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash)
     print(format_regimes(r))
+    if args.json:
+        print(json.dumps(r, default=str))
+    return 0
+
+
+def cmd_research_capacity(args: argparse.Namespace) -> int:
+    """How much capital the adopted rules can run: orders against daily traded value, and a rough impact cost."""
+    from .costs import cost_model_for
+    from .research_studies import capacity, format_capacity
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    r = capacity(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash)
+    print(format_capacity(r))
     if args.json:
         print(json.dumps(r, default=str))
     return 0
@@ -1679,7 +1693,9 @@ def build_parser() -> argparse.ArgumentParser:
                           ("research-robustness", cmd_research_robustness,
                            "the adopted rules with next-day fills and 1.5x / 2x costs, and the survivorship count"),
                           ("research-regimes", cmd_research_regimes,
-                           "the adopted rules month by month in bull, sideways, bear and high-volatility markets")):
+                           "the adopted rules month by month in bull, sideways, bear and high-volatility markets"),
+                          ("research-capacity", cmd_research_capacity,
+                           "how much capital the adopted rules can run before their own orders move prices")):
         sp = sub.add_parser(name, help=hlp)
         sp.add_argument("--universe", default="NIFTYMIDCAP150")
         sp.add_argument("--years", type=int, default=5, help="years before --until (plus a lookback year)")
