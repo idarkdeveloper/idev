@@ -258,3 +258,17 @@ def test_the_health_tab_badge_palette_command_and_portfolio_buttons_are_on_the_l
     css = (ui / "nocturne.css").read_text(encoding="utf-8")
     block = css[css.index("/* ---- Health tab"):]
     assert not re.findall(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(", block)                    # tokens only
+
+
+def test_a_403_from_groww_candles_reads_as_not_on_your_plan_not_failing(s):
+    s.broker = "groww"
+    health.note_run(s.state_dir, "groww_fill", ok=False, error="BIRET: GrowwAPIError: Groww 403: Access forbidden for this request.")
+    r = by_id(health.report(s, MON_11, Cal()))["groww_fill"]
+    assert r["status"] == "off" and r["status_text"] == "not on your Groww plan" and r["error"] is None
+    assert "paid data plan" in r["detail"] and "403" in r["detail"]
+    health.note_run(s.state_dir, "groww_fill", ok=False, error="TCS: JSONDecodeError: Extra data: line 1 column 5")
+    r = by_id(health.report(s, MON_11, Cal()))["groww_fill"]
+    assert r["status"] == "failing" and r["status_text"] == "failing"          # any other fault is still a failure
+    health.note_run(s.state_dir, "groww_fill", ok=True, rows=2)
+    r = by_id(health.report(s, MON_11 + timedelta(hours=1), Cal()))["groww_fill"]
+    assert r["status"] == "ok" and r["status_text"] == "ok"                      # and a later fill clears it

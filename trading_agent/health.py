@@ -202,6 +202,24 @@ def _run(runs: dict[str, Any], sid: str) -> tuple[datetime | None, int | None, s
             _parse(r.get("error_at")))
 
 
+# Groww answers 403 "Access forbidden" to daily candles when the account's plan has no historical data. That is not a
+# fault: the fallback just stays dormant, so the row says so instead of "failing".
+PLAN_REFUSAL = ("403", "access forbidden")
+
+
+def _groww_fill_row(settings: Any, runs: dict[str, Any], now: datetime) -> dict[str, Any]:
+    ok, n, err, err_at = _run(runs, "groww_fill")
+    row = _row("groww_fill", "Groww daily candles (late Yahoo bars)", [AGENT, SCREEN, MORNING, DASH],
+               configured=bool(getattr(settings, "use_groww", False)), last_ok=ok, rows=n, error=err,
+               error_at=err_at, now=now, schedule="only when Yahoo lacks the last session's bar; Groww window, saved token",
+               detail="rows: bars filled in the last fill; none needed is normal")
+    if row["status"] == "failing" and err and any(m in str(err).lower() for m in PLAN_REFUSAL):
+        row.update(status="off", status_text="not on your Groww plan", error=None,
+                   detail="Groww refused daily candles (403): historical data is part of Groww's paid data plan, so this "
+                          "fallback stays dormant and the app uses Yahoo's prices as they are. Nothing else is affected. "
+                          "Last refusal: " + redact(err, 120))
+    return row
+
 def _newest_mtime(paths: list[Path]) -> datetime | None:
     best = None
     for p in paths:
@@ -316,11 +334,7 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
     rows.append(_row("yahoo", "Yahoo prices", [AGENT, SCREEN, MORNING, EVENING, DASH], last_ok=yok, rows=fresh,
                      late=yok is None or yok.date() < ydue.date(), due_text=f"no price refreshed on {_day_text(ydue.date())}", now=now,
                      schedule="on demand; each price is kept up to 6 h", detail="rows: price files refreshed in the last 24 h"))
-    ok, n, err, err_at = _run(runs, "groww_fill")
-    rows.append(_row("groww_fill", "Groww daily candles (late Yahoo bars)", [AGENT, SCREEN, MORNING, DASH],
-                     configured=bool(getattr(settings, "use_groww", False)), last_ok=ok, rows=n, error=err,
-                     error_at=err_at, now=now, schedule="only when Yahoo lacks the last session's bar; Groww window, saved token",
-                     detail="rows: bars filled in the last fill; none needed is normal"))
+    rows.append(_groww_fill_row(settings, runs, now))
 
     # market data the watch service stores in the evening
     rows.append(_daily_store(sd / "flows.json", "flows", "FII/DII flows", [MORNING], now, cal, dtime(21, 0),
