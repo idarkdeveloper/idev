@@ -450,3 +450,82 @@ def format_regimes(r: dict[str, Any]) -> str:
     lines.append("  A diagnostic: nothing here changes a rule. A filter built on this table would be a new trial, "
                  "judged on months it never saw.")
     return "\n".join(lines)
+
+
+
+# --------------------------------------------------------------------------- #
+# capacity: how much money before our own trades move the price
+# --------------------------------------------------------------------------- #
+CAPITALS = (5e5, 25e5, 1e7, 5e7, 2.5e8, 1e9)   # Rs 5 lakh, 25 lakh, 1 crore, 5 crore, 25 crore, 100 crore
+PARTICIPATION = (0.05, 0.10)                     # an order at most this share of a day's traded value
+
+
+def _adv(m: Market, sym: str, t: int, n: int = 60) -> float | None:
+    """Average daily traded value (close x volume) over the ``n`` sessions before day t."""
+    from bisect import bisect_left
+    bars, dates = m.raw.get(sym), m.raw_dates.get(sym)
+    if not bars or not dates:
+        return None
+    i = bisect_left(dates, m.dates[t])
+    window = [b["close"] * (b.get("volume") or 0) for b in bars[max(0, i - n):i] if b.get("close")]
+    window = [x for x in window if x > 0]
+    return statistics.fmean(window) if len(window) >= n // 2 else None
+
+
+def capacity(m: Market, *, cost_model: Any, capital: float = 500_000.0, rules: Rules | None = None) -> dict[str, Any]:
+    """The adopted rules run once at ``capital``; every fill compared with its stock's average daily traded value (the 60
+    sessions before). Orders scale with capital, so the capital at which 95% of orders stay under 5% / 10% of a day's
+    value follows; and a rough market-impact cost per capital from the square-root rule (impact = daily volatility x
+    sqrt(order / daily value)), on top of the brokerage and taxes the backtest already charges."""
+    rules = rules or FINALIST
+    start = _first_ranked_day(m)
+    end = len(m.dates) - 1
+    run = simulate(m, rules, start, end, capital=capital, cost_model=cost_model)
+    rows = []
+    for t, sym, notional in run["fills"]:
+        adv = _adv(m, sym, t)
+        vol = m.vol(sym)[t]
+        if adv and notional > 0:
+            rows.append({"ratio": notional / adv, "notional": notional, "sigma": (vol or 0.35) / 252 ** 0.5})
+    if not rows:
+        raise ValueError("no fills with traded-value history")
+    ratios = sorted(r["ratio"] for r in rows)
+    q95 = ratios[int(0.95 * (len(ratios) - 1))]
+    median = ratios[len(ratios) // 2]
+    years = max((date.fromisoformat(m.dates[end]) - date.fromisoformat(m.dates[start])).days, 1) / 365.25
+    avg_equity = statistics.fmean(run["curve"]) if run["curve"] else capital
+    table = []
+    for cap in CAPITALS:
+        k = cap / capital
+        imp = [(r["notional"], r["sigma"] * (r["ratio"] * k) ** 0.5) for r in rows]
+        traded = sum(n for n, _ in imp)
+        table.append({"capital": cap,
+                      "median_participation": median * k, "p95_participation": q95 * k,
+                      "over_10pct": sum(r["ratio"] * k > 0.10 for r in rows) / len(rows),
+                      "impact_bps": sum(n * i for n, i in imp) / traded * 1e4 if traded else 0.0,
+                      "drag_per_year": sum(n * i for n, i in imp) / avg_equity / years})
+    return {"start": m.dates[start], "end": m.dates[end], "rules": rules.label(), "fills": len(rows),
+            "reference_capital": capital, "median_ratio": median, "p95_ratio": q95,
+            "capacity": {p: capital * p / q95 for p in PARTICIPATION}, "table": table,
+            "turnover": summarize(run, m, start, end)["turnover"]}
+
+
+def _rupees(x: float) -> str:
+    return f"Rs {x / 1e7:,.1f} crore" if x >= 1e7 else f"Rs {x / 1e5:,.0f} lakh"
+
+
+def format_capacity(r: dict[str, Any]) -> str:
+    lines = [f"Capacity of the adopted rules ({r['rules']}), {r['start']} to {r['end']}: {r['fills']} orders, each against "
+             "its stock's average daily traded value over the 60 sessions before.",
+             f"  At {_rupees(r['reference_capital'])} the median order is {r['median_ratio'] * 100:.3f}% of a day's value, "
+             f"the 95th percentile {r['p95_ratio'] * 100:.3f}%.",
+             "  Capital at which 95% of orders stay under " + "; ".join(
+                 f"{p * 100:.0f}% of a day's value: {_rupees(c)}" for p, c in r["capacity"].items()) + ".",
+             f"  {'capital':<16}{'median order':>13}{'95th pct':>10}{'over 10%':>10}{'impact/order':>14}{'drag a year':>13}"]
+    for x in r["table"]:
+        lines.append(f"  {_rupees(x['capital']):<16}{x['median_participation'] * 100:>12.2f}%{x['p95_participation'] * 100:>9.1f}%"
+                     f"{x['over_10pct'] * 100:>9.0f}%{x['impact_bps']:>11.1f} bps{x['drag_per_year'] * 100:>12.2f}%")
+    lines.append("  Impact is a rough square-root estimate (daily volatility x sqrt(order / daily value)), on top of the "
+                 "brokerage and taxes already in the backtest; real fills can be worse in thin stocks and fast markets.")
+    lines.append("  Orders are assumed to fill in one session; splitting a large order over days lowers its impact.")
+    return "\n".join(lines)
