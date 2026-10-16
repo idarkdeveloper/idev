@@ -118,15 +118,15 @@ def test_the_batch_runs_the_five_preregistered_rule_sets():
     m, series = backward_market()
     ind = {s: ("Banks", "IT", "Pharma", "Metals")[i % 4] for i, s in enumerate(sorted(series))}
     r = rb.backward_batch(m, ind, cost_model=IndianDeliveryCosts())
-    assert list(r["results"]) == ["A0", "A", "B", "C", "D"] and r["start"] >= rb.TRADING_FROM
+    assert list(r["results"]) == ["A0", "A", "B", "C", "D", "E"] and r["start"] >= rb.TRADING_FROM
     c = r["results"]["A0"]
     assert r["control_passes"] == (c["excess"] > 0 and c["max_drawdown"] >= c["fund_max_drawdown"] - 0.10)
-    for k in ("A", "B", "C", "D"):
+    for k in ("A", "B", "C", "D", "E"):
         x = r["results"][k]
         assert set(x["checks"]) == {"beats the benchmark", "+2 points a year over the control",
                                     "worst fall within 5 points of the control's", "turnover at most 1.5x the control's"}
         assert x["passes"] == all(x["checks"].values())
-    assert r["passing_variants"] == [k for k in "ABCD" if r["results"][k]["passes"]]
+    assert r["passing_variants"] == [k for k in "ABCDE" if r["results"][k]["passes"]]
     text = rb.format_backward(r, ["rebuilt from 36 index changes since 2016-09-30."])
     assert "THE BACKWARD CHECK, run once" in text and "Survivorship: 1 of" in text and "This window is now spent" in text
 
@@ -157,7 +157,7 @@ def test_the_command_needs_confirm_and_runs_once(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "THE BACKWARD CHECK" in out and guarded["h"] == rb.WINDOW_END
     rows = [json.loads(x) for x in (tmp_path / "research" / "trials.jsonl").read_text().splitlines()]
-    assert [x["params"]["variant"] for x in rows] == ["A0", "A", "B", "C", "D"] and rows[0]["study"] == rb.STUDY
+    assert [x["params"]["variant"] for x in rows] == ["A0", "A", "B", "C", "D", "E"] and rows[0]["study"] == rb.STUDY
     assert cli.cmd_research_backward(SimpleNamespace(confirm=True, tri_csv=None, json=False)) == 2
     assert "already run" in capsys.readouterr().out and "research-backward" in cli.HALT_ALLOWED
 
@@ -178,7 +178,8 @@ def test_preregistered_numbers_are_unchanged():
         "2017-04-01", "2020-10-01", 0.002, 0.10, 0.02, 0.05, 1.5, 5, 3)
     v = {vid: (r.top, r.buffer, r.tax_aware_floor, r.industry_cap) for vid, _, r, _ in rb.variants({})}
     assert v == {"A0": (20, 35, 50, None), "A": (20, 35, 50, None), "B": (10, 18, 25, None),
-                 "C": (20, 35, 50, None), "D": (20, 35, 50, 5)}
+                 "C": (20, 35, 50, None), "D": (20, 35, 50, 5), "E": (20, 35, 50, None)}
+    assert (rb.RESIDUAL_WINDOW, rb.RESIDUAL_SKIP, rb.RESIDUAL_MIN_DAYS) == (252, 21, 150)
 
 
 def test_the_withdrawn_march_2020_review_is_ignored_except_where_nse_kept_it():
@@ -188,3 +189,28 @@ def test_the_withdrawn_march_2020_review_is_ignored_except_where_nse_kept_it():
                {"date": "2020-03-27", "index": "NIFTY50", "added": ["P"], "removed": ["Q"]}]
     assert changes_for(changes, "NIFTYMIDCAP150") == [("2020-06-26", ("X",), ("Y",))]
     assert changes_for(changes, "NIFTY50") == [("2020-03-27", ("P",), ("Q",))]
+
+
+def test_residual_momentum_prefers_return_the_market_does_not_explain():
+    rng = random.Random(4)
+    n = 400
+    dates = days(n, date(2017, 1, 2))
+    bench, high_beta, alpha = [100.0], [100.0], [100.0]
+    for _ in range(n - 1):
+        mkt = 0.0015 + 0.01 * rng.gauss(0, 1)                     # a rising market
+        bench.append(bench[-1] * math.exp(mkt))
+        high_beta.append(high_beta[-1] * math.exp(2.0 * mkt + 0.005 * rng.gauss(0, 1)))   # beta 2, no alpha
+        alpha.append(alpha[-1] * math.exp(0.5 * mkt + 0.0008 + 0.005 * rng.gauss(0, 1)))  # low beta, real alpha
+    m = Market(dates, {"HB": bars(dates, high_beta), "AL": bars(dates, alpha)}, bars(dates, bench),
+               lambda d: {"HB", "AL"}, min_turnover=0)
+    m.momentum_ranking = lambda t: ["HB", "AL"]                    # plain momentum would put the high-beta name first
+    assert rb.residual_momentum_ranker()(m, n - 1) == ["AL", "HB"]
+    assert rb.residual_momentum_ranker()(m, 100) == []             # under 150 days of history: unranked
+
+
+def test_residual_momentum_passes_the_leakage_test():
+    from trading_agent import research_leakage as rl
+    m, _ = backward_market()
+    r = rl.leakage_check(m, ranker=rb.residual_momentum_ranker(), ranking_days=2, simulation_days=1,
+                         holdout_start="2099-01-01")
+    assert r["ok"], rl.format_leakage(r)
