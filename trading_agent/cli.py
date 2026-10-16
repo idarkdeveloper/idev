@@ -298,6 +298,30 @@ def cmd_fundamentals_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fundamentals_inspect(args: argparse.Namespace) -> int:
+    """Download one March results filing and show its contexts and balance-sheet items (reading only)."""
+    from .fundamentals_history import ResultsHistory, inspect_xbrl
+    settings = _settings(args)
+    h = ResultsHistory(settings.state_dir / "cache")
+    pe = f"{args.fy}-03-31"
+    found = [f for f in h.filings(args.symbol) if f["period_end"] == pe]
+    if not found:
+        print(f"No March {args.fy} results filing listed for {args.symbol.upper()}.")
+        return 1
+    f = sorted(found, key=lambda f: (not f["consolidated"], f["available"]))[0]
+    print(f"{args.symbol.upper()} FY{args.fy} ({'consolidated' if f['consolidated'] else 'standalone'}), "
+          f"broadcast {f['available']}: {f['xbrl']}")
+    info = inspect_xbrl(h.fetch_xml(f))
+    print("Contexts (id: dates, facts):")
+    for cid, (dates, n) in info["contexts"].items():
+        print(f"  {cid}: {dates}, {n}")
+    print(f"Balance-sheet-like items ({len(info['balance'])}):" if info["balance"] else
+          "No balance-sheet-like items in this filing.")
+    for tag, cid, value in info["balance"][:80]:
+        print(f"  {tag} [{cid}] = {value}")
+    return 0
+
+
 def cmd_market_data(args: argparse.Namespace) -> int:
     """FII/DII flows, NIFTY 500 breadth and NSE price bands: show what is stored, or fetch now (public NSE files)."""
     from datetime import datetime
@@ -1639,6 +1663,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--annual", action="store_true",
                     help="the March (full-year) filings with profit before tax and finance costs (Coffee Can research)")
     sp.set_defaults(func=cmd_fundamentals_history)
+    sp = sub.add_parser("fundamentals-inspect",
+                        help="show what one March results filing holds (contexts, balance-sheet items); reads only")
+    sp.add_argument("symbol")
+    sp.add_argument("--fy", type=int, default=2021, help="financial year ending March of this year")
+    sp.set_defaults(func=cmd_fundamentals_inspect)
     sp = sub.add_parser("index-history", help="rebuild past index members from NSE press releases")
     sp.add_argument("index", nargs="+", help="e.g. NIFTYMIDCAP150 NIFTYSMALLCAP250")
     sp.add_argument("--since", default="2021-01-01")

@@ -162,3 +162,35 @@ def test_stalled_downloads_are_retried_later_not_cached(tmp_path):
                                                        ("GET", "integrated-filing-results"): {"data": []},
                                                        ("GET", ".xml"): COMPANY}), sleep=lambda s: None)
     assert len(ok.history("X")) == 4  # the next run downloads them (listing reused from cache)
+
+
+def test_inspect_lists_contexts_and_balance_sheet_items():
+    from trading_agent.fundamentals_history import inspect_xbrl
+    old = xbrl([("RevenueFromOperations", "FourD", "100"), ("EquityShareCapital", "FourI", "10"),
+                ("OtherEquity", "FourI", "90"), ("BorrowingsNoncurrent", "FourI", "5")],
+               contexts='<xbrli:context id="FourI"><xbrli:period><xbrli:instant>2021-03-31</xbrli:instant>'
+                        '</xbrli:period></xbrli:context>')
+    info = inspect_xbrl(old)
+    assert info["contexts"]["FourI"] == ("instant=2021-03-31", 3)
+    assert info["contexts"]["FourD"] == ("(not declared)", 1)
+    assert ("OtherEquity", "FourI", "90") in info["balance"] and len(info["balance"]) == 3
+    with pytest.raises(ValueError):
+        inspect_xbrl('<!DOCTYPE x [<!ENTITY a "b">]><x/>')
+
+
+def test_fundamentals_inspect_command(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from trading_agent import cli
+    from trading_agent import fundamentals_history as fh
+    monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path))
+    listed = [{"period_end": "2021-03-31", "available": "2021-05-20T18:00:00", "consolidated": False, "xbrl": "u1.xml"},
+              {"period_end": "2021-03-31", "available": "2021-05-21T18:00:00", "consolidated": True, "xbrl": "u2.xml"}]
+    got = []
+    monkeypatch.setattr(fh.ResultsHistory, "filings", lambda self, s: listed)
+    monkeypatch.setattr(fh.ResultsHistory, "fetch_xml",
+                        lambda self, f: got.append(f["xbrl"]) or xbrl([("Equity", "OneI", "7")]))
+    assert cli.cmd_fundamentals_inspect(SimpleNamespace(symbol="tcs", fy=2021)) == 0
+    out = capsys.readouterr().out
+    assert got == ["u2.xml"] and "consolidated" in out and "Equity [OneI] = 7" in out
+    assert cli.cmd_fundamentals_inspect(SimpleNamespace(symbol="tcs", fy=2019)) == 1
