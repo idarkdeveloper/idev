@@ -497,6 +497,23 @@ or fell, the yearly turnover and how long a stock stays held. The verdict follow
 selection added nothing, post-results drift is researched before the drawdown brake and the weights. Every run is
 appended to `state/research/trials.jsonl`, the trial log later deflated-Sharpe checks count.
 
+**Stop rules and portfolio controls** (research steps B1 to B4) run on a daily simulator (`research_sim.py`) that marks
+the portfolio every trading day, so stops and the drawdown brake act between the monthly rebalances. Rankings are
+computed once a month and shared by every variant; nothing from 1 Oct 2025 on is read; cash earns a liquid-fund rate
+(6.5% a year); trades happen at the close; ATR is close-to-close (Yahoo has no daily high/low).
+
+- `python -m trading_agent research-stops`: six stop rules (none, 3×ATR trail as today, 5×ATR, two-stage,
+  20-day grace, close below the 50-day EMA) on twelve one-year windows (Jan, May and Sep starts, 2021 to 2024) and
+  over the whole 5 years. A rule is accepted when its median hold is 60+ days, its median worst fall is no worse
+  than today's 3×ATR rule, and the deflated Sharpe of its monthly excess over MID150BEES is 0.95 or more, counting
+  every trial in the log. The report recommends; you decide.
+- `python -m trading_agent research-portfolio [--stop RULE]`: after Indian capital-gains tax (STCG and LTCG at the
+  rates of each sale date, paid each April), each change alone against the baseline: a rank buffer of 35 (passes
+  if turnover falls 35%+ without a lower return), a tax-aware buffer (a profitable holding aged 335-364 days waits
+  for day 366; passes if it beats the plain buffer after tax), the drawdown brake on the index fund's 50/200-day EMA
+  (variants: a 100-day average, + 3 days of breadth below 35%, + 5 days of FII/DII selling once that history exists)
+  and inverse-volatility weights (2.5%-8% a stock). The changes that pass are combined and judged once more.
+
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.

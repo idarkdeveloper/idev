@@ -509,7 +509,7 @@ def cmd_kill_switch(args: argparse.Namespace) -> int:
 # the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
 # reach Groww.
 HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
-                "factor-backtest", "research-gap", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
+                "factor-backtest", "research-gap", "research-stops", "research-portfolio", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data"}
 
 
@@ -861,6 +861,71 @@ def cmd_research_gap(args: argparse.Namespace) -> int:
     return 0
 
 
+def _research_market(args: argparse.Namespace, settings: Any) -> Any:
+    """The Midcap 150 (or another index with a fund) on the daily simulator, holdout sealed."""
+    from .factor_backtest import INDEX_FUNDS
+    from .index_history import point_in_time
+    from .research_sim import load_market
+    from .runner import free_prices
+    from .screen import load_universe
+    universe = args.universe.upper()
+    if universe not in INDEX_FUNDS:
+        raise SystemExit(f"{universe} has no index fund; use one of {', '.join(INDEX_FUNDS)}")
+    members = load_universe(universe)
+    membership = point_in_time(universe, [m["symbol"] for m in members], settings.state_dir, progress=print)
+    flows: dict[str, float] = {}
+    try:
+        raw = json.loads((settings.state_dir / "flows.json").read_text(encoding="utf-8"))
+        flows = {d: r["fii_net"] + r["dii_net"] for d, r in (raw.get("days") or {}).items()}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    print(f"Loading {universe} prices for {args.years} years before {args.until} (this takes a few minutes)…")
+    m = load_market([x["symbol"] for x in members], free_prices(settings), regime=INDEX_FUNDS[universe],
+                    years=args.years, until=args.until, membership=membership, flows=flows)
+    if m.missing:
+        print(f"No price history for {len(m.missing)} past member(s): {', '.join(m.missing[:12])}"
+              + (" …" if len(m.missing) > 12 else ""))
+    return m
+
+
+def cmd_research_stops(args: argparse.Namespace) -> int:
+    """Research B1: six stop rules over one-year windows, accepted by the rules set before the run."""
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .research_studies import compact, format_stop_race, prior_trials, stop_race
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    r = stop_race(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                  extra_trials=prior_trials(settings.state_dir), progress=print)
+    print(format_stop_race(r))
+    for rule, x in r["rules"].items():
+        log_trial(settings.state_dir, "B1-stops", {"rule": rule, "until": args.until},
+                  {"median_hold_days": x["median_hold_days"], "excess": x["whole"]["excess"],
+                   "verdict": x["verdict"]})
+    if args.json:
+        print(compact(r))
+    return 0
+
+
+def cmd_research_portfolio(args: argparse.Namespace) -> int:
+    """Research B2-B4: rank buffer, tax-aware buffer, drawdown brake variants, inverse-volatility weights."""
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .research_studies import compact, format_controls, portfolio_controls, prior_trials
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    r = portfolio_controls(m, cost_model=cost_model_for("in"), stop=args.stop, capital=settings.paper_starting_cash,
+                           extra_trials=prior_trials(settings.state_dir), progress=print)
+    print(format_controls(r))
+    for name, x in r["results"].items():
+        log_trial(settings.state_dir, "B2-B4", {"variant": name, "stop": args.stop, "until": args.until},
+                  {"return": x["total_return"], "excess": x["excess"], "max_drawdown": x["max_drawdown"],
+                   "passed": r["passed"].get(name)})
+    if args.json:
+        print(compact(r))
+    return 0
+
+
 def cmd_costs(args: argparse.Namespace) -> int:
     from .costs import FlatCosts, cost_model_for
     settings = _settings(args)
@@ -1164,6 +1229,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--liquid-rate", type=float, default=None, help="yearly interest on cash (default 0.065)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_research_gap)
+    for name, fn, hlp in (("research-stops", cmd_research_stops, "research B1: race six stop rules"),
+                          ("research-portfolio", cmd_research_portfolio,
+                           "research B2-B4: rank buffer, drawdown brake, inverse-volatility weights")):
+        sp = sub.add_parser(name, help=hlp)
+        sp.add_argument("--universe", default="NIFTYMIDCAP150")
+        sp.add_argument("--years", type=int, default=5, help="years before --until (plus a lookback year)")
+        sp.add_argument("--until", default="2025-10-01", help="first date NOT used (the sealed holdout)")
+        if name == "research-portfolio":
+            from .research_sim import STOP_RULES
+            sp.add_argument("--stop", default="none", choices=STOP_RULES,
+                            help="stop rule for every variant (the B1 winner, once chosen)")
+        sp.add_argument("--json", action="store_true")
+        sp.set_defaults(func=fn)
     sp = sub.add_parser("fundamentals-history", help="download NSE quarterly results for a universe (resumable)")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--years", type=int, default=5, help="also cover stocks that were members this far back")
