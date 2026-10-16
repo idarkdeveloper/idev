@@ -545,7 +545,7 @@ HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum",
                 "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
                 "research-model", "research-robustness", "research-regimes",
-                "research-capacity"}
+                "research-capacity", "research-leakage"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -927,7 +927,36 @@ def _research_market(args: argparse.Namespace, settings: Any) -> Any:
     if m.missing:
         print(f"No price history for {len(m.missing)} past member(s): {', '.join(m.missing[:12])}"
               + (" …" if len(m.missing) > 12 else ""))
+    if not getattr(args, "skip_leakage_guard", False):
+        _leakage_guard(m)
     return m
+
+
+def _leakage_guard(m: Any) -> None:
+    """Stop the run if a quick leakage check finds a decision that used data from after its day."""
+    from .costs import cost_model_for
+    from .research_leakage import LeakageError, guard
+    print("Checking for look-ahead (six decision days, two simulation cuts)…")
+    try:
+        guard(m, cost_model=cost_model_for("in"))
+    except LeakageError as e:
+        print(str(e))
+        raise SystemExit("Stopped: a decision used data published after it. Fix the leak before trusting this run.") from e
+
+
+def cmd_research_leakage(args: argparse.Namespace) -> int:
+    """The full leakage test: every rebalance day and four end-to-end cuts of the adopted rules."""
+    from .costs import cost_model_for
+    from .research_leakage import format_leakage, leakage_check
+    settings = _settings(args)
+    args.skip_leakage_guard = True
+    m = _research_market(args, settings)
+    r = leakage_check(m, cost_model=cost_model_for("in"), ranking_days=args.days, simulation_days=args.cuts,
+                      progress=print)
+    print(format_leakage(r))
+    if args.json:
+        print(json.dumps(r, default=str))
+    return 0 if r["ok"] else 1
 
 
 def cmd_research_stops(args: argparse.Namespace) -> int:
@@ -1695,7 +1724,9 @@ def build_parser() -> argparse.ArgumentParser:
                           ("research-regimes", cmd_research_regimes,
                            "the adopted rules month by month in bull, sideways, bear and high-volatility markets"),
                           ("research-capacity", cmd_research_capacity,
-                           "how much capital the adopted rules can run before their own orders move prices")):
+                           "how much capital the adopted rules can run before their own orders move prices"),
+                          ("research-leakage", cmd_research_leakage,
+                           "check that no decision used data published after its day (cut the data and re-decide)")):
         sp = sub.add_parser(name, help=hlp)
         sp.add_argument("--universe", default="NIFTYMIDCAP150")
         sp.add_argument("--years", type=int, default=5, help="years before --until (plus a lookback year)")
@@ -1704,6 +1735,9 @@ def build_parser() -> argparse.ArgumentParser:
             from .research_sim import STOP_RULES
             sp.add_argument("--stop", default="none", choices=STOP_RULES,
                             help="stop rule for every variant (the B1 winner, once chosen)")
+        if name == "research-leakage":
+            sp.add_argument("--days", type=int, default=None, help="rebalance days to check (default: all)")
+            sp.add_argument("--cuts", type=int, default=4, help="end-to-end simulation cuts (default 4)")
         sp.add_argument("--json", action="store_true")
         sp.set_defaults(func=fn)
     sp = sub.add_parser("model-paper", help="the prediction model's own paper account (practice money only)")
