@@ -221,18 +221,21 @@ class Watcher:
         return fresh
 
     def poll_news(self) -> list[dict[str, Any]]:
-        """Notify once per headline that is negative with medium/high confidence, for held or recently
-        recommended stocks. Fetching is cached and each headline is tagged once, so a tick is cheap."""
+        """Notify once per headline that counts as an instant alert (news.is_instant_alert: negative, or positive
+        about a company event, with medium/high confidence), for stocks in the practice account, your real Groww
+        holdings and recent recommendations. Fetching is cached and each headline is tagged once, so a tick is cheap.
+        A real holding's headlines are recorded silently the first time it is looked at, so no backlog arrives."""
         if self._news is None:
             return []
-        from .news import is_alert
+        from .news import is_instant_alert
         if getattr(self._news.tagger, "name", "none") == "none" and not self._warned_no_tagger:
             self._warned_no_tagger = True
             log.warning("news alerts are off: no headline tagger is available "
                         "(start Ollama with `ollama serve` and `ollama pull <model>`, or set NEWS_TAGGER)")
         candidates: list[dict[str, Any]] = []
         held, recent = self._tickers_by_reason()
-        tickers = list(dict.fromkeys(held + recent))
+        real = self.real_holdings()
+        tickers = list(dict.fromkeys(held + real + recent))
         got, errors = 0, []
         for t in tickers:  # slow: network and tagging, with no State held open
             try:
@@ -242,27 +245,39 @@ class Watcher:
                 errors.append(f"{t}: {type(e).__name__}: {e}")
                 continue
             got += len(items)
-            candidates += [{**i, "symbol": t} for i in items if is_alert(i)]
+            candidates += [{**i, "symbol": t} for i in items if is_instant_alert(i)]
         if tickers:   # the Health tab's record
             from . import health
             health.note_run(self.settings.state_dir, "news", ok=len(errors) < len(tickers), rows=got,
                             error="; ".join(errors[:3]) or None)
+        st = State(self.settings.state_dir / "state.json")  # loaded now, so concurrent writes are kept
+        looked = set(st.data.get("news_tickers", []))
+        first_time = {t for t in real if t not in looked}
+        read_ok = first_time - {e.split(":")[0] for e in errors}   # a failed fetch gets its first look next tick
+        if read_ok:
+            st.data["news_tickers"] = sorted(looked | read_ok)[-1000:]
+            st.save()
         if not candidates:
             return []
-        st = State(self.settings.state_dir / "state.json")  # loaded now, so concurrent writes are kept
         seen = st.data.setdefault("seen_news", {})
         fresh: list[dict[str, Any]] = []
+        quiet = False
         for i in candidates:
             if i["id"] not in seen:
                 seen[i["id"]] = datetime.now(self.tz).date().isoformat()  # first-seen day
-                fresh.append(i)
+                if i["symbol"] in first_time:
+                    quiet = True     # a real holding's first look: recorded, not alerted
+                else:
+                    fresh.append(i)
+        if quiet and not fresh:
+            st.save()
         if fresh:
             cutoff = (datetime.now(self.tz) - timedelta(days=30)).date().isoformat()
             for k in [k for k, v in seen.items() if str(v)[:10] < cutoff]:
                 del seen[k]  # headlines older than 30 days can't come back
             st.save()
             if self._notifier is not None:
-                self._queue_news_alerts([(i, "held in your portfolio" if i["symbol"] in held
+                self._queue_news_alerts([(i, "held in your portfolio" if i["symbol"] in held or i["symbol"] in real
                                           else "recently recommended by the agent (watch list)") for i in fresh])
         return fresh
 

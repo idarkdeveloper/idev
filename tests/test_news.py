@@ -737,3 +737,44 @@ def test_seen_news_is_pruned_to_thirty_days(settings):
     assert len(w.poll_news()) == 1
     seen = State(settings.state_dir / "state.json").data["seen_news"]
     assert set(seen) == {"recent", "n1"} and seen["n1"] == datetime.now(IST).date().isoformat()
+
+
+def test_instant_alert_rule_covers_positive_company_events():
+    from trading_agent.news import is_alert, is_instant_alert
+    pos = {"sentiment": "positive", "confidence": "high", "event": "dividend_buyback"}
+    assert is_instant_alert(pos) and not is_alert(pos)               # the daily email's "negative news" list is unchanged
+    assert is_instant_alert({**pos, "event": "results", "confidence": "medium"})
+    assert not is_instant_alert({**pos, "event": "other"})           # "shares rise 3%" chatter
+    assert not is_instant_alert({**pos, "confidence": "low"})
+    assert not is_instant_alert({"sentiment": "neutral", "confidence": "high", "event": "results"})
+    assert is_instant_alert({"sentiment": "negative", "confidence": "medium", "event": "other"})
+
+
+class PerSymbol(FakeService):
+    def __init__(self, by_symbol):
+        super().__init__([])
+        self.by_symbol = by_symbol
+
+    def for_symbol(self, symbol, name=None, background=False):
+        self.asked.append((symbol, name, background))
+        return {"items": list(self.by_symbol.get(symbol, [])), "errors": [], "tagger": "fake:m"}
+
+
+def test_watch_alerts_news_for_real_holdings_after_a_silent_first_look(settings):
+    import json
+    settings.market = "in"
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    (settings.state_dir / "groww_holdings.json").write_text(json.dumps({"saved_at": "2026-10-15T16:05:00+05:30", "holdings": [
+        {"symbol": "INFY", "exchange": "NSE", "kind": "equity", "qty": 10, "avg_price": 1500.0}]}), encoding="utf-8")
+    old = {**headline("old"), "sentiment": "positive", "event": "results"}
+    svc = PerSymbol({"INFY": [old]})
+    notifier = Notifier()
+    w = Watcher(settings, every=60, notifier=notifier, news=svc)
+    assert w.poll_news() == [] and notifier.sent == []               # first look: recorded, no backlog alert
+    div = {**headline("div"), "sentiment": "positive", "event": "dividend_buyback", "title": "Infosys declares dividend"}
+    svc.by_symbol["INFY"].insert(0, div)
+    fresh = w.poll_news()
+    assert [i["id"] for i in fresh] == ["div"] and fresh[0]["symbol"] == "INFY"
+    w._story_thread and w._story_thread.join(5)
+    assert len(notifier.sent) == 1 and "INFY" in notifier.sent[0]["subject"]
+    assert w.poll_news() == [] and len(notifier.sent) == 1

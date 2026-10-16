@@ -720,3 +720,17 @@ class NewsService:
 
 def is_alert(item: dict[str, Any]) -> bool:
     return item.get("sentiment") == "negative" and item.get("confidence") in ("medium", "high")
+
+
+# Positive news worth an instant alert: a real company event, not "shares rise 3%" market chatter (event "other").
+POSITIVE_EVENTS = ("results", "order_win", "deal", "rating", "guidance", "dividend_buyback", "management")
+
+
+def is_instant_alert(item: dict[str, Any]) -> bool:
+    """The watch's instant news alerts: every negative headline the tagger is fairly sure of (is_alert), plus a
+    positive one about a company event (results, order wins, deals, ratings, guidance, dividends or buybacks,
+    management) tagged with medium or high confidence. The daily emails list every tone either way."""
+    if is_alert(item):
+        return True
+    return (item.get("sentiment") == "positive" and item.get("confidence") in ("medium", "high")
+            and item.get("event") in POSITIVE_EVENTS)
