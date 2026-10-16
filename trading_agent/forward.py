@@ -32,6 +32,7 @@ from typing import Any, Callable
 from . import killswitch
 from .broker import LocalPaperBroker
 from .factor_backtest import INDEX_FUNDS
+from .forward_telemetry import active_share, format_telemetry, live_orders_from, telemetry
 from .timezones import IST
 
 log = logging.getLogger(__name__)
@@ -150,14 +151,23 @@ class ForwardTest:
                          bench_units=(capital - cost) / price, bench_cost=round(cost, 2),
                          bench_start_price=price)
 
-    def rebalance(self, picks: list[str], *, eligible: int | None = None) -> dict[str, Any]:
-        """Trade the paper account to equal weights in ``picks``."""
+    def rebalance(self, picks: list[str], *, eligible: int | None = None, members: list[str] | None = None,
+                  caps: dict[str, float | None] | None = None) -> dict[str, Any]:
+        """Trade the paper account to equal weights in ``picks``. With the index ``members`` (and their market
+        ``caps``) the approximate active share after the trades is kept for the friction telemetry."""
         top = self.data["top"]
         fees_before = self.broker.performance()["fees_paid"]
+        equity_before = self.broker.account().equity
         trades = rebalance_to(self.broker, picks, top=top, price_fn=self.price_fn, cost_model=self.cost_model)
         entry = {"date": self.now().date().isoformat(), "month": self._month(),
                  "picks": [p.upper() for p in picks][:top], "eligible": eligible, "trades": trades,
-                 "charges": round(self.broker.performance()["fees_paid"] - fees_before, 2)}
+                 "charges": round(self.broker.performance()["fees_paid"] - fees_before, 2),
+                 "equity": round(equity_before, 2)}
+        if members:
+            values = {p.symbol: float(p.market_value or 0.0) for p in self.broker.positions()}
+            share = active_share(values, self.broker.account().equity, members, caps)
+            if share:
+                entry["active_share"] = share
         self.data["rebalances"] = (self.data["rebalances"] + [entry])[-60:]
         self.data["last_rebalance"] = self._month()
         return entry
@@ -193,7 +203,8 @@ class ForwardTest:
                 # promoter pledges are not picked; earlier rebalances were made without them
                 self.data["indian_filters_since"] = self.now().date().isoformat()
             picks = [r["symbol"] for r in result.get("top", [])]
-            rebalanced = self.rebalance(picks, eligible=result.get("eligible"))
+            members = [r["symbol"] for r in result.get("all", []) if r.get("symbol")]
+            rebalanced = self.rebalance(picks, eligible=result.get("eligible"), members=members, caps=result.get("caps"))
         self.mark()
         self.save()
         return {**self.summary(), "rebalanced": rebalanced}
@@ -231,7 +242,9 @@ class ForwardTest:
                 "strategy_max_drawdown": dd("equity"), "benchmark_max_drawdown": dd("bench"),
                 "charges_paid": self.broker.performance()["fees_paid"], "last_rebalance": d.get("last_rebalance"),
                 "rebalances": len(d["rebalances"]), "last_picks": d["rebalances"][-1]["picks"] if d["rebalances"] else [],
-                "holdings": holdings, "history": hist}
+                "holdings": holdings, "history": hist,
+                "telemetry": telemetry(d, self.broker.performance()["fees_paid"], live_orders_from(self.dir.parent),
+                                       getattr(self.cost_model, "slippage_bps", 15.0))}
 
 
 def format_forward(s: dict[str, Any]) -> str:
@@ -256,6 +269,8 @@ def format_forward(s: dict[str, Any]) -> str:
     for h in s["holdings"][:25]:
         w = f"{h['weight']*100:4.1f}%" if h.get("weight") is not None else "  n/a"
         lines.append(f"  {h['symbol']:<12} {h['qty']:>6g} sh  ₹{h['value']:>11,.0f}  {w}")
+    if s.get("telemetry"):
+        lines.append(format_telemetry(s["telemetry"]))
     if s["days"] < 60:
         lines.append("Too early to judge: give it at least a few months before reading anything into the gap.")
     return "\n".join(lines)
