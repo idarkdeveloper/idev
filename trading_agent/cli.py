@@ -281,7 +281,7 @@ def cmd_fundamentals_history(args: argparse.Namespace) -> int:
     done = empty = 0
     for i, sym in enumerate(symbols, 1):
         try:
-            recs = h.history(sym)
+            recs = h.annual(sym) if args.annual else h.history(sym)
         except Exception as e:  # noqa: BLE001
             print(f"  {sym}: listing failed ({type(e).__name__})")
             continue
@@ -509,7 +509,7 @@ def cmd_kill_switch(args: argparse.Namespace) -> int:
 # the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
 # reach Groww.
 HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
-                "factor-backtest", "research-gap", "research-stops", "research-portfolio", "research-pead", "insider-history", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
+                "factor-backtest", "research-gap", "research-stops", "research-portfolio", "research-pead", "insider-history", "research-coffee-can", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data"}
 
 
@@ -1008,6 +1008,92 @@ def cmd_research_pead(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research_coffee_can(args: argparse.Namespace) -> int:
+    """Research C: the Coffee Can screen (revenue growth > 10% and ROCE > 15% every year), held a year at a time."""
+    from .coffee_can import UnionMembership, coffee_can_ranker
+    from .costs import cost_model_for
+    from .fundamentals_history import ResultsHistory
+    from .gap_diagnosis import log_trial
+    from .index_history import point_in_time
+    from .research_sim import Rules, load_market, simulate, stats, summarize
+    from .research_studies import HOLDOUT_START, SKILL_BAR, _skill, prior_trials
+    from .runner import free_prices
+    from .screen import load_universe
+    settings = _settings(args)
+    log_path = settings.state_dir / "research" / "trials.jsonl"
+    until, years = args.until, args.years
+    if args.holdout:
+        if log_path.exists() and any('"study": "CoffeeCan-holdout"' in line
+                                     for line in log_path.read_text(encoding="utf-8").splitlines()):
+            print("The sealed holdout was already opened for this study (see the trial log): it is used once only.")
+            return 2
+        until, years = None, 2
+    members, industries, parts = [], {}, []
+    for uni in ("NIFTYMIDCAP150", "NIFTYSMALLCAP250"):
+        rows = load_universe(uni)
+        members += [r["symbol"] for r in rows]
+        industries.update({r["symbol"]: r.get("industry", "") for r in rows})
+        parts.append(point_in_time(uni, [r["symbol"] for r in rows], settings.state_dir, progress=print))
+    membership = UnionMembership(parts)
+    prices = free_prices(settings)
+    print(f"Loading {len(set(members))} Midcap 150 and Smallcap 250 stocks (this takes a few minutes)…")
+    m = load_market(sorted(set(members)), prices, regime="MID150BEES", years=years, until=until,
+                    membership=membership if membership.parts else None)
+    if args.holdout:
+        m.start_day = HOLDOUT_START
+    src = ResultsHistory(settings.state_dir / "cache", max_new_downloads=0)
+    annual: dict[str, Any] = {}
+    for sym in m.raw:
+        try:
+            annual[sym] = src.annual(sym)
+        except Exception:  # noqa: BLE001 - no cached listing
+            annual[sym] = []
+    covered = sum(1 for v in annual.values() if v)
+    print(f"Full-year filings cached for {covered} of {len(annual)} stocks.")
+    if covered < 0.8 * len(annual):
+        print("Coverage is low: run `fundamentals-history --annual --universe NIFTYMIDCAP150` and "
+              "`--universe NIFTYSMALLCAP250` until nothing is left, then again.")
+    picked: dict[str, Any] = {}
+    ranker = coffee_can_ranker(annual, industries, min_years=args.min_years, log=picked)
+    rules = Rules(top=40, weights="equal_picks", rebalance="yearly", rebalance_month=7, tax=True)
+    first = None
+    for t in m.rebalance_days(0, len(m.dates) - 1, "yearly", 7):
+        if m.dates[t] >= m.start_day and int(m.dates[t][5:7]) == 7 and len(ranker(m, t)) >= 5:
+            first = t
+            break
+    if first is None:
+        print(f"No July with 5+ qualifying stocks (need {args.min_years} years of growth each): nothing to test yet.")
+        return 1
+    end = len(m.dates) - 1
+    run = simulate(m, rules, first, end, cost_model=cost_model_for("in"), ranker=ranker)
+    x = summarize(run, m, first, end)
+    nb = prices.history("NIFTYBEES", "5y")
+    nb_by = {b["date"]: b["adj_close"] for b in nb}
+    nb_curve = [nb_by.get(d) for d in run["dates"]]
+    nbs = stats(nb_curve, run["dates"])
+    skill = _skill({"coffee can": run}, m, first, end, prior_trials(settings.state_dir))["coffee can"]
+    print(f"Coffee Can, {m.dates[first]} to {m.dates[end]}" + (" (THE SEALED HOLDOUT, opened once)" if args.holdout else "")
+          + f": after charges and tax {x['total_return'] * 100:+.1f}%, worst fall {x['max_drawdown'] * 100:.1f}%; "
+          f"MID150BEES {x['fund_total_return'] * 100:+.1f}%, NIFTYBEES "
+          + ("n/a" if nbs["total_return"] is None else f"{nbs['total_return'] * 100:+.1f}%")
+          + f"; tax paid {x['tax_paid']:,.0f}; skill odds "
+          + ("n/a" if skill["probability"] is None else f"{skill['probability']:.2f}"))
+    for day, names in picked.items():
+        if names and int(day[5:7]) == 7:
+            print(f"  {day}: {len(names)} qualify: {', '.join(names[:15])}" + (" …" if len(names) > 15 else ""))
+    beats = (x["excess"] or 0) > 0 and nbs["total_return"] is not None and x["total_return"] > nbs["total_return"]
+    print("  Verdict: " + ("beats both index funds after charges and tax" if beats else
+                           "does not beat both index funds after charges and tax")
+          + ("" if args.holdout else (" on the development years; " + (
+              "open the sealed holdout once with --holdout." if beats and (skill["probability"] or 0) >= SKILL_BAR
+              else "the holdout stays sealed."))))
+    print("  ROCE uses the closing balance sheet (the book averages opening and closing); "
+          f"{args.min_years} years of growth required (the book asks for 10; filings start in late 2018).")
+    log_trial(settings.state_dir, "CoffeeCan-holdout" if args.holdout else "CoffeeCan",
+              {"min_years": args.min_years, "until": until}, {"return": x["total_return"], "excess": x["excess"]})
+    return 0
+
+
 def cmd_costs(args: argparse.Namespace) -> int:
     from .costs import FlatCosts, cost_model_for
     settings = _settings(args)
@@ -1331,6 +1417,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--holdout", action="store_true",
                     help="run once on the sealed holdout (1 Oct 2025 to today); refused after the first time")
     sp.set_defaults(func=cmd_research_pead)
+    sp = sub.add_parser("research-coffee-can", help="research C: the Coffee Can screen, held a year at a time")
+    sp.add_argument("--years", type=int, default=5)
+    sp.add_argument("--until", default="2025-10-01", help="first date NOT used (the sealed holdout)")
+    sp.add_argument("--min-years", type=int, default=4, help="years of growth every stock needs (the book: 10)")
+    sp.add_argument("--holdout", action="store_true", help="run once on the sealed holdout; refused after that")
+    sp.set_defaults(func=cmd_research_coffee_can)
     sp = sub.add_parser("insider-history", help="download NSE insider disclosures month by month (resumable)")
     sp.add_argument("--years", type=int, default=7)
     sp.add_argument("--max-months", type=int, default=120)
@@ -1339,6 +1431,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--years", type=int, default=5, help="also cover stocks that were members this far back")
     sp.add_argument("--max", type=int, default=3000, help="most new filings to download this run")
+    sp.add_argument("--annual", action="store_true",
+                    help="the March (full-year) filings with profit before tax and finance costs (Coffee Can research)")
     sp.set_defaults(func=cmd_fundamentals_history)
     sp = sub.add_parser("index-history", help="rebuild past index members from NSE press releases")
     sp.add_argument("index", nargs="+", help="e.g. NIFTYMIDCAP150 NIFTYSMALLCAP250")

@@ -51,11 +51,12 @@ class Rules:
     brake: str = "none"             # one of BRAKES
     breadth_floor: float = 0.35
     breadth_days: int = 3
-    weights: str = "equal"          # equal | inverse_vol
+    weights: str = "equal"          # equal (1/top a slot) | equal_picks (1/number picked) | inverse_vol
     w_min: float = 0.025
     w_max: float = 0.08
     min_names_for_ivol: int = 13
     rebalance: str = "monthly"      # monthly | yearly
+    rebalance_month: int = 1        # yearly: the month of the yearly rebalance
     tax: bool = False
     liquid_rate: float = LIQUID_RATE
 
@@ -253,10 +254,16 @@ class Market:
         self.momentum_ranking(t)
         return self._rank_detail[t].get(sym)
 
-    def rebalance_days(self, start: int, end: int, every: str = "monthly") -> list[int]:
+    def rebalance_days(self, start: int, end: int, every: str = "monthly", month: int = 1) -> list[int]:
+        """Month starts; or with ``every="yearly"`` the start day plus the first trading day of ``month`` each year."""
         out, seen = [], set()
         for t in range(start, end + 1):
-            key = self.dates[t][:4] if every == "yearly" else self.dates[t][:7]
+            d = self.dates[t]
+            if every == "yearly":
+                y, mth = int(d[:4]), int(d[5:7])
+                key = str(y if mth >= month else y - 1)
+            else:
+                key = d[:7]
             if key not in seen:
                 seen.add(key)
                 out.append(t)
@@ -358,7 +365,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
              cost_model: Any | None = None, ranker: Callable[[Market, int], list[str]] | None = None) -> dict[str, Any]:
     """Run ``rules`` from day ``start`` to day ``end`` (indices into ``m.dates``, inclusive)."""
     rank = ranker or (lambda mk, t: mk.momentum_ranking(t))
-    rebal = set(m.rebalance_days(start, end, rules.rebalance))
+    rebal = set(m.rebalance_days(start, end, rules.rebalance, rules.rebalance_month))
     daily_rate = (1 + rules.liquid_rate) ** (1 / 365.0) - 1
     cash = capital
     pos: dict[str, Position] = {}
@@ -472,6 +479,8 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
     def weights_for(names: list[str], t: int) -> dict[str, float]:
         if rules.weights == "inverse_vol" and len(names) >= rules.min_names_for_ivol:
             return inverse_vol_weights({s: m.vol(s)[t] for s in names}, rules.w_min, rules.w_max)
+        if rules.weights == "equal_picks" and names:
+            return {s: 1 / len(names) for s in names}
         return {s: 1 / rules.top for s in names}
 
     last_fy = fy_of(m.dates[start])

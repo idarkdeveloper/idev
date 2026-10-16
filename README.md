@@ -528,6 +528,14 @@ after charges, then runs the portfolio (after charges and tax) with the screen's
 development years, `--holdout` runs it once on the sealed holdout (1 Oct 2025 to today); a second `--holdout` is
 refused, because the trial log shows it was opened.
 
+**Coffee Can screen** (research step C, `python -m trading_agent research-coffee-can`). First fill the full-year
+cache: `fundamentals-history --annual --universe NIFTYMIDCAP150` and the same for `NIFTYSMALLCAP250` (repeat until
+nothing is left). Each July, the Midcap 150 and Smallcap 250 stocks (banks and NBFCs left out) whose revenue grew more
+than 10% and whose ROCE (EBIT ÷ (equity + borrowings), from the March filings known by then) stayed above 15% in
+every year of at least four years of growth are bought equal-weight and held for a year. The result after charges
+and tax is compared with MID150BEES and NIFTYBEES; `--holdout` runs once on the sealed holdout. Filings start in
+late 2018, so it can ask for 4 to 6 years of history, not the book's 10 (`--min-years`).
+
 The dashboard draws all of it: account value, a one-year price chart with the 200-day
 average and your cost and stop for held stocks, the spread of backtest returns, and the
 factor portfolio against its benchmarks.
