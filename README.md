@@ -593,6 +593,17 @@ recreated (it used to live in the GitHub Actions cache), `forward --rebuild-from
 screen as of that day, same charges, fills at that day's close) and refuses if one already
 exists unless `--force`. Give it several months before reading anything into the gap.
 
+**Research rules (from 16 Oct 2026).** Research steps A, B1 and B2-B4 (README sections below) found that the
+screen's picks beat MID150BEES, that every stop-loss rule cost far more than it saved, and that a rank buffer halved
+turnover and raised the after-tax return. The forward test now follows those rules, recorded with their start date in
+its state (`rules.since`; earlier rebalances were the plain top 20, so the two are not comparable one to one):
+no stop-loss; at each monthly rebalance a holding is kept while it ranks 35 or better among the eligible names, and a
+profitable one aged 335-365 days while it ranks 50 or better (so the gain becomes long-term); only the empty slots are
+filled, from the top 20, and kept names are not trimmed. As disaster protection only, a holding that closes 25% or more
+below its average buy price is sold after that day's close and its slot stays in cash until the next rebalance. The
+practice account that follows Claude's deal-based picks keeps its own stops: the research tested the screen, not that
+strategy.
+
 **Friction telemetry.** `forward --status`, the daily report and the forward card measure what trading the screen
 costs, against fixed targets: turnover (under 120% a year, from the monthly rebalances after the first build),
 approximate active share against the fund (75–90%; the fund's weights approximated by the members' market caps from

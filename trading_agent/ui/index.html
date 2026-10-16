@@ -1188,7 +1188,7 @@
       return;
     }
     const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
-    $("fw-sub").textContent = `top ${f.top} of ${f.universe} vs ${f.benchmark} · started ${shortDate((f.started||"").slice(0,10))}${f.band_filter_since ? " · price-band filter since " + shortDate(f.band_filter_since) : ""}`;
+    $("fw-sub").textContent = `top ${f.top} of ${f.universe} vs ${f.benchmark} · started ${shortDate((f.started||"").slice(0,10))}${f.band_filter_since ? " · price-band filter since " + shortDate(f.band_filter_since) : ""}${f.rules && f.rules.since ? " · research rules since " + shortDate(f.rules.since) + ": no stop, rank buffer " + f.rules.buffer + " (tax-aware to " + f.rules.tax_aware_floor + "), " + Math.round((f.rules.floor || 0) * 100) + "% disaster floor" : ""}`;
     const h = f.history || [];
     const fall = v => v != null && v < 0 ? "worst fall " + pct(v) : "no fall yet";
     el.innerHTML = `<div class="fw-grid"><div class="fw-chartcol"><div class="chart" id="fw-chart"></div></div>
