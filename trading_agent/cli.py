@@ -1078,6 +1078,13 @@ def cmd_research_replication(args: argparse.Namespace) -> int:
     print(f"Loading prices for {len(current)} members and {spec['benchmark']} since 2015 (this takes a few minutes)…")
     m, notes = load_replication_market(market, prices_for(market, settings.state_dir), current, changes)
     _leakage_guard(m, holdout_start=WINDOW_END)
+    from .research_replication import data_problems
+    problems = data_problems(m)
+    if problems:   # a data fault must never spend the market: stop before the claim
+        print("The data cannot carry this test, so it is not run (nothing is spent):")
+        for x in problems:
+            print(f"  - {x}")
+        return 1
     if m.unit_jumps:   # a pence/pound mix-up would fake a 100x move; stop before anything is spent
         print(f"Prices jump more than 50x in a day for {', '.join(m.unit_jumps)} (a unit mix-up in the data). "
               "Not running (nothing is spent).")
