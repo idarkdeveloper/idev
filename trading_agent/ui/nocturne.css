@@ -910,3 +910,26 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .ks-card .ks-halted { padding: 10px 12px; border-left: 6px solid var(--strip-liveon-bd); background: var(--strip-liveon-bg);
   color: var(--strip-liveon-fg); font-weight: 600; overflow-wrap: anywhere; }
 .ks-card .ks-report { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 0; font-size: 12.5px; }
+
+/* ---- Phone (700 px and below): three things that ran off the screen ----
+   1. the "..." menu sits at the LEFT of the header, but its panel was anchored to its right edge and opened
+      leftwards (to x = -258); it now opens rightwards and is never wider than the screen.
+   2. the page tabs (Overview, Deals & orders, ...) were only 4 px apart.
+   3. the screener table was 547 px wide in a 304 px box; tighter cells, a smaller stock column and a smaller
+      sparkline so the stock, trend, price and 1D change fit side by side. */
+@media (max-width: 700px) {
+  /* the panel spans the screen (12 px margins) whichever side its button is on: the menu itself stops being the
+     positioning box, so left/right are measured from the header/page, and top:auto keeps it just below the button */
+  details.menu { position: static; }
+  details.menu .menu-pop, details.menu.more .menu-pop { left: 12px; right: 12px; top: auto; width: auto; min-width: 0; max-width: none; margin-top: 6px; }
+  .menu-row { flex-wrap: wrap; row-gap: 6px; }
+  .ws-tabs { gap: 8px; }
+  .ws-tabs button { padding: 0 14px; }
+  .sc-table { font-size: 13px; }
+  .sc-table th, .sc-table td { padding: 8px 5px; }
+  .sc-table thead th { white-space: normal; line-height: 1.2; vertical-align: bottom; }
+  .sc-table th.sc-stock, .sc-table td.sc-stock { min-width: 96px; }
+  .sc-name { max-width: 84px; }
+  .sc-sparkcol { width: 52px; }
+  .sc-spark { width: 52px; height: auto; }
+}
