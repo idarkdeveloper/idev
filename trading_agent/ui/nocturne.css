@@ -932,4 +932,8 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   .sc-name { max-width: 84px; }
   .sc-sparkcol { width: 52px; }
   .sc-spark { width: 52px; height: auto; }
+  /* smaller labels: the tab names, the BUY/SELL tags and the investor filter chips */
+  .ws-tabs button { font-size: 14px; padding: 0 10px; white-space: nowrap; }
+  .side-chip, .act { min-height: 0; padding: 2px 7px; font-size: 11px; line-height: 1.3; }
+  .chips-row button.chip, .chips-row .chip-add { min-height: 32px; font-size: 12px; padding: 0 10px; }
 }

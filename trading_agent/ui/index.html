@@ -1517,7 +1517,7 @@
       ${mini}
       <div class="lk-verdict"><div><span class="lk-call ${cls}">${esc(a.call)}</span> <span class="sub">${a.passN} of ${a.n} checks pass</span></div>
         <div class="lk-chips">${a.checks.map(c => `<span class="ck-pill" title="${esc(c.detail)}"><b class="ck-${c.state}" aria-hidden="true">${CK[c.state][0]}</b>${esc(c.label)}<span class="sr-only"> ${CK[c.state][1]}: ${esc(c.detail)}</span></span>`).join("")}</div></div>
-      <button type="button" class="primary lk-open" data-open-full="${esc(sym)}">Open full view →</button></div>`;
+      <button type="button" class="primary lk-open" data-open-full="${esc(sym)}">Open full view →</button> <button type="button" class="lk-open" data-size-it="${esc(sym)}">Position size</button></div>`;
   }
   async function checkStock(t){   // the card only: one read of /api/lookup
     t = String(t || "").trim(); if(!t) return;
@@ -1617,6 +1617,7 @@
     if(b.dataset.wsTab){ goWorkspace(b.dataset.wsTab); return; }
     if(b.dataset.sinceGo){ goWorkspace(b.dataset.sinceGo, true); return; }
     if(b.dataset.openFull){ lookup(b.dataset.openFull); return; }
+    if(b.dataset.sizeIt){ $("sz-ticker").value = b.dataset.sizeIt; goWorkspace("size"); palCentre($("sz-form")); if($("sz-form").requestSubmit) $("sz-form").requestSubmit(); return; }
     if(b.dataset.density){ setDensity(b.dataset.density); return; }
     if(b.dataset.layout){ setLayout(b.dataset.layout); return; }
     if(b.dataset.dfilRemove !== undefined){ dfil = dfil.filter((_, j) => j !== Number(b.dataset.dfilRemove)); render(true); $("deal-add").focus(); return; }
