@@ -1,6 +1,6 @@
 """Device secrets for the read-only phone app API.
 
-A device secret is shown once by ``app-device add`` and stored only as a SHA-256 hash in ``state/app_devices.json``
+A device secret is shown once by ``app-device add`` and stored only as a SHA-256 hash in ``state/app/app_devices.json``
 (owner-only). ``Authenticator.check`` answers 200, 401 (no detail) or 429 (locked out / rate limited). The secret is
 never logged or put in a message. In-memory counters only: a restart forgets lockouts."""
 
@@ -18,7 +18,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
-from .app_feed import _write_private
+from .app_feed import _write_private, app_dir
 
 DEVICES_FILE = "app_devices.json"
 FAIL_LIMIT, FAIL_WINDOW_S, LOCK_S = 5, 600, 900
@@ -35,7 +35,7 @@ def _load(state_dir: Path, *, strict: bool = False) -> list[dict[str, str]]:
     """Well-formed rows only; a missing or garbage file is an empty list (nobody is accepted). ``strict`` (used before
     a write) raises when the file exists but cannot be read, so it is never overwritten by mistake."""
     try:
-        data = json.loads((Path(state_dir) / DEVICES_FILE).read_text(encoding="utf-8"))
+        data = json.loads((app_dir(state_dir) / DEVICES_FILE).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return []
     except OSError as e:
@@ -54,7 +54,7 @@ def add_device(state_dir: Path, name: str) -> str:
         raise ValueError(f"device name {name!r} is empty or already used")
     secret = secrets.token_urlsafe(32)
     rows.append({"name": name, "hash": _hash(secret), "created": date.today().isoformat()})
-    _write_private(Path(state_dir) / DEVICES_FILE, rows)
+    _write_private(app_dir(state_dir) / DEVICES_FILE, rows)
     return secret
 
 
@@ -66,7 +66,7 @@ def revoke(state_dir: Path, name: str | None = None, *, all_: bool = False) -> i
     rows = _load(state_dir, strict=True)
     keep = [] if all_ else [r for r in rows if r["name"] != name]
     if len(keep) != len(rows):
-        _write_private(Path(state_dir) / DEVICES_FILE, keep)
+        _write_private(app_dir(state_dir) / DEVICES_FILE, keep)
     return len(rows) - len(keep)
 
 

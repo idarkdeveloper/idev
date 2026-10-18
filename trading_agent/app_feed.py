@@ -1,7 +1,7 @@
 """The feed the phone app reads: the portfolio as one small JSON file, rebuilt while the market is live.
 
 Read-only. ``AppFeed.tick`` is called by the watch service; it reads Groww only inside the Groww window (through the
-injected ``read_fn``), writes ``state/app_feed.json`` at most once per ``settings.app_feed_every_s``, and never raises.
+injected ``read_fn``), writes ``state/app/app_feed.json`` at most once per ``settings.app_feed_every_s``, and never raises.
 When the read fails or the account is not linked, the last good feed stays and only ``error`` is set."""
 
 from __future__ import annotations
@@ -23,11 +23,16 @@ log = logging.getLogger(__name__)
 
 FEED_FILE = "app_feed.json"
 HISTORY_FILE = "app_value_history.json"
+APP_DIR = "app"   # the web server's own folder: it is the only part of state/ that service can see
+
+
+def app_dir(state_dir: Path) -> Path:
+    return Path(state_dir) / APP_DIR
 
 
 def load_feed(state_dir: Path) -> dict[str, Any] | None:
     try:
-        data = json.loads((Path(state_dir) / FEED_FILE).read_text(encoding="utf-8"))
+        data = json.loads((app_dir(state_dir) / FEED_FILE).read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else None
     except (OSError, ValueError):
         return None
@@ -53,7 +58,7 @@ def _finite(v: Any) -> Any:
 
 def _write_private(path: Path, body: Any) -> None:
     """Owner-only from the moment the file exists, then swapped in (as runner.save_groww_snapshot does)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -70,7 +75,7 @@ _RANGE_DAYS = {"1m": 31, "3m": 92, "1y": 366}
 
 def _rows(state_dir: Path) -> list[dict[str, Any]]:
     try:
-        data = json.loads((Path(state_dir) / HISTORY_FILE).read_text(encoding="utf-8"))
+        data = json.loads((app_dir(state_dir) / HISTORY_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
     return [r for r in data if isinstance(r, dict) and _good_date(r.get("date")) and _is_number(r.get("value"))]         if isinstance(data, list) else []
@@ -96,7 +101,7 @@ def record_daily_value(state_dir: Path, feed: dict[str, Any], session: date) -> 
         key = session.isoformat()
         rows = [r for r in _rows(state_dir) if r["date"] != key]
         rows.append({"date": key, "value": feed.get("value"), "cash": feed.get("cash")})
-        _write_private(Path(state_dir) / HISTORY_FILE, sorted(rows, key=lambda r: r["date"]))
+        _write_private(app_dir(state_dir) / HISTORY_FILE, sorted(rows, key=lambda r: r["date"]))
         return True
     except Exception as e:  # noqa: BLE001
         log.warning("could not record the daily value: %s", e)
@@ -126,7 +131,7 @@ class AppFeed:
         self._last: datetime | None = None
 
     def _path(self) -> Path:
-        return Path(self.settings.state_dir) / FEED_FILE
+        return app_dir(self.settings.state_dir) / FEED_FILE
 
     def _holding(self, h: dict[str, Any]) -> dict[str, Any]:
         sym, qty, price = h["symbol"], h["qty"], h.get("price")

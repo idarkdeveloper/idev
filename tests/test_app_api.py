@@ -61,8 +61,14 @@ def api(tmp_path):
     a.server.server_close()
 
 
+def _put(state, name, text):
+    d = app_feed.app_dir(state)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(text, encoding="utf-8")
+
+
 def _write_feed(state, feed):
-    (state / app_feed.FEED_FILE).write_text(json.dumps(feed), encoding="utf-8")
+    _put(state, app_feed.FEED_FILE, json.dumps(feed))
 
 
 def test_health_and_portfolio_with_a_valid_secret(api):
@@ -147,7 +153,7 @@ def test_stale_flag_and_age_s(api):
 def test_history_ranges(api):
     rows = [{"date": (datetime(2026, 10, 19) - timedelta(days=d)).date().isoformat(), "value": float(d), "cash": None}
             for d in (400, 200, 60, 10, 0)]
-    (api.state / app_feed.HISTORY_FILE).write_text(json.dumps(rows), encoding="utf-8")
+    _put(api.state, app_feed.HISTORY_FILE, json.dumps(rows))
     counts = {r: len(api.get(f"/v1/history?range={r}", api.secret)[1]["points"]) for r in ("1m", "3m", "1y", "all")}
     assert counts == {"1m": 2, "3m": 3, "1y": 4, "all": 5}
     pts = api.get("/v1/history?range=all", api.secret)[1]["points"]
@@ -156,7 +162,7 @@ def test_history_ranges(api):
 
 def test_bad_range_falls_back_to_1m(api):
     rows = [{"date": d, "value": 1.0, "cash": None} for d in ("2026-05-01", "2026-10-18", "2026-10-19")]
-    (api.state / app_feed.HISTORY_FILE).write_text(json.dumps(rows), encoding="utf-8")
+    _put(api.state, app_feed.HISTORY_FILE, json.dumps(rows))
     for q in ("", "?range=bogus", "?range=", "?range=1m&range=all"):
         assert len(api.get(f"/v1/history{q}", api.secret)[1]["points"]) == 2
 

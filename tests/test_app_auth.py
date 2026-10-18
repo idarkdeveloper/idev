@@ -5,7 +5,7 @@ import stat
 
 import pytest
 
-from trading_agent import app_auth, cli
+from trading_agent import app_auth, app_feed, cli
 from trading_agent.app_auth import Authenticator, add_device, list_devices, revoke
 
 
@@ -20,7 +20,7 @@ class Clock:
 def test_add_returns_a_long_secret_and_stores_only_a_hash(tmp_path):
     secret = add_device(tmp_path, "phone")
     assert len(secret) >= 43
-    path = tmp_path / app_auth.DEVICES_FILE
+    path = app_feed.app_dir(tmp_path) / app_auth.DEVICES_FILE
     assert secret not in path.read_text(encoding="utf-8")
     assert "phone" in path.read_text(encoding="utf-8")
     if os.name != "nt":
@@ -110,9 +110,10 @@ def test_duplicate_name_is_refused(tmp_path):
 
 
 def test_garbage_devices_file_means_nobody_is_accepted(tmp_path):
-    (tmp_path / app_auth.DEVICES_FILE).write_text("{not json", encoding="utf-8")
+    app_feed.app_dir(tmp_path).mkdir(exist_ok=True)
+    (app_feed.app_dir(tmp_path) / app_auth.DEVICES_FILE).write_text("{not json", encoding="utf-8")
     assert Authenticator(tmp_path).check("anything", "c") == (None, 401)
-    (tmp_path / app_auth.DEVICES_FILE).write_text(json.dumps([1, "x", {"name": 5}]), encoding="utf-8")
+    (app_feed.app_dir(tmp_path) / app_auth.DEVICES_FILE).write_text(json.dumps([1, "x", {"name": 5}]), encoding="utf-8")
     assert Authenticator(tmp_path).check("anything", "c") == (None, 401)
     assert list_devices(tmp_path) == []
 
@@ -122,7 +123,7 @@ def test_cli_add_list_revoke_use_the_given_state_folder(tmp_path, capsys):
     assert cli.main(["app-device", "--state-dir", state, "add", "phone"]) == 0
     out = capsys.readouterr().out
     assert "Copy it now; it is not shown again." in out
-    stored = json.loads((tmp_path / app_auth.DEVICES_FILE).read_text(encoding="utf-8"))
+    stored = json.loads((app_feed.app_dir(tmp_path) / app_auth.DEVICES_FILE).read_text(encoding="utf-8"))
     secret_in_output = [w for w in out.split() if len(w) >= 43][0]
     assert secret_in_output not in json.dumps(stored)
     assert Authenticator(tmp_path).check(secret_in_output, "c")[0] == "phone"
@@ -139,7 +140,7 @@ def test_cli_add_list_revoke_use_the_given_state_folder(tmp_path, capsys):
 
 def test_bad_input_is_a_counted_401_never_a_crash(tmp_path):
     secret = add_device(tmp_path, "phone")
-    path = tmp_path / app_auth.DEVICES_FILE
+    path = app_feed.app_dir(tmp_path) / app_auth.DEVICES_FILE
     rows = json.loads(path.read_text(encoding="utf-8"))
     rows.append({"name": "evil", "hash": "é", "created": "2026-01-01"})
     path.write_text(json.dumps(rows), encoding="utf-8")
@@ -160,7 +161,7 @@ def test_limited_results_never_carry_a_device_name(tmp_path):
 
 def test_unreadable_devices_file_is_never_overwritten(tmp_path, monkeypatch):
     add_device(tmp_path, "keep")
-    before = (tmp_path / app_auth.DEVICES_FILE).read_bytes()
+    before = (app_feed.app_dir(tmp_path) / app_auth.DEVICES_FILE).read_bytes()
 
     def boom(self, *a, **k):
         raise PermissionError("locked")
@@ -172,7 +173,7 @@ def test_unreadable_devices_file_is_never_overwritten(tmp_path, monkeypatch):
         revoke(tmp_path, all_=True)
     assert Authenticator(tmp_path).check("x", "c") == (None, 401)
     monkeypatch.undo()
-    assert (tmp_path / app_auth.DEVICES_FILE).read_bytes() == before
+    assert (app_feed.app_dir(tmp_path) / app_auth.DEVICES_FILE).read_bytes() == before
 
 
 def test_lockout_memory_is_bounded(tmp_path, monkeypatch):
@@ -192,7 +193,7 @@ def test_lockout_memory_is_bounded(tmp_path, monkeypatch):
 
 def test_cli_unreadable_devices_file_is_a_clean_error(tmp_path, monkeypatch, capsys):
     add_device(tmp_path, "keep")
-    path = tmp_path / app_auth.DEVICES_FILE
+    path = app_feed.app_dir(tmp_path) / app_auth.DEVICES_FILE
     before = path.read_bytes()
 
     def boom(self, *a, **k):
@@ -220,4 +221,19 @@ def test_devices_file_is_created_owner_only_on_every_platform(tmp_path, monkeypa
     monkeypatch.setattr(os, "open", spy)
     add_device(tmp_path, "phone")
     revoke(tmp_path, "phone")
-    assert (tmp_path / app_auth.DEVICES_FILE).exists() and modes == [0o600, 0o600]
+    assert (app_feed.app_dir(tmp_path) / app_auth.DEVICES_FILE).exists() and modes == [0o600, 0o600]
+
+
+def test_devices_file_lives_in_state_app_owner_only_and_not_at_the_old_place(tmp_path, monkeypatch, capsys):
+    from pathlib import Path
+    modes, real = [], Path.mkdir
+
+    def spy(self, mode=0o777, parents=False, exist_ok=False):
+        modes.append((self.name, mode))
+        return real(self, mode, parents, exist_ok)
+    monkeypatch.setattr(Path, "mkdir", spy)
+    assert cli.main(["app-device", "--state-dir", str(tmp_path), "add", "phone"]) == 0
+    assert ("app", 0o700) in modes
+    assert (tmp_path / "app" / "app_devices.json").is_file()
+    assert [p.name for p in tmp_path.iterdir()] == ["app"]
+    assert list_devices(tmp_path) == [{"name": "phone", "created": list_devices(tmp_path)[0]["created"]}]

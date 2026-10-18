@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from trading_agent.app_feed import FEED_FILE, HISTORY_FILE, AppFeed, load_feed, load_history, record_daily_value
+from trading_agent.app_feed import FEED_FILE, HISTORY_FILE, AppFeed, app_dir, load_feed, load_history, record_daily_value
 from trading_agent.timezones import IST
 
 MON = datetime(2026, 6, 8, 10, 30, tzinfo=IST)   # a Monday, inside the window
@@ -51,7 +51,7 @@ def test_writes_the_feed_in_the_window(tmp_path):
     r = Rig(tmp_path)
     out = r.feed.tick(MON)
     assert out is not None and load_feed(tmp_path) == out
-    assert (tmp_path / FEED_FILE).exists()
+    assert (app_dir(tmp_path) / FEED_FILE).exists()
 
 
 @pytest.mark.parametrize("when,closed", [(MON.replace(hour=7), ()), (MON.replace(hour=17), ()),
@@ -59,7 +59,7 @@ def test_writes_the_feed_in_the_window(tmp_path):
 def test_no_read_outside_the_window_or_on_a_holiday(tmp_path, when, closed):
     r = Rig(tmp_path, closed=closed)
     assert r.feed.tick(when) is None
-    assert r.reads == 0 and not (tmp_path / FEED_FILE).exists()
+    assert r.reads == 0 and not (app_dir(tmp_path) / FEED_FILE).exists()
 
 
 def test_does_not_read_again_before_the_interval(tmp_path):
@@ -96,7 +96,7 @@ def test_unlinked_or_error_keeps_the_last_good_feed_and_sets_error(tmp_path):
         out = r.feed.tick(MON + timedelta(minutes=5 * i))
         assert out is not None and out["error"]
         assert {k: v for k, v in out.items() if k != "error"} == {k: v for k, v in first.items() if k != "error"}
-        assert "SECRET123" not in (tmp_path / FEED_FILE).read_text(encoding="utf-8")
+        assert "SECRET123" not in (app_dir(tmp_path) / FEED_FILE).read_text(encoding="utf-8")
     assert load_feed(tmp_path)["holdings"] == first["holdings"]
 
 
@@ -121,8 +121,8 @@ def test_feed_file_is_owner_only_and_atomic(tmp_path):
     Rig(tmp_path).feed.tick(MON)
     assert not list(tmp_path.glob("*.tmp"))
     if sys.platform != "win32":
-        assert os.stat(tmp_path / FEED_FILE).st_mode & 0o777 == 0o600
-    json.loads((tmp_path / FEED_FILE).read_text(encoding="utf-8"))
+        assert os.stat(app_dir(tmp_path) / FEED_FILE).st_mode & 0o777 == 0o600
+    json.loads((app_dir(tmp_path) / FEED_FILE).read_text(encoding="utf-8"))
 
 
 def _feed(value=1600.0, cash=10.0, source="groww"):
@@ -134,7 +134,7 @@ def test_one_row_per_session_and_a_second_call_replaces_not_duplicates(tmp_path)
     assert record_daily_value(tmp_path, _feed(1700.0), date(2026, 6, 8)) is True
     assert load_history(tmp_path, "all") == [{"date": "2026-06-08", "value": 1700.0, "cash": 10.0}]
     if sys.platform != "win32":
-        assert os.stat(tmp_path / HISTORY_FILE).st_mode & 0o777 == 0o600
+        assert os.stat(app_dir(tmp_path) / HISTORY_FILE).st_mode & 0o777 == 0o600
 
 
 def test_not_recorded_before_15_35_or_from_a_saved_source(tmp_path):
@@ -160,9 +160,10 @@ def test_history_ranges_cut_by_date_and_come_oldest_first(tmp_path):
 
 
 def test_history_file_survives_garbage_content(tmp_path):
-    (tmp_path / HISTORY_FILE).write_text("{not json", encoding="utf-8")
+    app_dir(tmp_path).mkdir(exist_ok=True)
+    (app_dir(tmp_path) / HISTORY_FILE).write_text("{not json", encoding="utf-8")
     assert load_history(tmp_path, "all") == []
-    (tmp_path / HISTORY_FILE).write_text('{"a": 1}', encoding="utf-8")
+    (app_dir(tmp_path) / HISTORY_FILE).write_text('{"a": 1}', encoding="utf-8")
     assert load_history(tmp_path, "1m") == []
     assert record_daily_value(tmp_path, _feed(), date(2026, 6, 8)) is True
 
@@ -176,9 +177,10 @@ def test_a_missing_or_non_numeric_value_does_not_overwrite_a_good_row(tmp_path, 
 
 
 def test_bad_rows_are_dropped_and_good_rows_still_load(tmp_path):
+    app_dir(tmp_path).mkdir(exist_ok=True)
     rows = [{"date": "abc", "value": 1.0}, {"date": "2026-06-08", "value": 5.0, "cash": None},
             {"date": "2026-06-09", "value": None}, {"date": "2026-06-10", "value": True}, 7]
-    (tmp_path / HISTORY_FILE).write_text(json.dumps(rows), encoding="utf-8")
+    (app_dir(tmp_path) / HISTORY_FILE).write_text(json.dumps(rows), encoding="utf-8")
     for r in ("1m", "all"):
         assert load_history(tmp_path, r) == [{"date": "2026-06-08", "value": 5.0, "cash": None}]
 
@@ -353,7 +355,7 @@ def test_a_saved_snapshot_after_a_failed_read_is_an_error_with_the_snapshot_age(
     out = r.feed.tick(MON)
     assert out["source"] == "saved" and out["error"] == "ReadTimeout"
     assert out["as_of"] == "2026-06-05T15:40:00+05:30"
-    assert "FAKETOKEN123" not in (tmp_path / FEED_FILE).read_text(encoding="utf-8")
+    assert "FAKETOKEN123" not in (app_dir(tmp_path) / FEED_FILE).read_text(encoding="utf-8")
 
 
 def test_a_saved_snapshot_keeps_a_deliberate_reason_and_now_when_saved_at_is_bad(tmp_path):
@@ -380,7 +382,7 @@ def test_non_finite_numbers_become_null(tmp_path):
     r = Rig(tmp_path, read=good(holdings=[h], value=float("nan"), pl=float("-inf")))
     r.feed.trend_fn = lambda s: [1.0, float("nan")]
     out = r.feed.tick(MON)
-    text = (tmp_path / FEED_FILE).read_text(encoding="utf-8")
+    text = (app_dir(tmp_path) / FEED_FILE).read_text(encoding="utf-8")
     json.loads(text, parse_constant=lambda c: pytest.fail(f"non-standard JSON constant {c}"))
     assert out["value"] is None and out["pl"] is None
     assert out["holdings"][0]["pl_pct"] is None and out["holdings"][0]["avg_price"] is None
@@ -408,7 +410,7 @@ def _record_open_modes(monkeypatch):
 def test_feed_and_history_are_created_owner_only_on_every_platform(tmp_path, monkeypatch):
     modes = _record_open_modes(monkeypatch)
     Rig(tmp_path).feed.tick(MON.replace(hour=15, minute=40))   # writes the feed and the day's history row
-    assert (tmp_path / FEED_FILE).exists() and (tmp_path / HISTORY_FILE).exists()
+    assert (app_dir(tmp_path) / FEED_FILE).exists() and (app_dir(tmp_path) / HISTORY_FILE).exists()
     assert modes == [0o600, 0o600]
 
 
@@ -435,3 +437,29 @@ def test_watcher_tick_does_not_wait_for_a_slow_feed(settings):
         assert _time.monotonic() - t0 < 5 and Slow.calls == 1
     finally:
         release.set()
+
+
+def _record_mkdirs(monkeypatch):
+    from pathlib import Path
+    modes, real = [], Path.mkdir
+
+    def spy(self, mode=0o777, parents=False, exist_ok=False):
+        modes.append((self.name, mode))
+        return real(self, mode, parents, exist_ok)
+    monkeypatch.setattr(Path, "mkdir", spy)
+    return modes
+
+
+def test_writers_create_state_app_owner_only_and_nothing_at_the_old_place(tmp_path, monkeypatch):
+    modes = _record_mkdirs(monkeypatch)
+    Rig(tmp_path).feed.tick(MON.replace(hour=15, minute=40))   # feed + history row
+    assert ("app", 0o700) in modes
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["app"]
+    assert sorted(p.name for p in (tmp_path / "app").iterdir()) == [FEED_FILE, HISTORY_FILE]
+
+
+def test_readers_create_nothing_and_ignore_the_old_location(tmp_path):
+    (tmp_path / FEED_FILE).write_text('{"value": 1}', encoding="utf-8")
+    (tmp_path / HISTORY_FILE).write_text('[{"date": "2026-06-08", "value": 1}]', encoding="utf-8")
+    assert load_feed(tmp_path) is None and load_history(tmp_path, "all") == []
+    assert not (tmp_path / "app").exists()
