@@ -308,7 +308,7 @@
     } catch(e){ $("rl-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   }
   function newsHtml(r){
-    return r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file && /^https?:\/\//.test(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
+    return r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${TA.annChip(a)}${a.file && /^https?:\/\//.test(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
       : `<div class="sub">${esc(r.announcements_error || "none in the 60 days before the replay date")}</div>`;
   }
   // ---- Position size and Trade cost, as of the replay date ----

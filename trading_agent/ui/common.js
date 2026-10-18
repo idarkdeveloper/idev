@@ -301,6 +301,14 @@ window.TA = (function(){
   // News labels arrive a little after the headlines (a background tagger). A headline list still needs labels when
   // some items are untagged while a tagger is working ("pending" or a named one; "none" means nobody will label them).
   const NEWS_POLL_MS = 5000, NEWS_POLL_MAX_MS = 120000;
+  // A keyword guess at whether an NSE announcement is good or bad news for the share price (not advice, can be wrong).
+  const ANN_BAD = /penalt|show.?cause|insolven|fraud|resign|cessation|downgrad|loss|delay|suspen|search and seizure|investigat|litigation|arbitration|withdraw(n|al) of (credit )?rating|disruption|fire|strike|non.?compliance|dispute|demand notice|adverse|default/i;
+  const ANN_GOOD = /dividend|bonus|buy.?back|bags|wins?|new order|order (win|received)|letter of award|awarded|upgrad|acquisition|acquir|expansion|capacity|record|approv|launch|collaborat|partnership|profit|allot/i;
+  const annTone = (a) => {
+    const t = `${a.category || ""} ${a.text || ""}`, bad = ANN_BAD.test(t), good = ANN_GOOD.test(t);
+    return bad && !good ? {cls: "bad", label: "▼ Negative"} : good && !bad ? {cls: "ok", label: "▲ Positive"} : {cls: "", label: "● Neutral"};
+  };
+  const annChip = (a) => { const s = annTone(a); return `<span class="pill ${s.cls}" style="font-size:11px;padding:1px 7px" title="A keyword guess from the title and text, not advice; it can be wrong">${s.label}</span> `; };
   const newsNeedsLabels = (n) => !!n && !n.demo && n.tagger !== "none" && (n.items || []).some(i => !i.sentiment);
   // "poll" = ask again in NEWS_POLL_MS; "stop" = all tagged, no tagger, two minutes passed, or another stock was looked up.
   const newsPollNext = (n, startedAt, now, stillCurrent) =>
@@ -846,6 +854,18 @@ window.TA = (function(){
       legend.innerHTML = p.join(" · ");
     }
 
+    // Daily ranges already fetched are kept for two minutes, and once a chart is up the other small daily ranges are
+    // fetched quietly one at a time, so switching 1M / 3M / 6M / 1Y is instant instead of a fresh trip to the server.
+    const pcache = new Map();
+    function prefetchRanges(){
+      const want = ["1M", "3M", "6M", "1Y"].filter(r => r !== prefs.range && !pcache.has(r + "|" + exchange));
+      const ex = exchange;
+      (async () => { for(const r of want){
+        if(dead || ex !== exchange || !cfg.isCurrent()) return;
+        try { const p = await cfg.fetchCandles(r, ex); if(p && p.bars && p.bars.length && !p.error) pcache.set(r + "|" + ex, {t: Date.now(), p}); } catch(e){ return; }
+      } })();
+    }
+
     async function load(){
       const mine = ++seq;
       note.textContent = "Loading chart…";
@@ -855,11 +875,13 @@ window.TA = (function(){
         if(!soft){ cfg.fallback(why); return; }
         teardown(); data = null; legend.textContent = ""; note.textContent = "Intraday prices unavailable (" + why + "). Pick another range.";
       };
-      try { payload = await cfg.fetchCandles(prefs.range, exchange); }
+      const ckey = prefs.range + "|" + exchange, hit = pcache.get(ckey);
+      try { payload = hit && Date.now() - hit.t < 120000 ? hit.p : await cfg.fetchCandles(prefs.range, exchange); }
       catch(e){ if(mine === seq && !dead && cfg.isCurrent()) failed(e.message || "chart data unavailable"); return; }
       if(mine !== seq || dead || !cfg.isCurrent()) return;   // a newer range or another stock was asked for meanwhile
       if(!payload || payload.error || !payload.bars || !payload.bars.length){ failed((payload && payload.error) || "no price history"); return; }
-      data = payload; note.textContent = ""; paintChips();
+      if(!hit || hit.p !== payload) pcache.set(ckey, {t: Date.now(), p: payload});
+      data = payload; note.textContent = ""; paintChips(); prefetchRanges();
       try { build(false); } catch(e){ cfg.fallback(e.message || "chart failed"); }
     }
 
@@ -901,6 +923,6 @@ window.TA = (function(){
 
   return {$, esc, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct, quoteHtml, rangePos, quoteAge,
-          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart};
+          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart};
 })();
 window.TA.theme.init();
