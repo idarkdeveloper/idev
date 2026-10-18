@@ -1260,3 +1260,25 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #mp-card #mp-rows td.spark-col { grid-row: 2; align-self: center; }
   #mp-card #mp-rows td.spark-col:empty { display: block; }
 }
+/* ---- Desktop site on a phone / narrow laptop (701 px and up): the Risk card is a vertical stack, the markets one even row, the header tidy ---- */
+@media (min-width: 701px) {
+  .regime-card { flex-direction: column; flex-wrap: nowrap; }
+  .regime-left { flex: none; padding: 14px 18px 12px; gap: 8px; }
+  .regime-left .regime { flex-wrap: wrap; gap: 8px 12px; align-items: baseline; }
+  .regime-left .regime .sig { flex: 1 1 100%; font-size: 14px; line-height: 1.5; color: var(--color-label); }
+  .regime-left .regime .sig-guide { font-weight: 500; color: var(--color-text); }
+  .regime-meta { gap: 8px; }
+  .regime-meta .icon-btn { margin-left: auto; }
+  .regime-card .mkts { flex: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); border-left: none; border-top: 1px solid var(--color-divider); }
+  .ov-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  #investor-list { flex: 1 1 100%; font-size: 12.5px; line-height: 1.45; }
+}
+@media (min-width: 900px) {
+  .regime-card .mkts { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); grid-template-columns: none; }
+}
+@media (min-width: 701px) and (max-width: 1180px) {
+  .hdr .controls { flex: 1 1 100%; margin-left: 0; flex-wrap: nowrap; justify-content: flex-start; }
+}
+@media (min-width: 1181px) {
+  .hdr .controls { flex-wrap: nowrap; }
+}
