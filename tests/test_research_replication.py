@@ -75,13 +75,13 @@ class FakePrices:
         return self.series[sym]
 
 
-def synthetic(n=900, k=30, seed=3):
+def synthetic(n=1160, k=40, seed=3):
     rng = random.Random(seed)
-    dates = days(n, date(2015, 10, 1))
+    dates = days(n, date(2014, 10, 1))   # a year before the lookback, as real histories have
     series = {}
     for i in range(k):
         p, path = 100.0, []
-        drift, vol = rng.uniform(-0.0002, 0.0015), rng.uniform(0.01, 0.02)
+        drift, vol = rng.uniform(0.0003, 0.0015), rng.uniform(0.01, 0.02)   # most trend up: 20+ pass the screen
         for _ in range(n):
             p *= math.exp(drift + vol * rng.gauss(0, 1))
             path.append(p)
@@ -95,7 +95,7 @@ def test_the_run_uses_the_unchanged_rules_without_tax_and_the_fixed_costs():
     members = [s for s in series if s != "IJH"] + ["DEAD"]                 # one member without prices
     m, notes = rr.load_replication_market("us", FakePrices(series), members, [])
     assert m.min_turnover == 120_000.0 and not m.point_in_time and m.missing == ["DEAD"]
-    assert "today's 31 members" in notes[0] and m.dates[0] >= rr.LOOKBACK_FROM and m.dates[-1] < rr.WINDOW_END
+    assert "today's 41 members" in notes[0] and m.dates[0] >= rr.LOOKBACK_FROM and m.dates[-1] < rr.WINDOW_END
     r = rr.replicate("us", m)
     assert r["start"] >= rr.TRADING_FROM and "buffer35" in r["rules"] and r["point_in_time"] is False
     assert set(r["checks"]) == {"beats the fund", "worst fall within 10 points of the fund's"}
@@ -104,7 +104,7 @@ def test_the_run_uses_the_unchanged_rules_without_tax_and_the_fixed_costs():
     assert 0 <= ahead <= months and months > 10
     text = rr.format_replication(r, notes)
     assert "REPLICATION, run once" in text and "S&P MidCap 400" in text and "5 bps a side" in text
-    assert "Members without prices: 1 of 31 (DEAD)" in text and "This market is now spent" in text
+    assert "Members without prices: 1 of 41 (DEAD)" in text and "This market is now spent" in text
     j = rr.MARKETS["jp"]
     assert j["benchmark"] == "1306" and j["suffix"] == ".T" and j["one_way_bps"] == 10.0
 
@@ -235,7 +235,10 @@ def test_zero_or_negative_prices_are_dropped_and_reported_instead_of_crashing():
     members = [s for s in series if s != "1306"]
     m, notes = rr.load_replication_market("jp", FakePrices(series), members, [])
     assert any("3 zero or negative price point(s) dropped in 2 series (S03 2, S04 1)" in x for x in notes)
-    assert m.close["S03"][300] == m.close["S03"][299] > 0          # the bad day carries the last good price
+    bad_day = series["S03"][300]["date"]                            # (the bar was dropped: find its date in the original)
+    t = m.dates.index(bad_day) if bad_day in m.dates else None
+    if t is not None:
+        assert m.close["S03"][t] == m.close["S03"][t - 1] > 0      # the bad day carries the last good price
     for sym in members:
         m.vol(sym)                                                  # no ValueError
     from trading_agent import cli
@@ -250,3 +253,60 @@ def test_vol60_ignores_non_positive_prices():
     from trading_agent.research_sim import vol60
     out = vol60(bad)
     assert len(out) == len(bad) and out[-1] is not None and out[-1] >= 0
+
+
+def test_the_data_gate_stops_monthly_bars_a_broken_fund_and_a_late_start_before_the_claim(tmp_path, monkeypatch, capsys):
+    """18 Oct 2026: Yahoo served MONTHLY bars for range=max, so the US and Japan runs were simulated on month-end
+    prices, and 1306.T jumps 10x for two days in 2026. None of that may spend a market again."""
+    dates, series = synthetic()
+    members = [s for s in series if s != "IJH"]
+    m, _ = rr.load_replication_market("us", FakePrices(series), members, [])
+    assert rr.data_problems(m) == []
+    monthly = {k: [b for i, b in enumerate(v) if i % 21 == 0] for k, v in series.items()}
+    mm, _ = rr.load_replication_market("us", FakePrices(monthly), members, [])
+    assert any("not daily" in x for x in rr.data_problems(mm))
+    broken = dict(series)
+    broken["IJH"] = [{**b, "close": b["close"] / 10, "adj_close": b["adj_close"] / 10} if 600 <= i < 602 else b
+                     for i, b in enumerate(series["IJH"])]
+    mb, _ = rr.load_replication_market("us", FakePrices(broken), members, [])
+    assert any("more than 40% in a day" in x for x in rr.data_problems(mb))
+    late = {k: (v if k == "IJH" else [b for b in v if b["date"] >= "2016-06-01"]) for k, v in series.items()}
+    ml, _ = rr.load_replication_market("us", FakePrices(late), members, [])
+    assert any("not near 2016-10-01" in x or "not enough history" in x for x in rr.data_problems(ml))
+    from trading_agent import cli
+    monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path))
+    monkeypatch.setattr(rr, "fetch_members", lambda market: (members * 9, []))
+    monkeypatch.setattr(rr, "prices_for", lambda market, state_dir: FakePrices(monthly))
+    monkeypatch.setattr(cli, "_leakage_guard", lambda mk, holdout_start=None: None)
+    args = SimpleNamespace(replication_market="uk", confirm=True, json=False)
+    monkeypatch.setitem(rr.MARKETS["uk"], "benchmark", "IJH")
+    assert cli.cmd_research_replication(args) == 1
+    assert "nothing is spent" in capsys.readouterr().out
+    assert not (tmp_path / "research" / "once" / "Replication-UK.claimed").exists()
+
+
+def test_full_history_is_asked_for_by_dates_so_yahoo_keeps_daily_bars(tmp_path):
+    from trading_agent.prices import YahooPrices
+    seen = []
+
+    class Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"chart": {"result": [{"timestamp": [1475280000, 1475366400],
+                                          "indicators": {"quote": [{"close": [10.0, 11.0], "volume": [1, 2]}],
+                                                         "adjclose": [{"adjclose": [10.0, 11.0]}]}}]}}
+
+    class Session:
+        def get(self, url, headers=None, params=None, timeout=None):
+            seen.append(params)
+            return Resp()
+
+    p = YahooPrices(suffix="", session=Session(), cache_dir=tmp_path)
+    assert len(p.history("IJH", "max")) == 2 and len(p.history("IJH", "10y")) == 2
+    assert seen[0]["period1"] == 0 and "range" not in seen[0] and seen[0]["interval"] == "1d"
+    assert seen[1] == {"range": "10y", "interval": "1d"}
+    assert (tmp_path / "yahoo_IJH_maxd.json").exists() and not (tmp_path / "yahoo_IJH_max.json").exists()

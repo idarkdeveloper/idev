@@ -129,11 +129,16 @@ class YahooPrices:
         return self.fill.fill(ysym, bars, ohlc=ohlc) if self.fill is not None else bars
 
     def _history(self, ysym: str, range_: str) -> list[dict[str, Any]]:
-        cache = self.cache_dir / f"yahoo_{ysym.replace('^', 'IDX_')}_{range_}.json" if self.cache_dir else None
+        # Yahoo quietly serves MONTHLY bars for range=max even with interval=1d (seen 18 Oct 2026: IJH 318 bars since
+        # 2000), so the whole history is asked for by dates instead, which keeps daily bars. The cache name changes with
+        # it, so a monthly file cached before this fix is never read.
+        key = "maxd" if range_ == "max" else range_
+        cache = self.cache_dir / f"yahoo_{ysym.replace('^', 'IDX_')}_{key}.json" if self.cache_dir else None
         if cache and cache.exists() and time.time() - cache.stat().st_mtime < self.cache_ttl:
             return json.loads(cache.read_text())
-        resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
-                                params={"range": range_, "interval": "1d"}, timeout=self.timeout)
+        params: dict[str, Any] = ({"period1": 0, "period2": int(time.time()) + 86400, "interval": "1d"}
+                                  if range_ == "max" else {"range": range_, "interval": "1d"})
+        resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS, params=params, timeout=self.timeout)
         _check_status(resp, ysym)
         data: Any = resp.json()
         try:

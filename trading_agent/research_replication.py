@@ -257,6 +257,40 @@ def unit_jumps(series: dict[str, list[dict[str, Any]]]) -> list[str]:
     return sorted(out)
 
 
+BENCH_JUMP = 0.40               # a fund moving more than 40% in one day is a data error (an unadjusted split)
+LATEST_START = "2017-01-01"     # the first decision must fall within a quarter of TRADING_FROM
+
+
+def data_problems(m: Market) -> list[str]:
+    """Reasons the loaded data cannot carry the pre-registered test. Checked BEFORE the market is claimed, so a data
+    fault never spends it. None of these looks at a strategy result."""
+    from statistics import median
+    out: list[str] = []
+    gaps = [(datetime.fromisoformat(b) - datetime.fromisoformat(a)).days for a, b in zip(m.dates, m.dates[1:])]
+    if not gaps or median(gaps) > 4:
+        out.append(f"the benchmark's prices are not daily ({len(m.dates)} bars, a typical gap of "
+                   f"{median(gaps) if gaps else 0:g} days)")
+    fund = [v for v in m.fund_adj if v]
+    jumps = []
+    for i in range(1, len(m.fund_adj)):
+        a, b = m.fund_adj[i - 1], m.fund_adj[i]
+        if a and b and abs(b / a - 1) > BENCH_JUMP:
+            jumps.append(m.dates[i])
+    if jumps:
+        out.append(f"the benchmark moves more than {BENCH_JUMP:.0%} in a day on {', '.join(jumps[:4])} (a data error)")
+    if not fund:
+        out.append("the benchmark has no prices")
+    from .research_studies import _first_ranked_day
+    try:
+        first = m.dates[_first_ranked_day(m)]
+        if first >= LATEST_START:
+            out.append(f"the first day with 20 rankable stocks is {first}, not near {TRADING_FROM}: too few members have "
+                       "daily history that far back")
+    except ValueError as e:
+        out.append(str(e))
+    return out
+
+
 def month_starts(dates: list[str], start: str, end: str) -> list[str]:
     seen, out = set(), []
     for d in dates:
