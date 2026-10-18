@@ -340,3 +340,24 @@ def test_an_empty_answer_is_unavailable_data_not_an_empty_list(tmp_path):
     b2 = book(tmp_path / "x")
     b2.tick(FakeNSE(), MON, names=lambda: called.append(1) or {})
     assert called == []
+
+
+def test_nse_publishing_no_pledges_is_named_and_the_last_list_stays_in_use(tmp_path):
+    """From 16 Oct 2026 NSE's pledge list was empty on NSE's own page (its count read 0 companies). The error says so,
+    and the last good pledge list keeps the check working for 10 trading days, while the 2-day rule stays for the rest."""
+    b = book(tmp_path)
+    empty = {**FakeNSE().answers, "api/corporate-pledgedata": {"comNameList": [], "data": []},
+             fi.PLEDGE_COUNT_PATH: {"data": [{"NUMBER_OF_COMPANY": "0", "VALUE_OF_PLEDGE_HOLDING": None}]}}
+    b.tick(FakeNSE(empty), MON)
+    err = b.load()["tries"]["2026-10-12"]["errors"]["pledge"]
+    assert "NSE is publishing no pledge data right now" in err and "10 trading days" in err
+    unreadable = {**empty, fi.PLEDGE_COUNT_PATH: ConnectionError("x")}
+    b2 = book(tmp_path / "u")
+    b2.tick(FakeNSE(unreadable), MON)
+    assert "no usable rows" in b2.load()["tries"]["2026-10-12"]["errors"]["pledge"]   # count unknown: the plain error
+    filled(tmp_path / "s")                                                             # every list stored on Mon 12 Oct
+    five_on = book(tmp_path / "s", now=datetime(2026, 10, 19, 10, 0, tzinfo=IST))     # five trading days on
+    assert five_on.check("HIGH")["block"] and "promoter pledges" not in (five_on.note() or "")
+    assert "ASM/GSM" in five_on.note()                                                # the other lists still go stale at 2
+    eleven_on = book(tmp_path / "s", now=datetime(2026, 10, 27, 10, 0, tzinfo=IST))   # eleven trading days on
+    assert not eleven_on.check("HIGH")["block"] and "promoter pledges" in eleven_on.note()
