@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from trading_agent.app_feed import FEED_FILE, AppFeed, load_feed
+from trading_agent.app_feed import FEED_FILE, HISTORY_FILE, AppFeed, load_feed, load_history, record_daily_value
 from trading_agent.timezones import IST
 
 MON = datetime(2026, 6, 8, 10, 30, tzinfo=IST)   # a Monday, inside the window
@@ -123,3 +123,45 @@ def test_feed_file_is_owner_only_and_atomic(tmp_path):
     if sys.platform != "win32":
         assert os.stat(tmp_path / FEED_FILE).st_mode & 0o777 == 0o600
     json.loads((tmp_path / FEED_FILE).read_text(encoding="utf-8"))
+
+
+def _feed(value=1600.0, cash=10.0, source="groww"):
+    return {"value": value, "cash": cash, "source": source}
+
+
+def test_one_row_per_session_and_a_second_call_replaces_not_duplicates(tmp_path):
+    assert record_daily_value(tmp_path, _feed(1600.0), date(2026, 6, 8)) is True
+    assert record_daily_value(tmp_path, _feed(1700.0), date(2026, 6, 8)) is True
+    assert load_history(tmp_path, "all") == [{"date": "2026-06-08", "value": 1700.0, "cash": 10.0}]
+    if sys.platform != "win32":
+        assert os.stat(tmp_path / HISTORY_FILE).st_mode & 0o777 == 0o600
+
+
+def test_not_recorded_before_15_35_or_from_a_saved_source(tmp_path):
+    r = Rig(tmp_path)
+    r.feed.tick(MON.replace(hour=15, minute=34))
+    assert load_history(tmp_path, "all") == []
+    r.feed.tick(MON.replace(hour=15, minute=35))
+    assert [x["date"] for x in load_history(tmp_path, "all")] == ["2026-06-08"]
+    r2 = Rig(tmp_path / "b", read=good(source="saved"))
+    r2.feed.tick(MON.replace(hour=15, minute=40))
+    assert load_history(tmp_path / "b", "all") == []
+
+
+def test_history_ranges_cut_by_date_and_come_oldest_first(tmp_path):
+    last = date(2026, 6, 8)
+    for n in (400, 200, 60, 10, 0):   # written out of order on purpose
+        record_daily_value(tmp_path, _feed(float(n)), last - timedelta(days=n))
+    days = lambda r: [x["value"] for x in load_history(tmp_path, r)]  # noqa: E731
+    assert days("all") == [400.0, 200.0, 60.0, 10.0, 0.0]
+    assert days("1y") == [200.0, 60.0, 10.0, 0.0]
+    assert days("3m") == [60.0, 10.0, 0.0]
+    assert days("1m") == [10.0, 0.0]
+
+
+def test_history_file_survives_garbage_content(tmp_path):
+    (tmp_path / HISTORY_FILE).write_text("{not json", encoding="utf-8")
+    assert load_history(tmp_path, "all") == []
+    (tmp_path / HISTORY_FILE).write_text('{"a": 1}', encoding="utf-8")
+    assert load_history(tmp_path, "1m") == []
+    assert record_daily_value(tmp_path, _feed(), date(2026, 6, 8)) is True

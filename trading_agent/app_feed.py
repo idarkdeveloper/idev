@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import threading
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -31,7 +31,7 @@ def load_feed(state_dir: Path) -> dict[str, Any] | None:
         return None
 
 
-def _write_private(path: Path, body: dict[str, Any]) -> None:
+def _write_private(path: Path, body: Any) -> None:
     """Owner-only from the moment the file exists, then swapped in (as runner.save_groww_snapshot does)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
@@ -42,6 +42,41 @@ def _write_private(path: Path, body: dict[str, Any]) -> None:
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+RECORD_AFTER = time(15, 35)
+_RANGE_DAYS = {"1m": 31, "3m": 92, "1y": 366}
+
+
+def _rows(state_dir: Path) -> list[dict[str, Any]]:
+    try:
+        data = json.loads((Path(state_dir) / HISTORY_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [r for r in data if isinstance(r, dict) and isinstance(r.get("date"), str)] if isinstance(data, list) else []
+
+
+def record_daily_value(state_dir: Path, feed: dict[str, Any], session: date) -> bool:
+    """One row per session date; a second call for the same date replaces it."""
+    try:
+        key = session.isoformat()
+        rows = [r for r in _rows(state_dir) if r["date"] != key]
+        rows.append({"date": key, "value": feed.get("value"), "cash": feed.get("cash")})
+        _write_private(Path(state_dir) / HISTORY_FILE, sorted(rows, key=lambda r: r["date"]))
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not record the daily value: %s", e)
+        return False
+
+
+def load_history(state_dir: Path, range_: str) -> list[dict[str, Any]]:
+    """Oldest first; ``range_`` is 1m|3m|1y|all, counted back from the newest row."""
+    rows = sorted(_rows(state_dir), key=lambda r: r["date"])
+    days = _RANGE_DAYS.get(range_)
+    if days and rows:
+        cut = (date.fromisoformat(rows[-1]["date"]) - timedelta(days=days)).isoformat()
+        rows = [r for r in rows if r["date"] > cut]
+    return rows
 
 
 class AppFeed:
@@ -124,6 +159,8 @@ class AppFeed:
                 out, err = {}, f"read failed ({type(e).__name__})"
             feed = self._failed(err, now) if err else self._build(out, now)
             _write_private(self._path(), feed)
+            if not err and feed["source"] == "groww" and now.time() >= RECORD_AFTER:
+                record_daily_value(self.settings.state_dir, feed, now.date())
             return feed
         except Exception as e:  # noqa: BLE001 - never stops the watch
             log.warning("app feed tick failed: %s", e)
