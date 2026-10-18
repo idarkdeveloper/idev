@@ -1803,7 +1803,7 @@ def _app_feed_read(settings: Any, prices: Any) -> Any:
         out = read_groww_portfolio(settings, prices, datetime.now(IST).isoformat(timespec="seconds"))
         err = out.get("error")
         if isinstance(err, str):
-            m = re.match(r"([A-Za-z_][\w.]*(?:Error|Exception|Exit|Warning)): ", err)
+            m = re.match(r"([A-Za-z_][\w.]*): ", err)   # runner's "Type: message"; deliberate texts never look so
             out = {**out, "error": m.group(1) if m else err[:200]}
         return out
     return read
@@ -1816,8 +1816,9 @@ def _app_feed_cash(settings: Any) -> Any:
             from .groww import GrowwBroker
             from .runner import resolve_groww_token
             return float(GrowwBroker(resolve_groww_token(settings), live_orders=False,
-                                     exchange=settings.groww_exchange).available_cash())
-        except (Exception, SystemExit):  # noqa: BLE001 - includes GrowwTokenUnavailable; the feed shows no cash
+                                     exchange=settings.groww_exchange, timeout=10.0).available_cash())
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - includes GrowwTokenUnavailable; the feed shows no cash
+            logging.getLogger(__name__).warning("app feed cash read failed (%s)", type(e).__name__)
             return None
     return cash
 

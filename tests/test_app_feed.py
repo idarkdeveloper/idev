@@ -299,3 +299,20 @@ def test_cli_trend_and_prev_close_come_from_the_free_prices(settings):
     trend = cli._app_feed_trend(Prices())("X")
     assert len(trend) == 30 and trend[-1] == 7.0 and trend[0] < trend[1]
     assert cli._app_feed_prev_close(Prices())("X") == 30.0
+
+
+@pytest.mark.parametrize("err", ["ReadTimeout: HTTPSConnectionPool(host='api.groww.in'): Read timed out.",
+                                 "InvalidHeader: Invalid return character in Authorization: Bearer SECRETTOKEN\nx"])
+def test_cli_read_fn_scrubs_any_type_prefixed_error(settings, monkeypatch, err):
+    from trading_agent import cli, runner
+    monkeypatch.setattr(runner, "read_groww_portfolio", lambda *a, **k: {"linked": True, "error": err})
+    out = cli._app_feed_read(settings, object())()
+    assert out["error"] == err.split(":")[0] and "SECRETTOKEN" not in out["error"]
+
+
+def test_a_saved_source_never_asks_groww_for_cash(tmp_path):
+    rig = Rig(tmp_path, read=good(source="saved"))
+    calls = []
+    rig.feed.cash_fn = lambda: calls.append(1) or 5.0
+    feed = rig.feed.tick(MON)
+    assert calls == [] and feed["cash"] is None

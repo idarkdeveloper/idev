@@ -141,7 +141,8 @@ class AppFeed:
         base = sum(prev * r["qty"] for r, prev in with_day)
         return {"as_of": now.isoformat(timespec="seconds"), "age_s": 0, "stale": False,
                 "market_closed": bool(out.get("market_closed")), "source": out.get("source") or "groww",
-                "cash": self._cash(), "value": out.get("value"), "invested": out.get("invested"),
+                "cash": self._cash() if (out.get("source") or "groww") == "groww" else None,  # no second Groww call in an outage
+                "value": out.get("value"), "invested": out.get("invested"),
                 "pl": out.get("pl"), "pl_pct": out.get("pl_pct"),
                 "day_change": day, "day_change_pct": day / base if day is not None and base else None,
                 "holdings": rows, "unpriced": list(out.get("unpriced") or []), "error": None}
@@ -170,7 +171,7 @@ class AppFeed:
                 err = None if out.get("linked") and not out.get("error") else (
                     str(out.get("error") or "Groww is not linked"))
             except Exception as e:  # noqa: BLE001 - the text may carry secrets, so only the type is kept
-                log.warning("app feed read failed: %s", e)
+                log.warning("app feed read failed (%s)", type(e).__name__)
                 out, err = {}, f"read failed ({type(e).__name__})"
             feed = self._failed(err, now) if err else self._build(out, now)
             _write_private(self._path(), feed)
