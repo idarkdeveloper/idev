@@ -136,11 +136,13 @@ class PriceArchive:
         units (split-adjusted)."""
         c = self._conn()
         try:
-            rows = c.execute("SELECT * FROM bars WHERE symbol=? ORDER BY date", (symbol,)).fetchall()
+            c.row_factory = None   # plain tuples: far cheaper than sqlite3.Row on a 1M-row universe
+            close, vol = ("close_raw", "volume_raw") if raw else ("close", "volume")
+            rows = c.execute(f"SELECT date, {close}, adj_close, {vol} FROM bars WHERE symbol=? ORDER BY date",
+                             (symbol,)).fetchall()
         finally:
             c.close()
-        return [{"date": r["date"], "close": r["close_raw"] if raw else r["close"],
-                 "adj_close": r["adj_close"], "volume": r["volume_raw"] if raw else r["volume"]} for r in rows]
+        return [{"date": d, "close": cl, "adj_close": ad, "volume": v} for d, cl, ad, v in rows]
 
     def splits(self, symbol: str) -> list[dict[str, Any]]:
         c = self._conn()
