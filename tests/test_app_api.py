@@ -234,14 +234,20 @@ def _raw_exchange(api, payload: bytes):
         chunks = []
         while chunk := s.recv(4096):
             chunks.append(chunk)
-    head, _, body = b"".join(chunks).partition(b"\r\n\r\n")
+    data = b"".join(chunks)
+    if not data.startswith(b"HTTP/"):
+        # Up to Python 3.12 the standard library answers a request line it cannot parse (a bad version, plain
+        # garbage) in the old HTTP/0.9 form: the body alone, with no status line or headers. Newer Pythons send a
+        # full response. Either way the body must be our JSON error.
+        return None, json.loads(data)
+    head, _, body = data.partition(b"\r\n\r\n")
     return int(head.split(b" ")[1]), json.loads(body)
 
 
 def test_malformed_requests_get_a_json_error_and_no_traceback(api, capfd):
     for payload in (b"GET /v1/x HTTP/9.9\r\n\r\n", b"GARBAGE\r\n\r\n", b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n"):
         status, body = _raw_exchange(api, payload)
-        assert status in (400, 414, 505) and "error" in body and len(body["error"]) < 40
+        assert status in (None, 400, 414, 505) and "error" in body and len(body["error"]) < 40   # None: HTTP/0.9 reply
     assert _raw_exchange(api, b"GET / HTTP/1.1\r\n\r\n")[0] == 401   # still serving
     assert "Traceback" not in capfd.readouterr().err
 

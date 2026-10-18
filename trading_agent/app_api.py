@@ -26,7 +26,8 @@ log = logging.getLogger(__name__)
 DEFAULT_EVERY_S = 300   # the feed interval when an older feed file does not say; stale is two intervals old
 RANGES = ("1m", "3m", "1y", "all")
 REQUEST_TIMEOUT_S = 15   # a client that sends nothing cannot hold a thread (this runs before authentication)
-_ERRORS = {400: "bad request", 405: "method not allowed", 414: "request too long", 431: "headers too large"}
+_ERRORS = {400: "bad request", 405: "method not allowed", 414: "request too long", 431: "headers too large",
+           505: "http version not supported"}
 
 
 def _parse_aware(text: Any) -> datetime | None:
