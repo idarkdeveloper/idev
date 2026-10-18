@@ -1033,3 +1033,188 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 @media (max-width: 700px) {
   .ws-panel > .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ---- Phone redesign (Live page, 700 px and below): one-row header, scrolling mode tabs, compact strip, 44 px section tabs,
+   a folded Risk card, three market tiles in a row. The desktop layout above is untouched. Tokens only. ---- */
+.ph-check, .ph-only, .regime-why { display: none; }
+@media (max-width: 700px) {
+  .hdr { flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 12px 16px 0; }
+  .hdr .brand { order: 1; flex: 1 1 0; min-width: 0; gap: 10px; }
+  .hdr .controls { display: contents; }
+  .hdr #btn-palette { order: 2; } .hdr .split { order: 3; } .hdr #more-menu { order: 4; }
+  .hdr .tabs { order: 5; flex: 0 0 100%; margin: 2px -16px 0; width: calc(100% + 32px); padding: 0 12px; gap: 4px; border: none; border-radius: 0;
+    overflow-x: auto; scrollbar-width: none; background: transparent; }
+  .hdr .tabs::-webkit-scrollbar { display: none; }
+  .hdr .tabs a { flex: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 0; font-size: 15px; font-weight: 600; }
+  .hdr .tabs a[aria-current="page"] { background: transparent; color: var(--color-text); box-shadow: inset 0 -2px 0 var(--tab-accent, var(--color-accent)); }
+  .hdr .logo { width: 40px; height: 40px; }
+  .brand-name { font-size: 17px; line-height: 1.2; }
+  .brand-sub { max-width: none; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 12px; line-height: 1.3; }
+  .ph-check { display: inline; }
+  #lastcheck { display: none; }
+  .hdr .split { gap: 0; } .hdr .split > button { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .hdr #check-menu > summary { width: 28px; min-width: 28px; height: 44px; padding: 0; justify-content: center; border-left: none; border-top-left-radius: 0; border-bottom-left-radius: 0; color: var(--color-accent); }
+  .hdr #btn-palette, .hdr #btn-check, .hdr details.menu.more > summary { width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; justify-content: center; }
+  .hdr #btn-palette > span, .hdr #btn-palette > kbd, .hdr #btn-check > span { display: none; }
+  .hdr #btn-palette svg, .hdr #btn-check svg { width: 20px; height: 20px; }
+  /* the mode strip: a compact one- or two-line band, the lock icon kept */
+  .modestrip { min-height: 0; gap: 8px; padding: 6px 12px; font-size: 12px; line-height: 1.3; }
+  .modestrip:not(.liveon):not(.halted):not(.brake):not(.unknown) { border-left-width: 4px; }
+  .modestrip .ico, .modestrip svg { width: 16px; height: 16px; }
+  .ws-tabbar { padding: 0 16px; }
+  .ws-tabs { gap: 4px; }
+  .ws-tabs button { min-height: 44px; padding: 0 12px; }
+  /* Risk card */
+  .regime-card { flex-direction: column; flex-wrap: nowrap; }
+  .regime-left { flex: none; padding: 12px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 8px; }
+  .regime-left .regime { display: contents; }
+  .regime-left .regime-chip { grid-column: 1; grid-row: 1; justify-self: start; }
+  .regime-card:has(.sig-why) .regime-why { display: inline-flex; grid-column: 2; grid-row: 1; min-height: 44px; padding: 0 8px; border: none; color: var(--color-accent); font-size: 13px; font-weight: 600; }
+  .regime-left .regime-why:hover { background: transparent; text-decoration: underline; }
+  .regime-left .sig { grid-column: 1 / -1; display: flex; flex-direction: column; font-size: 14px; line-height: 1.45; color: var(--color-label); }
+  .regime-left .sig-guide { order: 0; } .regime-left .sig-sep { display: none; }
+  .regime-left .sig-why { order: 1; display: none; margin-top: 6px; font-size: 12.5px; color: var(--color-muted); }
+  .regime-card.why-open .sig-why { display: block; }
+  .regime-left .sig-guide ~ .sig-why { order: 1; }
+  .regime-meta { grid-column: 1 / -1; margin-top: 8px; gap: 6px; }
+  .regime-meta .pill { padding: 2px 8px; font-size: 11.5px; background: transparent; border-color: var(--color-divider); color: var(--color-muted); }
+  .regime-meta .icon-btn { width: 44px; height: 44px; margin: -6px -8px -6px auto; }
+  /* three market tiles in one row (the rest scroll sideways) */
+  .regime-card .mkts { display: flex; flex: none; align-items: stretch; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 10px 14px 12px; border-left: none; border-top: 1px solid var(--color-divider);
+    scroll-snap-type: x proximity; }
+  .regime-card .mkts::-webkit-scrollbar { display: none; }
+  .regime-card .mkts:empty { display: none; }
+  .regime-card .mkt { flex: 0 0 calc((100% - 16px) / 3); min-width: 0; padding: 6px 8px; border: 1px solid var(--color-divider); border-radius: var(--radius-md); scroll-snap-align: start; }
+  .regime-card .mkt .k { font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .regime-card .mkt .v { font-size: 14px; } .regime-card .mkt .c { font-size: 11.5px; }
+}
+/* ---- Phone: the other body parts. Even 16 px gutters, cards that wrap, tables that scroll with a visible edge, two stat tiles per row. ---- */
+@media (max-width: 700px) {
+  .modestrip { flex-wrap: nowrap; align-items: flex-start; }
+  .modestrip > span:last-child, .modestrip #modestrip-text { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+  .mode-banner { padding: 10px 14px; gap: 8px; font-size: 13px; line-height: 1.35; }
+  .mode-banner > span[style] { margin-left: 0 !important; width: 100%; }
+  .mode-banner button.small { min-height: 44px; }
+  main.ws-main { padding-inline: 16px; }
+  .cardhead { padding: 14px 16px 10px; gap: 6px 10px; }
+  .cardhead > h2 { font-size: 20px; }
+  .cardhead > .sub { flex: 1 1 100%; font-size: 12.5px; line-height: 1.4; }
+  .cardhead > button, .cardhead > .row button { min-height: 44px; }
+  .cardhead > button[style*="margin-left:auto"] { margin-left: 0 !important; }
+  .cardbody { padding: 12px 16px; }
+  .cardbody.sub, .card > .sub { font-size: 13px; line-height: 1.45; }
+  .cardfoot { padding: 10px 16px; flex-wrap: wrap; }
+  .empty { padding: 16px; }
+  /* stat tiles two to a row */
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+  .stats .mkt { padding: 0; margin: 0; border-right: none; }
+  .stats .mkt .v { font-size: 20px; overflow-wrap: anywhere; line-height: 1.2; }
+  #mp-card .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); padding-left: 16px; padding-right: 16px; column-gap: 16px; }
+  #mp-card .tile { margin-right: 0; padding-right: 0; border-right: none; }
+  .ws-panel > .tiles { padding: 4px 16px; column-gap: 16px; }
+  .ws-panel > .tiles .tile { margin-right: 0; padding: 12px 0; border-right: none; }
+  /* tables: a clean sideways scroll, a shadow on whichever edge has more, the first column kept in view */
+  .scroll, .tscroll {
+    background: linear-gradient(to right, var(--color-surface) 30%, transparent) left center / 24px 100% no-repeat local,
+                linear-gradient(to left, var(--color-surface) 30%, transparent) right center / 24px 100% no-repeat local,
+                linear-gradient(to right, var(--color-scrim), transparent) left center / 10px 100% no-repeat scroll,
+                linear-gradient(to left, var(--color-scrim), transparent) right center / 10px 100% no-repeat scroll;
+    -webkit-overflow-scrolling: touch; }
+  .dt th:first-child, .dt td:first-child { padding-left: 16px; }
+  .dt th:last-child, .dt td:last-child { padding-right: 16px; }
+  table.dt { min-width: 520px; }
+  .mp-table { min-width: 460px; }
+  .dt td a, td button { min-height: 44px; }
+  /* buttons and forms in cards */
+  .card form .row, .cardbody > .row { gap: 8px; }
+  .card form input:not([type="checkbox"]):not([type="radio"]), .card form select, .card form textarea { min-height: 44px; font-size: 16px; max-width: 100%; }
+  .card form .row > input, .card form .row > select { flex: 1 1 100% !important; width: 100%; }
+  .card form button:not(.chip):not([data-side]) { min-height: 44px; }
+  .ks-card .ks-row input { max-width: none; flex: 1 1 100%; }
+  .ks-card button { min-height: 44px; }
+  /* Health cards: status pill and title on one line, details small and muted */
+  .hl-item { padding: 10px 12px; }
+  .hl-head { flex-wrap: nowrap; gap: 8px; }
+  .hl-name { min-width: 0; overflow-wrap: anywhere; }
+  .hl-facts, .hl-line { font-size: 12.5px; color: var(--color-muted); }
+  #ws-health > .card + .card { margin-top: 0; }
+  .ws-panel { gap: 16px; } .ws-content { gap: 16px; }
+}
+/* Holdings table on a phone: each holding is a small card (stock and trend on top, then price, today, value, profit / loss) */
+@media (max-width: 700px) {
+  .stats .mkt .v { overflow-wrap: normal; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  table.mp-table, .mp-table tbody, .mp-table tfoot { display: block; min-width: 0; width: 100%; }
+  .mp-table thead { display: none; }
+  .mp-table tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 10px; padding: 12px 16px; border-bottom: 1px solid var(--color-rule); align-items: start; }
+  .mp-table td { display: block; padding: 0 !important; border: none; text-align: left; min-width: 0; }
+  .mp-table td.stock-cell { grid-column: 1 / 3; grid-row: 1; white-space: normal; }
+  .mp-table td.spark-col { grid-column: 3; grid-row: 1; justify-self: end; }
+  .mp-table td[colspan] { grid-column: 1 / -1; }
+  .mp-table td.num { white-space: nowrap; }
+  .mp-table td.num::before, .mp-table td.prot-cell::before { display: block; font-size: 11px; font-weight: 400; color: var(--color-muted); letter-spacing: .04em; text-transform: uppercase; }
+  .mp-table td.num:nth-child(3)::before { content: "Price"; } .mp-table td.num:nth-child(4)::before { content: "Today"; }
+  .mp-table td.num:nth-child(5)::before { content: "Value"; } .mp-table td.num:nth-child(6)::before { content: "Profit / loss"; }
+  .mp-table td.prot-cell { grid-column: 2 / -1; white-space: normal; } .mp-table td.prot-cell::before { content: "Stop"; }
+  .mp-table td:empty:not(.spark-col) { display: none; }
+  .mp-table tfoot td:first-child { grid-column: 1 / -1; }
+  .mp-table tfoot tr { border-bottom: none; background: none; }
+}
+@media (max-width: 700px) {
+  .mp-table tfoot td { border-top: none; }
+  .mp-table tfoot tr { border-top: 1px solid var(--color-divider); }
+}
+@media (max-width: 700px) {
+  td.empty[colspan] { position: sticky; left: 0; display: table-cell; width: calc(100vw - 64px); max-width: calc(100vw - 64px); white-space: normal; box-sizing: border-box; }
+}
+/* Deals and orders on a phone: one small card per row instead of a sideways table */
+@media (max-width: 700px) {
+  table.dt:has(> tbody#deals), table.dt:has(> tbody#orders) { display: block; min-width: 0; width: 100%; }
+  table.dt:has(> tbody#deals) thead, table.dt:has(> tbody#orders) thead { display: none; }
+  #deals, #orders { display: block; }
+  #deals tr, #orders tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4px 12px; padding: 12px 16px; border-bottom: 1px solid var(--color-rule); align-items: start; }
+  #deals td, #orders td { display: block; padding: 0 !important; border: none; min-width: 0; white-space: normal; text-align: left; }
+  #deals td:nth-child(1), #orders td:nth-child(1) { grid-column: 1; grid-row: 1; color: var(--color-muted); }
+  #deals td:nth-child(2) { grid-column: 2; grid-row: 1; justify-self: end; }
+  #deals td:nth-child(3) { grid-column: 1 / -1; font-weight: 600; }
+  #deals td:nth-child(4), #deals td:nth-child(5) { font-size: 12.5px; color: var(--color-muted); }
+  #deals td:nth-child(4)::before { content: "Who: "; } #deals td:nth-child(5)::before { content: "Where: "; }
+  #orders td:nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  #orders td:nth-child(3) { grid-column: 1; grid-row: 3; font-weight: 600; }
+  #orders td:nth-child(4) { grid-column: 2; grid-row: 3; justify-self: end; }
+  #deals td[colspan], #orders td[colspan] { grid-column: 1 / -1; grid-row: auto; justify-self: stretch; }
+  #deals td.empty::before, #orders td.empty::before { content: none; }
+}
+@media (max-width: 700px) {
+  .dt tbody tr.is-new { background: var(--color-accent-900); }
+  .dt tbody tr.is-new > td { background: none; }
+}
+.more-toggle { display: none; }
+@media (max-width: 700px) {
+  .hl-note:not(.open) { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .more-toggle { display: inline-flex; align-self: flex-start; min-height: 44px; margin-top: -8px; padding: 0 4px; border: none; color: var(--color-accent); font-size: 13px; font-weight: 600; }
+  .more-toggle:hover { background: transparent; text-decoration: underline; }
+  /* Tools: one column, label above each full-width input */
+  .sz-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .field > label { font-size: 12.5px; color: var(--color-muted); }
+  .field input, .field select { width: 100%; }
+  #sz-form .row button, #cs-form .cs-head button { width: 100%; min-height: 44px; }
+  .cs-head { flex-direction: column; align-items: stretch; }
+  .cs-head::after { content: none; }
+  .cs-head input { width: 100%; flex: none; text-align: left; margin: 0; min-height: 44px; }
+  .cs-head > h2 + input { margin-top: 2px; }
+  /* Health */
+  .hl-facts, .hl-line { font-size: 12px; line-height: 1.4; }
+  .hl-list { gap: 8px; }
+  #ws-health .cardhead > button { min-height: 44px; }
+}
+@media (max-width: 700px) {
+  .hdr .controls > #btn-settings { order: 4; width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0; justify-content: center; }
+  .hdr .controls > #btn-settings > span { display: none; }
+}
+@media (max-width: 700px) {
+  .hdr .brand { gap: 8px; }
+  .hdr .logo { width: 36px; height: 36px; }
+  .hdr .brand-name { font-size: 16px; white-space: nowrap; }
+  .hdr .brand-sub { font-size: 11.5px; }
+  .hdr { gap: 4px 6px; }
+}
