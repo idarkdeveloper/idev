@@ -72,7 +72,9 @@ def _indicators(m: Market, t: int) -> dict[str, Any]:
     out: dict[str, Any] = {"fund_ema50": m.fund_ema50[t], "fund_ema200": m.fund_ema200[t],
                            "fund_sma100": m.fund_sma100[t], "breadth": m.breadth()[t], "regime": regime_of(m, t)}
     for sym in sorted(m.members_on(m.dates[t])):
-        if sym in m.close:
+        # a member with no price yet on day t (listed later, or a renamed symbol whose history starts at the new
+        # name) has no indicators to read; the cut market drops it, so leaving it out here is not hiding a leak
+        if sym in m.close and m.close[sym][t] is not None:
             out[f"{sym} atr"] = m.atr(sym)[t]
             out[f"{sym} ema50"] = m.ema50(sym)[t]
             out[f"{sym} vol60"] = m.vol(sym)[t]
@@ -82,8 +84,11 @@ def _indicators(m: Market, t: int) -> dict[str, Any]:
 
 def _first_difference(full: dict[str, Any], cut: dict[str, Any]) -> str:
     for k in full:
-        if not _same(full[k], cut.get(k)):
+        if k in cut and not _same(full[k], cut[k]):
             return f"{k}: {full[k]!r} with later data, {cut.get(k)!r} without"
+    for k in full:
+        if k not in cut:
+            return f"{k} appears only with later data"
     extra = sorted(set(cut) - set(full))
     return f"{extra[0]} appears only without later data" if extra else "differs"
 
