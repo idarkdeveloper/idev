@@ -1214,6 +1214,26 @@ def cmd_model_paper(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_resmom_paper(args: argparse.Namespace) -> int:
+    """Residual momentum's (variant E's) paper account: show it, or with --run do today's after-close run now."""
+    from .resmom_paper import ResidualPaper, control_over, format_resmom_paper, run_resmom_paper_due
+    from .runner import free_prices
+    settings = _settings(args)
+    prices = free_prices(settings)
+    if args.run:
+        print(run_resmom_paper_due(settings, prices, _market_holidays(settings)))
+        return 0
+    rp = ResidualPaper(settings.state_dir, universe=settings.forward_universe, capital=settings.paper_starting_cash,
+                       price_fn=prices.latest_price)
+    if not rp.ft.started:
+        print("Residual momentum paper account: not started (starts "
+              f"{settings.resmom_paper_start or 'never: RESMOM_PAPER_START=off'}, after the close, from the watch service).")
+        return 0
+    s = {**rp.ft.summary(), "rebalanced": None}
+    print(format_resmom_paper(s, control_over(settings.state_dir, settings.forward_universe, s.get("started"))))
+    return 0
+
+
 def cmd_research_regimes(args: argparse.Namespace) -> int:
     """How the adopted rules did in bull, sideways, bear and high-volatility months (a diagnostic, not a filter)."""
     from .costs import cost_model_for
@@ -1676,6 +1696,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
         print(run_forward_due(settings, forward_prices, holidays, notifier))
         from .model_paper import run_model_paper_due   # the prediction model's own paper account (never raises)
         print(run_model_paper_due(settings, forward_prices, holidays))
+        from .resmom_paper import run_resmom_paper_due   # variant E's own paper account (never raises)
+        print(run_resmom_paper_due(settings, forward_prices, holidays))
     forward = ForwardScheduler(settings.state_dir, after_close, holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
                 integration=make_integration_scheduler(settings, notifier, holidays),
@@ -1935,6 +1957,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("model-paper", help="the prediction model's own paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly sizing, mark)")
     sp.set_defaults(func=cmd_model_paper)
+    sp = sub.add_parser("resmom-paper", help="residual momentum's (variant E's) paper account (practice money only)")
+    sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")
+    sp.set_defaults(func=cmd_resmom_paper)
     sp = sub.add_parser("research-pead", help="research: post-results drift and promoter-buying signals")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--years", type=int, default=5)
