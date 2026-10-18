@@ -144,3 +144,48 @@ def test_research_leakage_command(clean, tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert seen["skip"] is True and "PASSED" in out
     assert "research-leakage" in cli.HALT_ALLOWED
+
+
+def _late_listing(n=560, first=450):
+    """A member whose price history starts after some decision days (a later listing, or a renamed symbol whose
+    history begins at the new name)."""
+    m = make(n)
+    series = dict(m.raw)
+    series["LATE"] = [b for b in bars(m.dates, [50.0 * 1.001 ** i for i in range(n)]) if b["date"] >= m.dates[first]]
+    fund = [{"date": d, "close": c, "adj_close": a} for d, c, a in zip(m.dates, m.fund_close, m.fund_adj)]
+    return Market(m.dates, series, fund, lambda d: set(series), min_turnover=0, flows=m.flows)
+
+
+def test_a_member_with_no_price_yet_is_not_a_leak():
+    m = _late_listing()
+    from trading_agent.research_studies import _first_ranked_day
+    early = _first_ranked_day(m)
+    assert m.close["LATE"][early] is None   # the first decision days come before LATE's first bar
+    ind_full, ind_cut = rl._indicators(m, early), rl._indicators(rl.truncate(m, early), early)
+    assert ind_full == ind_cut and not any(k.startswith("LATE ") for k in ind_full)
+    r = quick(m, ranking_days=None, simulation_days=0)
+    assert r["checks"]["indicators"]["checked"] >= 2 and r["checks"]["indicators"]["failures"] == []
+
+
+def test_an_indicator_present_only_with_later_data_is_named():
+    full = {"A atr": 1.0, "LATE atr": 2.0}
+    assert rl._first_difference(full, {"A atr": 1.0}) == "LATE atr appears only with later data"
+
+
+class Backfilled(Market):
+    def _align(self, bars):   # fills the days before a stock's first bar with its first price: a look-ahead
+        close, adj = super()._align(bars)
+        if bars:
+            c0, a0 = float(bars[0]["close"]), float(bars[0].get("adj_close") or bars[0]["close"])
+            close = [c0 if c is None else c for c in close]
+            adj = [a0 if a is None else a for a in adj]
+        return close, adj
+
+
+def test_a_price_backfilled_before_the_first_bar_is_still_caught():
+    m = _late_listing()
+    leaky = Backfilled(m.dates, m.raw, [{"date": d, "close": c, "adj_close": a}
+                                        for d, c, a in zip(m.dates, m.fund_close, m.fund_adj)],
+                       m.members_on, min_turnover=0, flows=m.flows)
+    f = quick(leaky, ranking_days=None, simulation_days=0)["checks"]["indicators"]["failures"]
+    assert f and all(x["day"] < m.dates[450] for x in f)   # every day before LATE's first bar is flagged
