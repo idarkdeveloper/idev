@@ -8,12 +8,17 @@ User=agent
 WorkingDirectory=/opt/trading-agent
 Environment=TZ=Asia/Kolkata
 Environment=APP_API_HOST=127.0.0.1
-ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent app-api --state-dir /opt/trading-agent/state
+# the module's own entry point: it never imports the cli, config, runner or Groww code
+ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent.app_api --state-dir /opt/trading-agent/state
 Restart=on-failure
 RestartSec=30
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadOnlyPaths=/opt/trading-agent
+# same user as the watch, so the Groww keys and token are hidden from this process outright ("-": fine if absent)
+InaccessiblePaths=-/opt/trading-agent/.env -/opt/trading-agent/state/groww_token.json
+PrivateTmp=true
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

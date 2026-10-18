@@ -6,9 +6,12 @@ refused with 405 without its body being read."""
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import math
+import os
+import sys
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,14 +23,23 @@ from .app_feed import load_feed, load_history
 
 log = logging.getLogger(__name__)
 
-STALE_AFTER_S = 2 * 300   # two feed intervals
+DEFAULT_EVERY_S = 300   # the feed interval when an older feed file does not say; stale is two intervals old
 RANGES = ("1m", "3m", "1y", "all")
 REQUEST_TIMEOUT_S = 15   # a client that sends nothing cannot hold a thread (this runs before authentication)
 _ERRORS = {400: "bad request", 405: "method not allowed", 414: "request too long", 431: "headers too large"}
 
 
-def _fresh_feed(state_dir: Path) -> tuple[dict[str, Any], int] | None:
-    """The feed with age_s / stale worked out now, or None when there is no usable feed (no data yet)."""
+def _parse_aware(text: Any) -> datetime | None:
+    try:
+        dt = datetime.fromisoformat(str(text))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else None
+
+
+def _fresh_feed(state_dir: Path, now: datetime | None = None) -> tuple[dict[str, Any], int] | None:
+    """The feed with age_s / stale / market_closed worked out now, or None when there is no usable feed (no data
+    yet). Closed: the writer said so, or the day's Groww window (``window_end``) is over; old figures are then normal."""
     feed = load_feed(state_dir)
     try:
         as_of = datetime.fromisoformat(feed["as_of"]) if feed else None
@@ -38,9 +50,14 @@ def _fresh_feed(state_dir: Path) -> tuple[dict[str, Any], int] | None:
     if (feed is None or as_of is None or as_of.tzinfo is None or feed.get("source") not in ("groww", "saved")
             or isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
         return None
-    age = max(0, int((datetime.now(timezone.utc) - as_of).total_seconds()))
-    closed = feed.get("market_closed") is True
-    return {**feed, "age_s": age, "stale": age > STALE_AFTER_S and not closed}, age
+    now = now or datetime.now(timezone.utc)
+    age = max(0, int((now - as_of).total_seconds()))
+    end = _parse_aware(feed.get("window_end"))
+    closed = feed.get("market_closed") is True or (end is not None and now > end)
+    every = feed.get("every_s")
+    every = every if isinstance(every, int) and not isinstance(every, bool) and every > 0 else DEFAULT_EVERY_S
+    body = {k: v for k, v in feed.items() if k not in ("window_end", "every_s")}   # not in the phone contract
+    return {**body, "age_s": age, "stale": age > 2 * every and not closed, "market_closed": closed}, age
 
 
 def make_handler(state_dir: Path, auth: Authenticator) -> type[BaseHTTPRequestHandler]:
@@ -95,7 +112,8 @@ def make_handler(state_dir: Path, auth: Authenticator) -> type[BaseHTTPRequestHa
         do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _refuse
 
         def log_request(self, code: Any = "-", size: Any = "-") -> None:
-            log.info("%s %s %s %s", self.command or "-", getattr(self, "path", "")[:200], code, self.device or "-")
+            path = getattr(self, "path", "").partition("?")[0].partition("#")[0]   # a query string is never logged
+            log.info("%s %s %s %s", self.command or "-", path[:200], code, self.device or "-")
 
         def log_message(self, fmt: str, *args: Any) -> None:   # protocol errors can echo request text: say nothing
             pass
@@ -119,3 +137,32 @@ def serve(state_dir: Path, host: str, port: int) -> None:
         pass
     finally:
         server.server_close()
+
+
+def add_arguments(p: argparse.ArgumentParser) -> None:
+    """The options, shared with ``python -m trading_agent app-api`` (cli) so there is one copy."""
+    p.add_argument("--state-dir", default="state", help="the state folder (default: state)")
+    p.add_argument("--host", default=os.environ.get("APP_API_HOST") or "127.0.0.1")
+    p.add_argument("--port", type=int, help="default: env APP_API_PORT else 8788")
+
+
+def run(args: argparse.Namespace) -> int:
+    try:
+        port = args.port if args.port is not None else int(os.environ.get("APP_API_PORT") or 8788)
+    except ValueError:
+        print("APP_API_PORT must be a whole number", file=sys.stderr)
+        return 1
+    serve(Path(args.state_dir), args.host, port)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """The service's entry point (``python -m trading_agent.app_api``): it never imports cli, config or Groww code."""
+    p = argparse.ArgumentParser(prog="python -m trading_agent.app_api", description="the read-only phone app API")
+    add_arguments(p)
+    return run(p.parse_args(argv))
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    raise SystemExit(main())

@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
-import re
 import sys
 import time
 from importlib import resources
@@ -595,15 +593,9 @@ def cmd_app_device(args: argparse.Namespace) -> int:
 
 
 def cmd_app_api(args: argparse.Namespace) -> int:
-    """The read-only phone app API. Offline of Groww and .env: it reads the feed files in --state-dir only."""
+    """The read-only phone app API (the service runs ``python -m trading_agent.app_api``; this is the same code)."""
     from . import app_api
-    try:
-        port = args.port if args.port is not None else int(os.environ.get("APP_API_PORT") or 8788)
-    except ValueError:
-        print("APP_API_PORT must be a whole number", file=sys.stderr)
-        return 1
-    app_api.serve(Path(args.state_dir), args.host, port)
-    return 0
+    return app_api.run(args)
 
 
 def cmd_history(args: argparse.Namespace) -> int:
@@ -1836,17 +1828,16 @@ def _market_holidays(settings: Any) -> Any | None:
 
 
 def _app_feed_read(settings: Any, prices: Any) -> Any:
-    """The feed's Groww read. The runner's error text for an unexpected exception is ``Type: message`` and the message
-    can carry a URL or key, so only the type is kept; the deliberate refusal texts (cool-down, not linked) stay."""
+    """The feed's Groww read, its error text scrubbed (app_feed.scrub_error: the message can carry a URL or key)."""
     def read() -> dict[str, Any]:
         from datetime import datetime
+        from .app_feed import scrub_error
         from .runner import read_groww_portfolio
         from .timezones import IST
         out = read_groww_portfolio(settings, prices, datetime.now(IST).isoformat(timespec="seconds"))
         err = out.get("error")
         if isinstance(err, str):
-            m = re.match(r"([A-Za-z_][\w.]*): ", err)   # runner's "Type: message"; deliberate texts never look so
-            out = {**out, "error": m.group(1) if m else err[:200]}
+            out = {**out, "error": scrub_error(err)}
         return out
     return read
 
@@ -2230,9 +2221,8 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--all", action="store_true")
     sp.set_defaults(func=cmd_app_device)
     sp = sub.add_parser("app-api", help="phone app: serve the read-only API (/v1/health, /v1/portfolio, /v1/history)")
-    sp.add_argument("--state-dir", default="state", help="the state folder (default: state)")
-    sp.add_argument("--host", default=os.environ.get("APP_API_HOST") or "127.0.0.1")
-    sp.add_argument("--port", type=int, help="default: env APP_API_PORT else 8788")
+    from . import app_api
+    app_api.add_arguments(sp)
     sp.set_defaults(func=cmd_app_api)
     sp = sub.add_parser("top10-paper", help="variant B's (top 10) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")

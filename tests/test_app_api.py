@@ -267,3 +267,96 @@ def test_bad_port_env_only_hurts_app_api(tmp_path, monkeypatch, capsys):
     assert cli.main(["app-device", "--state-dir", str(tmp_path), "list"]) == 0
     assert cli.main(["app-api", "--state-dir", str(tmp_path)]) == 1
     assert "APP_API_PORT" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------------- final review fixes
+
+MON = datetime(2026, 6, 8, 10, 30, tzinfo=app_feed.IST)   # a Monday inside the Groww window (ends 16:00)
+
+
+def _real_feed(state, at=MON, every=300, read=None):
+    """A feed written by the real AppFeed from the runner's live-read shape (which has NO market_closed key)."""
+    from types import SimpleNamespace
+
+    class Weekdays:
+        def is_trading_day(self, d):
+            return d.weekday() < 5
+    live = {"linked": True, "at": "x", "invested": 1500.0, "value": 1600.0, "pl": 100.0, "pl_pct": 0.06,
+            "unpriced": [], "holdings": [{"symbol": "X", "name": None, "qty": 10, "avg_price": 150.0, "price": 160.0,
+                                          "value": 1600.0, "pl": 100.0, "pl_pct": 0.06}]}
+    settings = SimpleNamespace(state_dir=state, app_feed_every_s=every, groww_window_start="08:30",
+                               groww_window_end="16:00")
+    feed = app_feed.AppFeed(settings, lambda: read or live, lambda: 1.0, lambda s: 155.0, lambda s: [],
+                            holidays=Weekdays()).tick(at)
+    assert feed is not None and "market_closed" not in (read or live)
+    return feed
+
+
+def test_evening_after_the_window_is_closed_not_stale(tmp_path):
+    _real_feed(tmp_path, at=MON.replace(hour=15, minute=59))
+    body, _ = app_api._fresh_feed(tmp_path, now=MON.replace(hour=21))
+    assert body["market_closed"] is True and body["stale"] is False
+    body, _ = app_api._fresh_feed(tmp_path, now=MON + timedelta(days=5))   # Saturday
+    assert body["market_closed"] is True and body["stale"] is False
+
+
+@pytest.mark.parametrize("every,stale", [(300, True), (900, False)])
+def test_inside_the_window_stale_is_two_feed_intervals(tmp_path, every, stale):
+    _real_feed(tmp_path, every=every)
+    body, age = app_api._fresh_feed(tmp_path, now=MON + timedelta(seconds=700))
+    assert age == 700 and body["market_closed"] is False and body["stale"] is stale
+    assert "window_end" not in body and "every_s" not in body   # not in the phone contract
+
+
+def test_without_window_end_or_every_s_the_old_rules_apply(tmp_path):
+    _write_feed(tmp_path, _feed(age_s=700))   # an older feed file: neither key
+    body, _ = app_api._fresh_feed(tmp_path)
+    assert body["stale"] is True and body["market_closed"] is False
+    _write_feed(tmp_path, _feed(age_s=700, closed=True, window_end="garbage", every_s="x"))
+    assert app_api._fresh_feed(tmp_path)[0]["stale"] is False
+
+
+def test_a_saved_snapshot_after_a_failed_read_is_stale_inside_the_window(tmp_path):
+    saved = {"linked": True, "source": "saved", "saved_at": "2026-06-05T15:40:00+05:30", "invested": 1500.0,
+             "value": 1600.0, "pl": 100.0, "pl_pct": 0.06, "unpriced": [], "holdings": [],
+             "reason": "ReadTimeout: HTTPSConnectionPool(host='api.groww.in'): token=FAKETOKEN123"}
+    _real_feed(tmp_path, read=saved)
+    body, age = app_api._fresh_feed(tmp_path, now=MON + timedelta(seconds=10))
+    assert body["stale"] is True and body["error"] == "ReadTimeout" and age > 2 * 86400
+    assert "FAKETOKEN123" not in json.dumps(body)
+
+
+def test_a_query_string_never_reaches_the_log(api, caplog):
+    _write_feed(api.state, _feed())
+    with caplog.at_level("DEBUG"):
+        api.get("/v1/history?range=1m&key=QUERYSECRET", api.secret)
+        api.get("/v1/portfolio?QUERYSECRET#frag", api.secret)
+    assert "GET /v1/history 200 phone" in caplog.text and "QUERYSECRET" not in caplog.text
+
+
+def test_entry_point_imports_no_cli_groww_broker_config_runner_or_ui():
+    code = ("import sys, runpy; sys.path.insert(0, sys.argv[1]); sys.argv = ['app_api', '--help']\n"
+            "try:\n    runpy.run_module('trading_agent.app_api', run_name='__main__')\n"
+            "except SystemExit as e:\n    assert e.code == 0, e.code\n"
+            "bad = [m for m in ('trading_agent.cli', 'trading_agent.groww', 'trading_agent.broker', "
+            "'trading_agent.config', 'trading_agent.runner', 'trading_agent.ui') if m in sys.modules]\n"
+            "assert not bad, bad")
+    r = subprocess.run([sys.executable, "-I", "-c", code, str(ROOT)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert "--state-dir" in r.stdout and "--port" in r.stdout
+
+
+def test_entry_point_bad_port_env_is_one_clean_line(monkeypatch, capsys):
+    monkeypatch.setenv("APP_API_PORT", "abc")
+    assert app_api.main(["--state-dir", "nowhere"]) == 1
+    err = capsys.readouterr().err
+    assert "APP_API_PORT" in err and "Traceback" not in err and len(err.strip().splitlines()) == 1
+
+
+def test_systemd_unit_runs_the_entry_point_and_hides_the_groww_keys():
+    unit = (ROOT / "deploy" / "systemd" / "trading-agent-app-api.service").read_text(encoding="utf-8")
+    assert "ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent.app_api --state-dir /opt/trading-agent/state" in unit
+    assert "InaccessiblePaths=-/opt/trading-agent/.env -/opt/trading-agent/state/groww_token.json" in unit
+    for line in ("PrivateTmp=true", "ProtectHome=true", "NoNewPrivileges=true", "ProtectSystem=strict",
+                 "ReadOnlyPaths=/opt/trading-agent", "User=agent"):
+        assert line in unit
