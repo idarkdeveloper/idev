@@ -932,4 +932,84 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   .sc-name { max-width: 84px; }
   .sc-sparkcol { width: 52px; }
   .sc-spark { width: 52px; height: auto; }
+  /* smaller labels: the tab names, the BUY/SELL tags and the investor filter chips */
+  .ws-tabs button { font-size: 14px; padding: 0 10px; white-space: nowrap; }
+  .side-chip, .act { min-height: 0; padding: 2px 7px; font-size: 11px; line-height: 1.3; }
+  .chips-row button.chip, .chips-row .chip-add { min-height: 32px; font-size: 12px; padding: 0 10px; }
+  .card button.chip { min-height: 34px; font-size: 13px; padding: 0 10px; }   /* the Replay deal filters */
+}
+
+/* ---- Screener on a phone: one row of presets, controls on one row, the rest in a bottom sheet. Tokens only. ---- */
+.sc-filtersbtn, .sc-exportbtn, .sc-chips2, .sc-sheet-head, .sc-sheet-foot { display: none; }
+.sc-sheet, .sc-sheet-body { display: contents; }
+.sc-sheet-backdrop[hidden] { display: none; }
+@media (max-width: 700px) {
+  body[data-mode="screener"] header .brand .sub, body[data-mode="screener"] .theme-label { display: none; }
+  body[data-mode="screener"] .sc-wrap { gap: 8px; }
+  .sc-card { gap: 8px; padding: 12px 8px 8px; }
+  .sc-sparkcol, .sc-spark { width: 44px; }
+  .sc-top h2 { font-size: 18px; }
+  .sc-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 12px; align-items: center; }
+  .sc-top h2, .sc-top #sc-count { grid-column: 1; }
+  .sc-top-actions { grid-column: 2; grid-row: 1 / span 2; width: auto; margin-left: 0; }
+  body[data-mode="screener"] .pal-btn span { display: none; }
+  .sc-density, #sc-export, .sc-presetbar .sc-eyebrow { display: none; }
+  .sc-btn { min-height: 44px; }
+  .sc-presetbar { flex-wrap: nowrap; }
+  .sc-presets { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-inline: -12px; padding-inline: 12px; }
+  .sc-presets::-webkit-scrollbar { display: none; }
+  .sc-pill, .sc-presets .sc-link { flex: none; min-height: 44px; padding: 0 14px; font-size: 14px; white-space: nowrap; }
+  .sc-filterbar { flex-wrap: wrap; padding-top: 0; border-top: none; gap: 8px; }
+  .sc-filterbar #sc-universe { flex: 1 1 0; min-width: 0; min-height: 44px; font-size: 14px; }
+  .sc-filtersbtn, .sc-exportbtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: none; min-height: 44px; border-radius: var(--radius-md); }
+  .sc-filtersbtn { padding: 0 14px; color: var(--color-accent); border-color: var(--color-accent); font-weight: 600; }
+  .sc-exportbtn { width: 44px; padding: 0; }
+  .sc-fcount { min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--color-accent); color: var(--color-bg); font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  .sc-fcount[hidden] { display: none; }
+  .sc-chips2 { flex: 0 0 100%; display: flex; align-items: center; gap: 8px; padding-block: 7px; overflow-x: auto; scrollbar-width: none; }
+  .sc-chips2:empty { display: none; }
+  .sc-chips2 .sc-chip { flex: none; white-space: nowrap; }
+  .sc-chips2 .sc-chip button { min-width: 44px; min-height: 44px; margin: -7px -2px -7px 0; }
+  .sc-chips2 .sc-link { flex: none; min-height: 44px; }
+  /* the sheet */
+  .sc-sheet { display: none; }
+  .sc-sheet.sc-open { display: flex; flex-direction: column; position: fixed; left: 0; right: 0; bottom: 0; z-index: 36; max-height: 75vh;
+    background: var(--color-surface); border-top: 1px solid var(--color-divider); border-radius: 20px 20px 0 0; box-shadow: 0 -8px 32px var(--color-scrim); }
+  .sc-sheet-backdrop { position: fixed; inset: 0; z-index: 35; background: var(--color-scrim); }
+  .sc-sheet-head { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 10px 16px 0; }
+  .sc-sheet-head::before { content: ""; width: 40px; height: 4px; border-radius: 2px; background: var(--color-divider); }
+  .sc-sheet-head h3 { align-self: flex-start; margin: 0; font-size: 20px; }
+  .sc-sheet-body { display: flex; flex-direction: column; align-items: stretch; gap: 14px; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 12px 16px; }
+  .sc-sheet-body #sc-q { width: 100%; min-height: 48px; font-size: 16px; flex: none; }
+  .sc-sheet-body .sc-chips { display: flex; flex-wrap: wrap; }
+  .sc-sheet-body .sc-chips:empty { display: none; }
+  .sc-sheet-body .sc-chip { min-height: 44px; }
+  .sc-sheet-body .sc-addbtn { min-height: 52px; font-size: 15px; font-weight: 600; border-radius: var(--radius-md); }
+  .sc-sheet-body .sc-link { align-self: flex-start; min-height: 44px; }
+  .sc-sheet-body .sc-link[hidden] { display: none; }
+  .sc-sheet-body .sc-savebox { width: 100%; margin-left: 0; }
+  .sc-sheet-foot { display: flex; gap: 10px; padding: 12px 16px 20px; border-top: 1px solid var(--color-rule); }
+  .sc-sheet-foot .sc-btn { min-height: 52px; border-radius: var(--radius-md); font-size: 15px; font-weight: 600; flex: 1; }
+  .sc-sheet-foot .sc-accent { flex: 2; }
+  /* results: compact ~64px rows, the price in mono on the right */
+  .sc-table td { height: 64px; padding: 8px 3px; }
+  .sc-table th { padding: 6px 3px; }
+  .sc-table .sc-badge { padding: 0 5px; }
+  .sc-table td.sc-stock { min-width: 0; }
+  .sc-sym { font-weight: 700; font-size: 14px; }
+  .sc-name, .sc-compact .sc-name { display: block; max-width: 78px; }
+  .sc-table td.num { font-family: var(--mono); font-size: 13px; }
+  .sc-table td.num:nth-child(3) { font-size: 14px; font-weight: 500; }
+  .sc-sym { text-decoration: none; }
+  .sc-sym:hover { text-decoration: underline; }
+  /* page scrolls, not the table; by default only stock, trend, price and 1D (the sort/filter columns are in All columns) */
+  .sc-scroll { max-height: none; }
+  .sc-card:not(.sc-allcols) .sc-table :is(th, td):nth-child(n+5) { display: none; }
+  .sc-card:not(.sc-allcols) .sc-table { min-width: 0; width: 100%; }
+  /* Screener header: brand mark, search and theme on one row, the page tabs scrolling sideways below */
+  body[data-mode="screener"] .sc-wrap { flex-wrap: wrap; align-items: center; }
+  body[data-mode="screener"] .sc-wrap .brand { order: 1; }
+  body[data-mode="screener"] .sc-wrap .brand > div:last-child { display: none; }
+  body[data-mode="screener"] .sc-wrap .controls { order: 2; margin-left: auto; flex-wrap: nowrap; }
+  body[data-mode="screener"] .sc-wrap .tabs { order: 3; flex: 0 0 100%; overflow-x: auto; scrollbar-width: none; }
 }

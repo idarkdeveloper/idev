@@ -334,7 +334,7 @@
     function newsPanelHtml(){
       const r = st.r; if(!r) return loading("news");
       const anns = r.announcements && r.announcements.length
-        ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file && safeUrl(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener noreferrer">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
+        ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${TA.annChip(a)}${a.file && safeUrl(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener noreferrer">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
         : `<div class="sub">${esc(r.announcements_error || "none found")}</div>`;
       return `<h3 style="margin-top:6px">NSE announcements</h3>${anns}<div class="sp-news">${newsHtml(st.news)}</div>`;
     }

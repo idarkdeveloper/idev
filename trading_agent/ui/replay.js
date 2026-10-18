@@ -286,6 +286,8 @@
         <div id="rl-deals" aria-live="polite"><div class="sub">Loading disclosed deals for the chart…</div></div>
         <h3 style="margin-top:6px">NSE announcements, last 60 days</h3><div id="rl-news" aria-live="polite">${r.announcements_pending ? `<div class="sub">Loading NSE announcements… the first look-up of a company takes up to half a minute.</div>` : newsHtml(r)}</div>`;
       const h = r.history || [];
+      $("rl-note").insertAdjacentHTML("beforebegin", '<div class="row" style="margin-top:6px"><button type="button" class="small" id="rl-size">Position size</button></div>');
+      $("rl-size").addEventListener("click", () => { $("rz-ticker").value = r.ticker; $("rz-form").requestSubmit(); $("rz-form").scrollIntoView({behavior: "smooth", block: "center"}); });
       const chartRefs = r.position ? [{y: r.position.avg_entry_price, label: "Your cost"}].concat(r.position.stop != null ? [{y: r.position.stop, label: "Stop", color: C.neg}] : []) : [];
       lineChart($("rl-chart"), {x: h.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, label: `${r.ticker} price, year before the replay date`,
         yFmt: v => "₹" + Math.round(v).toLocaleString("en-IN"), empty: "No price history before this date.",
@@ -306,7 +308,7 @@
     } catch(e){ $("rl-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   }
   function newsHtml(r){
-    return r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${a.file && /^https?:\/\//.test(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
+    return r.announcements.length ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${TA.annChip(a)}${a.file && /^https?:\/\//.test(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
       : `<div class="sub">${esc(r.announcements_error || "none in the 60 days before the replay date")}</div>`;
   }
   // ---- Position size and Trade cost, as of the replay date ----

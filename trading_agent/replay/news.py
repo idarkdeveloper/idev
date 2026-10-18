@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from typing import Any
 
 from ..filing_time import usable_by
 from .clock import ReplayClock
+
+
+_BAD = re.compile("�+")
 
 
 class ClockedNews:
@@ -24,4 +28,6 @@ class ClockedNews:
         # An announcement disseminated at or after 15:00 IST on day T is only usable from the next trading day
         # (filing_time.usable_from), so a replay clock on T must not see it.
         items = [a for a in rows if since < a["at"][:10] <= until and usable_by(a["at"], until, self.holidays)]
+        # NSE text can hold U+FFFD (an unreadable-character mark, saved in the cache); show a space instead
+        items = [{**a, "text": _BAD.sub(" ", a.get("text") or "")} for a in items]
         return {"items": items, "error": None}

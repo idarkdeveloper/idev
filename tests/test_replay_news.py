@@ -38,3 +38,9 @@ def test_blocked_news_is_reported_not_raised(tmp_path):
     news = ClockedNews(client(tmp_path, RuntimeError("HTTP 403")), ReplayClock("2021-03-01"))
     r = news.for_symbol("TATASTEEL")
     assert r["items"] == [] and r["error"] == "news unavailable for this period (HTTP 403)"
+
+
+def test_unreadable_marks_in_announcement_text_become_spaces(tmp_path):
+    rows = [{"symbol": "TATASTEEL", "sort_date": "2021-02-20 09:00:00", "desc": "Updates", "attchmntText": "of�� relationships��", "seq_id": "1"}]
+    r = ClockedNews(client(tmp_path, rows), ReplayClock("2021-03-01")).for_symbol("TATASTEEL", days=30)
+    assert "�" not in r["items"][0]["text"] and r["items"][0]["text"].startswith("of ")
