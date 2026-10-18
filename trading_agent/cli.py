@@ -994,6 +994,44 @@ def _claim_once(settings: Any, study: str) -> bool:
     return True
 
 
+def cmd_research_replication(args: argparse.Namespace) -> int:
+    """The adopted rules on US or Japanese midcaps, ONCE per market (pre-registered 18 Oct 2026). Refused without
+    --confirm and after the first time (the trial log records it)."""
+    from .gap_diagnosis import log_trial
+    from .research_replication import (MARKETS, PREREGISTRATION, WINDOW_END, fetch_members, format_replication,
+                                       load_replication_market, prices_for, replicate)
+    from .research_studies import prior_trials
+    settings = _settings(args)
+    market = args.market.lower()
+    spec = MARKETS[market]
+    study = spec["study"]
+    if _once_used(settings, study):
+        return 2
+    if not args.confirm:
+        print(f"This runs the pre-registered replication ({PREREGISTRATION}) on the {spec['index']} ({spec['name']}), "
+              f"Oct 2016 to Sep 2026, ONCE. The result is final and this market is spent. Run again with --confirm.")
+        return 2
+    print(f"Loading today's {spec['index']} members…")
+    current, changes = fetch_members(market)
+    if len(current) < 300:
+        print(f"Only {len(current)} members were read; not running (nothing is spent).")
+        return 1
+    print(f"Loading prices for {len(current)} members and {spec['benchmark']} since 2015 (this takes a few minutes)…")
+    m, notes = load_replication_market(market, prices_for(market, settings.state_dir), current, changes)
+    _leakage_guard(m, holdout_start=WINDOW_END)
+    if not _claim_once(settings, study):   # after the data loaded: a refused download does not spend it
+        return 2
+    r = replicate(market, m, extra_trials=prior_trials(settings.state_dir))
+    log_trial(settings.state_dir, study, {"market": market, "from": r["start"], "to": r["end"], "rules": r["rules"],
+                                          "point_in_time": r["point_in_time"]},
+              {"return": r["total_return"], "excess": r["excess"], "cagr": r["cagr"], "max_drawdown": r["max_drawdown"],
+               "turnover": r["turnover"], "passes": r["passes"], "skill": (r["skill"] or {}).get("probability")})
+    print(format_replication(r, notes))
+    if args.json:
+        print(json.dumps({k: v for k, v in r.items() if k != "skill"}, default=str))
+    return 0
+
+
 def cmd_research_holdout(args: argparse.Namespace) -> int:
     """Open the sealed holdout ONCE: the adopted rules, unchanged, on the months since 1 Oct 2025. Refused after the
     first time (the trial log records it) and without --confirm."""
@@ -1954,6 +1992,12 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--cuts", type=int, default=4, help="end-to-end simulation cuts (default 4)")
         sp.add_argument("--json", action="store_true")
         sp.set_defaults(func=fn)
+    sp = sub.add_parser("research-replication", help="research: the adopted rules on US or Japanese midcaps, ONCE "
+                                                     "per market (pre-registered)")
+    sp.add_argument("--market", choices=("us", "jp"), required=True)
+    sp.add_argument("--confirm", action="store_true", help="really run it (once per market)")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_research_replication)
     sp = sub.add_parser("model-paper", help="the prediction model's own paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly sizing, mark)")
     sp.set_defaults(func=cmd_model_paper)
