@@ -256,8 +256,10 @@
     for(const b of $("sc-density").querySelectorAll("[data-density]")) b.setAttribute("aria-pressed", String(b.dataset.density === st.density));
     $("sc-allcols").textContent = st.allCols ? "Fewer columns" : "All columns";
     $("sc-allcols").setAttribute("aria-pressed", String(st.allCols));
-    $("sc-export").disabled = !rows.length;
+    $("sc-export").disabled = $("sc-export2").disabled = !rows.length;
+    $("sc-sheet-show").textContent = `Show ${rows.length} stock${rows.length === 1 ? "" : "s"}`;
     $("sc-card").classList.toggle("sc-compact", st.density === "compact");
+    $("sc-card").classList.toggle("sc-allcols", st.allCols);
   }
   function renderPresets(){
     const rows = baseRows(), have = rows.length > 0;
@@ -277,6 +279,26 @@
     $("sc-chips").innerHTML = st.filters.map((fl, i) =>
       `<span class="sc-chip"><span>${esc(describeFilter(fl))}</span><button type="button" data-rm="${i}" aria-label="Remove filter: ${esc(describeFilter(fl))}">×</button></span>`).join("");
     $("sc-clear").hidden = !st.filters.length && !st.query;
+    // phone: the same filters as a compact removable row under the controls, and a count on the Filters button
+    $("sc-chips2").innerHTML = st.filters.length ? st.filters.map((fl, i) =>
+      `<span class="sc-chip"><span>${esc(describeFilter(fl))}</span><button type="button" data-rm="${i}" aria-label="Remove filter: ${esc(describeFilter(fl))}">×</button></span>`).join("")
+      + '<button type="button" class="sc-link" data-clearall>Clear all</button>' : "";
+    $("sc-fcount").textContent = st.filters.length; $("sc-fcount").hidden = !st.filters.length;
+  }
+
+  // ---- phone: search, the filter editor and Save view live in a bottom sheet opened by the Filters button ----
+  const sheetOpen = () => $("sc-sheet").classList.contains("sc-open");
+  function openSheet(){
+    if(sheetOpen()) return;
+    $("sc-sheet").classList.add("sc-open"); $("sc-sheet").setAttribute("role", "dialog"); $("sc-sheet").setAttribute("aria-modal", "true");
+    $("sc-sheet-backdrop").hidden = false; $("sc-filtersbtn").setAttribute("aria-expanded", "true");
+    $("sc-q").focus();
+  }
+  function closeSheet(){
+    if(!sheetOpen()) return;
+    $("sc-sheet").classList.remove("sc-open"); $("sc-sheet").removeAttribute("role"); $("sc-sheet").removeAttribute("aria-modal");
+    $("sc-sheet-backdrop").hidden = true; $("sc-filtersbtn").setAttribute("aria-expanded", "false");
+    $("sc-filtersbtn").focus();
   }
 
   // ---- table ----
@@ -296,7 +318,7 @@
     else body = rows.map(r => {
       const sub = [r.name, r.industry].filter(Boolean).join(" · ");
       return `<tr data-sym="${esc(r.symbol)}" tabindex="0" aria-selected="${st.sel === r.symbol}">`
-        + `<td class="sc-stock"><div class="sc-symrow"><span class="sc-sym">${esc(r.symbol)}</span>${badges(r)}</div>`
+        + `<td class="sc-stock"><div class="sc-symrow"><a class="sc-sym" href="${esc(TA.palette.landingUrl("lookup", r.symbol))}">${esc(r.symbol)}</a>${badges(r)}</div>`
         + (sub ? `<div class="sc-name" title="${esc(sub)}">${esc(r.name)}${r.name && r.industry ? " · " : ""}${esc(r.industry)}</div>` : "") + `</td>`
         + `<td class="sc-sparkcol">${spark(r)}</td>` + cols.map(c => cell(c, r)).join("") + `</tr>`;
     }).join("");
@@ -507,6 +529,25 @@
       st.filters.splice(Number(rm.dataset.rm), 1); filtersChanged();
       $("sc-addbtn").focus();
     });
+    $("sc-chips2").addEventListener("click", (e) => {
+      const rm = e.target.closest && e.target.closest("[data-rm]");
+      if(rm) st.filters.splice(Number(rm.dataset.rm), 1);
+      else if(e.target.closest && e.target.closest("[data-clearall]")){ st.filters = []; st.query = ""; $("sc-q").value = ""; }
+      else return;
+      filtersChanged(); $("sc-filtersbtn").focus();
+    });
+    $("sc-filtersbtn").addEventListener("click", () => sheetOpen() ? closeSheet() : openSheet());
+    $("sc-sheet-close").addEventListener("click", closeSheet);
+    $("sc-sheet-show").addEventListener("click", closeSheet);
+    $("sc-sheet-backdrop").addEventListener("click", closeSheet);
+    $("sc-sheet").addEventListener("keydown", (e) => {
+      if(e.key !== "Tab") return;   // keep focus inside the open sheet
+      const f = Array.from($("sc-sheet").querySelectorAll("button:not([disabled]), input, select")).filter(x => x.offsetParent !== null);
+      if(!f.length) return;
+      if(e.shiftKey && document.activeElement === f[0]){ e.preventDefault(); f[f.length - 1].focus(); }
+      else if(!e.shiftKey && document.activeElement === f[f.length - 1]){ e.preventDefault(); f[0].focus(); }
+    });
+    $("sc-export2").addEventListener("click", () => $("sc-export").click());
     $("sc-clear").addEventListener("click", () => { st.filters = []; st.query = ""; $("sc-q").value = ""; filtersChanged(); $("sc-q").focus(); });
     $("sc-save").addEventListener("click", () => { $("sc-save").hidden = true; $("sc-savewrap").hidden = false; $("sc-savename").focus(); });
     $("sc-saveok").addEventListener("click", saveView);
@@ -522,7 +563,10 @@
     });
     // a row click toggles its details; Enter or Space on a focused row does the same
     const rowAct = (tr) => { if(st.sel === tr.dataset.sym) closeDrawer(); else openDrawer(tr.dataset.sym); };
-    $("sc-rows").addEventListener("click", (e) => { const tr = e.target.closest && e.target.closest("tr[data-sym]"); if(tr) rowAct(tr); });
+    $("sc-rows").addEventListener("click", (e) => {
+      const a = e.target.closest && e.target.closest("a.sc-sym");   // the ticker is a real link; a plain click opens the row, Ctrl/Cmd/middle click follows it
+      if(a && !(e.ctrlKey || e.metaKey || e.shiftKey)) e.preventDefault();
+      const tr = e.target.closest && e.target.closest("tr[data-sym]"); if(tr) rowAct(tr); });
     $("sc-rows").addEventListener("keydown", (e) => {
       if(e.key !== "Enter" && e.key !== " ") return;
       const tr = e.target.closest && e.target.closest("tr[data-sym]"); if(!tr || e.target !== tr) return;
@@ -563,11 +607,12 @@
     document.addEventListener("keydown", (e) => {
       if(e.key !== "Escape") return;
       if(popOpen()){ e.preventDefault(); closePop(); }
+      else if(sheetOpen()){ e.preventDefault(); closeSheet(); }
       else if(drawerOpen()){ e.preventDefault(); closeDrawer(); }
     });
     document.addEventListener("visibilitychange", () => { if(!document.hidden && needsPoll(st.data)) load(false); });
     let rz = 0;
-    window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if(!st.allCols) renderTable(); if(popOpen()) closePop(); }, 150); });
+    window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if(!st.allCols) renderTable(); if(popOpen()) closePop(); if(sheetOpen() && !narrow()) closeSheet(); }, 150); });
     load(true);
   }
   init();

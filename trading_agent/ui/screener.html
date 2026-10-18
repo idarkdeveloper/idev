@@ -37,12 +37,21 @@
     <div class="sc-presetbar" role="group" aria-label="Presets"><span class="sc-eyebrow">Presets</span><div class="sc-presets" id="sc-presets"></div></div>
     <div class="sc-filterbar">
       <select id="sc-universe" aria-label="Stocks"></select>
+      <button type="button" class="sc-filtersbtn" id="sc-filtersbtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="sc-sheet"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"></path></svg><span>Filters</span><span class="sc-fcount" id="sc-fcount" hidden></span></button>
+      <button type="button" class="sc-exportbtn" id="sc-export2" aria-label="Export CSV" disabled><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg></button>
+      <div class="sc-chips2" id="sc-chips2" aria-label="Active filters"></div>
+      <div class="sc-sheet" id="sc-sheet" aria-labelledby="sc-sheet-title">
+      <div class="sc-sheet-head"><h3 id="sc-sheet-title">Filters</h3></div>
+      <div class="sc-sheet-body">
       <input id="sc-q" type="search" autocomplete="off" placeholder="Search name or ticker" aria-label="Search name or ticker">
       <span class="sc-vrule" aria-hidden="true"></span>
       <div class="sc-chips" id="sc-chips" aria-label="Active filters"></div>
       <button type="button" class="sc-addbtn" id="sc-addbtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="sc-pop">+ Add filter</button>
       <button type="button" class="sc-link" id="sc-clear" hidden>Clear all</button>
       <span class="sc-savebox"><button type="button" class="sc-link" id="sc-save">Save view</button><span id="sc-savewrap" hidden><input id="sc-savename" maxlength="40" aria-label="Name for this view" placeholder="Name this view"><button type="button" class="sc-btn" id="sc-saveok">Save</button></span></span>
+      </div>
+      <div class="sc-sheet-foot"><button type="button" class="sc-btn" id="sc-sheet-close">Close</button><button type="button" class="sc-btn sc-accent" id="sc-sheet-show">Show stocks</button></div>
+      </div>
     </div>
     <div class="sc-note sub" id="sc-presetnote" aria-live="polite"></div>
     <div class="scroll sc-scroll"><table class="sc-table" id="sc-table"><thead id="sc-head"></thead><tbody id="sc-rows"></tbody></table></div>
@@ -50,6 +59,7 @@
   </section>
 </main>
 
+<div class="sc-sheet-backdrop" id="sc-sheet-backdrop" hidden></div>
 <div class="sc-pop-backdrop" id="sc-pop-backdrop" hidden></div>
 <form class="sc-pop" id="sc-pop" role="dialog" aria-label="Add a filter" hidden>
   <div class="field"><label for="af-col">Filter on</label><select id="af-col"></select></div>
