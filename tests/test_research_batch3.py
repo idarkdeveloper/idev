@@ -192,9 +192,31 @@ def test_the_audit_runs_the_adopted_rules_and_states_its_limits():
     m = make()
     r = rc.circuit_audit(m, cost_model=cost_model_for("in"), capital=100_000)
     assert r["sells"] + r["buys"] > 0 and r["locked_sells"] == [] and r["unknown"] == r["sells"] + r["buys"]
-    assert r["points"] == 0.0 and not r["fix_forward"]
+    assert r["points"] == 0.0 and not r["fix_forward"] and r["verdict"] is False and r["checked"] == 0
     text = rc.format_circuit_audit(r)
-    assert "not a trial" in text and "could not be checked" in text and "Within the 15-point threshold" in text
+    # 18 Oct 2026: every fill was unchecked yet the audit said "within the threshold"; it must give no verdict instead
+    assert "not a trial" in text and "NO VERDICT" in text and "Within the 15-point threshold" not in text
+
+
+def test_open_high_low_come_from_the_ohlc_source_when_the_market_has_closes_only(monkeypatch):
+    m, d = ohlc_market([(95, 95, 95, 95, 1e4), (90, 96, 89, 80, 1e6)])
+    full = m.raw["A"]
+    closes_only = [{k: b[k] for k in ("date", "close", "adj_close", "volume")} for b in full]
+    m2 = Market(d, {"A": closes_only}, bars(d, [100.0] * len(d)), lambda day: {"A"}, min_turnover=0)
+    t = 70
+    fake = {"trades": [{"symbol": "A", "exit": d[t]}], "fills": [(t - 5, "A", 10_000.0), (t, "A", 9_500.0)],
+            "curve": [100_000.0, 99_000.0]}
+    monkeypatch.setattr(rc, "simulate", lambda *a, **k: fake)
+    import trading_agent.research_studies as rs
+    monkeypatch.setattr(rs, "_first_ranked_day", lambda mk: 0)
+    blind = rc.circuit_audit(m2, cost_model=None, capital=100_000)
+    assert blind["unknown"] == 2 and blind["locked_sells"] == [] and blind["verdict"] is False
+    loaded = []
+    r = rc.circuit_audit(m2, cost_model=None, capital=100_000, ohlc=lambda sym: loaded.append(sym) or full)
+    assert loaded == ["A"] and r["unknown"] == 0 and r["verdict"] is True and len(r["locked_sells"]) == 1
+    assert r["locked_sells"][0]["filled"] == d[71]
+    failing = rc.circuit_audit(m2, cost_model=None, capital=100_000, ohlc=lambda sym: 1 / 0)
+    assert failing["unknown"] == 2 and failing["verdict"] is False
 
 
 def test_a_sell_on_a_locked_day_is_repriced_at_the_first_free_close(monkeypatch):
@@ -223,3 +245,22 @@ def test_a_lock_that_never_reopens_within_20_sessions_is_counted_not_priced(monk
     assert r["never_reopened"] == 1 and r["cost"] == 0.0
     text = rc.format_circuit_audit(r)
     assert "no freely traded close within 20 sessions" in text and "lower bound" in text
+
+
+def test_the_circuits_command_loads_open_high_low_for_traded_stocks(tmp_path, monkeypatch, capsys):
+    from trading_agent import cli, runner
+    m = make()
+    asked = []
+
+    class Prices:
+        def history_ohlc(self, sym, range_, ttl=None):
+            asked.append((sym, range_))
+            return [{**b, "open": b["close"], "high": b["close"] * 1.01, "low": b["close"] * 0.99} for b in m.raw[sym]]
+
+    monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path, paper_starting_cash=100_000))
+    monkeypatch.setattr(cli, "_research_market", lambda a, s: m)
+    monkeypatch.setattr(runner, "free_prices", lambda s: Prices())
+    assert cli.cmd_research_circuits(SimpleNamespace(json=False)) == 0
+    out = capsys.readouterr().out
+    assert asked and all(r == "10y" for _, r in asked) and "NO VERDICT" not in out
+    assert "Within the 15-point threshold" in out and "could not be checked" not in out
