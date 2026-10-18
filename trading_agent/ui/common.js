@@ -881,7 +881,7 @@ window.TA = (function(){
       if(mine !== seq || dead || !cfg.isCurrent()) return;   // a newer range or another stock was asked for meanwhile
       if(!payload || payload.error || !payload.bars || !payload.bars.length){ failed((payload && payload.error) || "no price history"); return; }
       if(!hit || hit.p !== payload) pcache.set(ckey, {t: Date.now(), p: payload});
-      data = payload; note.textContent = ""; paintChips(); prefetchRanges();
+      data = payload; note.textContent = payload.note || ""; paintChips(); prefetchRanges();
       try { build(false); } catch(e){ cfg.fallback(e.message || "chart failed"); }
     }
 
