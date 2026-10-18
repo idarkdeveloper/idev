@@ -88,7 +88,7 @@
         <div class="mkts" id="mkts"></div>
       </section>
       <div class="since" id="since" hidden><span class="since-title">Since your last visit</span><span class="since-chips" id="since-chips"></span><button type="button" class="since-seen" id="since-seen">Mark all seen</button></div>
-      <div class="ov-meta sub"><span id="investor-list" hidden></span><span id="summary"></span></div>
+      <div class="ov-meta sub"><button type="button" class="inv-toggle" id="inv-toggle" aria-expanded="false" aria-controls="investor-list" hidden></button><span id="investor-list" hidden></span><span id="summary"></span></div>
     </div>
 
     <div class="ov-split" id="ov-split">
@@ -763,6 +763,7 @@
     const inv = investorsOf(s);
     $("investor").textContent = inv.length === 1 ? inv[0] : `${inv.length} investors`;
     $("investor-list").hidden = inv.length < 2; $("investor-list").textContent = inv.join(" · ");
+    { const t = $("inv-toggle"); t.hidden = inv.length < 2; t.textContent = `Following ${inv.length} investors ▾`; t.onclick = () => { const o = $("investor-list").classList.toggle("open"); t.setAttribute("aria-expanded", String(o)); t.textContent = `Following ${inv.length} investors ${o ? "▴" : "▾"}`; }; }   // phones only: the names fold behind this button
     const modePill = s.mode === "live" ? '<span class="pill bad"><span class="dot"></span>LIVE orders</span>'
                    : s.mode === "paper" ? '<span class="pill ok"><span class="dot"></span>Paper trading</span>'
                    : '<span class="pill ok"><span class="dot"></span>Recommendations only</span>';
