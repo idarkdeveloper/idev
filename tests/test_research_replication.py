@@ -220,3 +220,33 @@ def test_a_pence_pound_mix_up_stops_the_uk_run_before_anything_is_spent(tmp_path
 def test_the_uk_flag_parses():
     from trading_agent import cli
     assert cli.build_parser().parse_args(["research-replication", "--market", "uk"]).replication_market == "uk"
+
+
+def test_zero_or_negative_prices_are_dropped_and_reported_instead_of_crashing():
+    """Japan stopped in the leakage check: a Yahoo history held a 0 / -0.0 price and vol60 took log(-0.0)."""
+    dates, series = synthetic()
+    series["1306"] = series.pop("IJH")
+    series = {k: [{**b, "volume": 1e6} for b in v] for k, v in series.items()}   # above the 18M-yen floor
+    series["S03"] = [{**b, "close": -0.0, "adj_close": -0.0} if i in (300, 301) else b
+                     for i, b in enumerate(series["S03"])]
+    series["S04"] = [{**b, "adj_close": 0.0, "close": 0.0} if i == 400 else b for i, b in enumerate(series["S04"])]
+    kept, n = rr.drop_bad_prices(series["S03"])
+    assert n == 2 and len(kept) == len(series["S03"]) - 2 and all(b["close"] > 0 for b in kept)
+    members = [s for s in series if s != "1306"]
+    m, notes = rr.load_replication_market("jp", FakePrices(series), members, [])
+    assert any("3 zero or negative price point(s) dropped in 2 series (S03 2, S04 1)" in x for x in notes)
+    assert m.close["S03"][300] == m.close["S03"][299] > 0          # the bad day carries the last good price
+    for sym in members:
+        m.vol(sym)                                                  # no ValueError
+    from trading_agent import cli
+    cli._leakage_guard(m, holdout_start=rr.WINDOW_END)             # the step that crashed: now passes
+    r = rr.replicate("jp", m)
+    assert r["total_return"] is not None
+
+
+def test_vol60_ignores_non_positive_prices():
+    vals = [100.0 * 1.01 ** i for i in range(70)]
+    bad = vals[:30] + [-0.0, 0.0] + vals[30:]
+    from trading_agent.research_sim import vol60
+    out = vol60(bad)
+    assert len(out) == len(bad) and out[-1] is not None and out[-1] >= 0

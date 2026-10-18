@@ -237,6 +237,16 @@ def parse_uk(page: str) -> list[str]:
     return sorted({uk_symbol(r[col]) for r in rows[1:] if len(r) > col and uk_symbol(r[col])})
 
 
+def drop_bad_prices(bars: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Bars with a zero or negative close (or adjusted close) removed; such a day carries the last good price, as a
+    day without trading does. Yahoo's Japanese histories occasionally hold such points."""
+    def bad(b: dict[str, Any]) -> bool:
+        c, a = b.get("close"), b.get("adj_close")
+        return c is None or not float(c) > 0 or (a is not None and not float(a) > 0)
+    kept = [b for b in bars if not bad(b)]
+    return kept, len(bars) - len(kept)
+
+
 def unit_jumps(series: dict[str, list[dict[str, Any]]]) -> list[str]:
     """Stocks whose close jumps by more than UNIT_JUMP times in a day (a pence/pound mix-up in the data)."""
     out = []
@@ -294,7 +304,8 @@ def load_replication_market(market: str, prices: Any, current: list[str],
                             workers: int = 8) -> tuple[Market, list[str]]:
     """Every member (ever, when point in time) on the benchmark's trading days, nothing dated on or after WINDOW_END."""
     spec = MARKETS[market]
-    bench = [b for b in prices.history(spec["benchmark"], "max") if LOOKBACK_FROM <= b["date"] < WINDOW_END]
+    bench, bad_bench = drop_bad_prices([b for b in prices.history(spec["benchmark"], "max")
+                                        if LOOKBACK_FROM <= b["date"] < WINDOW_END])
     if not bench or bench[0]["date"] > "2015-10-31":
         raise ValueError(f"the benchmark {spec['benchmark']} has no prices from {LOOKBACK_FROM}")
     calendar = [b["date"] for b in bench]
@@ -304,14 +315,26 @@ def load_replication_market(market: str, prices: Any, current: list[str],
                "left the index are missing, so the result is flattered (survivorship)."])
     universe = sorted(membership.ever_members(LOOKBACK_FROM)) if membership is not None else sorted(current)
 
+    dropped: dict[str, int] = {}
+
     def load(sym: str) -> tuple[str, list[dict[str, Any]] | None]:
         try:
-            return sym, [b for b in prices.history(sym, "max") if b["date"] < WINDOW_END]
+            bars, bad = drop_bad_prices([b for b in prices.history(sym, "max") if b["date"] < WINDOW_END])
         except Exception:  # noqa: BLE001 - a missing stock is counted, not fatal
             return sym, None
+        if bad:
+            dropped[sym] = bad
+        return sym, bars
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         series = {s: b for s, b in ex.map(load, universe) if b and b[0]["date"] < WINDOW_END}
+    if bad_bench:
+        dropped[spec["benchmark"]] = bad_bench
+    if dropped:
+        names = sorted(dropped)
+        notes.append(f"{sum(dropped.values())} zero or negative price point(s) dropped in {len(names)} series "
+                     f"({', '.join(f'{k} {dropped[k]}' for k in names[:12])}{' …' if len(names) > 12 else ''}); "
+                     "each such day carries the last good price.")
     members_on = membership.members_on if membership is not None else (lambda d, c=frozenset(current): set(c))
     window_members: set[str] = set()
     for d in month_starts(calendar, TRADING_FROM, WINDOW_END):

@@ -142,11 +142,11 @@ def vol60(adj: list[float | None]) -> list[float | None]:
     rets: list[float] = []
     prev = None
     for v in adj:
-        if v is not None and prev:
+        if v is not None and v > 0 and prev:
             rets.append(math.log(v / prev))
             if len(rets) > 60:
                 rets.pop(0)
-        if v is not None:
+        if v is not None and v > 0:   # a zero or negative price is bad data: never a log input or a base
             prev = v
         if len(rets) == 60:   # population sd with fsum: equal to statistics.pstdev to ~1e-15, far faster
             mu = math.fsum(rets) / 60

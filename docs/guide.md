@@ -638,7 +638,7 @@ the report says the result is flattered. Pass: beat the fund with a worst fall n
 is claimed before it runs, logged before it prints and refused a second time; no Indian rule changes either way.
 `--market uk` runs the FTSE 250 (today's members, against MIDD.L) at 55 bps on buys (0.5% stamp duty) and 5 bps on
 sells, with a £95,000-a-day floor, as fixed in the [UK addendum](research/preregistered-replication-2026-10-18b.md). If
-any London price jumps more than 50 times in a day (a pence/pound mix-up), it stops before anything is spent.
+any London price jumps more than 50 times in a day (a pence/pound mix-up), it stops before anything is spent. In every market, a zero or negative price point (Yahoo occasionally has them, mostly in Japan) is dropped, that day carries the last good price, and the report lists how many were dropped.
 
 **Batch 3 (once).** `research-batch3 --confirm` runs the two ideas
 [pre-registered](research/preregistered-batch-2026-10-18.md) on 18 Oct 2026 beside the adopted rules on the development
