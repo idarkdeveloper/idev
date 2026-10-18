@@ -181,7 +181,7 @@ def test_locks_are_read_from_the_daily_bar():
     assert rc.lock(m, "A", d[70]) == "lower"                             # O = H = L = C below yesterday
     assert rc.lock(m, "A", d[71]) is None
     assert rc.lock(m, "A", d[72]) == "upper"
-    assert rc.lock(m, "A", d[73]) == "lower"                             # -5% on a tenth of the usual volume
+    assert rc.lock(m, "A", d[73]) == "near-lower"                        # -5% on a tenth of the usual volume
     assert rc.lock(m, "A", d[74]) is None
     assert rc.first_free_close(m, "A", d[70]) == (d[71], 92.0)
     plain = make()
@@ -207,5 +207,19 @@ def test_a_sell_on_a_locked_day_is_repriced_at_the_first_free_close(monkeypatch)
     monkeypatch.setattr(rs, "_first_ranked_day", lambda mk: 0)
     r = rc.circuit_audit(m, cost_model=None, capital=100_000)
     (x,) = r["locked_sells"]
-    assert r["sells"] == 1 and r["buys"] == 1 and x["filled"] == d[71]
+    assert r["sells"] == 1 and r["buys"] == 1 and x["filled"] == d[71] and x["hard"]
+    assert r["hard_points"] == pytest.approx(r["points"]) and r["never_reopened"] == 0
     assert x["cost"] == pytest.approx(9_500.0 * (80 / 95 - 1)) and r["points"] == pytest.approx(x["cost"] / 100_000)
+
+
+def test_a_lock_that_never_reopens_within_20_sessions_is_counted_not_priced(monkeypatch):
+    m, d = ohlc_market([(95, 95, 95, 95, 1e4)] + [(95, 95, 95, 95, 1e3)] * 25 + [(90, 96, 89, 92, 1e6)])
+    assert rc.first_free_close(m, "A", d[70]) is None                    # the free close comes after 26 sessions
+    fake = {"trades": [{"symbol": "A", "exit": d[70]}], "fills": [(70, "A", 9_500.0)], "curve": [1.0, 1.0]}
+    monkeypatch.setattr(rc, "simulate", lambda *a, **k: fake)
+    import trading_agent.research_studies as rs
+    monkeypatch.setattr(rs, "_first_ranked_day", lambda mk: 0)
+    r = rc.circuit_audit(m, cost_model=None, capital=100_000)
+    assert r["never_reopened"] == 1 and r["cost"] == 0.0
+    text = rc.format_circuit_audit(r)
+    assert "no freely traded close within 20 sessions" in text and "lower bound" in text
