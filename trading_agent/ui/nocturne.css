@@ -1013,3 +1013,7 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   body[data-mode="screener"] .sc-wrap .controls { order: 2; margin-left: auto; flex-wrap: nowrap; }
   body[data-mode="screener"] .sc-wrap .tabs { order: 3; flex: 0 0 100%; overflow-x: auto; scrollbar-width: none; }
 }
+/* Phone: the Overview tiles two to a row, so Cash is on the first screen */
+@media (max-width: 700px) {
+  .ws-panel > .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
