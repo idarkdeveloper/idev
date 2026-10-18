@@ -303,9 +303,10 @@
   .group-title { font-weight: 700; color: var(--color-text); font-size: 14px; }
   /* Settings: titled sections and a chip bar that stays at the top of the dialog while it scrolls */
   #dlg .menu-status { padding: 0; }
-  .set-nav { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; position: sticky; top: -24px; z-index: 2;
+  .set-nav { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; position: sticky; top: 0; z-index: 2;
              margin: -8px -24px 0; padding: 10px 24px; background: var(--color-surface); border-bottom: 1px solid var(--color-divider); }
   .set-nav::-webkit-scrollbar { display: none; }
+  @media (min-width: 700px) { .set-nav { flex-wrap: wrap; overflow-x: visible; } }
   .set-nav button { flex: 0 0 auto; min-height: 34px; padding: 0 12px; border-radius: 999px; font-size: 13px; font-weight: 500; }
   .set-sec { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 64px; }
   .set-sec + .set-sec, #set-live > .set-sec:first-child { border-top: 1px solid var(--color-divider); padding-top: 18px; }
