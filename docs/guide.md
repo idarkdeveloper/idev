@@ -616,6 +616,19 @@ monthly rebalances have followed the start, charges above **20%** of that return
 trip the **friction gate**: one Telegram and email alert a month, an amber banner on the Live and Demo pages, and
 `groww-check --live-test` refuses without `--confirm-friction-override`. The gate never changes a setting by itself.
 
+**Two more paper accounts beside it.** Each keeps its own files in `state/forward/`, trades practice money only and is
+run by the watch service in the same after-close job; nothing in them is retuned on what they show.
+
+- `model-paper`: the prediction model, fitted once on the development years and frozen, sizes the momentum top 20 by
+  its probabilities (from `MODEL_PAPER_START`, default 19 Oct 2026). The research rejected it; this is its
+  out-of-sample look.
+- `resmom-paper`: residual momentum, variant E of the [pre-registered](research/preregistered-batch-2026-10-16b.md)
+  backward check, which it passed on Apr 2017 – Sep 2020 (+14.1% a year against +9.8% for the adopted rules). Same
+  names, filters and research rules as the forward test; only the ranking differs: residual returns after a fit through
+  the origin on MID150BEES over sessions t−252 to t−21. From `RESMOM_PAPER_START` (default 2 Nov 2026). Its report
+  compares it with the forward test over the same days. As pre-registered, it replaces the adopted rules only if it
+  beats them over 12 months here. `resmom-paper --run` does today's run by hand.
+
 ## Can algo trading predict a share? The signal lab
 
 `python -m trading_agent signal-lab --universe NIFTY50 --years 5` (or the *Signal lab*
