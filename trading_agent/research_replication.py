@@ -1,4 +1,5 @@
-"""The adopted rules on US and Japanese midcaps, ONCE per market (docs/research/preregistered-replication-2026-10-18.md).
+"""The adopted rules on US, Japanese and UK midcaps, ONCE per market (docs/research/preregistered-replication-2026-10-18.md;
+the UK in its addendum, preregistered-replication-2026-10-18b.md).
 
 A replication, not a search: ``FINALIST`` unchanged except that no tax is charged (both sides are compared before
 tax), on the S&P MidCap 400 and the TOPIX Mid400, 1 Oct 2016 - 30 Sep 2026, against each market's fund. Every choice
@@ -15,6 +16,10 @@ below was fixed in the pre-registration or in its data step, before any strategy
 * Costs: 5 bps a side in the US, 10 bps in Japan; the fund pays one buy at the start. No tax either side.
 * Liquidity floor: the Indian Rs 1 crore a day at a fixed rate: US$120,000 and 18 million yen.
 
+* UK (addendum): today's FTSE 250 members (Wikipedia; no free change history), ``.L`` prices in pence, against
+  the iShares FTSE 250 ETF (MIDD.L). 55 bps on buys (0.5% stamp duty plus 5 bps), 5 bps on sells; the fund pays one
+  5 bp buy (no stamp duty on ETFs). Floor GBP 95,000 a day, applied as 9.5 million pence of traded value.
+
 Pass (per market): beat the fund over the window AND a worst fall no more than 10 points deeper than the fund's.
 Each market runs once: claimed before the simulation, logged before printing, refused a second time.
 """
@@ -29,11 +34,14 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from .research_sim import Market, simulate, summarize, with_rules
 
 PREREGISTRATION = "docs/research/preregistered-replication-2026-10-18.md"
+UK_ADDENDUM = "docs/research/preregistered-replication-2026-10-18b.md"
+UNIT_JUMP = 50.0                 # a close more than 50x (or under 1/50 of) the day before: a pence/pound mix-up
 LOOKBACK_FROM = "2015-10-01"     # a year of history before the first decision
 TRADING_FROM = "2016-10-01"
 WINDOW_END = "2026-10-01"        # first date NOT used
@@ -45,13 +53,51 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chr
 MARKETS: dict[str, dict[str, Any]] = {
     "us": {"name": "United States", "index": "S&P MidCap 400", "suffix": "", "benchmark": "IJH",
            "benchmark_name": "iShares Core S&P Mid-Cap ETF (IJH)", "one_way_bps": 5.0, "min_turnover": 120_000.0,
-           "currency": "USD", "study": "Replication-US",
+           "currency": "USD", "study": "Replication-US", "min_members": 300, "plan": PREREGISTRATION,
            "url": "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"},
     "jp": {"name": "Japan", "index": "TOPIX Mid400", "suffix": ".T", "benchmark": "1306",
            "benchmark_name": "NEXT FUNDS TOPIX ETF (1306.T; no TOPIX Mid400 ETF is listed)", "one_way_bps": 10.0,
-           "min_turnover": 18_000_000.0, "currency": "JPY", "study": "Replication-JP",
+           "min_turnover": 18_000_000.0, "currency": "JPY", "study": "Replication-JP", "min_members": 300,
+           "plan": PREREGISTRATION,
            "url": "https://www.jpx.co.jp/automation/english/markets/indices/topix/files/topixweight_e.csv"},
+    "uk": {"name": "the United Kingdom", "index": "FTSE 250", "suffix": ".L", "benchmark": "MIDD",
+           "benchmark_name": "iShares FTSE 250 ETF (MIDD.L)", "one_way_bps": 5.0, "buy_bps": 55.0, "sell_bps": 5.0,
+           "fund_bps": 5.0, "min_turnover": 9_500_000.0, "currency": "GBp", "study": "Replication-UK",
+           "min_members": 240, "plan": UK_ADDENDUM, "url": "https://en.wikipedia.org/wiki/FTSE_250_Index"},
 }
+
+
+@dataclass(frozen=True)
+class SideCosts:
+    """Different charges on buys and sells (UK stamp duty is paid on purchases only)."""
+
+    buy_bps: float
+    sell_bps: float
+
+    def charges(self, side: str, notional: float) -> float:
+        return notional * (self.buy_bps if side == "buy" else self.sell_bps) / 10_000
+
+    def breakdown(self, side: str, notional: float) -> dict[str, float]:
+        c = self.charges(side, notional)
+        return {"charges": c, "slippage": 0.0, "total": c}
+
+    def round_trip_bps(self, notional: float, include_slippage: bool = True) -> float:
+        return self.buy_bps + self.sell_bps
+
+
+def cost_model(market: str) -> Any:
+    from .costs import FlatCosts
+    spec = MARKETS[market]
+    if "buy_bps" in spec:
+        return SideCosts(spec["buy_bps"], spec["sell_bps"])
+    return FlatCosts(one_way_bps=spec["one_way_bps"])
+
+
+def cost_text(market: str) -> str:
+    spec = MARKETS[market]
+    if "buy_bps" in spec:
+        return f"{spec['buy_bps']:g} bps on buys, {spec['sell_bps']:g} bps on sells"
+    return f"{spec['one_way_bps']:g} bps a side"
 
 
 # --------------------------------------------------------------------------- #
@@ -172,6 +218,35 @@ def parse_jp(text: str) -> list[str]:
                    if (r.get("New Index Series Code") or "").strip() == "TOPIX Mid400" and (r.get("Code") or "").strip()})
 
 
+def uk_symbol(ticker: str) -> str:
+    """Yahoo's spelling of a London ticker (without .L): BT.A -> BT-A."""
+    return re.sub(r"[^A-Z0-9-]", "", re.sub(r"\[.*?\]", "", ticker).strip().upper().rstrip(".").replace(".", "-"))
+
+
+def parse_uk(page: str) -> list[str]:
+    """Today's FTSE 250 members from the Wikipedia constituents table (its Ticker column)."""
+    p = _Tables()
+    p.feed(page)
+    rows = p.tables.get("constituents") or []
+    if not rows:
+        return []
+    header = [h.lower() for h in rows[0]]
+    col = next((i for i, h in enumerate(header) if h.startswith("ticker") or h.startswith("epic")), None)
+    if col is None:
+        return []
+    return sorted({uk_symbol(r[col]) for r in rows[1:] if len(r) > col and uk_symbol(r[col])})
+
+
+def unit_jumps(series: dict[str, list[dict[str, Any]]]) -> list[str]:
+    """Stocks whose close jumps by more than UNIT_JUMP times in a day (a pence/pound mix-up in the data)."""
+    out = []
+    for sym, bars in series.items():
+        closes = [b["close"] for b in bars if b.get("close")]
+        if any(b / a > UNIT_JUMP or a / b > UNIT_JUMP for a, b in zip(closes, closes[1:]) if a > 0 and b > 0):
+            out.append(sym)
+    return sorted(out)
+
+
 def month_starts(dates: list[str], start: str, end: str) -> list[str]:
     seen, out = set(), []
     for d in dates:
@@ -206,6 +281,8 @@ def fetch_members(market: str, session: Any = None) -> tuple[list[str], list[tup
     resp.raise_for_status()
     if market == "us":
         return parse_us(resp.text)
+    if market == "uk":
+        return parse_uk(resp.text), []
     return parse_jp(resp.content.decode("utf-8", errors="replace")), []
 
 
@@ -222,7 +299,8 @@ def load_replication_market(market: str, prices: Any, current: list[str],
         raise ValueError(f"the benchmark {spec['benchmark']} has no prices from {LOOKBACK_FROM}")
     calendar = [b["date"] for b in bench]
     membership, notes = us_membership(current, changes, calendar) if market == "us" else (
-        None, [f"today's {len(current)} members for every date (JPX publishes no free change history): stocks that "
+        None, [f"today's {len(current)} members for every date "
+               f"({'JPX' if market == 'jp' else 'Wikipedia'} publishes no free change history): stocks that "
                "left the index are missing, so the result is flattered (survivorship)."])
     universe = sorted(membership.ever_members(LOOKBACK_FROM)) if membership is not None else sorted(current)
 
@@ -242,21 +320,21 @@ def load_replication_market(market: str, prices: Any, current: list[str],
     m.missing = sorted(window_members - set(series))
     m.start_day = TRADING_FROM
     m.point_in_time = membership is not None
+    m.unit_jumps = unit_jumps(series) if spec["currency"] == "GBp" else []   # London quotes mix pence and pounds
     return m, notes
 
 
 def replicate(market: str, m: Market, *, extra_trials: int = 0) -> dict[str, Any]:
     """The adopted rules, unchanged except no tax, once; judged by the pre-registered rule."""
-    from .costs import FlatCosts
     from .research_studies import FINALIST, _first_ranked_day, _skill
     spec = MARKETS[market]
     start, end = _first_ranked_day(m), len(m.dates) - 1
     if m.dates[start] < TRADING_FROM or m.dates[end] >= WINDOW_END:
         raise ValueError(f"the window must run {TRADING_FROM} to before {WINDOW_END}")
     rules = with_rules(FINALIST, tax=False)
-    run = simulate(m, rules, start, end, capital=CAPITAL, cost_model=FlatCosts(one_way_bps=spec["one_way_bps"]))
+    run = simulate(m, rules, start, end, capital=CAPITAL, cost_model=cost_model(market))
     x = summarize(run, m, start, end)
-    buy = spec["one_way_bps"] / 10_000
+    buy = spec.get("fund_bps", spec["one_way_bps"]) / 10_000
     fund = None if x["fund_total_return"] is None else (1 + x["fund_total_return"]) * (1 - buy) - 1
     excess = None if fund is None or x["total_return"] is None else x["total_return"] - fund
     checks = {"beats the fund": excess is not None and excess > 0,
@@ -286,7 +364,7 @@ def format_replication(r: dict[str, Any], notes: list[str]) -> str:
     ahead, n = r["months_ahead"]
     p = (r["skill"] or {}).get("probability")
     lines = [f"REPLICATION, run once: the adopted rules, unchanged (no tax), on the {spec['index']} ({spec['name']}), "
-             f"{r['start']} to {r['end']}, {spec['one_way_bps']:g} bps a side ({PREREGISTRATION}).",
+             f"{r['start']} to {r['end']}, {cost_text(r['market'])} ({spec['plan']}).",
              f"  Adopted rules: {pct(r['total_return'])} ({pct(r['cagr'])} a year), worst fall {pct(r['max_drawdown'])}, "
              f"turnover {pct(r['turnover'], '.0f')} a year, ahead of the fund in {ahead} of {n} months.",
              f"  {spec['benchmark_name']}: {pct(r['fund_total_return'])}, worst fall {pct(r['fund_max_drawdown'])}.",

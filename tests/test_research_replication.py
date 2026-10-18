@@ -150,3 +150,73 @@ def test_the_market_flag_never_reaches_the_apps_market_setting(tmp_path, monkeyp
     assert cli.cmd_research_replication(args) == 2 and "TOPIX Mid400" in capsys.readouterr().out
     import os
     assert "MARKET" not in os.environ
+
+
+UK_PAGE = """
+<table class="wikitable sortable" id="constituents">
+<tr><th>Company</th><th>Ticker</th><th>Sector[13]</th></tr>
+<tr><td>3i Infrastructure</td><td>3IN</td><td>Financial Services</td></tr>
+<tr><td>BT class A</td><td>BT.A</td><td>Telecoms</td></tr>
+<tr><td>Newco</td><td>NEW.<sup>[4]</sup></td><td>Industrials</td></tr>
+<tr><td>Blank</td><td></td><td>None</td></tr>
+</table>
+"""
+
+
+def test_the_uk_page_gives_todays_ftse250_in_yahoo_spelling():
+    assert rr.parse_uk(UK_PAGE) == ["3IN", "BT-A", "NEW"]
+    assert rr.parse_uk("<table id='constituents'><tr><th>Company</th></tr></table>") == []
+    u = rr.MARKETS["uk"]
+    assert (u["suffix"], u["benchmark"], u["min_turnover"], u["study"]) == (".L", "MIDD", 9_500_000.0, "Replication-UK")
+    assert u["plan"] == rr.UK_ADDENDUM and u["min_members"] == 240
+
+
+def test_uk_costs_charge_stamp_duty_on_buys_only():
+    c = rr.cost_model("uk")
+    assert c.charges("buy", 10_000) == pytest.approx(55.0) and c.charges("sell", 10_000) == pytest.approx(5.0)
+    assert c.round_trip_bps(1) == 60.0
+    assert rr.cost_model("us").charges("buy", 10_000) == pytest.approx(5.0)
+    assert rr.cost_text("uk") == "55 bps on buys, 5 bps on sells" and rr.cost_text("jp") == "10 bps a side"
+
+
+def test_the_uk_run_uses_the_addendum_costs_and_the_fund_pays_no_stamp_duty():
+    dates, series = synthetic()
+    series["MIDD"] = series.pop("IJH")
+    members = [s for s in series if s != "MIDD"]
+    m, notes = rr.load_replication_market("uk", FakePrices(series), members, [])
+    assert m.min_turnover == 9_500_000.0 and m.unit_jumps == [] and "Wikipedia publishes no free change history" in notes[0]
+    r = rr.replicate("uk", m)
+    assert r["fund_total_return"] is not None
+    text = rr.format_replication(r, notes)
+    assert "FTSE 250 (the United Kingdom)" in text and "55 bps on buys, 5 bps on sells" in text
+    assert rr.UK_ADDENDUM in text and "iShares FTSE 250 ETF (MIDD.L)" in text
+    # the same run with symmetric 55 bps costs does worse: buys and sells really are charged differently
+    from trading_agent.research_studies import FINALIST
+    rules, end = rr.with_rules(FINALIST, tax=False), len(m.dates) - 1
+    sym = rr.simulate(m, rules, 0, end, capital=rr.CAPITAL, cost_model=rr.SideCosts(55.0, 55.0))
+    asym = rr.simulate(m, rules, 0, end, capital=rr.CAPITAL, cost_model=rr.SideCosts(55.0, 5.0))
+    assert sym["costs"] > asym["costs"] > 0
+
+
+def test_a_pence_pound_mix_up_stops_the_uk_run_before_anything_is_spent(tmp_path, monkeypatch, capsys):
+    from trading_agent import cli
+    dates, series = synthetic()
+    series["MIDD"] = series.pop("IJH")
+    series["S00"] = [{**b, "close": b["close"] / 100} if i >= 500 else b for i, b in enumerate(series["S00"])]
+    assert rr.unit_jumps(series) == ["S00"]
+    members = [s for s in series if s != "MIDD"]
+    monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path))
+    monkeypatch.setattr(rr, "fetch_members", lambda market: (members * 9, []))
+    monkeypatch.setattr(rr, "prices_for", lambda market, state_dir: FakePrices(series))
+    monkeypatch.setattr(cli, "_leakage_guard", lambda mk, holdout_start=None: None)
+    args = SimpleNamespace(replication_market="uk", confirm=True, json=False)
+    assert cli.cmd_research_replication(args) == 1 and "unit mix-up" in capsys.readouterr().out
+    assert not (tmp_path / "research" / "once" / "Replication-UK.claimed").exists()
+    series["S00"] = list(series["S01"])                                       # clean data: runs once, then refused
+    assert cli.cmd_research_replication(args) == 0 and "Claimed Replication-UK" in capsys.readouterr().out
+    assert cli.cmd_research_replication(args) == 2 and "used once only" in capsys.readouterr().out
+
+
+def test_the_uk_flag_parses():
+    from trading_agent import cli
+    assert cli.build_parser().parse_args(["research-replication", "--market", "uk"]).replication_market == "uk"

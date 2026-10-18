@@ -629,13 +629,16 @@ run by the watch service in the same after-close job; nothing in them is retuned
   compares it with the forward test over the same days. As pre-registered, it replaces the adopted rules only if it
   beats them over 12 months here. `resmom-paper --run` does today's run by hand.
 
-**US and Japan replication (once per market).** `research-replication --market us|jp --confirm` runs the adopted rules,
+**US, Japan and UK replication (once per market).** `research-replication --market us|jp|uk --confirm` runs the adopted rules,
 unchanged except that no tax is charged, on the S&P MidCap 400 (against IJH) or the TOPIX Mid400 (against the TOPIX ETF
 1306.T, as JPX lists no Mid400 ETF), 1 Oct 2016 – 30 Sep 2026, at 5 or 10 bps a side, as
 [pre-registered](research/preregistered-replication-2026-10-18.md). Membership is point in time only if the free change
 history passes a fixed completeness test (390–410 members at every month start); otherwise today's members are used and
 the report says the result is flattered. Pass: beat the fund with a worst fall no more than 10 points deeper. Each market
 is claimed before it runs, logged before it prints and refused a second time; no Indian rule changes either way.
+`--market uk` runs the FTSE 250 (today's members, against MIDD.L) at 55 bps on buys (0.5% stamp duty) and 5 bps on
+sells, with a £95,000-a-day floor, as fixed in the [UK addendum](research/preregistered-replication-2026-10-18b.md). If
+any London price jumps more than 50 times in a day (a pence/pound mix-up), it stops before anything is spent.
 
 **Batch 3 (once).** `research-batch3 --confirm` runs the two ideas
 [pre-registered](research/preregistered-batch-2026-10-18.md) on 18 Oct 2026 beside the adopted rules on the development
