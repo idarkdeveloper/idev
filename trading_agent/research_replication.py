@@ -46,6 +46,8 @@ RERUN_ADDENDUM = "docs/research/rerun-addendum-2026-10-18c.md"
 # void, kept in the trial log, and rerun once each under new names with the corrected data (RERUN_ADDENDUM).
 VOID_STUDIES = ("Replication-US", "Replication-JP", "Backward-batch")
 UNIT_JUMP = 50.0                 # a close more than 50x (or under 1/50 of) the day before: a pence/pound mix-up
+MAX_JUMPED = 0.10               # more than this share of stocks with unit errors: stop instead of leaving them out
+UK_DATA_NOTE = "docs/research/uk-data-note-2026-10-18d.md"
 LOOKBACK_FROM = "2015-10-01"     # a year of history before the first decision
 TRADING_FROM = "2016-10-01"
 WINDOW_END = "2026-10-01"        # first date NOT used
@@ -68,7 +70,8 @@ MARKETS: dict[str, dict[str, Any]] = {
     "uk": {"name": "the United Kingdom", "index": "FTSE 250", "suffix": ".L", "benchmark": "MIDD",
            "benchmark_name": "iShares FTSE 250 ETF (MIDD.L)", "one_way_bps": 5.0, "buy_bps": 55.0, "sell_bps": 5.0,
            "fund_bps": 5.0, "min_turnover": 9_500_000.0, "currency": "GBp", "study": "Replication-UK",
-           "min_members": 240, "plan": UK_ADDENDUM, "url": "https://en.wikipedia.org/wiki/FTSE_250_Index"},
+           "min_members": 240, "plan": f"{UK_ADDENDUM}; data note: {UK_DATA_NOTE}",
+           "url": "https://en.wikipedia.org/wiki/FTSE_250_Index"},
 }
 
 
@@ -387,16 +390,17 @@ def load_replication_market(market: str, prices: Any, current: list[str],
     for d in month_starts(calendar, TRADING_FROM, WINDOW_END):
         window_members |= members_on(d)
     jumped = unit_jumps(series)
-    if jumped and spec["currency"] != "GBp":   # rerun addendum: a >50x day is a data error; the stock is left out
-        series = {k: v for k, v in series.items() if k not in jumped}
+    too_many = len(jumped) > MAX_JUMPED * max(1, len(series))
+    if jumped and not too_many:   # a >50x day is a data error; the stock is left out and named (rerun addendum;
+        series = {k: v for k, v in series.items() if k not in jumped}   # for the UK, uk-data-note-2026-10-18d.md)
         notes = notes + [f"{len(jumped)} stock(s) left out for a one-day move of more than 50x (a data error): "
                          f"{', '.join(jumped[:12])}."]
     m = Market(calendar, series, bench, members_on, min_turnover=spec["min_turnover"])
     m.missing = sorted(window_members - set(series))
     m.start_day = TRADING_FROM
     m.point_in_time = membership is not None
-    if spec["currency"] == "GBp":
-        m.unit_jumps = jumped        # London quotes mix pence and pounds: the UK addendum stops the run
+    if too_many:
+        m.unit_jumps = jumped        # so many unit errors that the data cannot be trusted: the run stops
     elif jumped:
         m.excluded = jumped
     return m, notes

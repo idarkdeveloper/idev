@@ -168,7 +168,7 @@ def test_the_uk_page_gives_todays_ftse250_in_yahoo_spelling():
     assert rr.parse_uk("<table id='constituents'><tr><th>Company</th></tr></table>") == []
     u = rr.MARKETS["uk"]
     assert (u["suffix"], u["benchmark"], u["min_turnover"], u["study"]) == (".L", "MIDD", 9_500_000.0, "Replication-UK")
-    assert u["plan"] == rr.UK_ADDENDUM and u["min_members"] == 240
+    assert rr.UK_ADDENDUM in u["plan"] and rr.UK_DATA_NOTE in u["plan"] and u["min_members"] == 240
 
 
 def test_uk_costs_charge_stamp_duty_on_buys_only():
@@ -198,22 +198,32 @@ def test_the_uk_run_uses_the_addendum_costs_and_the_fund_pays_no_stamp_duty():
     assert sym["costs"] > asym["costs"] > 0
 
 
-def test_a_pence_pound_mix_up_stops_the_uk_run_before_anything_is_spent(tmp_path, monkeypatch, capsys):
+def test_uk_unit_errors_are_left_out_and_named_and_too_many_stop_the_run(tmp_path, monkeypatch, capsys):
+    """18 Oct 2026: six FTSE 250 stocks (BCG, CLDN, MEGP, PNL, ROSE, VSVS) mix pence and pounds on Yahoo. The owner chose
+    to leave such stocks out and name them (uk-data-note); only more than 10% of stocks stops the run."""
     from trading_agent import cli
     dates, series = synthetic()
     series["MIDD"] = series.pop("IJH")
     series["S00"] = [{**b, "close": b["close"] / 100} if i >= 500 else b for i, b in enumerate(series["S00"])]
     assert rr.unit_jumps(series) == ["S00"]
     members = [s for s in series if s != "MIDD"]
+    m, notes = rr.load_replication_market("uk", FakePrices(series), members, [])
+    assert "S00" not in m.raw and m.excluded == ["S00"] and m.unit_jumps == []
+    assert any("left out for a one-day move of more than 50x" in x and "S00" in x for x in notes)
+    broken = {k: ([{**b, "close": b["close"] / 100} if i >= 500 else b for i, b in enumerate(v)]
+                  if k in ("S00", "S01", "S02", "S03", "S04") else v) for k, v in series.items()}
     monkeypatch.setattr(cli, "_settings", lambda a: SimpleNamespace(state_dir=tmp_path))
     monkeypatch.setattr(rr, "fetch_members", lambda market: (members * 9, []))
-    monkeypatch.setattr(rr, "prices_for", lambda market, state_dir: FakePrices(series))
+    prices = {"now": FakePrices(broken)}
+    monkeypatch.setattr(rr, "prices_for", lambda market, state_dir: prices["now"])
     monkeypatch.setattr(cli, "_leakage_guard", lambda mk, holdout_start=None: None)
     args = SimpleNamespace(replication_market="uk", confirm=True, json=False)
-    assert cli.cmd_research_replication(args) == 1 and "unit mix-up" in capsys.readouterr().out
+    assert cli.cmd_research_replication(args) == 1 and "cannot be trusted" in capsys.readouterr().out   # 5 of 40
     assert not (tmp_path / "research" / "once" / "Replication-UK.claimed").exists()
-    series["S00"] = list(series["S01"])                                       # clean data: runs once, then refused
-    assert cli.cmd_research_replication(args) == 0 and "Claimed Replication-UK" in capsys.readouterr().out
+    prices["now"] = FakePrices(series)                          # one bad stock: left out, the run goes once
+    assert cli.cmd_research_replication(args) == 0
+    out = capsys.readouterr().out
+    assert "Claimed Replication-UK" in out and "S00" in out
     assert cli.cmd_research_replication(args) == 2 and "used once only" in capsys.readouterr().out
 
 
