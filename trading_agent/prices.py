@@ -19,6 +19,24 @@ from .circuit import CircuitBreaker, GuardedSession
 
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+SHORT_DAILY_RANGES = ("1d", "5d")   # a daily answer of one bar is normal for these
+HOURLY_RANGE = "2y"                 # Yahoo serves 60-minute bars for at most 730 days
+
+
+def daily_from_hourly(hourly: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Daily OHLC bars built from intraday bars (each with an IST ``date``), oldest first: the first open, the highest
+    high, the lowest low, the last close and the summed volume of each date. Marked ``from_hourly``."""
+    days: dict[str, dict[str, Any]] = {}
+    for b in sorted(hourly, key=lambda x: str(x.get("ts") or x["date"])):
+        d = days.get(b["date"])
+        if d is None:
+            days[b["date"]] = {"ts": b.get("ts"), "date": b["date"], "open": b["open"], "high": b["high"],
+                               "low": b["low"], "close": b["close"], "volume": float(b.get("volume") or 0),
+                               "from_hourly": True}
+            continue
+        d["high"], d["low"] = max(d["high"], b["high"]), min(d["low"], b["low"])
+        d["close"], d["volume"] = b["close"], d["volume"] + float(b.get("volume") or 0)
+    return list(days.values())
 
 
 def _check_status(resp: Any, ysym: str) -> None:
@@ -164,6 +182,15 @@ class YahooPrices:
                 "adj_close": float(adj[i] if adj[i] is not None else close),
                 "volume": float(quote["volume"][i] or 0),
             })
+        if range_ not in SHORT_DAILY_RANGES and len(bars) <= 1:   # Yahoo's daily series is broken here (see _hourly_days)
+            days = self._hourly_days(ysym)
+            if len(days) > len(bars):
+                from .timezones import IST
+                today = datetime.fromtimestamp(self.clock(), tz=timezone.utc).astimezone(IST).date().isoformat()
+                bars = [{"date": d["date"], "close": d["close"], "adj_close": d["close"], "volume": d["volume"],
+                         "from_hourly": True} for d in days]
+                if bars[-1]["date"] >= today:   # today's hours so far are not a close: served, never archived
+                    bars[-1]["provisional"] = True
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(bars))
@@ -175,13 +202,16 @@ class YahooPrices:
         disk for ``ttl`` seconds."""
         from .timezones import IST
         ysym = self.yahoo_symbol(symbol)
-        cache = (self.cache_dir / f"yahoo_{ysym.replace('^', 'IDX_').replace('=', '_')}_{range_}_{interval}_ohlc.json"
+        key = "maxd" if interval == "1d" and range_ == "max" else range_   # a monthly file cached before is never read
+        cache = (self.cache_dir / f"yahoo_{ysym.replace('^', 'IDX_').replace('=', '_')}_{key}_{interval}_ohlc.json"
                  if self.cache_dir else None)
         if cache and cache.exists() and time.time() - cache.stat().st_mtime < ttl:
             cached: list[dict[str, Any]] = json.loads(cache.read_text())
             return self._filled(ysym, cached, ohlc=True) if interval == "1d" else cached
-        resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS,
-                                params={"range": range_, "interval": interval}, timeout=self.timeout)
+        daily_max = interval == "1d" and range_ == "max"   # by dates: range=max serves MONTHLY bars (see _history)
+        params: dict[str, Any] = ({"period1": 0, "period2": int(time.time()) + 86400, "interval": "1d"} if daily_max
+                                  else {"range": range_, "interval": interval})
+        resp = self.session.get(YAHOO_URL.format(symbol=ysym), headers=HEADERS, params=params, timeout=self.timeout)
         _check_status(resp, ysym)
         data: Any = resp.json()
         try:
@@ -212,10 +242,23 @@ class YahooPrices:
                          "high": float(h[i]), "low": float(lo[i]), "close": float(c[i]), "volume": float(v[i] or 0)})
         if interval == "1d":   # Yahoo can repeat the last day (a live bar and the settled one): keep the last of each date
             bars = list({b["date"]: b for b in bars}.values())
+            if range_ not in SHORT_DAILY_RANGES and len(bars) <= 1:   # Yahoo's daily series is broken here
+                days = self._hourly_days(ysym)
+                if len(days) > len(bars):
+                    bars = days
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps(bars))
         return self._filled(ysym, bars, ohlc=True) if interval == "1d" else bars
+
+    def _hourly_days(self, ysym: str) -> list[dict[str, Any]]:
+        """Daily bars built from Yahoo's 60-minute bars, used only when Yahoo's daily series is broken: on 18 Oct 2026
+        every BSE (.BO) symbol's daily chart held just the latest day, whatever the range (by range or by dates),
+        while its 60-minute bars went back to 17 Jul 2026. Empty when the hourly bars cannot be read either."""
+        try:
+            return daily_from_hourly(self._ohlc(ysym, HOURLY_RANGE, "60m", 3600.0))
+        except Exception:  # noqa: BLE001 - the caller keeps the daily answer it had
+            return []
 
     def history_ohlc(self, symbol: str, range_: str = "1y", ttl: float | None = None) -> list[dict[str, Any]]:
         """Daily OHLC bars (see ``_ohlc``). Cached for at most 15 minutes, so an evening read sees the day's final bar."""

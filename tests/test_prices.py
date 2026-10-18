@@ -83,3 +83,76 @@ def test_yahoo_4xx_and_null_result_are_lookup_errors_but_429_and_5xx_are_not(met
         with pytest.raises(requests.HTTPError) as ei:
             getattr(YahooPrices(".NS", session=_Sess({}, status)), method)("HDFC")
         assert not isinstance(ei.value, LookupError)
+
+
+# --- Yahoo's broken BSE daily series (18 Oct 2026): daily bars rebuilt from hourly bars -------------------------------
+
+class _ChartSess:
+    """A fake Yahoo chart API: one answer per interval, and every request's params recorded."""
+
+    def __init__(self, by_interval):
+        self.by_interval, self.params = by_interval, []
+
+    def get(self, url, params=None, **kw):
+        self.params.append(dict(params or {}))
+        return _Resp(self.by_interval[params["interval"]], 200)
+
+
+def _chart(rows):
+    """rows: (epoch seconds, open, high, low, close, volume)."""
+    ts, o, h, lo, c, v = (list(x) for x in zip(*rows))
+    return {"chart": {"result": [{"meta": {"regularMarketPrice": c[-1]}, "timestamp": ts,
+                                  "indicators": {"quote": [{"open": o, "high": h, "low": lo, "close": c, "volume": v}],
+                                                 "adjclose": [{"adjclose": c}]}}]}}
+
+
+D15, D16 = 1792036800, 1792123200          # 2026-10-15 and 2026-10-16, 04:00 UTC (09:30 IST)
+ONE_DAY = _chart([(D16, 176.45, 178.15, 174.9, 175.6, 965045)])
+HOURLY = _chart([(D15, 174.2, 175.0, 173.1, 174.8, 100), (D15 + 3600, 174.8, 176.9, 174.5, 176.45, 200),
+                 (D16, 176.45, 178.15, 176.0, 177.0, 300), (D16 + 3600, 177.0, 177.2, 174.9, 175.6, 400)])
+
+
+def test_daily_from_hourly_keeps_first_open_extremes_last_close_and_summed_volume():
+    from trading_agent.prices import daily_from_hourly
+    bars = YahooPrices(".BO", session=_ChartSess({"60m": HOURLY}))._ohlc("TATASTEEL.BO", "2y", "60m", 0)
+    days = daily_from_hourly(bars)
+    assert [(d["date"], d["open"], d["high"], d["low"], d["close"], d["volume"]) for d in days] == [
+        ("2026-10-15", 174.2, 176.9, 173.1, 176.45, 300.0), ("2026-10-16", 176.45, 178.15, 174.9, 175.6, 700.0)]
+    assert all(d["from_hourly"] for d in days)
+
+
+def test_a_one_bar_daily_answer_is_rebuilt_from_hourly_bars_for_the_chart_and_the_close_series():
+    sess = _ChartSess({"1d": ONE_DAY, "60m": HOURLY})
+    y = YahooPrices(".BO", session=sess)
+    y.clock = lambda: D16 + 86400 * 2
+    ohlc = y.history_ohlc("TATASTEEL", "5y")
+    assert [b["date"] for b in ohlc] == ["2026-10-15", "2026-10-16"] and ohlc[0]["from_hourly"]
+    closes = y.history("TATASTEEL", "1y")
+    assert [(b["date"], b["close"]) for b in closes] == [("2026-10-15", 176.45), ("2026-10-16", 175.6)]
+    assert not any(b.get("provisional") for b in closes)
+    assert {"range": "2y", "interval": "60m"} in sess.params
+
+
+def test_todays_hourly_built_bar_is_provisional_so_it_is_never_archived():
+    y = YahooPrices(".BO", session=_ChartSess({"1d": ONE_DAY, "60m": HOURLY}))
+    y.clock = lambda: D16 + 3 * 3600
+    closes = y.history("TATASTEEL", "1y")
+    assert closes[-1]["provisional"] and not closes[0].get("provisional")
+
+
+def test_a_one_bar_answer_is_normal_for_short_ranges_and_a_working_daily_series_is_kept():
+    sess = _ChartSess({"1d": ONE_DAY, "60m": HOURLY})
+    assert len(YahooPrices(".BO", session=sess).history_ohlc("TATASTEEL", "5d")) == 1
+    assert not any(p["interval"] == "60m" for p in sess.params)
+    daily = _chart([(D15, 1, 2, 0.5, 1.5, 10), (D16, 1.5, 2, 1, 1.8, 10)])
+    sess = _ChartSess({"1d": daily, "60m": HOURLY})
+    assert [b["close"] for b in YahooPrices(".NS", session=sess).history_ohlc("TATASTEEL", "5y")] == [1.5, 1.8]
+    assert not any(p["interval"] == "60m" for p in sess.params)
+
+
+def test_the_all_range_of_ohlc_asks_by_dates_because_range_max_serves_monthly_bars(tmp_path):
+    daily = _chart([(D15, 1, 2, 0.5, 1.5, 10), (D16, 1.5, 2, 1, 1.8, 10)])
+    sess = _ChartSess({"1d": daily})
+    YahooPrices(".NS", session=sess, cache_dir=tmp_path).history_ohlc("TATASTEEL", "max")
+    assert sess.params[0]["period1"] == 0 and "range" not in sess.params[0]
+    assert (tmp_path / "yahoo_TATASTEEL.NS_maxd_1d_ohlc.json").exists()

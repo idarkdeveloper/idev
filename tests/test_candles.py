@@ -119,3 +119,13 @@ def test_chart_colours_use_real_nocturne_tokens_and_both_theme_signals():
 def test_position_is_passed_through():
     pos = {"cost": 101.0, "stop": 95.5}
     assert build_candles("X", "1M", _bars(40), pos)["position"] == pos
+
+
+def test_a_chart_built_from_hourly_prices_says_so_and_where_it_starts():
+    from trading_agent.candles import build_candles
+    bars = [{"date": "2026-07-17", "open": 1, "high": 2, "low": 1, "close": 1.5, "volume": 1, "from_hourly": True},
+            {"date": "2026-07-18", "open": 1, "high": 2, "low": 1, "close": 1.6, "volume": 1, "from_hourly": True}]
+    out = build_candles("TATASTEEL", "5Y", bars)
+    assert "hourly prices, which start 17 Jul 2026" in out["note"] and len(out["bars"]) == 2
+    assert "note" not in build_candles("TATASTEEL", "5Y", [{k: v for k, v in b.items() if k != "from_hourly"}
+                                                         for b in bars])

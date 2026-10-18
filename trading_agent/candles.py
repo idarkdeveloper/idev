@@ -91,6 +91,9 @@ def build_candles(ticker: str, range_key: str, bars: list[dict[str, Any]],
         return out
     dates = [str(b["date"])[:10] for b in clean]
     closes = [float(b["close"]) for b in clean]
+    if clean[0].get("from_hourly"):
+        out["note"] = (f"Yahoo is serving only the latest day of daily prices for this symbol, so this chart is built "
+                       f"from its hourly prices, which start {date.fromisoformat(dates[0]).strftime('%-d %b %Y')}.")
     if range_key == ALL:
         start = 0
     else:

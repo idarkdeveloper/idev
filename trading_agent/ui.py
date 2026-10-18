@@ -871,6 +871,8 @@ class App:
             bars, error = self._ohlc(symbol, "max" if range_key == ALL else "5y")
             out = build_candles(ticker, range_key, bars or [], position)
         out["exchange"] = exchange
+        if out.get("note") and exchange == "BSE" and not base.isdigit():
+            out["note"] += " Switch to NSE for the full history."
         if error and not out["bars"]:
             out["error"] = error
         return out
