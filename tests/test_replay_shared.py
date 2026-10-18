@@ -95,18 +95,18 @@ def test_warmup_loads_universe_and_benchmark_through_the_cache(monkeypatch):
                 raise OSError("no membership file")
             self.membership = type("M", (), {"ever_members": staticmethod(lambda start: ["B", "A", "GONE"])})()
 
-    monkeypatch.setattr(web, "ReplayUniverse", U)
     monkeypatch.setattr(web, "BENCHMARKS", {"NIFTY50": "NIFTYBEES", "NIFTY100": "NIFTYBEES"})
     src = market()
     app = ReplayApp.__new__(ReplayApp)
     app.settings = type("S", (), {"state_dir": "x"})()
     app._stop = threading.Event()
     app.source = SharedHistory(src)
-    app._warm(0)
+    app._universe = lambda name: U(name, None)
+    app._warm(0, 0)
     assert sorted(c[1] for c in src.calls) == ["A", "B", "GONE", "NIFTYBEES"]   # GONE: LookupError ignored
     app._stop.set()
     src.calls.clear()
-    app._warm(0)
+    app._warm(0, 0)
     assert src.calls == []
 
 
@@ -118,3 +118,56 @@ def test_injected_source_is_left_as_given_and_no_warm_thread(settings):
     r = ReplayApp(App(settings, dotenv=None), source=src, universe_factory=lambda n: FakeUniverse(), news_client=FakeNews())
     assert r.source is src
     assert "replay-warm" not in [t.name for t in threading.enumerate()]
+
+
+def test_universe_built_once_across_threads(settings):
+    from trading_agent.ui import App
+    from trading_agent.replay.web import ReplayApp
+    from .test_replay_web import FakeNews
+    built = []
+
+    def factory(name):
+        built.append(name)
+        time.sleep(0.05)
+        return object()
+
+    r = ReplayApp(App(settings, dotenv=None), source=market(), universe_factory=factory, news_client=FakeNews())
+    ts = [threading.Thread(target=r._universe, args=("X",)) for _ in range(6)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert built == ["X"]
+
+
+def test_expired_entries_are_evicted_on_a_miss():
+    sh = SharedHistory(Counting({"A": path(100, 0.001), "B": path(100, 0.001)}), ttl=0.01)
+    sh.history("A", "10y")
+    time.sleep(0.03)
+    sh.history("B", "10y")
+    assert list(sh._cache) == [("B", "10y")] and ("A", "10y") not in sh._locks
+
+
+@pytest.mark.parametrize("env,threads", [(None, 1), ("false", 0)])
+def test_production_wiring(settings, monkeypatch, env, threads):
+    import trading_agent.prices as prices
+    import trading_agent.price_archive as pa
+    from trading_agent.ui import App
+    from trading_agent.replay import web
+    from .test_replay_web import FakeNews, FakeUniverse
+    started = []
+
+    class T:
+        def __init__(self, target=None, args=(), daemon=None, name=None):
+            self.kw = (daemon, name)
+
+        def start(self):
+            started.append(self.kw)
+
+    monkeypatch.setattr(web.threading, "Thread", T)
+    monkeypatch.setattr(prices, "YahooPrices", lambda **kw: market())
+    monkeypatch.setattr(pa, "archive_for", lambda s: None)
+    if env:
+        monkeypatch.setenv("REPLAY_WARM", env)
+    else:
+        monkeypatch.delenv("REPLAY_WARM", raising=False)
+    r = web.ReplayApp(App(settings, dotenv=None), universe_factory=lambda n: FakeUniverse(), news_client=FakeNews())
+    assert isinstance(r.source, SharedHistory)
+    assert started == [(True, "replay-warm")] * threads

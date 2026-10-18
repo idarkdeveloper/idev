@@ -66,6 +66,7 @@ class ReplayApp:
             source = SharedHistory(source)   # one history cache for all trials and tools
         self.source = source
         self._universes: dict[str, Any] = {}
+        self._universe_lock = threading.RLock()   # build each universe once (it may download and rewrite files)
         self.universe_factory = universe_factory or (lambda n: ReplayUniverse(n, self.settings.state_dir))
         if news_client is None:
             from ..nse import NSEClient
@@ -90,7 +91,7 @@ class ReplayApp:
     def close(self) -> None:
         self._stop.set()
 
-    def _warm(self, delay: float) -> None:
+    def _warm(self, delay: float, pause: float = 0.3) -> None:
         """Load every universe's 10y history into the shared cache, so the first replay does not wait for it."""
         try:
             if self._stop.wait(delay):
@@ -100,7 +101,7 @@ class ReplayApp:
                 if self._stop.is_set():
                     return
                 try:
-                    syms = sorted(ReplayUniverse(name, self.settings.state_dir).membership.ever_members(EARLIEST_START))
+                    syms = sorted(self._universe(name).membership.ever_members(EARLIEST_START))
                 except Exception as e:  # noqa: BLE001
                     log.debug("replay warm-up: universe %s skipped: %s", name, e)
                     continue
@@ -112,15 +113,18 @@ class ReplayApp:
                         n += 1
                     except Exception as e:  # noqa: BLE001
                         log.debug("replay warm-up: %s skipped: %s", sym, e)
+                    if self._stop.wait(pause):   # spread the load, yield the GIL to page requests
+                        return
             log.info("replay warm-up: %d symbols loaded in %.1fs", n, time.monotonic() - t0)
         except Exception:  # noqa: BLE001 - a warm-up must never take anything down
             log.debug("replay warm-up failed", exc_info=True)
 
     # -- helpers -------------------------------------------------------------------
     def _universe(self, name: str) -> Any:
-        if name not in self._universes:
-            self._universes[name] = self.universe_factory(name)
-        return self._universes[name]
+        with self._universe_lock:
+            if name not in self._universes:
+                self._universes[name] = self.universe_factory(name)
+            return self._universes[name]
 
     def trial(self, slug: str) -> Trial:
         if not _SLUG.match(slug or ""):
