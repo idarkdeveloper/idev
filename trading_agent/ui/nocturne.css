@@ -1226,3 +1226,37 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #mp-card .mp-table tfoot td:not(:first-child):empty { display: block; }
   #mp-card .mp-table tfoot td:nth-child(2):empty, #mp-card .mp-table tfoot td:nth-child(3):empty, #mp-card .mp-table tfoot td:nth-child(7):empty { display: none; }
 }
+/* Holdings rows on a phone, compact: symbol + tags and price on top, qty x avg and today under it, value and profit / loss, then the stop as a small chip.
+   The micro-labels are visually hidden (screen readers still hear Price / Today / Value / Profit / loss / Stop). */
+@media (max-width: 700px) {
+  #mp-card #mp-rows tr[data-open-stock] { grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 10px; padding: 10px 16px; align-items: center; min-height: 44px; }
+  #mp-card #mp-rows td.stock-cell { display: contents; }
+  #mp-card #mp-rows .stock-cell > .sym-line { grid-column: 1; grid-row: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; font-weight: 700; font-size: 15px; }
+  #mp-card #mp-rows .stock-cell > .sym-line .pill { padding: 0 6px; font-size: 10.5px; line-height: 16px; }
+  #mp-card #mp-rows .stock-cell > .sym-line a { min-height: 32px; }
+  #mp-card #mp-rows .stock-cell > .l2 { grid-column: 1 / 3; grid-row: 2; font-size: 12px; line-height: 1.3; color: var(--color-muted); min-width: 0; }
+  #mp-card #mp-rows .stock-cell > div:not(.sym-line):not(.l2) { grid-column: 1 / -1; grid-row: 5; }
+  #mp-card #mp-rows td.spark-col { grid-column: 2; grid-row: 1; justify-self: end; width: 64px; height: 24px; }
+  #mp-card #mp-rows td.spark-col svg { width: 64px; height: 24px; display: block; }
+  #mp-card #mp-rows td.num { font-size: 13px; white-space: nowrap; }
+  #mp-card #mp-rows td.num:nth-child(3) { grid-column: 3; grid-row: 1; justify-self: end; font-family: var(--mono); font-size: 15px; font-weight: 600; }
+  #mp-card #mp-rows td.num:nth-child(4) { grid-column: 3; grid-row: 2; justify-self: end; font-size: 12px; }
+  #mp-card #mp-rows td.num:nth-child(5) { grid-column: 1; grid-row: 3; font-size: 13px; }
+  #mp-card #mp-rows td.num:nth-child(6) { grid-column: 2 / 4; grid-row: 3; justify-self: end; display: flex; gap: 6px; align-items: baseline; font-weight: 600; }
+  #mp-card #mp-rows td.num:nth-child(6) .l2 { font-size: 12px; font-weight: 500; }
+  #mp-card #mp-rows td.prot-cell { grid-column: 1 / -1; grid-row: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 12px; }
+  #mp-card #mp-rows td.prot-cell .stop-state { display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border: 1px solid var(--color-divider); border-radius: 999px; font-size: 11.5px; line-height: 18px; color: var(--color-muted); }
+  #mp-card #mp-rows td.prot-cell .sub.l2 { font-size: 11.5px; }
+  #mp-card #mp-rows td.prot-cell .stop-warn { flex: 1 1 100%; }
+  /* labels: Today and Value stay as small lowercase words, the rest are for screen readers only */
+  #mp-card #mp-rows td.num::before, #mp-card #mp-rows td.prot-cell::before { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); text-transform: none; }
+  #mp-card #mp-rows td.num:nth-child(4)::before, #mp-card #mp-rows td.num:nth-child(5)::before { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; display: inline; font-size: 12px; color: var(--color-muted); letter-spacing: 0; text-transform: none; margin-right: 4px; }
+  #mp-card #mp-rows td.num:nth-child(4)::before { content: "Today"; } #mp-card #mp-rows td.num:nth-child(5)::before { content: "Value"; }
+}
+@media (max-width: 700px) {
+  #mp-card #mp-rows tr[data-open-stock] { padding: 8px 16px; gap: 1px 10px; }
+  #mp-card #mp-rows .stock-cell > .sym-line { grid-column: 1 / 3; }
+  #mp-card #mp-rows .stock-cell > .l2 { grid-column: 1; }
+  #mp-card #mp-rows td.spark-col { grid-row: 2; align-self: center; }
+  #mp-card #mp-rows td.spark-col:empty { display: block; }
+}
