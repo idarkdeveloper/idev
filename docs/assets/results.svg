@@ -1,15 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="Research so far, 1 Oct 2020 to 30 Sep 2025, after charges and tax: the adopted momentum rules made 363.8 percent against 230.8 percent for the Midcap 150 index fund, with a worst fall of about 31 percent against 21 percent. Skill odds 0.43 against a 0.95 bar: not proven.">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-label="Research so far, 1 Oct 2020 to 30 Sep 2025, after charges and tax: the adopted momentum rules made 363.8 percent against 230.8 percent for the Midcap 150 index fund, with a worst fall of about 31 percent against 21 percent. Skill odds 0.43 against a 0.95 bar. The sealed year (Oct 2025 to Oct 2026) passed thinly, 4.5 percent against 2.8; the pre-registered April 2017 to September 2020 check passed, 38.7 percent against 15.6. Not proven.">
   <defs>
     <radialGradient id="g" cx="85%" cy="0%" r="70%">
       <stop offset="0" stop-color="#8b7cf6" stop-opacity="0.22"/>
       <stop offset="1" stop-color="#8b7cf6" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <rect width="1200" height="300" rx="18" fill="#12131c"/>
-  <rect width="1200" height="300" rx="18" fill="url(#g)"/>
-  <rect x="0.5" y="0.5" width="1199" height="299" rx="18" fill="none" stroke="#2a2c3d"/>
+  <rect width="1200" height="340" rx="18" fill="#12131c"/>
+  <rect width="1200" height="340" rx="18" fill="url(#g)"/>
+  <rect x="0.5" y="0.5" width="1199" height="339" rx="18" fill="none" stroke="#2a2c3d"/>
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="2.4" fill="#8a8ca8">
-    <text x="48" y="48">RESEARCH SO FAR · 1 OCT 2020 – 30 SEP 2025 · AFTER CHARGES AND TAX</text>
+    <text x="48" y="48">DEVELOPMENT YEARS · 1 OCT 2020 – 30 SEP 2025 · AFTER CHARGES AND TAX</text>
   </g>
   <g font-family="-apple-system, 'Segoe UI', Inter, Helvetica, Arial, sans-serif">
     <text x="48" y="104" font-size="44" font-weight="700" fill="#f2f2f8">+363.8%</text>
@@ -32,14 +32,16 @@
       <text x="492" y="112" font-size="12" fill="#8a8ca8">−21.2%</text>
     </g>
 
-    <g transform="translate(640 70)">
-      <rect width="512" height="196" rx="12" fill="#1a1b28" stroke="#2a2c3d"/>
+    <g transform="translate(640 66)">
+      <rect width="512" height="250" rx="12" fill="#1a1b28" stroke="#2a2c3d"/>
       <text x="24" y="34" font-family="ui-monospace, Menlo, Consolas, monospace" font-size="11" letter-spacing="2" fill="#8a8ca8">THE HONEST MATH</text>
-      <text x="24" y="68" font-size="15" fill="#f2f2f8">Skill odds <tspan font-weight="700" fill="#fcd34d">0.43</tspan> <tspan fill="#8a8ca8">· the bar is 0.95, every try counted</tspan></text>
-      <text x="24" y="96" font-size="15" fill="#f2f2f8">Momentum robustness: <tspan font-weight="700" fill="#f9a8d4">fragile</tspan> <tspan fill="#8a8ca8">· 7 of 9 variants beat the fund</tspan></text>
-      <text x="24" y="124" font-size="15" fill="#f2f2f8">Leakage test: <tspan font-weight="700" fill="#5eead4">passed</tspan> <tspan fill="#8a8ca8">· 60 decision days, no look-ahead</tspan></text>
-      <text x="24" y="152" font-size="15" fill="#f2f2f8">Prediction model: <tspan font-weight="700" fill="#f9a8d4">rejected</tspan> <tspan fill="#8a8ca8">· simple rules beat it</tspan></text>
-      <text x="24" y="180" font-size="13" fill="#8a8ca8">Not proven. A sealed year and a pre-registered 2017–2020 check decide.</text>
+      <text x="24" y="66" font-size="15" fill="#f2f2f8">Sealed year: <tspan font-weight="700" fill="#5eead4">passed, thinly</tspan> <tspan fill="#8a8ca8">· +4.5% vs +2.8%</tspan></text>
+      <text x="24" y="94" font-size="15" fill="#f2f2f8">2017–2020 check: <tspan font-weight="700" fill="#5eead4">passed</tspan> <tspan fill="#8a8ca8">· +38.7% vs +15.6%</tspan></text>
+      <text x="24" y="122" font-size="15" fill="#f2f2f8">Skill odds <tspan font-weight="700" fill="#fcd34d">0.43</tspan> <tspan fill="#8a8ca8">· the bar is 0.95, every try counted</tspan></text>
+      <text x="24" y="150" font-size="15" fill="#f2f2f8">Momentum robustness: <tspan font-weight="700" fill="#f9a8d4">fragile</tspan> <tspan fill="#8a8ca8">· 7 of 9 variants beat the fund</tspan></text>
+      <text x="24" y="178" font-size="15" fill="#f2f2f8">Leakage test: <tspan font-weight="700" fill="#5eead4">passed</tspan> <tspan fill="#8a8ca8">· no decision used later data</tspan></text>
+      <text x="24" y="206" font-size="15" fill="#f2f2f8">Prediction model: <tspan font-weight="700" fill="#f9a8d4">rejected</tspan> <tspan fill="#8a8ca8">· simple rules beat it</tspan></text>
+      <text x="24" y="234" font-size="13" fill="#8a8ca8">Both one-time checks passed; not proven. The paper test decides.</text>
     </g>
   </g>
 </svg>
