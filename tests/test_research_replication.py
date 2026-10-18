@@ -125,7 +125,7 @@ def test_the_command_needs_confirm_and_runs_each_market_once(tmp_path, monkeypat
     monkeypatch.setattr(rr, "prices_for", lambda market, state_dir: FakePrices(series))
     guarded = {}
     monkeypatch.setattr(cli, "_leakage_guard", lambda mk, holdout_start=None: guarded.update(h=holdout_start))
-    args = SimpleNamespace(market="us", confirm=False, json=False)
+    args = SimpleNamespace(replication_market="us", confirm=False, json=False)
     assert cli.cmd_research_replication(args) == 2 and "Run again with --confirm" in capsys.readouterr().out
     args.confirm = True
     assert cli.cmd_research_replication(args) == 0
@@ -135,5 +135,18 @@ def test_the_command_needs_confirm_and_runs_each_market_once(tmp_path, monkeypat
     assert [r["study"] for r in rows] == ["Replication-US"]
     assert cli.cmd_research_replication(args) == 2 and "used once only" in capsys.readouterr().out
     monkeypatch.setattr(rr, "fetch_members", lambda market: (["A"], []))   # Japan: too few names read -> not spent
-    assert cli.cmd_research_replication(SimpleNamespace(market="jp", confirm=True, json=False)) == 1
+    assert cli.cmd_research_replication(SimpleNamespace(replication_market="jp", confirm=True, json=False)) == 1
     assert not (tmp_path / "research" / "once" / "Replication-JP.claimed").exists()
+
+
+def test_the_market_flag_never_reaches_the_apps_market_setting(tmp_path, monkeypatch, capsys):
+    """--market jp once reached _settings as MARKET=jp and stopped the run; it must parse and leave MARKET alone."""
+    from trading_agent import cli, config
+    monkeypatch.delenv("MARKET", raising=False)
+    monkeypatch.setattr(config, "load_settings", lambda: SimpleNamespace(state_dir=tmp_path))
+    monkeypatch.setattr(cli, "load_settings", lambda: SimpleNamespace(state_dir=tmp_path), raising=False)
+    args = cli.build_parser().parse_args(["research-replication", "--market", "jp"])
+    assert args.replication_market == "jp" and getattr(args, "market", None) is None
+    assert cli.cmd_research_replication(args) == 2 and "TOPIX Mid400" in capsys.readouterr().out
+    import os
+    assert "MARKET" not in os.environ
