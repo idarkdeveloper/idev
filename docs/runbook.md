@@ -501,8 +501,13 @@ Python environment, the package code and `state/app/`; the keys file and the Gro
 reaching the server from the phone over Tailscale see section 15 (not repeated here).
 
 1. Pull the merged code: `cd /opt/trading-agent && sudo -u agent git pull`.
-2. The unit uses `ProtectHome=true`, so the venv's base Python must not be under `/home` or `/root`:
-   `readlink -f /opt/trading-agent/.venv/bin/python` (if it is, rebuild the venv on a system Python first).
+2. The venv's Python is the uv-managed interpreter under the agent's home, so the unit uses `ProtectHome=tmpfs` (the
+   whole of `/home` is hidden) and binds back only `/home/agent/.local/share/uv/python`, read-only. Check where the
+   interpreter really is: `sudo -u agent readlink -f /opt/trading-agent/.venv/bin/python` (it must be under
+   `/home/agent/.local/share/uv/python/`; if not, edit the second `BindReadOnlyPaths=` line in the unit to that
+   folder). With a plain `ProtectHome=true` the service fails to start with `status=203/EXEC`. If you installed a
+   test override earlier at `/etc/systemd/system/trading-agent-app-api.service.d/python-home.conf`, delete it
+   (`sudo rm -r /etc/systemd/system/trading-agent-app-api.service.d`) once the unit file has these lines.
 3. Create the app folder as `agent` BEFORE starting the unit (the bind mount needs it to exist):
    `sudo -u agent mkdir -p -m 700 /opt/trading-agent/state/app`, then `stat -c '%U %a' /opt/trading-agent/state/app`
    must print `agent 700`. If `state/app` is ever deleted and recreated (a restore, a manual fix), restart

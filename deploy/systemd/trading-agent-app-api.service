@@ -25,7 +25,12 @@ ProtectSystem=strict
 TemporaryFileSystem=/opt/trading-agent:ro
 BindReadOnlyPaths=/opt/trading-agent/.venv /opt/trading-agent/trading_agent /opt/trading-agent/state/app
 PrivateTmp=true
-ProtectHome=true
+# The venv's Python is the uv-managed interpreter under the agent's home (deploy/upgrade-python.sh installs it there),
+# so a plain ProtectHome=true makes the service fail to start (status 203/EXEC). Hide the whole of /home (an empty
+# tmpfs) and bind back ONLY that interpreter folder, read-only. If `readlink -f .venv/bin/python` shows another
+# location (runbook section 17, step 2), change the second line to that folder.
+ProtectHome=tmpfs
+BindReadOnlyPaths=/home/agent/.local/share/uv/python
 
 [Install]
 WantedBy=multi-user.target

@@ -366,10 +366,12 @@ def test_systemd_unit_shows_the_service_only_its_own_files():
     assert "ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent.app_api --state-dir /opt/trading-agent/state" in lines
     for line in ("TemporaryFileSystem=/opt/trading-agent:ro",
                  "BindReadOnlyPaths=/opt/trading-agent/.venv /opt/trading-agent/trading_agent /opt/trading-agent/state/app",
-                 "PrivateTmp=true", "ProtectHome=true", "NoNewPrivileges=true", "ProtectSystem=strict", "User=agent",
+                 "PrivateTmp=true", "ProtectHome=tmpfs",
+                 "BindReadOnlyPaths=/home/agent/.local/share/uv/python", "NoNewPrivileges=true", "ProtectSystem=strict", "User=agent",
                  "WorkingDirectory=/opt/trading-agent", "Environment=PYTHONDONTWRITEBYTECODE=1",
                  "Environment=APP_API_HOST=127.0.0.1", "Environment=TZ=Asia/Kolkata"):
         assert line in lines
     assert "InaccessiblePaths" not in unit and not [ln for ln in lines if ln.startswith("ReadOnlyPaths")]
     assert not [ln for ln in lines if ".env" in ln or "groww_token" in ln]
+    assert "ProtectHome=true" not in lines   # true would hide the uv-managed interpreter: the unit fails with 203/EXEC
     assert "# After=tailscaled.service" in unit
