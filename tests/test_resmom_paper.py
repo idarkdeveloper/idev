@@ -21,7 +21,7 @@ def screen_result(eligible, excluded=()):
 
 
 def test_the_start_date_setting():
-    assert parse_resmom_paper_start(None) == "2026-11-02" and parse_resmom_paper_start("") == "2026-11-02"
+    assert parse_resmom_paper_start(None) == "2026-10-19" and parse_resmom_paper_start("") == "2026-10-19"
     assert parse_resmom_paper_start("off") is None and parse_resmom_paper_start("2026-12-01") == "2026-12-01"
     with pytest.raises(ValueError):
         parse_resmom_paper_start("soon")

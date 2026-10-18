@@ -17,7 +17,7 @@ Everything is the forward test's except the ranking:
   a profitable holding aged 335-365 days, for long-term tax), a 25% disaster floor below the buy price, no stop;
 * monthly, after the close, Indian delivery charges, marked daily against MID150BEES.
 
-It starts on ``RESMOM_PAPER_START`` (default 2 Nov 2026, the next monthly rebalance; ``off`` disables it), keeps its
+It starts on ``RESMOM_PAPER_START`` (default 19 Oct 2026, the first trading day after the backward check; ``off`` disables it), keeps its
 own files (``state/forward/resmom_<universe>.json``) and practice money only. Nothing is retuned on what it shows.
 """
 

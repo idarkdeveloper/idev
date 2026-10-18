@@ -162,12 +162,12 @@ def parse_model_paper_start(value: object) -> str | None:
         raise ValueError("MODEL_PAPER_START must be a date as YYYY-MM-DD, or off") from None
 
 
-RESMOM_PAPER_DEFAULT = "2026-11-02"
+RESMOM_PAPER_DEFAULT = "2026-10-19"
 
 
 def parse_resmom_paper_start(value: object) -> str | None:
-    """RESMOM_PAPER_START: the YYYY-MM-DD residual momentum's (variant E's) paper account starts (unset: 2026-11-02,
-    the next monthly rebalance after the backward check; off: never)."""
+    """RESMOM_PAPER_START: the YYYY-MM-DD residual momentum's (variant E's) paper account starts (unset: 2026-10-19,
+    the first trading day after the backward check; off: never)."""
     text = str(value if value is not None else "").strip()
     if not text:
         return RESMOM_PAPER_DEFAULT
