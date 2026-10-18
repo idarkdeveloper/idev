@@ -640,6 +640,12 @@ is claimed before it runs, logged before it prints and refused a second time; no
 sells, with a £95,000-a-day floor, as fixed in the [UK addendum](research/preregistered-replication-2026-10-18b.md). If
 any London price jumps more than 50 times in a day (a pence/pound mix-up), it stops before anything is spent. In every market, a zero or negative price point (Yahoo occasionally has them, mostly in Japan) is dropped, that day carries the last good price, and the report lists how many were dropped.
 
+**Rerun of three void studies (18 Oct).** Yahoo served monthly bars for whole histories, so the backward check and the
+US and Japan replications ran on monthly prices and are void. Per the [rerun addendum](research/rerun-addendum-2026-10-18c.md)
+each runs once more on daily prices under a new name (`Backward-batch-v2`, `Replication-US-v2`, `Replication-JP-v2`),
+with Japan against MAXIS TOPIX (1348.T). Before any claim a data gate stops the run, with nothing spent, if prices are
+not daily, the fund moves more than 40% in a day, or too few stocks can be ranked at the start.
+
 **Batch 3 (once).** `research-batch3 --confirm` runs the two ideas
 [pre-registered](research/preregistered-batch-2026-10-18.md) on 18 Oct 2026 beside the adopted rules on the development
 years: F reorders the momentum top 40 by how smoothly each stock rose (information discreteness), G moves names with net

@@ -41,6 +41,10 @@ from .research_sim import Market, simulate, summarize, with_rules
 
 PREREGISTRATION = "docs/research/preregistered-replication-2026-10-18.md"
 UK_ADDENDUM = "docs/research/preregistered-replication-2026-10-18b.md"
+RERUN_ADDENDUM = "docs/research/rerun-addendum-2026-10-18c.md"
+# The first US and Japan runs (and the backward check) were simulated on MONTHLY bars (Yahoo's range=max); they are
+# void, kept in the trial log, and rerun once each under new names with the corrected data (RERUN_ADDENDUM).
+VOID_STUDIES = ("Replication-US", "Replication-JP", "Backward-batch")
 UNIT_JUMP = 50.0                 # a close more than 50x (or under 1/50 of) the day before: a pence/pound mix-up
 LOOKBACK_FROM = "2015-10-01"     # a year of history before the first decision
 TRADING_FROM = "2016-10-01"
@@ -53,12 +57,13 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chr
 MARKETS: dict[str, dict[str, Any]] = {
     "us": {"name": "United States", "index": "S&P MidCap 400", "suffix": "", "benchmark": "IJH",
            "benchmark_name": "iShares Core S&P Mid-Cap ETF (IJH)", "one_way_bps": 5.0, "min_turnover": 120_000.0,
-           "currency": "USD", "study": "Replication-US", "min_members": 300, "plan": PREREGISTRATION,
+           "currency": "USD", "study": "Replication-US-v2", "min_members": 300,
+           "plan": f"{PREREGISTRATION}; rerun: {RERUN_ADDENDUM}",
            "url": "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"},
-    "jp": {"name": "Japan", "index": "TOPIX Mid400", "suffix": ".T", "benchmark": "1306",
-           "benchmark_name": "NEXT FUNDS TOPIX ETF (1306.T; no TOPIX Mid400 ETF is listed)", "one_way_bps": 10.0,
-           "min_turnover": 18_000_000.0, "currency": "JPY", "study": "Replication-JP", "min_members": 300,
-           "plan": PREREGISTRATION,
+    "jp": {"name": "Japan", "index": "TOPIX Mid400", "suffix": ".T", "benchmark": "1348",
+           "benchmark_name": "MAXIS TOPIX ETF (1348.T; no TOPIX Mid400 ETF is listed; 1306.T has a 10x glitch)",
+           "one_way_bps": 10.0, "min_turnover": 18_000_000.0, "currency": "JPY", "study": "Replication-JP-v2",
+           "min_members": 300, "plan": f"{PREREGISTRATION}; rerun: {RERUN_ADDENDUM}",
            "url": "https://www.jpx.co.jp/automation/english/markets/indices/topix/files/topixweight_e.csv"},
     "uk": {"name": "the United Kingdom", "index": "FTSE 250", "suffix": ".L", "benchmark": "MIDD",
            "benchmark_name": "iShares FTSE 250 ETF (MIDD.L)", "one_way_bps": 5.0, "buy_bps": 55.0, "sell_bps": 5.0,
@@ -261,7 +266,7 @@ BENCH_JUMP = 0.40               # a fund moving more than 40% in one day is a da
 LATEST_START = "2017-01-01"     # the first decision must fall within a quarter of TRADING_FROM
 
 
-def data_problems(m: Market) -> list[str]:
+def data_problems(m: Market, *, trading_from: str = TRADING_FROM, latest_start: str = LATEST_START) -> list[str]:
     """Reasons the loaded data cannot carry the pre-registered test. Checked BEFORE the market is claimed, so a data
     fault never spends it. None of these looks at a strategy result."""
     from statistics import median
@@ -280,11 +285,19 @@ def data_problems(m: Market) -> list[str]:
         out.append(f"the benchmark moves more than {BENCH_JUMP:.0%} in a day on {', '.join(jumps[:4])} (a data error)")
     if not fund:
         out.append("the benchmark has no prices")
+    sparse = 0
+    for bars in m.raw.values():
+        recent = [b["date"] for b in bars if b["date"] >= trading_from][:250]
+        g = [(datetime.fromisoformat(b) - datetime.fromisoformat(a)).days for a, b in zip(recent, recent[1:])]
+        if g and median(g) > 4:
+            sparse += 1
+    if m.raw and sparse > 0.1 * len(m.raw):
+        out.append(f"{sparse} of {len(m.raw)} stocks have prices that are not daily")
     from .research_studies import _first_ranked_day
     try:
         first = m.dates[_first_ranked_day(m)]
-        if first >= LATEST_START:
-            out.append(f"the first day with 20 rankable stocks is {first}, not near {TRADING_FROM}: too few members have "
+        if first >= latest_start:
+            out.append(f"the first day with 20 rankable stocks is {first}, not near {trading_from}: too few members have "
                        "daily history that far back")
     except ValueError as e:
         out.append(str(e))
@@ -373,11 +386,19 @@ def load_replication_market(market: str, prices: Any, current: list[str],
     window_members: set[str] = set()
     for d in month_starts(calendar, TRADING_FROM, WINDOW_END):
         window_members |= members_on(d)
+    jumped = unit_jumps(series)
+    if jumped and spec["currency"] != "GBp":   # rerun addendum: a >50x day is a data error; the stock is left out
+        series = {k: v for k, v in series.items() if k not in jumped}
+        notes = notes + [f"{len(jumped)} stock(s) left out for a one-day move of more than 50x (a data error): "
+                         f"{', '.join(jumped[:12])}."]
     m = Market(calendar, series, bench, members_on, min_turnover=spec["min_turnover"])
     m.missing = sorted(window_members - set(series))
     m.start_day = TRADING_FROM
     m.point_in_time = membership is not None
-    m.unit_jumps = unit_jumps(series) if spec["currency"] == "GBp" else []   # London quotes mix pence and pounds
+    if spec["currency"] == "GBp":
+        m.unit_jumps = jumped        # London quotes mix pence and pounds: the UK addendum stops the run
+    elif jumped:
+        m.excluded = jumped
     return m, notes
 
 

@@ -33,7 +33,7 @@ SECTOR_MIN_NAMES = 3
 RESIDUAL_WINDOW = 252           # variant E (preregistered-batch-2026-10-16b.md): sessions t-252 .. t-21
 RESIDUAL_SKIP = 21
 RESIDUAL_MIN_DAYS = 150
-STUDY = "Backward-batch"
+STUDY = "Backward-batch-v2"   # the first run used monthly bars and is void (rerun-addendum-2026-10-18c.md)
 PREREGISTRATION = "docs/research/preregistered-batch-2026-10-16.md (+ batch 2, -16b, variant E)"
 # ------------------------------------------------------------------------------------------------------------------ #
 
@@ -135,14 +135,18 @@ def load_backward_market(membership: Any, prices: Any, benchmark: list[dict[str,
     calendar = [b["date"] for b in bench]
     universe = sorted(membership.ever_members(LOOKBACK_FROM))
 
+    from .research_replication import drop_bad_prices, unit_jumps
+
     def load(sym: str) -> tuple[str, list[dict[str, Any]] | None]:
         try:
-            return sym, [b for b in prices.history(sym, "max") if b["date"] < WINDOW_END]
+            return sym, drop_bad_prices([b for b in prices.history(sym, "max") if b["date"] < WINDOW_END])[0]
         except Exception:  # noqa: BLE001 - a missing stock is counted, not fatal
             return sym, None
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         series = {s: b for s, b in ex.map(load, universe) if b and b[0]["date"] < WINDOW_END}
+    jumped = unit_jumps(series)   # rerun addendum: a >50x one-day move is a data error; the stock is left out
+    series = {k: v for k, v in series.items() if k not in jumped}
     window_members = set()
     for d in calendar:
         if d >= TRADING_FROM and d[8:] <= "07":     # month starts are enough to list who could be bought
@@ -151,6 +155,7 @@ def load_backward_market(membership: Any, prices: Any, benchmark: list[dict[str,
     m.missing = sorted(window_members - set(series))
     m.start_day = TRADING_FROM
     m.point_in_time = True
+    m.excluded = jumped
     return m
 
 
