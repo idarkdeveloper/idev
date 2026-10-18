@@ -165,3 +165,19 @@ def test_history_file_survives_garbage_content(tmp_path):
     (tmp_path / HISTORY_FILE).write_text('{"a": 1}', encoding="utf-8")
     assert load_history(tmp_path, "1m") == []
     assert record_daily_value(tmp_path, _feed(), date(2026, 6, 8)) is True
+
+
+@pytest.mark.parametrize("bad", [None, True, float("nan"), float("inf"), "1600"])
+def test_a_missing_or_non_numeric_value_does_not_overwrite_a_good_row(tmp_path, bad):
+    d = date(2026, 6, 8)
+    record_daily_value(tmp_path, _feed(1600.0), d)
+    assert record_daily_value(tmp_path, _feed(bad), d) is False
+    assert load_history(tmp_path, "all") == [{"date": "2026-06-08", "value": 1600.0, "cash": 10.0}]
+
+
+def test_bad_rows_are_dropped_and_good_rows_still_load(tmp_path):
+    rows = [{"date": "abc", "value": 1.0}, {"date": "2026-06-08", "value": 5.0, "cash": None},
+            {"date": "2026-06-09", "value": None}, {"date": "2026-06-10", "value": True}, 7]
+    (tmp_path / HISTORY_FILE).write_text(json.dumps(rows), encoding="utf-8")
+    for r in ("1m", "all"):
+        assert load_history(tmp_path, r) == [{"date": "2026-06-08", "value": 5.0, "cash": None}]

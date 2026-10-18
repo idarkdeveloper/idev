@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 from datetime import date, datetime, time, timedelta
@@ -53,11 +54,25 @@ def _rows(state_dir: Path) -> list[dict[str, Any]]:
         data = json.loads((Path(state_dir) / HISTORY_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    return [r for r in data if isinstance(r, dict) and isinstance(r.get("date"), str)] if isinstance(data, list) else []
+    return [r for r in data if isinstance(r, dict) and _good_date(r.get("date")) and _is_number(r.get("value"))]         if isinstance(data, list) else []
+
+
+def _is_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _good_date(v: Any) -> bool:
+    try:
+        date.fromisoformat(v)
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def record_daily_value(state_dir: Path, feed: dict[str, Any], session: date) -> bool:
     """One row per session date; a second call for the same date replaces it."""
+    if not _is_number(feed.get("value")):
+        return False   # a live read with no value must not erase the day's good row
     try:
         key = session.isoformat()
         rows = [r for r in _rows(state_dir) if r["date"] != key]
