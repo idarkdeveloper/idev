@@ -541,7 +541,7 @@ def cmd_kill_switch(args: argparse.Namespace) -> int:
 # Under HALT the CLI refuses everything (exit 1) except the switch itself, the dashboard (its order routes refuse),
 # the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
 # reach Groww.
-HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
+HALT_ALLOWED = {"kill-switch", "app-device", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
                 "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
@@ -562,6 +562,31 @@ def _halt_refusal(args: argparse.Namespace) -> str | None:
         import os
         state_dir = Path(os.environ.get("STATE_DIR") or "state")
     return killswitch.reason(state_dir, f"run `{args.command}`")
+
+
+def cmd_app_device(args: argparse.Namespace) -> int:
+    """Owner-only: manage the phone app's device secrets. Offline; reads no .env (hence --state-dir)."""
+    from . import app_auth
+    state_dir = Path(args.state_dir)
+    if args.action == "add":
+        try:
+            secret = app_auth.add_device(state_dir, args.name)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 1
+        print(f"Device {args.name!r} added. Its secret (enter it in the app):\n\n  {secret}\n\n"
+              "Copy it now; it is not shown again.")
+        return 0
+    if args.action == "list":
+        for d in app_auth.list_devices(state_dir):
+            print(f"{d['name']}  (added {d['created']})")
+        return 0
+    if not args.name and not args.all:
+        print("revoke needs a NAME or --all", file=sys.stderr)
+        return 1
+    n = app_auth.revoke(state_dir, args.name, all_=args.all)
+    print(f"revoked {n} device(s)")
+    return 0 if n else 1
 
 
 def cmd_history(args: argparse.Namespace) -> int:
@@ -2178,6 +2203,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("resmom-paper", help="residual momentum's (variant E's) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")
     sp.set_defaults(func=cmd_resmom_paper)
+    sp = sub.add_parser("app-device", help="phone app: add / list / revoke device secrets (read-only access)")
+    sp.add_argument("--state-dir", default="state", help="the state folder (default: state)")
+    asub = sp.add_subparsers(dest="action", required=True)
+    asub.add_parser("add", help="make a new device secret (shown once)").add_argument("name")
+    asub.add_parser("list", help="device names and dates (never secrets)")
+    rp = asub.add_parser("revoke", help="stop a device (or --all) from logging in")
+    rp.add_argument("name", nargs="?")
+    rp.add_argument("--all", action="store_true")
+    sp.set_defaults(func=cmd_app_device)
     sp = sub.add_parser("top10-paper", help="variant B's (top 10) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")
     sp.set_defaults(func=cmd_top10_paper)
