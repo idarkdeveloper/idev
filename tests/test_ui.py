@@ -139,7 +139,7 @@ def test_lookup_and_regime_endpoints(server, monkeypatch):
     assert status == 400
 
 
-def test_backtest_job_and_watch_toggle(server):
+def test_backtest_job_and_no_watch_from_the_dashboard(server):
     base, app = server
     status, job = _post(base + "/api/backtest", {"investor": "Nancy Pelosi", "days": 365, "horizons": "5,20", "cost_bps": 50})
     assert status == 202 and job["kind"] == "backtest"
@@ -150,12 +150,9 @@ def test_backtest_job_and_watch_toggle(server):
         time.sleep(0.05)
     assert st["jobs"][-1]["ok"] is True, st["jobs"][-1]
     assert st["backtest"]["summary"]["deals"] == 3 and st["backtest"]["summary"]["priced"] == 3
-    status, w = _post(base + "/api/watch", {"on": True, "every": 30})
-    assert status == 200 and w["on"] is True and w["every"] == 30
-    _, st = _get(base + "/api/state")
-    assert st["watch"]["on"] is True
-    status, w = _post(base + "/api/watch", {"on": False})
-    assert w["on"] is False
+    # the watch runs only as the server's watch service: the dashboard can neither start it nor report one
+    status, _ = _post(base + "/api/watch", {"on": True, "every": 30})
+    assert status == 404 and "watch" not in st and not hasattr(app, "watcher")
 
 
 def test_calculators_orders_close_and_groww_test(server):
@@ -204,13 +201,8 @@ def test_settings_market_switch_and_cash(server):
     assert status == 400
 
 
-def test_watch_auto_exit_flag_and_regime_refresh(server):
+def test_regime_refresh(server):
     base, app = server
-    status, w = _post(base + "/api/watch", {"on": True, "every": 45, "auto_exit": True})
-    assert status == 200 and w["on"] and w["every"] == 45 and w["auto_exit"] is True
-    _, st = _get(base + "/api/state")
-    assert st["watch"]["auto_exit"] is True
-    _post(base + "/api/watch", {"on": False})
     status, r = _get(base + "/api/regime?refresh=1")
     assert status == 200  # "not configured" in the fixture, but the route works
 
@@ -599,10 +591,10 @@ def test_demo_refuses_what_controls_the_real_agent(two_pages):
     base, app, fake, settings = two_pages
     before = dict(vars(settings))
     for path, body in (("/demo/api/check", {"dry_run": True}), ("/demo/api/settings", {"auto_trade": True}),
-                       ("/demo/api/watch", {"on": True}), ("/demo/api/groww-test", {})):
+                       ("/demo/api/groww-test", {})):
         status, j = _post(base + path, body)
         assert status == 403 and "Live page" in j["error"], path
-    assert vars(settings) == before and app.watcher is None and fake.writes == []
+    assert vars(settings) == before and fake.writes == []
 
 
 def test_live_and_demo_share_one_practice_writer_in_paper_mode(settings, monkeypatch):
@@ -724,7 +716,7 @@ def test_tiles_and_recommendation_buttons_depend_on_mode():
             assert first["symbol"] == "LAURUSLABS" and first["source"] == "practice" and first["held_over_year"] is None   # untouched tick: nothing sent
         else:
             assert "sp-qty" not in out["groww_panel"] and "sell-panel" not in out["practice_panel"]
-        assert out["check_hidden"] is out["settings_hidden"] is out["watch_hidden"] is (mode == "demo"), mode
+        assert out["check_hidden"] is out["settings_hidden"] is (mode == "demo"), mode
     # the offline sample dashboard is a Demo page that owns everything: banner says so, controls stay
     r = subprocess.run([node, str(harness), "demo", "sample"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -1568,3 +1560,11 @@ def test_vendored_chart_library_is_served_with_a_pinned_hash(settings):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_the_dashboard_has_no_start_watch_button():
+    """The watch runs only as the server's watch service; a second one started from the dashboard would double alerts."""
+    from pathlib import Path
+    html = (Path(__file__).parent.parent / "trading_agent" / "ui" / "index.html").read_text()
+    assert "btn-watch" not in html and "Start watch" not in html and "/api/watch" not in html
+    assert "f-every" not in html and "f-autoexit" not in html

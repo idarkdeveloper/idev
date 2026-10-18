@@ -114,7 +114,7 @@ count ("n/a" until Groww is linked).
 My Groww portfolio) with the practice account added: the practice portfolio (account-value chart, positions, order
 form), practice tiles and "Paper buy/sell" buttons on recommendations. The practice account is
 `state/paper_broker.json` (PAPER_STARTING_CASH, prices from Groww when linked, otherwise Yahoo). Demo can never place a
-Groww order, write `.env` or send a notification, even with GROWW_LIVE_ORDERS=true; Run check, Settings and Start watch
+Groww order, write `.env` or send a notification, even with GROWW_LIVE_ORDERS=true; Run check and Settings
 are only on the Live page. **Reset practice account** (asks first) resets only `paper_broker.json`, not the Live state.
 
 `python -m trading_agent ui --demo` is the offline sample dashboard: bundled sample deals and prices with its own
@@ -291,7 +291,8 @@ who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
   latest-announcements RSS feed as the fallback (BSE's API refuses some cloud IPs; the feed only holds the newest
   filings, so what it shows is kept in `cache/bse_ann/`). The Health tab's *BSE announcements* row says which one
   answers. Alerts name the company: `[NEWS] 1 new announcement: XYZ Chemicals · BSE`.
-- **Watch mode**: `python -m trading_agent watch --every 60` (or the *Start watch* button)
+- **Watch mode**: `python -m trading_agent watch --every 60` (on the server, the `trading-agent-watch` service; the
+  dashboard has no Start watch button, so a second watcher can never double the alerts)
   polls deals and announcements for your positions and recent recommendations every
   minute between 08:45 and 18:30 IST on weekdays, notifying on anything new. Meant for a
   machine with a fixed IP, which the April 2026 SEBI rules require for live orders.
@@ -301,7 +302,6 @@ Everything the CLI does is also in the dashboard:
 | CLI | Dashboard |
 |---|---|
 | `check`, `check --force`, `check --dry-run` | **Run check now** and its options menu |
-| `watch`, `loop` | **Start watch** (interval and auto-exit on stops in Settings) |
 | `portfolio`, `history`, `reset` | Paper portfolio, order history, recommendations, run log, Reset in Settings |
 | `momentum` | Look up a stock (also click any ticker) |
 | `size` | Position size panel, and *Suggest size* in the paper order ticket |
@@ -360,8 +360,7 @@ article text is never stored (an alert reads its article once, see below).
 
 ## Daily emails
 
-Two emails on NSE trading days, sent by the watch service (`python -m trading_agent watch`, or Start watch on the
-dashboard) to your email (Resend) and/or webhook. They never place an order.
+Two emails on NSE trading days, sent by the watch service (`python -m trading_agent watch`) to your email (Resend) and/or webhook. They never place an order.
 
 - **Morning, after 09:00 IST:** the market mood (and "No new buys today" when the regime is risk-off or Nifty is below
   its 200-day average), buy ideas from the momentum screen of `DIGEST_UNIVERSE` with a quantity sized to risk 1% of
