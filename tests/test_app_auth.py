@@ -85,7 +85,7 @@ def test_rate_limit_61st_request_in_a_minute_gets_429(tmp_path):
     auth = Authenticator(tmp_path, clock=clock)
     for _ in range(60):
         assert auth.check(secret, "c")[1] == 200
-    assert auth.check(secret, "c") == ("phone", 429)
+    assert auth.check(secret, "c") == (None, 429)
     clock.t += 61
     assert auth.check(secret, "c")[1] == 200
 
@@ -135,3 +135,56 @@ def test_cli_add_list_revoke_use_the_given_state_folder(tmp_path, capsys):
     cli.main(["app-device", "--state-dir", state, "add", "x"])
     assert cli.main(["app-device", "--state-dir", state, "revoke", "--all"]) == 0
     assert list_devices(tmp_path) == []
+
+
+def test_bad_input_is_a_counted_401_never_a_crash(tmp_path):
+    secret = add_device(tmp_path, "phone")
+    path = tmp_path / app_auth.DEVICES_FILE
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    rows.append({"name": "evil", "hash": "é", "created": "2026-01-01"})
+    path.write_text(json.dumps(rows), encoding="utf-8")
+    assert [d["name"] for d in list_devices(tmp_path)] == ["phone"]   # non-hex hash row dropped
+    auth = Authenticator(tmp_path, clock=Clock())
+    for _ in range(5):
+        assert auth.check("\ud800", "c") == (None, 401)   # lone surrogate
+    assert auth.check(secret, "c") == (None, 429)   # the attempts counted toward lockout
+
+
+def test_limited_results_never_carry_a_device_name(tmp_path):
+    secret = add_device(tmp_path, "phone")
+    auth = Authenticator(tmp_path, clock=Clock())
+    for _ in range(60):
+        auth.check(secret, "c")
+    assert auth.check(secret, "c") == (None, 429)
+
+
+def test_unreadable_devices_file_is_never_overwritten(tmp_path, monkeypatch):
+    add_device(tmp_path, "keep")
+    before = (tmp_path / app_auth.DEVICES_FILE).read_bytes()
+
+    def boom(self, *a, **k):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(app_auth.Path, "read_text", boom)
+    with pytest.raises(RuntimeError):
+        add_device(tmp_path, "new")
+    with pytest.raises(RuntimeError):
+        revoke(tmp_path, all_=True)
+    assert Authenticator(tmp_path).check("x", "c") == (None, 401)
+    monkeypatch.undo()
+    assert (tmp_path / app_auth.DEVICES_FILE).read_bytes() == before
+
+
+def test_lockout_memory_is_bounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_auth, "MAX_TRACKED", 10)
+    clock = Clock()
+    auth = Authenticator(tmp_path, clock=clock)
+    for i in range(50):
+        auth.check("bad", f"ip{i}")
+    assert len(auth._fails) <= 11
+    for i in range(5):
+        auth.check("bad", "target")
+    clock.t += 2000   # everything expired: the next call sweeps it away
+    for i in range(12):
+        auth.check("bad", f"more{i}")
+    assert len(auth._fails) <= 11 and len(auth._blocked) == 0
