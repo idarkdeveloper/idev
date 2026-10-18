@@ -14,14 +14,14 @@
   <div class="wrap row hdr">
     <div class="brand">
       <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"></polyline><polyline points="15 7 21 7 21 13"></polyline></svg></div>
-      <div><div class="brand-name">Trading Agent</div><div class="sub brand-sub" id="subtitle">Following <span id="investor">…</span></div></div>
+      <div><div class="brand-name">Trading Agent</div><div class="sub brand-sub" id="subtitle">Following <span id="investor">…</span><span class="ph-check" id="subtitle-check"></span></div></div>
     </div>
     <nav class="tabs" aria-label="Pages"><a href="/" data-tab="live">Live</a><a href="/replay" data-tab="replay">Replay</a><a href="/demo" data-tab="demo">Demo</a><a href="/screener" data-tab="screener">Screener</a></nav>
     <div class="row controls">
-      <button type="button" id="btn-palette" class="pal-btn" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title="Search stocks and commands (Ctrl+K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Search</span><kbd class="pal-kbd" aria-hidden="true">Ctrl K</kbd></button>
+      <button type="button" id="btn-palette" class="pal-btn" aria-label="Search stocks and commands" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title="Search stocks and commands (Ctrl+K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Search</span><kbd class="pal-kbd" aria-hidden="true">Ctrl K</kbd></button>
       <span class="sub" id="lastcheck"></span>
       <div class="split" id="check-split">
-      <button type="button" class="primary" id="btn-check"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg><span>Run check now</span></button>
+      <button type="button" class="primary" id="btn-check" aria-label="Run check now"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg><span>Run check now</span></button>
       <details class="menu" id="check-menu">
         <summary class="btn" aria-label="More check options"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
         <div class="menu-pop">
@@ -78,6 +78,7 @@
       <section class="card regime-card">
         <div class="regime-left">
           <div class="regime" id="regime"><span class="sub">Loading global context…</span></div>
+          <button type="button" class="regime-why" id="regime-why" aria-expanded="false" aria-controls="regime">Why?</button>
           <div class="regime-meta">
             <span class="pill fresh idle" id="freshness" role="status" title=""><span class="dot" aria-hidden="true"></span><span id="fresh-text">Checking data freshness…</span></span>
             <span class="pill fresh idle" id="integ-chip" role="status" title=""><span class="dot" aria-hidden="true"></span><span id="integ-text">Integration: checking…</span></span>
@@ -287,7 +288,7 @@
     <section class="card" data-anchor="health" aria-labelledby="hl-title">
       <div class="cardhead"><h2 id="hl-title">Data health</h2><span class="sub" id="hl-sub" aria-live="polite">loading…</span>
         <button type="button" class="small" id="hl-refresh" style="margin-left:auto">Refresh</button></div>
-      <div class="cardbody"><p class="sub hl-note">Every data source the agent reads, failing first: when it last worked, how many rows it brought, whether it is on time for its schedule (weekends and NSE holidays are never late), any back-off, and its last error with anything secret-looking removed. Read from what the agent records on this machine; this page asks no data source again and never logs in to Groww.</p>
+      <div class="cardbody"><p class="sub hl-note" id="hl-note">Every data source the agent reads, failing first: when it last worked, how many rows it brought, whether it is on time for its schedule (weekends and NSE holidays are never late), any back-off, and its last error with anything secret-looking removed. Read from what the agent records on this machine; this page asks no data source again and never logs in to Groww.</p><button type="button" class="more-toggle" aria-expanded="false" aria-controls="hl-note">Read more</button>
         <ul class="hl-list" id="hl-list" aria-label="Data sources"></ul></div>
     </section>
     <section class="card" data-anchor="groww-logins" aria-labelledby="gl-title">
@@ -652,7 +653,7 @@
     const cls = r.regime === "risk_off" ? "off" : r.regime === "risk_on" ? "on" : "neutral";
     const label = {risk_on: "Risk-on", risk_off: "Risk-off", neutral: "Neutral"}[r.regime] || esc(r.regime);
     el.innerHTML = `<span class="regime-chip ${cls}"><span class="dot" aria-hidden="true"></span>${label} · score ${r.score>=0?"+":""}${r.score}</span>
-      <span class="sig">${esc((r.signals||[]).join(" · "))}${r.guidance ? " — " + esc(r.guidance) : ""}</span>`;
+      <span class="sig"><span class="sig-why">${esc((r.signals||[]).join(" · "))}</span>${r.guidance ? `<span class="sig-sep"> — </span><span class="sig-guide">${esc(r.guidance)}</span>` : ""}</span>`;
     const m = r.markets || {};
     const fmt = (k, v) => k === "india_vix" ? v.toFixed(1) : k === "usdinr" ? v.toFixed(2) : Math.round(v).toLocaleString("en-IN");
     mk.innerHTML = ["nifty50","sp500","nasdaq_fut","nikkei","india_vix","usdinr","brent"]
@@ -773,6 +774,7 @@
       + (S.running ? `<span class="pill warn"><span class="dot"></span>${esc(S.running.label)} running…</span>` : "");
     const lastRun = S.runs[0];
     $("lastcheck").textContent = lastRun ? "Checked " + when(lastRun.at) : "No checks yet";
+    $("subtitle-check").textContent = " · " + (lastRun ? "checked " + when(lastRun.at) : "no checks yet");   // phones show this in the one-row header
     const wb = $("btn-watch"); wb.className = w.on ? "on" : ""; wb.querySelector("span").textContent = w.on ? `Stop watch (${w.ticks||0} ticks)` : "Start watch";
     renderRegime();
     if(MP && MODE !== "demo") renderMyPortfolio(MP);   // the Stop column follows the state answer
@@ -830,7 +832,7 @@
     if(!btCostSet && S.costs && S.costs.examples){ $("bt-cost").value = S.costs.examples["25000"]; btCostSet = true; }
     if(S.screen && S.screen.top) renderScreen(S.screen);
     $("sc-run").disabled = S.busy;
-    $("btn-check").disabled = S.busy; $("btn-check").querySelector("span").textContent = S.busy ? "Running…" : "Run check now";
+    $("btn-check").disabled = S.busy; $("btn-check").querySelector("span").textContent = S.busy ? "Running…" : "Run check now"; $("btn-check").setAttribute("aria-label", S.busy ? "Running check" : "Run check now");
     $("bt-run").disabled = S.busy;
   }
 
@@ -1378,6 +1380,8 @@
   }
   $("btn-check").addEventListener("click", () => runCheck(false, false));
   document.querySelectorAll("[data-check]").forEach(b => b.addEventListener("click", () => { $("check-menu").open = false; runCheck(b.dataset.check === "force", b.dataset.check === "dry"); }));
+  document.querySelectorAll(".more-toggle").forEach(t => t.addEventListener("click", () => { const el = $(t.getAttribute("aria-controls")), on = !el.classList.contains("open"); el.classList.toggle("open", on); t.setAttribute("aria-expanded", String(on)); t.textContent = on ? "Show less" : "Read more"; }));   // phones: long help text is clamped to 3 lines
+  $("regime-why").addEventListener("click", () => { const on = !$("regime").closest(".regime-card").classList.contains("why-open"); $("regime").closest(".regime-card").classList.toggle("why-open", on); $("regime-why").setAttribute("aria-expanded", String(on)); $("regime-why").textContent = on ? "Hide" : "Why?"; });   // phones only: the reasoning folds behind this
   $("btn-regime").addEventListener("click", async () => {
     $("btn-regime").disabled = true;
     try { await api("/api/regime?refresh=1"); await refresh(); toast("Global context refreshed"); } catch(e){ toast(e.message); }
