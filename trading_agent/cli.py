@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -541,7 +542,7 @@ def cmd_kill_switch(args: argparse.Namespace) -> int:
 # Under HALT the CLI refuses everything (exit 1) except the switch itself, the dashboard (its order routes refuse),
 # the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
 # reach Groww.
-HALT_ALLOWED = {"kill-switch", "app-device", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
+HALT_ALLOWED = {"kill-switch", "app-device", "app-api", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
                 "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
@@ -591,6 +592,13 @@ def cmd_app_device(args: argparse.Namespace) -> int:
         return 1
     print(f"revoked {n} device(s)")
     return 0 if n else 1
+
+
+def cmd_app_api(args: argparse.Namespace) -> int:
+    """The read-only phone app API. Offline of Groww and .env: it reads the feed files in --state-dir only."""
+    from . import app_api
+    app_api.serve(Path(args.state_dir), args.host, args.port)
+    return 0
 
 
 def cmd_history(args: argparse.Namespace) -> int:
@@ -2216,6 +2224,11 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("name", nargs="?")
     rp.add_argument("--all", action="store_true")
     sp.set_defaults(func=cmd_app_device)
+    sp = sub.add_parser("app-api", help="phone app: serve the read-only API (/v1/health, /v1/portfolio, /v1/history)")
+    sp.add_argument("--state-dir", default="state", help="the state folder (default: state)")
+    sp.add_argument("--host", default=os.environ.get("APP_API_HOST") or "127.0.0.1")
+    sp.add_argument("--port", type=int, default=int(os.environ.get("APP_API_PORT") or 8788))
+    sp.set_defaults(func=cmd_app_api)
     sp = sub.add_parser("top10-paper", help="variant B's (top 10) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")
     sp.set_defaults(func=cmd_top10_paper)

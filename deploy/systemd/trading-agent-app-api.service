@@ -1,0 +1,19 @@
+[Unit]
+Description=Trading Agent phone app API (read-only; the owner sets APP_API_HOST to the Tailscale address at rollout)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=agent
+WorkingDirectory=/opt/trading-agent
+Environment=TZ=Asia/Kolkata
+Environment=APP_API_HOST=127.0.0.1
+ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent app-api --state-dir /opt/trading-agent/state
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/trading-agent
+
+[Install]
+WantedBy=multi-user.target
