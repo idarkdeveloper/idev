@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 import time
 from importlib import resources
@@ -1792,6 +1793,57 @@ def _market_holidays(settings: Any) -> Any | None:
     return NSEHolidays(cache_dir=settings.state_dir / "cache")
 
 
+def _app_feed_read(settings: Any, prices: Any) -> Any:
+    """The feed's Groww read. The runner's error text for an unexpected exception is ``Type: message`` and the message
+    can carry a URL or key, so only the type is kept; the deliberate refusal texts (cool-down, not linked) stay."""
+    def read() -> dict[str, Any]:
+        from datetime import datetime
+        from .runner import read_groww_portfolio
+        from .timezones import IST
+        out = read_groww_portfolio(settings, prices, datetime.now(IST).isoformat(timespec="seconds"))
+        err = out.get("error")
+        if isinstance(err, str):
+            m = re.match(r"([A-Za-z_][\w.]*(?:Error|Exception|Exit|Warning)): ", err)
+            out = {**out, "error": m.group(1) if m else err[:200]}
+        return out
+    return read
+
+
+def _app_feed_cash(settings: Any) -> Any:
+    """The cash balance through a read-only Groww client (live orders off); None on any failure."""
+    def cash() -> float | None:
+        try:
+            from .groww import GrowwBroker
+            from .runner import resolve_groww_token
+            return float(GrowwBroker(resolve_groww_token(settings), live_orders=False,
+                                     exchange=settings.groww_exchange).available_cash())
+        except (Exception, SystemExit):  # noqa: BLE001 - includes GrowwTokenUnavailable; the feed shows no cash
+            return None
+    return cash
+
+
+def _app_feed_prev_close(prices: Any) -> Any:
+    from datetime import datetime
+    from .day_brake import prev_close_fn
+    from .timezones import IST
+    return lambda symbol: prev_close_fn(prices, datetime.now(IST).date())(symbol)   # the date moves on in a long run
+
+
+def _app_feed_trend(prices: Any) -> Any:
+    """Up to 30 daily closes, oldest first."""
+    def trend(symbol: str) -> list[float]:
+        return [float(b["close"]) for b in prices.history(symbol, "1mo") if b.get("close") is not None][-30:]
+    return trend
+
+
+def _app_feed(settings: Any, holidays: Any) -> Any:
+    from .app_feed import AppFeed
+    from .runner import free_prices
+    prices = free_prices(settings)
+    return AppFeed(settings, _app_feed_read(settings, prices), _app_feed_cash(settings), _app_feed_prev_close(prices),
+                   _app_feed_trend(prices), holidays)
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """Always-on local mode: poll deals and announcements during market hours."""
     from .runner import make_broker, make_data_source, make_notifier
@@ -1838,6 +1890,9 @@ def cmd_watch(args: argparse.Namespace) -> int:
         close_snapshot = CloseSnapshot(
             settings, lambda day: read_groww_portfolio(settings, close_prices, datetime.now(IST).isoformat(timespec="seconds"),
                                                        force=True, close_session=day), holidays)
+    app_feed = None
+    if settings.app_feed and settings.use_groww and settings.has_groww_credentials:
+        app_feed = _app_feed(settings, holidays)
     def after_close() -> None:
         print(run_forward_due(settings, forward_prices, holidays, notifier))
         from .model_paper import run_model_paper_due   # the prediction model's own paper account (never raises)
@@ -1849,7 +1904,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     forward = ForwardScheduler(settings.state_dir, after_close, holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
                 integration=make_integration_scheduler(settings, notifier, holidays),
-                backup=make_backup_scheduler(settings, holidays), close_snapshot=close_snapshot,
+                backup=make_backup_scheduler(settings, holidays), close_snapshot=close_snapshot, app_feed=app_feed,
                 heartbeat=Heartbeat(settings.heartbeat_url, fail_enabled=True if settings.heartbeat_fail else None),
                 window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),

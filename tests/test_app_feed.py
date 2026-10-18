@@ -181,3 +181,121 @@ def test_bad_rows_are_dropped_and_good_rows_still_load(tmp_path):
     (tmp_path / HISTORY_FILE).write_text(json.dumps(rows), encoding="utf-8")
     for r in ("1m", "all"):
         assert load_history(tmp_path, r) == [{"date": "2026-06-08", "value": 5.0, "cash": None}]
+
+
+# ------------------------------------------------------------------- settings, Watcher and the cli wiring
+
+def test_app_feed_defaults_off(monkeypatch):
+    from trading_agent.config import load_settings
+    monkeypatch.delenv("APP_FEED", raising=False)
+    monkeypatch.delenv("APP_FEED_EVERY_S", raising=False)
+    s = load_settings(None)
+    assert s.app_feed is False and s.app_feed_every_s == 300
+
+
+def test_app_feed_env_parsing_and_minimum(monkeypatch):
+    from trading_agent.config import load_settings
+    monkeypatch.setenv("APP_FEED", "true")
+    monkeypatch.setenv("APP_FEED_EVERY_S", "120")
+    s = load_settings(None)
+    assert s.app_feed is True and s.app_feed_every_s == 120
+    for bad in ("59", "soon"):
+        monkeypatch.setenv("APP_FEED_EVERY_S", bad)
+        with pytest.raises(SystemExit):
+            load_settings(None)
+
+
+def test_watcher_tick_calls_the_feed_once_and_survives_its_error(settings):
+    from trading_agent.watch import Watcher
+
+    class Feed:
+        def __init__(self, boom=False):
+            self.boom, self.calls = boom, []
+
+        def tick(self, now):
+            self.calls.append(now)
+            if self.boom:
+                raise RuntimeError("feed broke")
+            return {"as_of": "x"}
+    ok = Feed()
+    info = Watcher(settings, every=60, app_feed=ok).tick(force=True)
+    assert len(ok.calls) == 1 and info["app_feed"] == {"as_of": "x"}
+    bad = Feed(boom=True)
+    info = Watcher(settings, every=60, app_feed=bad).tick(force=True)
+    assert len(bad.calls) == 1 and "app_feed" not in info and "in_window" in info
+
+
+def test_watcher_without_a_feed_behaves_as_before(settings):
+    from trading_agent.watch import Watcher
+    assert "app_feed" not in Watcher(settings, every=60).tick(force=True)
+
+
+def _cli_settings(settings, **over):
+    import dataclasses
+    return dataclasses.replace(settings, **over)
+
+
+def test_cli_read_fn_keeps_only_the_error_type_for_unknown_exceptions(settings, monkeypatch):
+    from trading_agent import cli, runner
+    secret = "sk-SECRET-token-123"
+    monkeypatch.setattr(runner, "read_groww_portfolio", lambda *a, **k: {
+        "linked": True, "error": f"HTTPError: 401 for url https://x/?key={secret}"})
+    out = cli._app_feed_read(settings, object())()
+    assert secret not in json.dumps(out) and out["error"] == "HTTPError"
+    # a deliberate, human-readable refusal text is kept
+    monkeypatch.setattr(runner, "read_groww_portfolio", lambda *a, **k: {
+        "linked": True, "error": "Groww is cooling down until 10:00"})
+    assert cli._app_feed_read(settings, object())()["error"] == "Groww is cooling down until 10:00"
+    # a read that returns good data is untouched
+    monkeypatch.setattr(runner, "read_groww_portfolio", lambda *a, **k: good())
+    assert cli._app_feed_read(settings, object())()["value"] == 1600.0
+
+
+@pytest.mark.parametrize("fail", ["token", "exit", "other"])
+def test_cli_cash_fn_returns_none_on_any_error(settings, monkeypatch, fail):
+    from trading_agent import cli, groww, runner
+    from trading_agent.groww import GrowwTokenUnavailable
+
+    class FakeBroker:
+        def __init__(self, token, **kw):
+            pass
+
+        def available_cash(self):
+            raise RuntimeError("boom")
+
+    def resolve(s):
+        if fail == "token":
+            raise GrowwTokenUnavailable("cooling down")
+        if fail == "exit":
+            raise SystemExit("no creds")
+        return "t"
+    monkeypatch.setattr(groww, "GrowwBroker", FakeBroker)
+    monkeypatch.setattr(runner, "resolve_groww_token", resolve)
+    assert cli._app_feed_cash(settings)() is None
+
+
+def test_cli_cash_fn_returns_the_balance(settings, monkeypatch):
+    from trading_agent import cli, groww, runner
+    seen = {}
+
+    class FakeBroker:
+        def __init__(self, token, **kw):
+            seen.update(kw, token=token)
+
+        def available_cash(self):
+            return 99.5
+    monkeypatch.setattr(groww, "GrowwBroker", FakeBroker)
+    monkeypatch.setattr(runner, "resolve_groww_token", lambda s: "t")
+    assert cli._app_feed_cash(settings)() == 99.5 and seen["live_orders"] is False
+
+
+def test_cli_trend_and_prev_close_come_from_the_free_prices(settings):
+    from trading_agent import cli
+
+    class Prices:
+        def history(self, symbol, range_="2y"):
+            return [{"date": f"2026-05-{d:02d}", "close": float(d)} for d in range(1, 41 - 10)] + [
+                {"date": "2999-01-01", "close": 7.0}]
+    trend = cli._app_feed_trend(Prices())("X")
+    assert len(trend) == 30 and trend[-1] == 7.0 and trend[0] < trend[1]
+    assert cli._app_feed_prev_close(Prices())("X") == 30.0

@@ -76,7 +76,8 @@ class Watcher:
                  holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
                  news: Any | None = None, broker_factory: Callable[[], Any] | None = None,
                  digest: Any | None = None, forward: Any | None = None, heartbeat: Any | None = None,
-                 integration: Any | None = None, backup: Any | None = None, close_snapshot: Any | None = None):
+                 integration: Any | None = None, backup: Any | None = None, close_snapshot: Any | None = None,
+                 app_feed: Any | None = None):
         self.settings = settings
         self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
         self._blocked_until: datetime | None = None
@@ -101,6 +102,7 @@ class Watcher:
         self._forward = forward  # ForwardScheduler: the paper forward test, once a trading day after the close
         self._backup = backup  # BackupScheduler: copies the state files once a trading day after the close
         self._integration = integration  # IntegrationScheduler: the read-only live-services check at 08:35 IST
+        self._app_feed = app_feed  # app_feed.AppFeed: the phone app's feed file (read-only, off unless APP_FEED)
         self._close_snapshot = close_snapshot  # groww_hours.CloseSnapshot: one saved Groww read at the close (15:35-15:50)
         self._groww_paused = False  # live Groww broker outside the Groww window: no Groww call this tick
         self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every minute, at all hours
@@ -591,6 +593,11 @@ class Watcher:
                 info["close_snapshot"] = self._close_snapshot.tick(now)
             except Exception:  # noqa: BLE001 - never stops the watch
                 log.exception("close snapshot failed")
+        if self._app_feed is not None:  # rebuilds state/app_feed.json while the Groww window is open
+            try:
+                info["app_feed"] = self._app_feed.tick(now)
+            except Exception:  # noqa: BLE001 - never stops the watch
+                log.exception("app feed failed")
         self._groww_paused = self.groww_paused(now)
         if self._groww_paused:
             info["groww_paused"] = "outside the Groww window: no Groww calls (stops and order checks resume at the open)"
