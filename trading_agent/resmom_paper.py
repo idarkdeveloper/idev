@@ -1,9 +1,10 @@
 """Residual momentum (variant E) on paper: its 12-month forward test beside the adopted rules.
 
-The pre-registered backward check (``docs/research/preregistered-batch-2026-10-16b.md``, run once on 18 Oct 2026)
-passed variant E: the adopted rules with only the ranking changed to residual momentum. The pre-registration says a
-passing variant becomes a candidate for 12 months of forward paper trading beside the control, and is adopted only if
-it beats the control there. This is that account.
+Variant E is the adopted rules with only the ranking changed to residual momentum
+(``docs/research/preregistered-batch-2026-10-16b.md``). Its first backward pass came from a run on monthly prices,
+which is void; rerun on daily prices (``Backward-batch-v2``) it failed (+15.8% a year against +16.3%). The rerun addendum
+(``rerun-addendum-2026-10-18c.md``, written before the rerun) keeps this paper account running whatever happened: it
+is forward evidence. E is adopted only if it beats the control over 12 months here. This is that account.
 
 Everything is the forward test's except the ranking:
 

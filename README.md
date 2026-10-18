@@ -82,7 +82,7 @@ flowchart LR
 ## Research that counts every try
 
 <p align="center">
-  <img src="docs/assets/results.svg" alt="Research so far, 1 Oct 2020 to 30 Sep 2025, after charges and tax: adopted momentum rules +363.8% against +230.8% for the Midcap 150 index fund; worst fall about −31.5% against −21.2%. Skill odds 0.43 against a 0.95 bar; momentum robustness fragile (7 of 9 variants beat the fund); leakage test passed; prediction model rejected. Sealed year Oct 2025 to Oct 2026 passed thinly, +4.5% against +2.8%; the 2017–2020 check passed, +38.7% against +15.6%. Not proven yet." width="100%">
+  <img src="docs/assets/results.svg" alt="Research so far, 1 Oct 2020 to 30 Sep 2025, after charges and tax: adopted momentum rules +363.8% against +230.8% for the Midcap 150 index fund; worst fall about −31.5% against −21.2%. Skill odds 0.43 against a 0.95 bar; momentum robustness fragile (7 of 9 variants beat the fund); leakage test passed; prediction model rejected. Sealed year Oct 2025 to Oct 2026 passed thinly, +4.5% against +2.8%; the 2017–2020 check, rerun on daily prices, passed, +69.4% against +15.6%; the US, Japan and UK replications passed. Not proven yet." width="100%">
 </p>
 
 Backtests are easy to fool, so this one is built to catch itself:
@@ -99,13 +99,16 @@ Backtests are easy to fool, so this one is built to catch itself:
   [pre-registered](docs/research/preregistered-batch-2026-10-16.md)
   ([and one more](docs/research/preregistered-batch-2026-10-16b.md)) and judged once, with the adopted rules, on
   Apr 2017 – Sep 2020, data no research had used. A sealed year (from Oct 2025) was opened once, for the adopted
-  rules only. Both are now spent.
+  rules only. Both are now spent. The first 2017–2020 run used monthly prices by mistake (Yahoo serves monthly bars
+  for whole histories) and is void; it was rerun once on daily prices, as
+  [written down before the rerun](docs/research/rerun-addendum-2026-10-18c.md).
 
 | One-time check | Adopted rules | Benchmark | Verdict |
 |---|---|---|---|
 | Sealed year, 1 Oct 2025 – 16 Oct 2026 | +4.5%, worst fall −13.0% | MID150BEES +2.8%, −14.2% | Passed, thinly: ahead in 5 of 13 months; −0.1% with next-day fills and double costs |
-| Apr 2017 – Sep 2020 (2018 midcap fall, 2020 crash) | +38.7% (+9.8% a year), worst fall −32.3% | Midcap 150 total return less 0.20% a year: +15.6%, −43.3% | Passed; 21 of 322 members have no prices, so it may be flattered |
-| Same window, five variants | Residual momentum +58.7% (+14.1% a year) | | Only residual momentum passed; it must now beat the adopted rules over 12 months of paper trading |
+| Apr 2017 – Sep 2020 (2018 midcap fall, 2020 crash), rerun once on daily prices | +69.4% (+16.3% a year), worst fall −34.4% | Midcap 150 total return less 0.20% a year: +15.6%, −43.3% | Passed; 23 of 321 members have no prices, so it may be flattered |
+| Same window, five variants | Top 10 (B) +86.4% (+19.5% a year); residual momentum (E) +67.0% (+15.8% a year) | | Only B passed (overfitting odds 0.79); B and E are each paper-traded for 12 months against the adopted rules |
+| US, Japan and UK midcaps, Oct 2016 – Sep 2026, before tax | Beat each market's fund | S&P 400 (IJH), TOPIX (1348.T), FTSE 250 (MIDD.L) | Passed in all three; today's members only, so flattered by survivorship |
 
 Results and how to run each study are in the [full guide](docs/guide.md#keeping-score).
 

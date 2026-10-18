@@ -623,7 +623,8 @@ run by the watch service in the same after-close job; nothing in them is retuned
   its probabilities (from `MODEL_PAPER_START`, default 19 Oct 2026). The research rejected it; this is its
   out-of-sample look.
 - `resmom-paper`: residual momentum, variant E of the [pre-registered](research/preregistered-batch-2026-10-16b.md)
-  backward check, which it passed on Apr 2017 – Sep 2020 (+14.1% a year against +9.8% for the adopted rules). Same
+  backward check. Its first pass came from a run on monthly prices, now void; rerun on daily prices it failed (+15.8% a
+  year against +16.3% for the adopted rules). Its paper account runs anyway, as the rerun addendum fixed in advance. Same
   names, filters and research rules as the forward test; only the ranking differs: residual returns after a fit through
   the origin on MID150BEES over sessions t−252 to t−21. From `RESMOM_PAPER_START` (default 19 Oct 2026; it buys its first 20 that day and rebalances monthly from 2 Nov). Its report
   compares it with the forward test over the same days. As pre-registered, it replaces the adopted rules only if it
