@@ -1061,7 +1061,7 @@ def cmd_research_replication(args: argparse.Namespace) -> int:
                                        load_replication_market, prices_for, replicate)
     from .research_studies import prior_trials
     settings = _settings(args)
-    market = args.market.lower()
+    market = args.replication_market.lower()
     spec = MARKETS[market]
     study = spec["study"]
     if _once_used(settings, study):
@@ -2060,7 +2060,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.set_defaults(func=cmd_research_batch3)
     sp = sub.add_parser("research-replication", help="research: the adopted rules on US or Japanese midcaps, ONCE "
                                                      "per market (pre-registered)")
-    sp.add_argument("--market", choices=("us", "jp"), required=True)
+    # its own dest: an argument named "market" would be read by _settings as the app's MARKET (in / us)
+    sp.add_argument("--market", dest="replication_market", choices=("us", "jp"), required=True)
     sp.add_argument("--confirm", action="store_true", help="really run it (once per market)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_research_replication)
