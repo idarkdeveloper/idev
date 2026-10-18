@@ -647,7 +647,7 @@
   });
 
   let MP = null;  // the last My Groww portfolio answer: it fills the Live tiles
-  const LIVE_TILES = ["Holdings value", "Profit / loss", "Today", "Holdings"];
+  const LIVE_TILES = ["Holdings value", "Cash", "Profit / loss", "Today", "Holdings"];
   if(MODE !== "demo") $("tiles").innerHTML = LIVE_TILES.map(l => tile(l, "…", "Loading your holdings…")).join("");
   const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"]],
                    us:[["congress","Congress trades"],["insider","Insider filings"]]};
@@ -897,7 +897,10 @@
       else {
         const cls = toneOf(MP.pl), sv = MP.source === "saved" ? " (saved)" : "";   // the Groww message is shown once, on the My Groww portfolio card
         const today = todayTotal();
+        // cash is the agent's own last read, recorded on disk; this page never asks Groww (n/a until the agent has read it today)
+        const cashAt = MP.cash_as_of ? new Date(MP.cash_as_of).toLocaleTimeString("en-IN", {hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata"}) : "";
         t = [tile("Holdings value" + sv, inr(MP.value), `invested ${inr(MP.invested)}`),
+             MP.cash == null ? tile("Cash", "n/a", "the agent hasn't read it yet") : tile("Cash", inr(MP.cash), `free to buy; as of ${cashAt} IST`),
              tile("Profit / loss" + sv, sinr(MP.pl), `<span class="${cls}">${spct(MP.pl_pct)} vs what you paid</span>`, cls),
              tile("Today", today == null ? "…" : sinr(today), today == null ? "reading price history…" : "latest session vs previous close", toneOf(today)),
              tile("Holdings" + sv, String(MP.holdings.length), MP.unpriced.length ? `${MP.unpriced.length} without a price` : "all priced")];

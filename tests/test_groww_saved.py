@@ -155,3 +155,26 @@ def test_page_shows_saved_subtitle_and_the_message_once():
     live = subprocess.run([node, str(Path(__file__).parent / "ui_mode_harness.js"), "live"],
                           capture_output=True, text=True, encoding="utf-8")
     assert "(saved)" not in json.loads(live.stdout)["tiles"] and json.loads(live.stdout)["mp_sub"].startswith("2 holdings")
+
+
+def _feed_cash(linked, tmp_path, feed):
+    from trading_agent import app_feed
+    d = app_feed.app_dir(linked.state_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / app_feed.FEED_FILE).unlink(missing_ok=True)
+    if feed is not None:
+        (d / app_feed.FEED_FILE).write_text(json.dumps(feed), encoding="utf-8")
+    return _app(linked, tmp_path, FreePrices({})).my_portfolio(refresh=True)
+
+
+def test_live_cash_comes_only_from_a_fresh_groww_feed_on_disk(linked, tmp_path):
+    now = datetime.now(IST)
+    out = _feed_cash(linked, tmp_path, {"source": "groww", "cash": 12345.5, "as_of": now.isoformat()})
+    assert out["cash"] == 12345.5 and out["cash_as_of"]
+    for feed in (None, {"source": "groww", "cash": None, "as_of": now.isoformat()},
+                 {"source": "saved", "cash": 99.0, "as_of": now.isoformat()},
+                 {"source": "groww", "cash": 99.0, "as_of": (now - timedelta(days=2)).isoformat()},
+                 {"source": "groww", "cash": "lots", "as_of": now.isoformat()},
+                 {"source": "groww", "cash": 99.0, "as_of": "garbage"}):
+        out = _feed_cash(linked, tmp_path, feed)
+        assert out["cash"] is None and out["cash_as_of"] is None, feed
