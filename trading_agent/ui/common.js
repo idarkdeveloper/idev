@@ -859,7 +859,7 @@ window.TA = (function(){
       catch(e){ if(mine === seq && !dead && cfg.isCurrent()) failed(e.message || "chart data unavailable"); return; }
       if(mine !== seq || dead || !cfg.isCurrent()) return;   // a newer range or another stock was asked for meanwhile
       if(!payload || payload.error || !payload.bars || !payload.bars.length){ failed((payload && payload.error) || "no price history"); return; }
-      data = payload; note.textContent = ""; paintChips();
+      data = payload; note.textContent = payload.note || ""; paintChips();
       try { build(false); } catch(e){ cfg.fallback(e.message || "chart failed"); }
     }
 
