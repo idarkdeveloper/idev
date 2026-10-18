@@ -208,3 +208,62 @@ def test_runs_without_any_env_file(tmp_path):
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0 and r.stdout.strip() == "True", r.stderr
     assert not (cwd / ".env").exists()
+
+
+def test_the_writers_empty_feed_is_503_not_data(api):
+    # exactly what AppFeed._failed writes when Groww fails before any good feed exists
+    empty = {"as_of": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"), "age_s": 0, "stale": True,
+             "market_closed": False, "source": "none", "cash": None, "value": None, "invested": None, "pl": None,
+             "pl_pct": None, "day_change": None, "day_change_pct": None, "holdings": [], "unpriced": [],
+             "error": "Groww is down"}
+    _write_feed(api.state, empty)
+    assert api.get("/v1/portfolio", api.secret)[:2] == (503, {"error": "no data yet"})
+    assert api.get("/v1/health", api.secret)[1] == {"ok": True, "feed_age_s": None}
+
+
+def _raw_exchange(api, payload: bytes):
+    import socket
+    with socket.create_connection(("127.0.0.1", api.port), timeout=5) as s:
+        s.sendall(payload)
+        chunks = []
+        while chunk := s.recv(4096):
+            chunks.append(chunk)
+    head, _, body = b"".join(chunks).partition(b"\r\n\r\n")
+    return int(head.split(b" ")[1]), json.loads(body)
+
+
+def test_malformed_requests_get_a_json_error_and_no_traceback(api, capfd):
+    for payload in (b"GET /v1/x HTTP/9.9\r\n\r\n", b"GARBAGE\r\n\r\n", b"GET /" + b"a" * 70000 + b" HTTP/1.1\r\n\r\n"):
+        status, body = _raw_exchange(api, payload)
+        assert status in (400, 414, 505) and "error" in body and len(body["error"]) < 40
+    assert _raw_exchange(api, b"GET / HTTP/1.1\r\n\r\n")[0] == 401   # still serving
+    assert "Traceback" not in capfd.readouterr().err
+
+
+def test_unknown_method_is_405_json(api):
+    assert _raw_exchange(api, b"FOO /v1/portfolio HTTP/1.1\r\n\r\n") == (405, {"error": "method not allowed"})
+
+
+def test_oversized_header_is_json(api):
+    status, body = _raw_exchange(api, b"GET / HTTP/1.1\r\nX: " + b"a" * 70000 + b"\r\n\r\n")
+    assert status == 431 and body == {"error": "headers too large"}
+
+
+def test_a_silent_client_is_dropped_after_the_timeout(tmp_path, monkeypatch):
+    import socket
+    monkeypatch.setattr(app_api, "REQUEST_TIMEOUT_S", 0.3)
+    a = Api(tmp_path)
+    try:
+        with socket.create_connection(("127.0.0.1", a.port), timeout=5) as s:
+            assert s.recv(10) == b""   # the server hung up on us instead of waiting forever
+    finally:
+        a.server.shutdown()
+        a.server.server_close()
+
+
+def test_bad_port_env_only_hurts_app_api(tmp_path, monkeypatch, capsys):
+    from trading_agent import cli
+    monkeypatch.setenv("APP_API_PORT", "abc")
+    assert cli.main(["app-device", "--state-dir", str(tmp_path), "list"]) == 0
+    assert cli.main(["app-api", "--state-dir", str(tmp_path)]) == 1
+    assert "APP_API_PORT" in capsys.readouterr().err

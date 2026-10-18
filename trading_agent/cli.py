@@ -597,7 +597,12 @@ def cmd_app_device(args: argparse.Namespace) -> int:
 def cmd_app_api(args: argparse.Namespace) -> int:
     """The read-only phone app API. Offline of Groww and .env: it reads the feed files in --state-dir only."""
     from . import app_api
-    app_api.serve(Path(args.state_dir), args.host, args.port)
+    try:
+        port = args.port if args.port is not None else int(os.environ.get("APP_API_PORT") or 8788)
+    except ValueError:
+        print("APP_API_PORT must be a whole number", file=sys.stderr)
+        return 1
+    app_api.serve(Path(args.state_dir), args.host, port)
     return 0
 
 
@@ -2227,7 +2232,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("app-api", help="phone app: serve the read-only API (/v1/health, /v1/portfolio, /v1/history)")
     sp.add_argument("--state-dir", default="state", help="the state folder (default: state)")
     sp.add_argument("--host", default=os.environ.get("APP_API_HOST") or "127.0.0.1")
-    sp.add_argument("--port", type=int, default=int(os.environ.get("APP_API_PORT") or 8788))
+    sp.add_argument("--port", type=int, help="default: env APP_API_PORT else 8788")
     sp.set_defaults(func=cmd_app_api)
     sp = sub.add_parser("top10-paper", help="variant B's (top 10) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")

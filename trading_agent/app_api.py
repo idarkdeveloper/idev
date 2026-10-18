@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,6 +22,8 @@ log = logging.getLogger(__name__)
 
 STALE_AFTER_S = 2 * 300   # two feed intervals
 RANGES = ("1m", "3m", "1y", "all")
+REQUEST_TIMEOUT_S = 15   # a client that sends nothing cannot hold a thread (this runs before authentication)
+_ERRORS = {400: "bad request", 405: "method not allowed", 414: "request too long", 431: "headers too large"}
 
 
 def _fresh_feed(state_dir: Path) -> tuple[dict[str, Any], int] | None:
@@ -30,7 +33,10 @@ def _fresh_feed(state_dir: Path) -> tuple[dict[str, Any], int] | None:
         as_of = datetime.fromisoformat(feed["as_of"]) if feed else None
     except (KeyError, TypeError, ValueError):
         as_of = None
-    if feed is None or as_of is None or as_of.tzinfo is None:
+    value = feed.get("value") if feed else None
+    # the writer's empty "no data yet" feed (source "none", no value) is not data: 503, as with no file
+    if (feed is None or as_of is None or as_of.tzinfo is None or feed.get("source") not in ("groww", "saved")
+            or isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
         return None
     age = max(0, int((datetime.now(timezone.utc) - as_of).total_seconds()))
     closed = feed.get("market_closed") is True
@@ -42,6 +48,7 @@ def make_handler(state_dir: Path, auth: Authenticator) -> type[BaseHTTPRequestHa
         server_version = "app-api"
         sys_version = ""
         device: str | None = None
+        timeout = REQUEST_TIMEOUT_S
 
         def _send(self, status: int, body: Any) -> None:
             data = json.dumps(body).encode("utf-8")
@@ -52,6 +59,12 @@ def make_handler(state_dir: Path, auth: Authenticator) -> type[BaseHTTPRequestHa
             self.send_header("Connection", "close")   # an unread body must not be taken for the next request
             self.end_headers()
             self.wfile.write(data)
+
+        def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+            # every error (bad request line, unknown method, oversized header) is JSON, never an HTML page
+            code = 405 if code == 501 else code   # a method we have no handler for is just "not GET"
+            self.close_connection = True
+            self._send(code, {"error": _ERRORS.get(code, "error")})
 
         def _secret(self) -> str | None:
             scheme, _, token = (self.headers.get("Authorization") or "").partition(" ")
@@ -82,7 +95,7 @@ def make_handler(state_dir: Path, auth: Authenticator) -> type[BaseHTTPRequestHa
         do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _refuse
 
         def log_request(self, code: Any = "-", size: Any = "-") -> None:
-            log.info("%s %s %s %s", self.command, self.path[:200], code, self.device or "-")
+            log.info("%s %s %s %s", self.command or "-", getattr(self, "path", "")[:200], code, self.device or "-")
 
         def log_message(self, fmt: str, *args: Any) -> None:   # protocol errors can echo request text: say nothing
             pass
