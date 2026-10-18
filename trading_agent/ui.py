@@ -1714,11 +1714,12 @@ class App:
         if self._parent is not None:  # the same real holdings, read once
             return self._parent.my_portfolio(refresh, force=True) if force else self._parent.my_portfolio(refresh)
         if self._my_portfolio is not None and not refresh and not force and time.time() - self._my_portfolio_at < 60:
-            return {**self._my_portfolio, **self._cooldown()}
+            return {**self._my_portfolio, **self._cooldown(), **self._feed_cash()}
         out = read_groww_portfolio(self.settings, self.prices, _now(), force=force)
         out.update(self._cooldown())
         if not out.get("at"):  # not linked, or an error: not cached
             return out
+        out.update(self._feed_cash())
         try:
             out["bands"] = self._bands_for([str(h.get("symbol")) for h in out.get("holdings") or []])
         except Exception:  # noqa: BLE001 - the pill is a nicety
@@ -1740,6 +1741,24 @@ class App:
             out["corp_actions"], out["corp_actions_note"] = {}, None
         self._my_portfolio, self._my_portfolio_at = out, time.time()
         return out
+
+    def _feed_cash(self) -> dict[str, Any]:
+        """The Groww cash the agent last recorded for the phone feed, read from its file on disk (never from Groww).
+        ``cash`` is None unless that read came from Groww and is under a day old."""
+        none = {"cash": None, "cash_as_of": None}
+        try:
+            from .app_feed import load_feed
+            feed = load_feed(self.settings.state_dir)
+            if not feed or feed.get("source") != "groww" or not isinstance(feed.get("cash"), (int, float)) or isinstance(feed.get("cash"), bool):
+                return none
+            at = datetime.fromisoformat(str(feed.get("as_of")))
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+            if not 0 <= (datetime.now(timezone.utc) - at).total_seconds() <= 86400 or not math.isfinite(feed["cash"]):
+                return none
+            return {"cash": float(feed["cash"]), "cash_as_of": at.isoformat(timespec="seconds")}
+        except Exception:  # noqa: BLE001 - a tile, never worth an error
+            return none
 
     def _cooldown(self) -> dict[str, Any]:
         """{"cooldown_until": iso} while a refused Groww token request is cooling down (no network), else {}."""
