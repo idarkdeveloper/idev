@@ -1,6 +1,6 @@
 """Daily backup of the state files, kept 30 days in ``state/backups/YYYYMMDD/``.
 
-Copies ``state/*.json``, ``state/forward/*.json`` (30 days) and the price archive (7 days)'s SQLite file (through SQLite's own backup API, so a writer in the middle of
+Copies ``state/*.json``, ``state/forward/*.json`` and ``state/app/*.json`` (30 days) and the price archive (7 days)'s SQLite file (through SQLite's own backup API, so a writer in the middle of
 a transaction cannot leave a torn copy). Anything that looks like a secret (a name with "token" or "secret", ``.env``)
 is never copied. ``state.json`` itself also gets a ``state.json.bak`` on every save (see ``state.atomic_write``).
 
@@ -61,15 +61,16 @@ def backup_now(state_dir: Path, today: date, *, keep_days: int = KEEP_DAYS) -> d
             copied.append(f.name)
         except OSError as e:
             log.warning("backup of %s failed: %s", f.name, e)
-    forward = state_dir / "forward"
-    if forward.is_dir():
-        (dest / "forward").mkdir(exist_ok=True)
-        for f in sorted(forward.glob("*.json")):
-            try:
-                _copy_atomic(f, dest / "forward" / f.name)
-                copied.append("forward/" + f.name)
-            except OSError as e:
-                log.warning("backup of forward/%s failed: %s", f.name, e)
+    for sub in ("forward", "app"):   # app/ holds the phone app's device hashes, value history and feed
+        folder = state_dir / sub
+        if folder.is_dir():
+            (dest / sub).mkdir(exist_ok=True)
+            for f in sorted(folder.glob("*.json")):
+                try:
+                    _copy_atomic(f, dest / sub / f.name)
+                    copied.append(f"{sub}/{f.name}")
+                except OSError as e:
+                    log.warning("backup of %s/%s failed: %s", sub, f.name, e)
     archived = False
     archive = state_dir / "prices" / "archive.sqlite"
     if archive.exists():

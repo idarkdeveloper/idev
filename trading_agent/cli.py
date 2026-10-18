@@ -540,7 +540,7 @@ def cmd_kill_switch(args: argparse.Namespace) -> int:
 # Under HALT the CLI refuses everything (exit 1) except the switch itself, the dashboard (its order routes refuse),
 # the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
 # reach Groww.
-HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
+HALT_ALLOWED = {"kill-switch", "app-device", "app-api", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
                 "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
@@ -561,6 +561,48 @@ def _halt_refusal(args: argparse.Namespace) -> str | None:
         import os
         state_dir = Path(os.environ.get("STATE_DIR") or "state")
     return killswitch.reason(state_dir, f"run `{args.command}`")
+
+
+def _device_error(e: Exception) -> str:
+    """One line, no secret: an OSError's text can carry a path, so only its type and the folder problem are named."""
+    if isinstance(e, OSError):
+        return f"cannot write the devices file in state/app ({type(e).__name__}); check that folder's owner and mode"
+    return str(e)
+
+
+def cmd_app_device(args: argparse.Namespace) -> int:
+    """Owner-only: manage the phone app's device secrets. Offline; reads no .env (hence --state-dir)."""
+    from . import app_auth
+    state_dir = Path(args.state_dir)
+    if args.action == "add":
+        try:
+            secret = app_auth.add_device(state_dir, args.name)
+        except (ValueError, RuntimeError, OSError) as e:
+            print(_device_error(e), file=sys.stderr)
+            return 1
+        print(f"Device {args.name!r} added. Its secret (enter it in the app):\n\n  {secret}\n\n"
+              "Copy it now; it is not shown again.")
+        return 0
+    if args.action == "list":
+        for d in app_auth.list_devices(state_dir):
+            print(f"{d['name']}  (added {d['created']})")
+        return 0
+    if not args.name and not args.all:
+        print("revoke needs a NAME or --all", file=sys.stderr)
+        return 1
+    try:
+        n = app_auth.revoke(state_dir, args.name, all_=args.all)
+    except (RuntimeError, OSError) as e:
+        print(_device_error(e), file=sys.stderr)
+        return 1
+    print(f"revoked {n} device(s)")
+    return 0 if n else 1
+
+
+def cmd_app_api(args: argparse.Namespace) -> int:
+    """The read-only phone app API (the service runs ``python -m trading_agent.app_api``; this is the same code)."""
+    from . import app_api
+    return app_api.run(args)
 
 
 def cmd_history(args: argparse.Namespace) -> int:
@@ -1792,6 +1834,57 @@ def _market_holidays(settings: Any) -> Any | None:
     return NSEHolidays(cache_dir=settings.state_dir / "cache")
 
 
+def _app_feed_read(settings: Any, prices: Any) -> Any:
+    """The feed's Groww read, its error text scrubbed (app_feed.scrub_error: the message can carry a URL or key)."""
+    def read() -> dict[str, Any]:
+        from datetime import datetime
+        from .app_feed import scrub_error
+        from .runner import read_groww_portfolio
+        from .timezones import IST
+        out = read_groww_portfolio(settings, prices, datetime.now(IST).isoformat(timespec="seconds"))
+        err = out.get("error")
+        if isinstance(err, str):
+            out = {**out, "error": scrub_error(err)}
+        return out
+    return read
+
+
+def _app_feed_cash(settings: Any) -> Any:
+    """The cash balance through a read-only Groww client (live orders off); None on any failure."""
+    def cash() -> float | None:
+        try:
+            from .groww import GrowwBroker
+            from .runner import resolve_groww_token
+            return float(GrowwBroker(resolve_groww_token(settings), live_orders=False,
+                                     exchange=settings.groww_exchange, timeout=10.0).available_cash())
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - includes GrowwTokenUnavailable; the feed shows no cash
+            logging.getLogger(__name__).warning("app feed cash read failed (%s)", type(e).__name__)
+            return None
+    return cash
+
+
+def _app_feed_prev_close(prices: Any) -> Any:
+    from datetime import datetime
+    from .day_brake import prev_close_fn
+    from .timezones import IST
+    return lambda symbol: prev_close_fn(prices, datetime.now(IST).date())(symbol)   # the date moves on in a long run
+
+
+def _app_feed_trend(prices: Any) -> Any:
+    """Up to 30 daily closes, oldest first."""
+    def trend(symbol: str) -> list[float]:
+        return [float(b["close"]) for b in prices.history(symbol, "1mo") if b.get("close") is not None][-30:]
+    return trend
+
+
+def _app_feed(settings: Any, holidays: Any) -> Any:
+    from .app_feed import AppFeed
+    from .runner import free_prices
+    prices = free_prices(settings)
+    return AppFeed(settings, _app_feed_read(settings, prices), _app_feed_cash(settings), _app_feed_prev_close(prices),
+                   _app_feed_trend(prices), holidays)
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """Always-on local mode: poll deals and announcements during market hours."""
     from .runner import make_broker, make_data_source, make_notifier
@@ -1838,6 +1931,9 @@ def cmd_watch(args: argparse.Namespace) -> int:
         close_snapshot = CloseSnapshot(
             settings, lambda day: read_groww_portfolio(settings, close_prices, datetime.now(IST).isoformat(timespec="seconds"),
                                                        force=True, close_session=day), holidays)
+    app_feed = None
+    if settings.app_feed and settings.use_groww and settings.has_groww_credentials:
+        app_feed = _app_feed(settings, holidays)
     def after_close() -> None:
         print(run_forward_due(settings, forward_prices, holidays, notifier))
         from .model_paper import run_model_paper_due   # the prediction model's own paper account (never raises)
@@ -1849,7 +1945,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     forward = ForwardScheduler(settings.state_dir, after_close, holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
                 integration=make_integration_scheduler(settings, notifier, holidays),
-                backup=make_backup_scheduler(settings, holidays), close_snapshot=close_snapshot,
+                backup=make_backup_scheduler(settings, holidays), close_snapshot=close_snapshot, app_feed=app_feed,
                 heartbeat=Heartbeat(settings.heartbeat_url, fail_enabled=True if settings.heartbeat_fail else None),
                 window=(args.window_start, args.window_end),
                 data=data, broker=broker, notifier=notifier, prices=free_prices(settings),
@@ -2122,6 +2218,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("resmom-paper", help="residual momentum's (variant E's) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")
     sp.set_defaults(func=cmd_resmom_paper)
+    sp = sub.add_parser("app-device", help="phone app: add / list / revoke device secrets (read-only access)")
+    sp.add_argument("--state-dir", default="state", help="the state folder (default: state)")
+    asub = sp.add_subparsers(dest="action", required=True)
+    asub.add_parser("add", help="make a new device secret (shown once)").add_argument("name")
+    asub.add_parser("list", help="device names and dates (never secrets)")
+    rp = asub.add_parser("revoke", help="stop a device (or --all) from logging in")
+    rp.add_argument("name", nargs="?")
+    rp.add_argument("--all", action="store_true")
+    sp.set_defaults(func=cmd_app_device)
+    sp = sub.add_parser("app-api", help="phone app: serve the read-only API (/v1/health, /v1/portfolio, /v1/history)")
+    from . import app_api
+    app_api.add_arguments(sp)
+    sp.set_defaults(func=cmd_app_api)
     sp = sub.add_parser("top10-paper", help="variant B's (top 10) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")
     sp.set_defaults(func=cmd_top10_paper)

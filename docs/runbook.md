@@ -491,3 +491,38 @@ sudo systemctl start trading-agent-watch trading-agent-dashboard
 ```
 
 If only the latest save went wrong, `cp state.json.bak state.json` is enough.
+
+---
+
+## 17. Phone app (read-only, stage 1)
+
+The phone app reads `state/app/` through a separate web service (`trading-agent-app-api`). That service sees only the
+Python environment, the package code and `state/app/`; the keys file and the Groww token do not exist inside it. For
+reaching the server from the phone over Tailscale see section 15 (not repeated here).
+
+1. Pull the merged code: `cd /opt/trading-agent && sudo -u agent git pull`.
+2. The unit uses `ProtectHome=true`, so the venv's base Python must not be under `/home` or `/root`:
+   `readlink -f /opt/trading-agent/.venv/bin/python` (if it is, rebuild the venv on a system Python first).
+3. Create the app folder as `agent` BEFORE starting the unit (the bind mount needs it to exist):
+   `sudo -u agent mkdir -p -m 700 /opt/trading-agent/state/app`, then `stat -c '%U %a' /opt/trading-agent/state/app`
+   must print `agent 700`. If `state/app` is ever deleted and recreated (a restore, a manual fix), restart
+   `trading-agent-app-api` afterwards: its bind mount keeps pointing at the old deleted directory.
+4. Install the unit: `sudo cp deploy/systemd/trading-agent-app-api.service /etc/systemd/system/`, then edit it: set
+   `Environment=APP_API_HOST=<the server's Tailscale address>` and add `After=tailscaled.service` under `[Unit]`.
+   `sudo systemctl daemon-reload`, then `systemd-analyze verify /etc/systemd/system/trading-agent-app-api.service` and
+   `systemd-analyze security trading-agent-app-api`, then `sudo systemctl enable --now trading-agent-app-api`.
+5. Prove the isolation: `PID=$(sudo systemctl show -p MainPID --value trading-agent-app-api)`.
+   `sudo nsenter -t $PID -m ls -A /opt/trading-agent` must list only `.venv`, `trading_agent`, `state`.
+   `sudo nsenter -t $PID -m ls -A /opt/trading-agent/state` must list only `app`; `sudo nsenter -t $PID -m ls -A /opt/trading-agent/state/app` must list only the app files. Anything else: stop the service.
+6. Create the phone's secret, only the owner, in their own terminal (it is printed once; never paste it into a chat):
+   `sudo -u agent /opt/trading-agent/.venv/bin/python -m trading_agent app-device --state-dir /opt/trading-agent/state add phone`
+7. Enabling the feed is a separate step, only on the owner's explicit word: set `APP_FEED=true` in the server's `.env`,
+   `sudo systemctl restart trading-agent-watch`, then during market hours check that
+   `/opt/trading-agent/state/app/app_feed.json` exists and that an authenticated request to `/v1/health` answers.
+8. Revoke a lost phone: `sudo -u agent /opt/trading-agent/.venv/bin/python -m trading_agent app-device --state-dir /opt/trading-agent/state revoke phone`.
+
+Gate checklist before relying on it:
+
+- Alert when the feed's `window_end` date is not today on a trading day: a dead watch reads "closed, not stale" the next morning.
+- The 150-login cap is unaffected: the feed reuses the cached token, it does not log in.
+- Revoking a phone works (step 8) and the revoked secret gets 401.

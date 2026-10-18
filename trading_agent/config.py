@@ -264,6 +264,8 @@ class Settings:
     # Groww is called mainly in this window (IST, NSE trading days); after it the holdings saved at the close are used.
     groww_window_start: str = "08:30"
     groww_window_end: str = "16:00"
+    app_feed: bool = False  # the watch service writes state/app/app_feed.json for the phone app (read-only)
+    app_feed_every_s: int = 300  # at most one Groww read for it per this many seconds (minimum 60)
     # Needed when the API key is not scoped to one workspace (the API then asks for it).
     anthropic_workspace_id: str | None = None
     # News headline tagging: auto = local Ollama when it is running, else untagged (never Claude implicitly)
@@ -487,6 +489,8 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         groww_proxy_url=env("GROWW_PROXY_URL") or None,
         groww_window_start=groww_window[0],
         groww_window_end=groww_window[1],
+        app_feed=_bool(env("APP_FEED"), False),
+        app_feed_every_s=int(_number("APP_FEED_EVERY_S", env("APP_FEED_EVERY_S"), 300, 60, 86400)),
         anthropic_workspace_id=env("ANTHROPIC_WORKSPACE_ID") or None,
         news_tagger=news_tagger,
         ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),

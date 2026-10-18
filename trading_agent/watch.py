@@ -76,7 +76,8 @@ class Watcher:
                  holidays: Any | None = None, awake: Callable[[bool], Any] | None = keep_awake,
                  news: Any | None = None, broker_factory: Callable[[], Any] | None = None,
                  digest: Any | None = None, forward: Any | None = None, heartbeat: Any | None = None,
-                 integration: Any | None = None, backup: Any | None = None, close_snapshot: Any | None = None):
+                 integration: Any | None = None, backup: Any | None = None, close_snapshot: Any | None = None,
+                 app_feed: Any | None = None):
         self.settings = settings
         self._broker_factory = broker_factory  # builds the broker later when it could not be built at start
         self._blocked_until: datetime | None = None
@@ -101,6 +102,8 @@ class Watcher:
         self._forward = forward  # ForwardScheduler: the paper forward test, once a trading day after the close
         self._backup = backup  # BackupScheduler: copies the state files once a trading day after the close
         self._integration = integration  # IntegrationScheduler: the read-only live-services check at 08:35 IST
+        self._app_feed = app_feed  # app_feed.AppFeed: the phone app's feed file (read-only, off unless APP_FEED)
+        self._app_feed_thread: threading.Thread | None = None
         self._close_snapshot = close_snapshot  # groww_hours.CloseSnapshot: one saved Groww read at the close (15:35-15:50)
         self._groww_paused = False  # live Groww broker outside the Groww window: no Groww call this tick
         self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every minute, at all hours
@@ -539,6 +542,13 @@ class Watcher:
                     + "\n\nThese are not analysed yet; the full check runs on them when Groww is back.")
         return [t.to_dict() for t in fresh]
 
+    def _app_feed_tick(self, now: datetime) -> None:
+        try:
+            assert self._app_feed is not None
+            self._app_feed.tick(now)
+        except Exception:  # noqa: BLE001 - never stops the watch
+            log.exception("app feed failed")
+
     def tick(self, force: bool = False) -> dict[str, Any]:
         now = datetime.now(self.tz)
         halted = killswitch.reason(getattr(self.settings, "state_dir", None), "run the watch")
@@ -591,6 +601,15 @@ class Watcher:
                 info["close_snapshot"] = self._close_snapshot.tick(now)
             except Exception:  # noqa: BLE001 - never stops the watch
                 log.exception("close snapshot failed")
+        if self._app_feed is not None:  # rebuilds state/app/app_feed.json while the Groww window is open; its own
+            # worker thread, as Groww timeouts in an outage can take a minute (AppFeed.tick never raises)
+            if self._app_feed_thread is not None and self._app_feed_thread.is_alive():
+                info["app_feed"] = "running"
+            else:
+                self._app_feed_thread = threading.Thread(target=self._app_feed_tick, args=(now,), daemon=True,
+                                                         name="app-feed")
+                self._app_feed_thread.start()
+                info["app_feed"] = "started"
         self._groww_paused = self.groww_paused(now)
         if self._groww_paused:
             info["groww_paused"] = "outside the Groww window: no Groww calls (stops and order checks resume at the open)"

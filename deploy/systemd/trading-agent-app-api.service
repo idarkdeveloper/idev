@@ -1,0 +1,31 @@
+[Unit]
+Description=Trading Agent phone app API (read-only; the owner sets APP_API_HOST to the Tailscale address at rollout)
+After=network-online.target
+# At rollout, when APP_API_HOST is the Tailscale address, also add (the address only exists once tailscaled is up):
+# After=tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=agent
+WorkingDirectory=/opt/trading-agent
+Environment=TZ=Asia/Kolkata
+Environment=APP_API_HOST=127.0.0.1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# the module's own entry point: it never imports the cli, config, runner or Groww code.
+# --state-dir is /opt/trading-agent/state, but inside this service the only thing visible there is app/.
+ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent.app_api --state-dir /opt/trading-agent/state
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+# Inside this service's own mount namespace /opt/trading-agent is an empty read-only tmpfs, and only three things are
+# bound back in, read-only. So the keys file and the Groww token do not exist for this process at all.
+# Directory binds (not single files): a bind of one file is lost when the watch replaces that file by rename, a
+# bind of a directory survives renames inside it. The directories must exist before the unit starts (see the runbook).
+TemporaryFileSystem=/opt/trading-agent:ro
+BindReadOnlyPaths=/opt/trading-agent/.venv /opt/trading-agent/trading_agent /opt/trading-agent/state/app
+PrivateTmp=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
