@@ -188,3 +188,22 @@ def test_lockout_memory_is_bounded(tmp_path, monkeypatch):
     for i in range(12):
         auth.check("bad", f"more{i}")
     assert len(auth._fails) <= 11 and len(auth._blocked) == 0
+
+
+def test_cli_unreadable_devices_file_is_a_clean_error(tmp_path, monkeypatch, capsys):
+    add_device(tmp_path, "keep")
+    path = tmp_path / app_auth.DEVICES_FILE
+    before = path.read_bytes()
+
+    def boom(self, *a, **k):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(app_auth.Path, "read_text", boom)
+    state = str(tmp_path)
+    for argv in (["add", "new"], ["revoke", "keep"], ["revoke", "--all"]):
+        assert cli.main(["app-device", "--state-dir", state, *argv]) == 1
+        err = capsys.readouterr().err
+        assert "cannot read" in err and "Traceback" not in err and len(err.strip().splitlines()) == 1
+    assert cli.main(["app-device", "--state-dir", state, "list"]) == 0
+    monkeypatch.undo()
+    assert path.read_bytes() == before

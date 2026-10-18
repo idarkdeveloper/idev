@@ -571,7 +571,7 @@ def cmd_app_device(args: argparse.Namespace) -> int:
     if args.action == "add":
         try:
             secret = app_auth.add_device(state_dir, args.name)
-        except ValueError as e:
+        except (ValueError, RuntimeError) as e:
             print(e, file=sys.stderr)
             return 1
         print(f"Device {args.name!r} added. Its secret (enter it in the app):\n\n  {secret}\n\n"
@@ -584,7 +584,11 @@ def cmd_app_device(args: argparse.Namespace) -> int:
     if not args.name and not args.all:
         print("revoke needs a NAME or --all", file=sys.stderr)
         return 1
-    n = app_auth.revoke(state_dir, args.name, all_=args.all)
+    try:
+        n = app_auth.revoke(state_dir, args.name, all_=args.all)
+    except RuntimeError as e:
+        print(e, file=sys.stderr)
+        return 1
     print(f"revoked {n} device(s)")
     return 0 if n else 1
 
