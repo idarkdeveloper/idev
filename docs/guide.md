@@ -775,7 +775,9 @@ Screener page (a "Filters" column and an "Exclude flagged" preset), the morning 
 (a warning you can override for practice) and the forward test (from the date it first used them, kept in its state).
 Holdings are flagged, never sold: ASM/GSM, "Results due <date>" and a pledge warning show on the portfolio rows, the stock
 page and the morning email. Filings disseminated at or after 15:00 IST count from the next trading day. A list that is
-missing, unreadable or more than 2 trading days old blocks nothing and says "filter data unavailable". Nothing here places,
+missing, unreadable or more than 2 trading days old (10 for promoter pledges, which change slowly; NSE's own pledge
+list was empty from 16 Oct 2026, and the error then says NSE is publishing none) blocks nothing and says "filter data
+unavailable". Nothing here places,
 modifies or cancels an order. The tax-aware B2 buffer (defer a profitable rank-buffer exit aged 335-364 days to day 366)
 is not built: it waits for the B2 rank buffer.
 

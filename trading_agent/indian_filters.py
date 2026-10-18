@@ -52,6 +52,11 @@ RESULTS_AHEAD_DAYS = 14   # board meetings are fetched for this many calendar da
 PLEDGE_MAX_PCT = 20.0
 PLEDGE_MAX_RISE_PP = 5.0
 MAX_AGE_TRADING_DAYS = 2
+# Promoter pledges change slowly and each row carries its own filing time, so the last good list stays in use for two
+# trading weeks. NSE's pledge list was empty on NSE's own page from 16 Oct 2026 (its count read 0 companies); with the
+# 2-day rule the pledge check would have switched itself off by the Wednesday.
+MAX_AGE_BY_PART = {"pledge": 10}
+PLEDGE_COUNT_PATH = "api/corporate-pledge-holding"
 MAX_TRIES = 6
 BACKOFF_MINUTES = (5, 15, 60)
 _LOCK = threading.Lock()
@@ -191,6 +196,16 @@ def parse_pledges(payload: Any, names: Any = None) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _nse_pledge_count(client: Any) -> int | None:
+    """NSE's own count of companies with a reported promoter pledge (the line above its pledge table), or None when it
+    cannot be read. 0 means NSE itself is publishing no pledge data, not that our request failed."""
+    try:
+        rows = _rows(client._get(PLEDGE_COUNT_PATH, params=None, referer=REFERER["pledge"]), "data")
+        return int(str((rows[0] if rows else {}).get("NUMBER_OF_COMPANY")).replace(",", ""))
+    except Exception:  # noqa: BLE001 - only used to word the error
+        return None
+
+
 PARSERS = {"asm": parse_asm, "gsm": parse_gsm, "results": parse_meetings, "pledge": parse_pledges}
 
 
@@ -302,6 +317,10 @@ class FilterBook:
         payload = client._get(path, params=params, referer=REFERER[part])
         parsed: Any = parse_pledges(payload, names) if part == "pledge" else PARSERS[part](payload)
         if not isinstance(parsed, dict) or not parsed:
+            if part == "pledge" and _nse_pledge_count(client) == 0:
+                raise ValueError(f"{LABEL[part]}: NSE is publishing no pledge data right now (its own page counts 0 "
+                                 f"companies); the last good list stays in use for up to {MAX_AGE_BY_PART['pledge']} "
+                                 "trading days")
             raise ValueError(f"{LABEL[part]}: NSE answered with no usable rows")
         return parsed
 
@@ -346,7 +365,8 @@ class FilterBook:
         return self.now_fn().astimezone(IST).date()
 
     def current(self, part: str) -> dict[str, Any] | None:
-        """The stored list for ``part`` unless the filter is off, it is missing, or more than 2 trading days old."""
+        """The stored list for ``part`` unless the filter is off, it is missing, or too old: more than 2 trading days
+        (10 for promoter pledges, see MAX_AGE_BY_PART)."""
         if not self.enabled.get(part):
             return None
         block = self.load().get(part)
@@ -358,7 +378,7 @@ class FilterBook:
             return None
         today = self._today()
         age = sum(1 for i in range(1, (today - listed).days + 1) if _trading(listed + timedelta(days=i), self.calendar))
-        return None if age > MAX_AGE_TRADING_DAYS else block["symbols"]
+        return None if age > MAX_AGE_BY_PART.get(part, MAX_AGE_TRADING_DAYS) else block["symbols"]
 
     def unavailable(self) -> list[str]:
         """The switched-on filters whose data is missing or stale (they block nothing until it comes back)."""
