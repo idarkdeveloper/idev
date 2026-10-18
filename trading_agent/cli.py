@@ -1000,8 +1000,12 @@ def cmd_research_circuits(args: argparse.Namespace) -> int:
     from .costs import cost_model_for
     from .research_circuits import circuit_audit, format_circuit_audit
     settings = _settings(args)
+    from .runner import free_prices
     m = _research_market(args, settings)
-    r = circuit_audit(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash)
+    prices = free_prices(settings)   # the simulator's daily history holds closes only: open/high/low come from here
+    print("Loading open/high/low for the traded stocks…")
+    r = circuit_audit(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                      ohlc=lambda sym: prices.history_ohlc(sym, "10y", ttl=7 * 86400))
     print(format_circuit_audit(r))
     if args.json:
         print(json.dumps(r, default=str))
