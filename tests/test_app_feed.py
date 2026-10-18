@@ -218,11 +218,18 @@ def test_watcher_tick_calls_the_feed_once_and_survives_its_error(settings):
                 raise RuntimeError("feed broke")
             return {"as_of": "x"}
     ok = Feed()
-    info = Watcher(settings, every=60, app_feed=ok).tick(force=True)
-    assert len(ok.calls) == 1 and info["app_feed"] == {"as_of": "x"}
+    w = Watcher(settings, every=60, app_feed=ok)
+    info = w.tick(force=True)
+    w._app_feed_thread.join(5)
+    assert len(ok.calls) == 1 and info["app_feed"] == "started"
     bad = Feed(boom=True)
-    info = Watcher(settings, every=60, app_feed=bad).tick(force=True)
-    assert len(bad.calls) == 1 and "app_feed" not in info and "in_window" in info
+    w = Watcher(settings, every=60, app_feed=bad)
+    info = w.tick(force=True)   # the error stays on the feed's own thread
+    w._app_feed_thread.join(5)
+    assert len(bad.calls) == 1 and "in_window" in info
+    w.tick(force=True)   # and the next tick starts a fresh read
+    w._app_feed_thread.join(5)
+    assert len(bad.calls) == 2
 
 
 def test_watcher_without_a_feed_behaves_as_before(settings):
@@ -316,3 +323,115 @@ def test_a_saved_source_never_asks_groww_for_cash(tmp_path):
     rig.feed.cash_fn = lambda: calls.append(1) or 5.0
     feed = rig.feed.tick(MON)
     assert calls == [] and feed["cash"] is None
+
+
+# ------------------------------------------------------------------- final review fixes
+
+def test_feed_carries_window_end_and_every_s_and_failed_refreshes_them(tmp_path):
+    r = Rig(tmp_path, every=300)
+    out = r.feed.tick(MON)
+    assert out["window_end"] == MON.replace(hour=16, minute=0).isoformat(timespec="seconds")
+    assert out["every_s"] == 300
+    r.settings.app_feed_every_s = 900
+    r.result = {"linked": True, "error": "cool-down until 11:00"}
+    nxt = MON + timedelta(days=1)   # the next trading day, before any good read
+    out = r.feed.tick(nxt)
+    assert out["window_end"] == nxt.replace(hour=16, minute=0).isoformat(timespec="seconds") and out["every_s"] == 900
+
+
+def _saved(**over):
+    """The runner's real saved-snapshot shape when the live read fails inside the window (no ``error`` key)."""
+    out = good(source="saved", saved_at="2026-06-05T15:40:00+05:30", prices="yahoo (delayed)", age_trading_days=1,
+               reason="ReadTimeout: HTTPSConnectionPool(host='api.groww.in'): token=FAKETOKEN123 Read timed out.")
+    out.pop("at")
+    out.update(over)
+    return out
+
+
+def test_a_saved_snapshot_after_a_failed_read_is_an_error_with_the_snapshot_age(tmp_path):
+    r = Rig(tmp_path, read=_saved())
+    out = r.feed.tick(MON)
+    assert out["source"] == "saved" and out["error"] == "ReadTimeout"
+    assert out["as_of"] == "2026-06-05T15:40:00+05:30"
+    assert "FAKETOKEN123" not in (tmp_path / FEED_FILE).read_text(encoding="utf-8")
+
+
+def test_a_saved_snapshot_keeps_a_deliberate_reason_and_now_when_saved_at_is_bad(tmp_path):
+    out = Rig(tmp_path, read=_saved(reason="Groww is cooling down until 11:00", saved_at="garbage")).feed.tick(MON)
+    assert out["error"] == "Groww is cooling down until 11:00" and out["as_of"] == MON.isoformat(timespec="seconds")
+
+
+def test_a_holding_priced_at_zero_does_not_freeze_the_feed(tmp_path):
+    zero = {"symbol": "DEAD", "name": None, "qty": 5, "avg_price": 10.0, "price": 0.0, "value": 0.0, "pl": -50.0,
+            "pl_pct": -1.0}
+    r = Rig(tmp_path, read=good(holdings=good()["holdings"] + [zero]))
+    out = r.feed.tick(MON)
+    assert out is not None and load_feed(tmp_path) == out
+    assert out["holdings"][1]["day_change"] == pytest.approx(-775.0)   # (0 - 155) * 5
+    assert out["day_change"] == pytest.approx(50.0 - 775.0)
+    assert out["day_change_pct"] == pytest.approx((50.0 - 775.0) / (1550.0 + 775.0))
+    only = Rig(tmp_path / "b", read=good(holdings=[zero]))
+    only.feed.prev_close_fn = lambda s: 0.0   # no usable previous close: no day change, still no crash
+    assert only.feed.tick(MON)["day_change_pct"] is None
+
+
+def test_non_finite_numbers_become_null(tmp_path):
+    h = dict(good()["holdings"][0], pl_pct=float("nan"), avg_price=float("inf"))
+    r = Rig(tmp_path, read=good(holdings=[h], value=float("nan"), pl=float("-inf")))
+    r.feed.trend_fn = lambda s: [1.0, float("nan")]
+    out = r.feed.tick(MON)
+    text = (tmp_path / FEED_FILE).read_text(encoding="utf-8")
+    json.loads(text, parse_constant=lambda c: pytest.fail(f"non-standard JSON constant {c}"))
+    assert out["value"] is None and out["pl"] is None
+    assert out["holdings"][0]["pl_pct"] is None and out["holdings"][0]["avg_price"] is None
+    assert out["holdings"][0]["trend"] == [1.0, None]
+
+
+def test_trend_is_capped_at_the_last_30_closes(tmp_path):
+    r = Rig(tmp_path)
+    r.feed.trend_fn = lambda s: [float(i) for i in range(45)]
+    assert r.feed.tick(MON)["holdings"][0]["trend"] == [float(i) for i in range(15, 45)]
+
+
+def _record_open_modes(monkeypatch):
+    modes = []
+    real = os.open
+
+    def spy(path, flags, mode=0o777, *a, **k):
+        if flags & os.O_CREAT:
+            modes.append(mode)
+        return real(path, flags, mode, *a, **k)
+    monkeypatch.setattr(os, "open", spy)
+    return modes
+
+
+def test_feed_and_history_are_created_owner_only_on_every_platform(tmp_path, monkeypatch):
+    modes = _record_open_modes(monkeypatch)
+    Rig(tmp_path).feed.tick(MON.replace(hour=15, minute=40))   # writes the feed and the day's history row
+    assert (tmp_path / FEED_FILE).exists() and (tmp_path / HISTORY_FILE).exists()
+    assert modes == [0o600, 0o600]
+
+
+def test_watcher_tick_does_not_wait_for_a_slow_feed(settings):
+    import threading
+    import time as _time
+
+    from trading_agent.watch import Watcher
+    release, started = threading.Event(), threading.Event()
+
+    class Slow:
+        calls = 0
+
+        def tick(self, now):
+            Slow.calls += 1
+            started.set()
+            release.wait(10)
+    w = Watcher(settings, every=60, app_feed=Slow())
+    try:
+        t0 = _time.monotonic()
+        w.tick(force=True)
+        assert started.wait(5)
+        w.tick(force=True)   # the first read still hangs: no second one is started
+        assert _time.monotonic() - t0 < 5 and Slow.calls == 1
+    finally:
+        release.set()

@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -30,6 +31,24 @@ def load_feed(state_dir: Path) -> dict[str, Any] | None:
         return data if isinstance(data, dict) else None
     except (OSError, ValueError):
         return None
+
+
+def scrub_error(text: str) -> str:
+    """The runner's text for an unexpected exception is ``Type: message`` and the message can carry a URL or key, so
+    only the type is kept; the deliberate refusal texts (cool-down, not linked) never look so and stay."""
+    m = re.match(r"([A-Za-z_][\w.]*): ", text)
+    return m.group(1) if m else text[:200]
+
+
+def _finite(v: Any) -> Any:
+    """NaN and infinity become None everywhere, so the file is always standard JSON for the phone."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    if isinstance(v, dict):
+        return {k: _finite(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_finite(x) for x in v]
+    return v
 
 
 def _write_private(path: Path, body: Any) -> None:
@@ -119,7 +138,7 @@ class AppFeed:
         except Exception as e:  # noqa: BLE001 - one bad quote must not hide the rest
             log.warning("no previous close for %s: %s", sym, e)
         try:
-            trend = list(self.trend_fn(sym))
+            trend = list(self.trend_fn(sym))[-30:]   # the contract: at most 30 closes, oldest first
         except Exception as e:  # noqa: BLE001
             log.warning("no trend for %s: %s", sym, e)
             trend = []
@@ -134,18 +153,32 @@ class AppFeed:
             log.warning("could not read the cash balance: %s", e)
             return None
 
+    def _timing(self, now: datetime) -> dict[str, Any]:
+        """What the API needs to tell "closed" from "stale": the end of today's Groww window and the feed interval."""
+        end = datetime.combine(now.date(), groww_hours.window_bounds(self.settings)[1], tzinfo=IST)
+        return {"window_end": end.isoformat(timespec="seconds"),
+                "every_s": int(getattr(self.settings, "app_feed_every_s", 300))}
+
     def _build(self, out: dict[str, Any], now: datetime) -> dict[str, Any]:
         rows = [self._holding(h) for h in out.get("holdings") or []]
-        with_day = [(r, r["price"] / (1 + r["day_change_pct"])) for r in rows if r["day_change"] is not None]
-        day = round(sum(r["day_change"] for r, _ in with_day), 2) if with_day else None
-        base = sum(prev * r["qty"] for r, prev in with_day)
-        return {"as_of": now.isoformat(timespec="seconds"), "age_s": 0, "stale": False,
+        with_day = [r for r in rows if r["day_change"] is not None]
+        day = round(sum(r["day_change"] for r in with_day), 2) if with_day else None
+        base = sum(r["price"] * r["qty"] - r["day_change"] for r in with_day)   # yesterday's value, no division
+        as_of, error = now, None
+        if out.get("source") == "saved":   # the live read failed: the runner's reason, and the snapshot's real age
+            error = scrub_error(str(out.get("reason") or "Groww could not be read"))
+            try:
+                saved = datetime.fromisoformat(str(out.get("saved_at")))
+                as_of = saved if saved.tzinfo else saved.replace(tzinfo=IST)
+            except ValueError:
+                pass
+        return {"as_of": as_of.isoformat(timespec="seconds"), "age_s": 0, "stale": False, **self._timing(now),
                 "market_closed": bool(out.get("market_closed")), "source": out.get("source") or "groww",
                 "cash": self._cash() if (out.get("source") or "groww") == "groww" else None,  # no second Groww call in an outage
                 "value": out.get("value"), "invested": out.get("invested"),
                 "pl": out.get("pl"), "pl_pct": out.get("pl_pct"),
                 "day_change": day, "day_change_pct": day / base if day is not None and base else None,
-                "holdings": rows, "unpriced": list(out.get("unpriced") or []), "error": None}
+                "holdings": rows, "unpriced": list(out.get("unpriced") or []), "error": error}
 
     def _failed(self, text: str, now: datetime) -> dict[str, Any]:
         """The last good feed with only ``error`` changed (an empty feed when there is none yet)."""
@@ -153,7 +186,7 @@ class AppFeed:
             "as_of": now.isoformat(timespec="seconds"), "age_s": 0, "stale": True, "market_closed": False,
             "source": "none", "cash": None, "value": None, "invested": None, "pl": None, "pl_pct": None,
             "day_change": None, "day_change_pct": None, "holdings": [], "unpriced": [], "error": None}
-        feed["error"] = text
+        feed.update(self._timing(now), error=text)
         return feed
 
     def tick(self, now: datetime | None = None) -> dict[str, Any] | None:
@@ -174,6 +207,7 @@ class AppFeed:
                 log.warning("app feed read failed (%s)", type(e).__name__)
                 out, err = {}, f"read failed ({type(e).__name__})"
             feed = self._failed(err, now) if err else self._build(out, now)
+            feed = _finite(feed)
             _write_private(self._path(), feed)
             if not err and feed["source"] == "groww" and now.time() >= RECORD_AFTER:
                 record_daily_value(self.settings.state_dir, feed, now.date())

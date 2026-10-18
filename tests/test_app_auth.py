@@ -207,3 +207,17 @@ def test_cli_unreadable_devices_file_is_a_clean_error(tmp_path, monkeypatch, cap
     assert cli.main(["app-device", "--state-dir", state, "list"]) == 0
     monkeypatch.undo()
     assert path.read_bytes() == before
+
+
+def test_devices_file_is_created_owner_only_on_every_platform(tmp_path, monkeypatch):
+    modes = []
+    real = os.open
+
+    def spy(path, flags, mode=0o777, *a, **k):
+        if flags & os.O_CREAT:
+            modes.append(mode)
+        return real(path, flags, mode, *a, **k)
+    monkeypatch.setattr(os, "open", spy)
+    add_device(tmp_path, "phone")
+    revoke(tmp_path, "phone")
+    assert (tmp_path / app_auth.DEVICES_FILE).exists() and modes == [0o600, 0o600]
