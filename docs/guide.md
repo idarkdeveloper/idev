@@ -628,6 +628,12 @@ run by the watch service in the same after-close job; nothing in them is retuned
   the origin on MID150BEES over sessions t−252 to t−21. From `RESMOM_PAPER_START` (default 19 Oct 2026; it buys its first 20 that day and rebalances monthly from 2 Nov). Its report
   compares it with the forward test over the same days. As pre-registered, it replaces the adopted rules only if it
   beats them over 12 months here. `resmom-paper --run` does today's run by hand.
+- `top10-paper`: variant B (top 10), which passed the 2017–2020 backward check rerun on daily prices
+  (`Backward-batch-v2`). The forward test's screen, ranking and filters, but 10 names kept while ranked 18 or better
+  (25 for a profitable holding near a year old), the same 25% floor, no stop. From `TOP10_PAPER_START` (default
+  19 Oct 2026; `off` disables it), in its own files (`state/forward/top10_<universe>.json`). It is judged against the
+  adopted rules over the same days; B replaces them only if it beats them over 12 months. The overfitting probability
+  across the backward variants was 0.79, so its pass may be luck. `top10-paper --run` does today's run by hand.
 
 **US, Japan and UK replication (once per market).** `research-replication --market us|jp|uk --confirm` runs the adopted rules,
 unchanged except that no tax is charged, on the S&P MidCap 400 (against IJH) or the TOPIX Mid400 (against the TOPIX ETF

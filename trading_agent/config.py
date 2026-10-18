@@ -163,6 +163,20 @@ def parse_model_paper_start(value: object) -> str | None:
 
 
 RESMOM_PAPER_DEFAULT = "2026-10-19"
+TOP10_PAPER_DEFAULT = "2026-10-19"
+
+
+def parse_top10_paper_start(value: object) -> str | None:
+    """TOP10_PAPER_START: the YYYY-MM-DD variant B's (top 10) paper account starts (unset: 2026-10-19; off: never)."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return TOP10_PAPER_DEFAULT
+    if text.lower() in ("off", "false", "no", "0", "none"):
+        return None
+    try:
+        return parse_forward_start(text)
+    except ValueError:
+        raise ValueError("TOP10_PAPER_START must be a date as YYYY-MM-DD, or off") from None
 
 
 def parse_resmom_paper_start(value: object) -> str | None:
@@ -295,6 +309,7 @@ class Settings:
     forward_start: str | None = None  # YYYY-MM-DD the forward test started; the server rebuilds from it when the account is missing
     forward_universe: str = "NIFTYMIDCAP150"  # the paper forward test the server runs once a day after the close
     model_paper_start: str | None = MODEL_PAPER_DEFAULT  # the prediction model's own paper account from this date
+    top10_paper_start: str | None = TOP10_PAPER_DEFAULT  # variant B's (top 10) paper account from this date
     resmom_paper_start: str | None = RESMOM_PAPER_DEFAULT  # residual momentum's (variant E's) paper account from this date
     # Read-only check of the real services (integration.py), run by the watch service at 08:35 IST on trading days.
     integration_check: bool = True
@@ -425,6 +440,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         forward_start = parse_forward_start(env("FORWARD_START"))
         model_paper_start = parse_model_paper_start(env("MODEL_PAPER_START"))
         resmom_paper_start = parse_resmom_paper_start(env("RESMOM_PAPER_START"))
+        top10_paper_start = parse_top10_paper_start(env("TOP10_PAPER_START"))
     except ValueError as e:
         raise SystemExit(str(e)) from None
     data_source = (env("DATA_SOURCE") or ("nse" if market == "in" else "quiver")).lower()
@@ -504,6 +520,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         forward_start=forward_start,
         model_paper_start=model_paper_start,
         resmom_paper_start=resmom_paper_start,
+        top10_paper_start=top10_paper_start,
         forward_universe=(env("FORWARD_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),
         integration_check=_bool(env("INTEGRATION_CHECK"), True),
         integration_claude=_bool(env("INTEGRATION_CLAUDE"), False),

@@ -1359,6 +1359,27 @@ def cmd_resmom_paper(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_top10_paper(args: argparse.Namespace) -> int:
+    """Variant B's (top 10) paper account: show it, or with --run do today's after-close run now."""
+    from .resmom_paper import control_over
+    from .runner import free_prices
+    from .top10_paper import Top10Paper, format_top10_paper, run_top10_paper_due
+    settings = _settings(args)
+    prices = free_prices(settings)
+    if args.run:
+        print(run_top10_paper_due(settings, prices, _market_holidays(settings)))
+        return 0
+    tp = Top10Paper(settings.state_dir, universe=settings.forward_universe, capital=settings.paper_starting_cash,
+                    price_fn=prices.latest_price)
+    if not tp.ft.started:
+        print("Top-10 paper account: not started (starts "
+              f"{settings.top10_paper_start or 'never: TOP10_PAPER_START=off'}, after the close, from the watch service).")
+        return 0
+    s = {**tp.ft.summary(), "rebalanced": None}
+    print(format_top10_paper(s, control_over(settings.state_dir, settings.forward_universe, s.get("started"))))
+    return 0
+
+
 def cmd_research_regimes(args: argparse.Namespace) -> int:
     """How the adopted rules did in bull, sideways, bear and high-volatility months (a diagnostic, not a filter)."""
     from .costs import cost_model_for
@@ -1823,6 +1844,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
         print(run_model_paper_due(settings, forward_prices, holidays))
         from .resmom_paper import run_resmom_paper_due   # variant E's own paper account (never raises)
         print(run_resmom_paper_due(settings, forward_prices, holidays))
+        from .top10_paper import run_top10_paper_due   # variant B's own paper account (never raises)
+        print(run_top10_paper_due(settings, forward_prices, holidays))
     forward = ForwardScheduler(settings.state_dir, after_close, holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
                 integration=make_integration_scheduler(settings, notifier, holidays),
@@ -2099,6 +2122,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("resmom-paper", help="residual momentum's (variant E's) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")
     sp.set_defaults(func=cmd_resmom_paper)
+    sp = sub.add_parser("top10-paper", help="variant B's (top 10) paper account (practice money only)")
+    sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")
+    sp.set_defaults(func=cmd_top10_paper)
     sp = sub.add_parser("research-pead", help="research: post-results drift and promoter-buying signals")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--years", type=int, default=5)
