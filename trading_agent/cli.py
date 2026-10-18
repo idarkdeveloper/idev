@@ -1090,7 +1090,8 @@ def cmd_research_replication(args: argparse.Namespace) -> int:
             print(f"  - {x}")
         return 1
     if m.unit_jumps:   # a pence/pound mix-up would fake a 100x move; stop before anything is spent
-        print(f"Prices jump more than 50x in a day for {', '.join(m.unit_jumps)} (a unit mix-up in the data). "
+        print(f"Prices jump more than 50x in a day for {len(m.unit_jumps)} stocks, more than 10% of them "
+              f"({', '.join(m.unit_jumps[:12])}): the data cannot be trusted. "
               "Not running (nothing is spent).")
         return 1
     if not _claim_once(settings, study):   # after the data loaded: a refused download does not spend it
