@@ -314,6 +314,7 @@
   .set-sec > .sub { margin: -6px 0 0; }
   .set-sec .menu-row { padding: 4px 0; }
   .field-label { font-size: 13px; color: var(--color-label); }
+  .set-group { display: flex; flex-direction: column; gap: 4px; }
   #set-live { display: flex; flex-direction: column; gap: 20px; }
   #set-live[hidden] { display: none; }
   .set-foot { border-top: 1px solid var(--color-divider); padding-top: 16px; }
