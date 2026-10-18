@@ -716,7 +716,8 @@ def test_tiles_and_recommendation_buttons_depend_on_mode():
             assert first["symbol"] == "LAURUSLABS" and first["source"] == "practice" and first["held_over_year"] is None   # untouched tick: nothing sent
         else:
             assert "sp-qty" not in out["groww_panel"] and "sell-panel" not in out["practice_panel"]
-        assert out["check_hidden"] is out["settings_hidden"] is (mode == "demo"), mode
+        assert out["check_hidden"] is out["set_live_hidden"] is (mode == "demo"), mode
+        assert not out["settings_hidden"], mode   # Settings opens on both pages; Demo shows only its Appearance part
     # the offline sample dashboard is a Demo page that owns everything: banner says so, controls stay
     r = subprocess.run([node, str(harness), "demo", "sample"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
@@ -1568,3 +1569,15 @@ def test_the_dashboard_has_no_start_watch_button():
     html = (Path(__file__).parent.parent / "trading_agent" / "ui" / "index.html").read_text()
     assert "btn-watch" not in html and "Start watch" not in html and "/api/watch" not in html
     assert "f-every" not in html and "f-autoexit" not in html
+
+
+def test_settings_is_one_gear_button_with_titled_sections():
+    from pathlib import Path
+    html = (Path(__file__).parent.parent / "trading_agent" / "ui" / "index.html").read_text()
+    assert 'id="more-menu"' not in html and 'class="set-btn" id="btn-settings"' in html
+    dlg = html[html.index('<dialog id="dlg"'):html.index("</dialog>", html.index('<dialog id="dlg"'))]
+    for sec in ("appearance", "profile", "investors", "filters", "alerts", "telegram", "emails", "stops", "screener", "checks"):
+        assert f'id="set-{sec}"' in dlg and f'data-set-jump="set-{sec}"' in dlg, sec
+    # Appearance (theme, table rows, layout) lives in the dialog, outside the part Demo hides
+    assert dlg.index('data-theme-choice="dark"') < dlg.index('id="set-live"')
+    assert dlg.index('id="f-tg-token"') > dlg.index('id="set-telegram"') > dlg.index('id="set-live"')
