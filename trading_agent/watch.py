@@ -601,7 +601,7 @@ class Watcher:
                 info["close_snapshot"] = self._close_snapshot.tick(now)
             except Exception:  # noqa: BLE001 - never stops the watch
                 log.exception("close snapshot failed")
-        if self._app_feed is not None:  # rebuilds state/app_feed.json while the Groww window is open; its own
+        if self._app_feed is not None:  # rebuilds state/app/app_feed.json while the Groww window is open; its own
             # worker thread, as Groww timeouts in an outage can take a minute (AppFeed.tick never raises)
             if self._app_feed_thread is not None and self._app_feed_thread.is_alive():
                 info["app_feed"] = "running"

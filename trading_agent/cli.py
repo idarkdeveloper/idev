@@ -563,6 +563,13 @@ def _halt_refusal(args: argparse.Namespace) -> str | None:
     return killswitch.reason(state_dir, f"run `{args.command}`")
 
 
+def _device_error(e: Exception) -> str:
+    """One line, no secret: an OSError's text can carry a path, so only its type and the folder problem are named."""
+    if isinstance(e, OSError):
+        return f"cannot write the devices file in state/app ({type(e).__name__}); check that folder's owner and mode"
+    return str(e)
+
+
 def cmd_app_device(args: argparse.Namespace) -> int:
     """Owner-only: manage the phone app's device secrets. Offline; reads no .env (hence --state-dir)."""
     from . import app_auth
@@ -570,8 +577,8 @@ def cmd_app_device(args: argparse.Namespace) -> int:
     if args.action == "add":
         try:
             secret = app_auth.add_device(state_dir, args.name)
-        except (ValueError, RuntimeError) as e:
-            print(e, file=sys.stderr)
+        except (ValueError, RuntimeError, OSError) as e:
+            print(_device_error(e), file=sys.stderr)
             return 1
         print(f"Device {args.name!r} added. Its secret (enter it in the app):\n\n  {secret}\n\n"
               "Copy it now; it is not shown again.")
@@ -585,8 +592,8 @@ def cmd_app_device(args: argparse.Namespace) -> int:
         return 1
     try:
         n = app_auth.revoke(state_dir, args.name, all_=args.all)
-    except RuntimeError as e:
-        print(e, file=sys.stderr)
+    except (RuntimeError, OSError) as e:
+        print(_device_error(e), file=sys.stderr)
         return 1
     print(f"revoked {n} device(s)")
     return 0 if n else 1

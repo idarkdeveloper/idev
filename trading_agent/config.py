@@ -264,7 +264,7 @@ class Settings:
     # Groww is called mainly in this window (IST, NSE trading days); after it the holdings saved at the close are used.
     groww_window_start: str = "08:30"
     groww_window_end: str = "16:00"
-    app_feed: bool = False  # the watch service writes state/app_feed.json for the phone app (read-only)
+    app_feed: bool = False  # the watch service writes state/app/app_feed.json for the phone app (read-only)
     app_feed_every_s: int = 300  # at most one Groww read for it per this many seconds (minimum 60)
     # Needed when the API key is not scoped to one workspace (the API then asks for it).
     anthropic_workspace_id: str | None = None

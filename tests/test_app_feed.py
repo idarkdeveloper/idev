@@ -119,7 +119,7 @@ def test_cash_error_gives_none(tmp_path):
 
 def test_feed_file_is_owner_only_and_atomic(tmp_path):
     Rig(tmp_path).feed.tick(MON)
-    assert not list(tmp_path.glob("*.tmp"))
+    assert not list(app_dir(tmp_path).glob("*.tmp"))
     if sys.platform != "win32":
         assert os.stat(app_dir(tmp_path) / FEED_FILE).st_mode & 0o777 == 0o600
     json.loads((app_dir(tmp_path) / FEED_FILE).read_text(encoding="utf-8"))
@@ -463,3 +463,11 @@ def test_readers_create_nothing_and_ignore_the_old_location(tmp_path):
     (tmp_path / HISTORY_FILE).write_text('[{"date": "2026-06-08", "value": 1}]', encoding="utf-8")
     assert load_feed(tmp_path) is None and load_history(tmp_path, "all") == []
     assert not (tmp_path / "app").exists()
+
+
+def test_backup_copies_the_app_folder(tmp_path):
+    from trading_agent.backup import backup_now
+    Rig(tmp_path).feed.tick(MON.replace(hour=15, minute=40))
+    r = backup_now(tmp_path, date(2026, 6, 8))
+    assert {f"app/{FEED_FILE}", f"app/{HISTORY_FILE}"} <= set(r["files"])
+    assert json.loads((tmp_path / "backups" / "20260608" / "app" / FEED_FILE).read_text(encoding="utf-8"))

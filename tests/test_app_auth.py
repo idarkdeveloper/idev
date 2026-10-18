@@ -237,3 +237,14 @@ def test_devices_file_lives_in_state_app_owner_only_and_not_at_the_old_place(tmp
     assert (tmp_path / "app" / "app_devices.json").is_file()
     assert [p.name for p in tmp_path.iterdir()] == ["app"]
     assert list_devices(tmp_path) == [{"name": "phone", "created": list_devices(tmp_path)[0]["created"]}]
+
+
+def test_cli_unwritable_app_folder_is_a_one_line_error_without_a_secret(tmp_path, monkeypatch, capsys):
+    def boom(*a, **k):
+        raise PermissionError(13, "denied", str(tmp_path / "app" / "x"))
+    monkeypatch.setattr(os, "open", boom)
+    assert cli.main(["app-device", "--state-dir", str(tmp_path), "add", "phone"]) == 1
+    cap = capsys.readouterr()
+    assert "Traceback" not in cap.err and len(cap.err.strip().splitlines()) == 1 and "PermissionError" in cap.err
+    assert "not shown again" not in cap.out and cap.out.strip() == ""
+    assert cli.main(["app-device", "--state-dir", str(tmp_path), "revoke", "phone"]) == 1
