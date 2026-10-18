@@ -1209,3 +1209,20 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #investor-list { display: none; }
   #investor-list.open:not([hidden]) { display: block; margin: 4px 0 8px; }
 }
+/* Phone fixes 2: section tabs that cannot lose their gap, and a clean Total footer under the holdings */
+@media (max-width: 700px) {
+  .ws-tabbar .ws-tabs { gap: 6px; flex-wrap: nowrap; }
+  .ws-tabbar .ws-tabs button[role="tab"] { flex: none; padding: 0 14px; white-space: nowrap; min-height: 44px; }
+  /* the holdings cards have nothing to scroll sideways: no edge-shadow gradients (they showed as dark bars at the card edge) */
+  .tscroll:has(> table.mp-table) { background: none; overflow-x: visible; }
+  #mp-card .mp-table tfoot tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 12px; padding: 12px 16px 14px; border-top: 1px solid var(--color-divider); border-bottom: none; background: none; }
+  #mp-card .mp-table tfoot td { border-top: none; font-weight: 600; }
+  #mp-card .mp-table tfoot td:first-child { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font-weight: 700; }
+  #mp-card .mp-table tfoot td:first-child .sub { margin: 0; font-weight: 400; }
+  #mp-card .mp-table tfoot td.num { display: block; grid-row: 2; white-space: nowrap; font-size: 15px; }
+  #mp-card .mp-table tfoot td:nth-child(4) { grid-column: 1; } #mp-card .mp-table tfoot td:nth-child(5) { grid-column: 2; } #mp-card .mp-table tfoot td:nth-child(6) { grid-column: 3; }
+  #mp-card .mp-table tfoot td.num:empty::after { content: "\2013"; color: var(--color-muted); font-weight: 400; }
+  #mp-card .mp-table tfoot td.num .l2 { font-size: 12.5px; font-weight: 500; }
+  #mp-card .mp-table tfoot td:not(:first-child):empty { display: block; }
+  #mp-card .mp-table tfoot td:nth-child(2):empty, #mp-card .mp-table tfoot td:nth-child(3):empty, #mp-card .mp-table tfoot td:nth-child(7):empty { display: none; }
+}
