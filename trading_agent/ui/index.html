@@ -1490,8 +1490,10 @@
   function practiceOrder(op, symbol){
     const t = TA.palette.routeStockOp(op, symbol, MODE, palHost);
     if(!t) return;
-    closeDrawer();
-    if(t.via === "host") palHost[t.op](t.symbol); else location.assign(t.url);
+    // Going to another page: closing the drawer would run history.back() after location.assign and cancel it (the owner
+    // landed back on Live). Clear the pushed-entry flag first so the close leaves the history alone.
+    if(t.via !== "host"){ drawerPushed = false; location.assign(t.url); return; }
+    closeDrawer(); palHost[t.op](t.symbol);
   }
   const stockOpts = (extra) => Object.assign({mode: MODE, context: () => ({regime: S && S.regime, screen: S && S.screen}), holding: growwHolding,
     onPractice: practiceOrder, onLoaded: (r) => { curStock = String(r.ticker).split(".")[0]; syncUrl(); lkSeq++; renderLookupCard(r); $("lk-ticker").value = r.ticker;
