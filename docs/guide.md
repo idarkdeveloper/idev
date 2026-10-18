@@ -637,6 +637,19 @@ history passes a fixed completeness test (390–410 members at every month start
 the report says the result is flattered. Pass: beat the fund with a worst fall no more than 10 points deeper. Each market
 is claimed before it runs, logged before it prints and refused a second time; no Indian rule changes either way.
 
+**Batch 3 (once).** `research-batch3 --confirm` runs the two ideas
+[pre-registered](research/preregistered-batch-2026-10-18.md) on 18 Oct 2026 beside the adopted rules on the development
+years: F reorders the momentum top 40 by how smoothly each stock rose (information discreteness), G moves names with net
+bulk or block deal buying by clients named FUND, INSURANCE or PENSION in the previous 60 days to the front of the top
+40. It first downloads NSE's deal history (Oct 2019 – Sep 2025, 90-day windows, cached); if a window fails, nothing
+runs and nothing is spent. A variant passes with +2 points a year over the adopted rules, a worst fall within 5 points
+and turnover at most 1.5x; a pass only earns a 12-month paper account.
+
+**Circuit-lock audit.** `research-circuits` (a diagnostic, not a trial) finds the adopted rules' sells made on days
+that look locked at the lower price band (open = high = low = close below the previous close, or a fall of 4.5% or more
+on under a fifth of the usual volume) and re-prices them at the first freely traded close. Above 15 points of lost
+return, the forward test's fills should be delayed the same way.
+
 ## Can algo trading predict a share? The signal lab
 
 `python -m trading_agent signal-lab --universe NIFTY50 --years 5` (or the *Signal lab*

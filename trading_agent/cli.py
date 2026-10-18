@@ -547,7 +547,8 @@ HALT_ALLOWED = {"kill-switch", "ui", "watch", "history", "backtest", "momentum",
                 "research-model", "research-robustness", "research-regimes",
                 "research-capacity", "research-leakage",
                 "research-momentum", "research-holdout",
-                "research-macro", "research-sectors", "research-backward"}
+                "research-macro", "research-sectors", "research-backward", "research-replication",
+                "research-batch3", "research-circuits"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -992,6 +993,64 @@ def _claim_once(settings: Any, study: str) -> bool:
     print(f"Claimed {study} ({path}): this is the only run. If it stops before printing a result, the window is "
           "still spent.")
     return True
+
+
+def cmd_research_circuits(args: argparse.Namespace) -> int:
+    """Circuit-lock fill audit of the adopted rules on the development years (a diagnostic, not a trial)."""
+    from .costs import cost_model_for
+    from .research_circuits import circuit_audit, format_circuit_audit
+    settings = _settings(args)
+    m = _research_market(args, settings)
+    r = circuit_audit(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash)
+    print(format_circuit_audit(r))
+    if args.json:
+        print(json.dumps(r, default=str))
+    return 0
+
+
+def cmd_research_batch3(args: argparse.Namespace) -> int:
+    """Pre-registered batch 3 (smooth momentum F, institutional buying G) on the development years, ONCE. Refused
+    without --confirm and after the first time (the trial log records it)."""
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .nse import NSEClient
+    from .research_batch3 import (PREREGISTRATION, STUDY, DealHistoryError, batch3, fetch_deal_history,
+                                  format_batch3, institutional_flows)
+    from .research_studies import HOLDOUT_START, prior_trials
+    settings = _settings(args)
+    if _once_used(settings, STUDY):
+        return 2
+    if not args.confirm:
+        print(f"This runs pre-registered batch 3 ({PREREGISTRATION}) on Oct 2020 to Sep 2025, ONCE. The result is "
+              "final and the batch is spent. Run again with --confirm.")
+        return 2
+    print("Loading NSE bulk and block deals, Oct 2019 to Sep 2025, in 90-day windows (cached once)…")
+    try:
+        rows = fetch_deal_history(NSEClient(cache_dir=settings.state_dir / "cache"),
+                                  settings.state_dir / "research" / "deals", progress=print)
+    except DealHistoryError as e:
+        print(f"Could not load the deal history ({e}). Batch 3 did not run; nothing is spent.")
+        return 1
+    flows, skipped = institutional_flows(rows)
+    note = (f"{len(rows):,} deals read, {sum(len(v) for v in flows.values()):,} by FUND / INSURANCE / PENSION clients "
+            f"in {len(flows)} stocks, {skipped} skipped for a missing quantity, price, side or date.")
+    print(note)
+    args.universe, args.years, args.until = "NIFTYMIDCAP150", 5, HOLDOUT_START
+    m = _research_market(args, settings)
+    if not _claim_once(settings, STUDY):   # after the data loaded: a refused download does not spend it
+        return 2
+    r = batch3(m, flows, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+               extra_trials=prior_trials(settings.state_dir))
+    for k, x in r["results"].items():   # logged before printing: once run, the batch is spent
+        log_trial(settings.state_dir, STUDY, {"variant": k, "name": x["name"], "from": r["start"], "to": r["end"]},
+                  {"return": x["total_return"], "excess": x["excess"], "cagr": x["cagr"],
+                   "max_drawdown": x["max_drawdown"], "turnover": x["turnover"], "passes": x.get("passes"),
+                   "skill": x["skill"].get("probability")})
+    print(format_batch3(r, note))
+    if args.json:
+        print(json.dumps({**r, "results": {k: {kk: vv for kk, vv in v.items() if kk != "skill"}
+                                           for k, v in r["results"].items()}}, default=str))
+    return 0
 
 
 def cmd_research_replication(args: argparse.Namespace) -> int:
@@ -1977,6 +2036,8 @@ def build_parser() -> argparse.ArgumentParser:
                            "the adopted rules around oil moves, rupee moves and RBI rate changes (a diagnostic)"),
                           ("research-sectors", cmd_research_sectors,
                            "how crowded the adopted rules' holdings were in one industry (a diagnostic)"),
+                          ("research-circuits", cmd_research_circuits,
+                           "how many sells fell on days locked at the lower band, and what delaying them costs"),
                           ("research-leakage", cmd_research_leakage,
                            "check that no decision used data published after its day (cut the data and re-decide)")):
         sp = sub.add_parser(name, help=hlp)
@@ -1992,6 +2053,11 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--cuts", type=int, default=4, help="end-to-end simulation cuts (default 4)")
         sp.add_argument("--json", action="store_true")
         sp.set_defaults(func=fn)
+    sp = sub.add_parser("research-batch3", help="research: pre-registered batch 3 (smooth momentum, institutional "
+                                                "buying), ONCE")
+    sp.add_argument("--confirm", action="store_true", help="really run it (once)")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_research_batch3)
     sp = sub.add_parser("research-replication", help="research: the adopted rules on US or Japanese midcaps, ONCE "
                                                      "per market (pre-registered)")
     sp.add_argument("--market", choices=("us", "jp"), required=True)
