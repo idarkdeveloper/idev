@@ -359,10 +359,17 @@ def test_entry_point_bad_port_env_is_one_clean_line(monkeypatch, capsys):
     assert "APP_API_PORT" in err and "Traceback" not in err and len(err.strip().splitlines()) == 1
 
 
-def test_systemd_unit_runs_the_entry_point_and_hides_the_groww_keys():
+def test_systemd_unit_shows_the_service_only_its_own_files():
+    # a text test: systemd cannot run on this PC, so the namespace itself is proved at rollout (runbook section 17)
     unit = (ROOT / "deploy" / "systemd" / "trading-agent-app-api.service").read_text(encoding="utf-8")
-    assert "ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent.app_api --state-dir /opt/trading-agent/state" in unit
-    assert "InaccessiblePaths=-/opt/trading-agent/.env -/opt/trading-agent/state/groww_token.json" in unit
-    for line in ("PrivateTmp=true", "ProtectHome=true", "NoNewPrivileges=true", "ProtectSystem=strict",
-                 "ReadOnlyPaths=/opt/trading-agent", "User=agent"):
-        assert line in unit
+    lines = [ln.strip() for ln in unit.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert "ExecStart=/opt/trading-agent/.venv/bin/python -m trading_agent.app_api --state-dir /opt/trading-agent/state" in lines
+    for line in ("TemporaryFileSystem=/opt/trading-agent:ro",
+                 "BindReadOnlyPaths=/opt/trading-agent/.venv /opt/trading-agent/trading_agent /opt/trading-agent/state/app",
+                 "PrivateTmp=true", "ProtectHome=true", "NoNewPrivileges=true", "ProtectSystem=strict", "User=agent",
+                 "WorkingDirectory=/opt/trading-agent", "Environment=PYTHONDONTWRITEBYTECODE=1",
+                 "Environment=APP_API_HOST=127.0.0.1", "Environment=TZ=Asia/Kolkata"):
+        assert line in lines
+    assert "InaccessiblePaths" not in unit and not [ln for ln in lines if ln.startswith("ReadOnlyPaths")]
+    assert not [ln for ln in lines if ".env" in ln or "groww_token" in ln]
+    assert "# After=tailscaled.service" in unit
