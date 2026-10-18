@@ -1,0 +1,174 @@
+Stopped: a decision used data published after it. Fix the leak before trusting this run.
+Rebuilding the Midcap 150's members since 2016 from NSE's index notices (downloaded once)…
+parsed 1/154 notices
+parsed 2/154 notices
+parsed 3/154 notices
+parsed 4/154 notices
+parsed 5/154 notices
+parsed 6/154 notices
+parsed 7/154 notices
+parsed 8/154 notices
+parsed 9/154 notices
+parsed 10/154 notices
+parsed 11/154 notices
+parsed 12/154 notices
+parsed 13/154 notices
+parsed 14/154 notices
+parsed 15/154 notices
+parsed 16/154 notices
+parsed 17/154 notices
+parsed 18/154 notices
+parsed 19/154 notices
+parsed 20/154 notices
+parsed 21/154 notices
+parsed 22/154 notices
+parsed 23/154 notices
+parsed 24/154 notices
+parsed 25/154 notices
+parsed 26/154 notices
+parsed 27/154 notices
+parsed 28/154 notices
+parsed 29/154 notices
+parsed 30/154 notices
+parsed 31/154 notices
+parsed 32/154 notices
+parsed 33/154 notices
+parsed 34/154 notices
+parsed 35/154 notices
+parsed 36/154 notices
+parsed 37/154 notices
+parsed 38/154 notices
+parsed 39/154 notices
+parsed 40/154 notices
+parsed 41/154 notices
+parsed 42/154 notices
+parsed 43/154 notices
+parsed 44/154 notices
+parsed 45/154 notices
+parsed 46/154 notices
+parsed 47/154 notices
+parsed 48/154 notices
+parsed 49/154 notices
+parsed 50/154 notices
+parsed 51/154 notices
+parsed 52/154 notices
+parsed 53/154 notices
+parsed 54/154 notices
+parsed 55/154 notices
+parsed 56/154 notices
+parsed 57/154 notices
+parsed 58/154 notices
+parsed 59/154 notices
+parsed 60/154 notices
+parsed 61/154 notices
+parsed 62/154 notices
+parsed 63/154 notices
+parsed 64/154 notices
+parsed 65/154 notices
+parsed 66/154 notices
+parsed 67/154 notices
+parsed 68/154 notices
+parsed 69/154 notices
+parsed 70/154 notices
+parsed 71/154 notices
+parsed 72/154 notices
+parsed 73/154 notices
+parsed 74/154 notices
+parsed 75/154 notices
+parsed 76/154 notices
+parsed 77/154 notices
+parsed 78/154 notices
+parsed 79/154 notices
+parsed 80/154 notices
+parsed 81/154 notices
+parsed 82/154 notices
+parsed 83/154 notices
+parsed 84/154 notices
+parsed 85/154 notices
+parsed 86/154 notices
+parsed 87/154 notices
+parsed 88/154 notices
+parsed 89/154 notices
+parsed 90/154 notices
+parsed 91/154 notices
+parsed 92/154 notices
+parsed 93/154 notices
+parsed 94/154 notices
+parsed 95/154 notices
+parsed 96/154 notices
+parsed 97/154 notices
+parsed 98/154 notices
+parsed 99/154 notices
+parsed 100/154 notices
+parsed 101/154 notices
+parsed 102/154 notices
+parsed 103/154 notices
+parsed 104/154 notices
+parsed 105/154 notices
+parsed 106/154 notices
+parsed 107/154 notices
+parsed 108/154 notices
+parsed 109/154 notices
+parsed 110/154 notices
+parsed 111/154 notices
+parsed 112/154 notices
+parsed 113/154 notices
+parsed 114/154 notices
+parsed 115/154 notices
+parsed 116/154 notices
+parsed 117/154 notices
+parsed 118/154 notices
+parsed 119/154 notices
+parsed 120/154 notices
+parsed 121/154 notices
+parsed 122/154 notices
+parsed 123/154 notices
+parsed 124/154 notices
+parsed 125/154 notices
+parsed 126/154 notices
+parsed 127/154 notices
+parsed 128/154 notices
+parsed 129/154 notices
+parsed 130/154 notices
+parsed 131/154 notices
+parsed 132/154 notices
+parsed 133/154 notices
+parsed 134/154 notices
+parsed 135/154 notices
+parsed 136/154 notices
+parsed 137/154 notices
+parsed 138/154 notices
+parsed 139/154 notices
+parsed 140/154 notices
+parsed 141/154 notices
+parsed 142/154 notices
+parsed 143/154 notices
+parsed 144/154 notices
+parsed 145/154 notices
+parsed 146/154 notices
+parsed 147/154 notices
+parsed 148/154 notices
+parsed 149/154 notices
+parsed 150/154 notices
+parsed 151/154 notices
+parsed 152/154 notices
+parsed 153/154 notices
+parsed 154/154 notices
+Loading the Nifty Midcap 150 total return index…
+Loading prices for every member since 2016 (this takes a few minutes)…
+Checking for look-ahead (six decision days, two simulation cuts)…
+Leakage test (floor25%, buffer35+tax-aware), 2017-04-03 to 2020-09-30: FAILED: 2 decision(s) used later data.
+  Each check cuts the market at a decision day and recomputes that day's decision without the later data.
+  check                               days  failed
+  holdout sealed                         1       0
+  ranking                                6       0
+  ranking scores                         6       0
+  back-adjustment                        6       0
+  indicators                             6       2
+  simulation, same-close fills           2       0
+  simulation, next-day fills             2       0
+  ! indicators on 2017-04-03: differs
+  ! indicators on 2017-12-01: differs
+  Not covered: event signals (results, insider trades), which use their own 15:00 IST as-of rule and are not in the adopted rules.
+REMOTE_EXIT_CODE=1
+
