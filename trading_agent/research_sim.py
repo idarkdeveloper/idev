@@ -182,6 +182,7 @@ class Market:
         self.missing: list[str] = []
         self.point_in_time = False   # membership taken at each date (load_market with a membership history)
         self.unit_jumps: list[str] = []   # stocks whose close jumps >50x in a day (a pence/pound mix-up)
+        self.excluded: list[str] = []     # stocks left out for a data error (listed in the report)
         self.start_day = calendar[0] if calendar else ""   # the test window's first day (load_market sets it)
         self._atr: dict[str, list[float | None]] = {}
         self._ema50: dict[str, list[float | None]] = {}

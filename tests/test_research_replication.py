@@ -106,7 +106,7 @@ def test_the_run_uses_the_unchanged_rules_without_tax_and_the_fixed_costs():
     assert "REPLICATION, run once" in text and "S&P MidCap 400" in text and "5 bps a side" in text
     assert "Members without prices: 1 of 41 (DEAD)" in text and "This market is now spent" in text
     j = rr.MARKETS["jp"]
-    assert j["benchmark"] == "1306" and j["suffix"] == ".T" and j["one_way_bps"] == 10.0
+    assert j["benchmark"] == "1348" and j["suffix"] == ".T" and j["one_way_bps"] == 10.0
 
 
 def test_a_benchmark_without_the_lookback_year_stops_before_anything_runs():
@@ -130,13 +130,13 @@ def test_the_command_needs_confirm_and_runs_each_market_once(tmp_path, monkeypat
     args.confirm = True
     assert cli.cmd_research_replication(args) == 0
     out = capsys.readouterr().out
-    assert "Claimed Replication-US" in out and "REPLICATION, run once" in out and guarded["h"] == rr.WINDOW_END
+    assert "Claimed Replication-US-v2" in out and "REPLICATION, run once" in out and guarded["h"] == rr.WINDOW_END
     rows = [json.loads(x) for x in (tmp_path / "research" / "trials.jsonl").read_text().splitlines()]
-    assert [r["study"] for r in rows] == ["Replication-US"]
+    assert [r["study"] for r in rows] == ["Replication-US-v2"]
     assert cli.cmd_research_replication(args) == 2 and "used once only" in capsys.readouterr().out
     monkeypatch.setattr(rr, "fetch_members", lambda market: (["A"], []))   # Japan: too few names read -> not spent
     assert cli.cmd_research_replication(SimpleNamespace(replication_market="jp", confirm=True, json=False)) == 1
-    assert not (tmp_path / "research" / "once" / "Replication-JP.claimed").exists()
+    assert not (tmp_path / "research" / "once" / "Replication-JP-v2.claimed").exists()
 
 
 def test_the_market_flag_never_reaches_the_apps_market_setting(tmp_path, monkeypatch, capsys):
@@ -225,14 +225,14 @@ def test_the_uk_flag_parses():
 def test_zero_or_negative_prices_are_dropped_and_reported_instead_of_crashing():
     """Japan stopped in the leakage check: a Yahoo history held a 0 / -0.0 price and vol60 took log(-0.0)."""
     dates, series = synthetic()
-    series["1306"] = series.pop("IJH")
+    series["1348"] = series.pop("IJH")
     series = {k: [{**b, "volume": 1e6} for b in v] for k, v in series.items()}   # above the 18M-yen floor
     series["S03"] = [{**b, "close": -0.0, "adj_close": -0.0} if i in (300, 301) else b
                      for i, b in enumerate(series["S03"])]
     series["S04"] = [{**b, "adj_close": 0.0, "close": 0.0} if i == 400 else b for i, b in enumerate(series["S04"])]
     kept, n = rr.drop_bad_prices(series["S03"])
     assert n == 2 and len(kept) == len(series["S03"]) - 2 and all(b["close"] > 0 for b in kept)
-    members = [s for s in series if s != "1306"]
+    members = [s for s in series if s != "1348"]
     m, notes = rr.load_replication_market("jp", FakePrices(series), members, [])
     assert any("3 zero or negative price point(s) dropped in 2 series (S03 2, S04 1)" in x for x in notes)
     bad_day = series["S03"][300]["date"]                            # (the bar was dropped: find its date in the original)
@@ -310,3 +310,20 @@ def test_full_history_is_asked_for_by_dates_so_yahoo_keeps_daily_bars(tmp_path):
     assert seen[0]["period1"] == 0 and "range" not in seen[0] and seen[0]["interval"] == "1d"
     assert seen[1] == {"range": "10y", "interval": "1d"}
     assert (tmp_path / "yahoo_IJH_maxd.json").exists() and not (tmp_path / "yahoo_IJH_max.json").exists()
+
+
+def test_the_rerun_leaves_out_garbage_stocks_outside_the_uk_and_keeps_the_void_runs_apart():
+    """8303.T jumps 2e7x in 2023 on Yahoo; under the rerun addendum such a stock is left out and named."""
+    dates, series = synthetic()
+    series["1348"] = series.pop("IJH")
+    series["S07"] = [{**b, "close": b["close"] * 1e6, "adj_close": b["adj_close"] * 1e6} if i >= 700 else b
+                     for i, b in enumerate(series["S07"])]
+    members = [s for s in series if s != "1348"]
+    m, notes = rr.load_replication_market("jp", FakePrices(series), members, [])
+    assert "S07" not in m.raw and m.excluded == ["S07"] and m.unit_jumps == []
+    assert any("left out for a one-day move of more than 50x" in x and "S07" in x for x in notes)
+    assert set(rr.VOID_STUDIES) == {"Replication-US", "Replication-JP", "Backward-batch"}
+    assert {rr.MARKETS[k]["study"] for k in ("us", "jp")} == {"Replication-US-v2", "Replication-JP-v2"}
+    assert rr.MARKETS["uk"]["study"] == "Replication-UK" and rr.RERUN_ADDENDUM in rr.MARKETS["jp"]["plan"]
+    from trading_agent import research_backward as rb
+    assert rb.STUDY == "Backward-batch-v2"

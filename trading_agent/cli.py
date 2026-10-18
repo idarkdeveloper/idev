@@ -1210,6 +1210,18 @@ def cmd_research_backward(args: argparse.Namespace) -> int:
     tri = tri_from_csv(args.tri_csv) if args.tri_csv else fetch_tri(settings.state_dir / "cache")
     print("Loading prices for every member since 2016 (this takes a few minutes)…")
     m = load_backward_market(membership, free_prices(settings), tri)
+    from .research_replication import data_problems
+    problems = data_problems(m, trading_from=TRADING_FROM, latest_start="2017-07-01")
+    if problems:   # a data fault must never spend the window: stop before the claim
+        print("The data cannot carry this test, so it is not run (nothing is spent):")
+        for x in problems:
+            print(f"  - {x}")
+        return 1
+    if m.excluded:
+        notes.append(f"{len(m.excluded)} stock(s) left out for a one-day move of more than 50x (a data error): "
+                     f"{', '.join(m.excluded[:12])}.")
+    notes.append("rerun with daily prices (docs/research/rerun-addendum-2026-10-18c.md); the first run used "
+                 "monthly bars and is void.")
     _leakage_guard(m, holdout_start=WINDOW_END)
     industries, failed = industry_map(load_universe)
     if failed:
