@@ -259,6 +259,7 @@
     $("sc-export").disabled = $("sc-export2").disabled = !rows.length;
     $("sc-sheet-show").textContent = `Show ${rows.length} stock${rows.length === 1 ? "" : "s"}`;
     $("sc-card").classList.toggle("sc-compact", st.density === "compact");
+    $("sc-card").classList.toggle("sc-allcols", st.allCols);
   }
   function renderPresets(){
     const rows = baseRows(), have = rows.length > 0;
@@ -317,7 +318,7 @@
     else body = rows.map(r => {
       const sub = [r.name, r.industry].filter(Boolean).join(" · ");
       return `<tr data-sym="${esc(r.symbol)}" tabindex="0" aria-selected="${st.sel === r.symbol}">`
-        + `<td class="sc-stock"><div class="sc-symrow"><span class="sc-sym">${esc(r.symbol)}</span>${badges(r)}</div>`
+        + `<td class="sc-stock"><div class="sc-symrow"><a class="sc-sym" href="${esc(TA.palette.landingUrl("lookup", r.symbol))}">${esc(r.symbol)}</a>${badges(r)}</div>`
         + (sub ? `<div class="sc-name" title="${esc(sub)}">${esc(r.name)}${r.name && r.industry ? " · " : ""}${esc(r.industry)}</div>` : "") + `</td>`
         + `<td class="sc-sparkcol">${spark(r)}</td>` + cols.map(c => cell(c, r)).join("") + `</tr>`;
     }).join("");
@@ -562,7 +563,10 @@
     });
     // a row click toggles its details; Enter or Space on a focused row does the same
     const rowAct = (tr) => { if(st.sel === tr.dataset.sym) closeDrawer(); else openDrawer(tr.dataset.sym); };
-    $("sc-rows").addEventListener("click", (e) => { const tr = e.target.closest && e.target.closest("tr[data-sym]"); if(tr) rowAct(tr); });
+    $("sc-rows").addEventListener("click", (e) => {
+      const a = e.target.closest && e.target.closest("a.sc-sym");   // the ticker is a real link; a plain click opens the row, Ctrl/Cmd/middle click follows it
+      if(a && !(e.ctrlKey || e.metaKey || e.shiftKey)) e.preventDefault();
+      const tr = e.target.closest && e.target.closest("tr[data-sym]"); if(tr) rowAct(tr); });
     $("sc-rows").addEventListener("keydown", (e) => {
       if(e.key !== "Enter" && e.key !== " ") return;
       const tr = e.target.closest && e.target.closest("tr[data-sym]"); if(!tr || e.target !== tr) return;

@@ -1000,4 +1000,16 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   .sc-name, .sc-compact .sc-name { display: block; max-width: 78px; }
   .sc-table td.num { font-family: var(--mono); font-size: 13px; }
   .sc-table td.num:nth-child(3) { font-size: 14px; font-weight: 500; }
+  .sc-sym { text-decoration: none; }
+  .sc-sym:hover { text-decoration: underline; }
+  /* page scrolls, not the table; by default only stock, trend, price and 1D (the sort/filter columns are in All columns) */
+  .sc-scroll { max-height: none; }
+  .sc-card:not(.sc-allcols) .sc-table :is(th, td):nth-child(n+5) { display: none; }
+  .sc-card:not(.sc-allcols) .sc-table { min-width: 0; width: 100%; }
+  /* Screener header: brand mark, search and theme on one row, the page tabs scrolling sideways below */
+  body[data-mode="screener"] .sc-wrap { flex-wrap: wrap; align-items: center; }
+  body[data-mode="screener"] .sc-wrap .brand { order: 1; }
+  body[data-mode="screener"] .sc-wrap .brand > div:last-child { display: none; }
+  body[data-mode="screener"] .sc-wrap .controls { order: 2; margin-left: auto; flex-wrap: nowrap; }
+  body[data-mode="screener"] .sc-wrap .tabs { order: 3; flex: 0 0 100%; overflow-x: auto; scrollbar-width: none; }
 }
