@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="idev25: follow the big money. A Claude trading agent for NSE and Groww, paper first. 1,944 offline tests, about 50 commands, two switches before any real order, a five-year after-tax backtest, one sealed holdout, no keys needed for the demo." width="100%">
+  <img src="docs/assets/hero.svg" alt="idev25: follow the big money. A Claude trading agent for NSE and Groww, paper first. 1,949 offline tests, about 50 commands, two switches before any real order, a five-year after-tax backtest, one sealed holdout, no keys needed for the demo." width="100%">
 </p>
 
 <p align="center">
@@ -34,7 +34,7 @@ until you deliberately switch real orders on.
 | 🧪 **Trades practice money** | A local simulator seeded with your real holdings, Indian delivery charges and tax included. A separate account tests the prediction model on its own. |
 | 📬 **Tells you** | Daily emails as readable cards, instant alerts for new deals and filings, and Telegram commands (`/lookup`, `/chart`, `/portfolio`, `/halt` …) from your own chat only. |
 | ⏪ **Replays the past** | Start a practice portfolio on any date since 2021 and race the agent's rules and the index fund, with no peeking at later data. |
-| 📊 **Researches honestly** | A daily portfolio simulator, a momentum screen, a signal lab, leakage and capacity checks, and a sealed holdout. Every variant tried is logged and counted against the result. |
+| 📊 **Researches honestly** | A daily portfolio simulator, a momentum screen, a signal lab, leakage and capacity checks, a sealed year and a pre-registered 2017–2020 check. Every variant tried is logged and counted against the result. |
 
 <p align="center">
   <img src="docs/assets/deals.png" alt="Deals and orders tab: the disclosed bulk and block deals with buy or sell, size, price, who traded and where." width="100%">
@@ -82,7 +82,7 @@ flowchart LR
 ## Research that counts every try
 
 <p align="center">
-  <img src="docs/assets/results.svg" alt="Research so far, 1 Oct 2020 to 30 Sep 2025, after charges and tax: adopted momentum rules +363.8% against +230.8% for the Midcap 150 index fund; worst fall about −31.5% against −21.2%. Skill odds 0.43 against a 0.95 bar; momentum robustness fragile (7 of 9 variants beat the fund); leakage test passed; prediction model rejected. Not proven yet." width="100%">
+  <img src="docs/assets/results.svg" alt="Research so far, 1 Oct 2020 to 30 Sep 2025, after charges and tax: adopted momentum rules +363.8% against +230.8% for the Midcap 150 index fund; worst fall about −31.5% against −21.2%. Skill odds 0.43 against a 0.95 bar; momentum robustness fragile (7 of 9 variants beat the fund); leakage test passed; prediction model rejected. Sealed year Oct 2025 to Oct 2026 passed thinly, +4.5% against +2.8%; the 2017–2020 check passed, +38.7% against +15.6%. Not proven yet." width="100%">
 </p>
 
 Backtests are easy to fool, so this one is built to catch itself:
@@ -95,9 +95,17 @@ Backtests are easy to fool, so this one is built to catch itself:
   stops on a leak.
 - **Point-in-time index members, real Indian charges and tax.** Stocks with no price history are counted and named,
   not silently dropped.
-- **Pass rules are written before the data is seen.** The four ideas left over from the research were
-  [pre-registered](docs/research/preregistered-batch-2026-10-16.md) and are judged once, on 2017–2020 data no
-  research has used. A sealed year (from Oct 2025) is opened once, for the adopted rules only.
+- **Pass rules are written before the data is seen.** Five ideas were
+  [pre-registered](docs/research/preregistered-batch-2026-10-16.md)
+  ([and one more](docs/research/preregistered-batch-2026-10-16b.md)) and judged once, with the adopted rules, on
+  Apr 2017 – Sep 2020, data no research had used. A sealed year (from Oct 2025) was opened once, for the adopted
+  rules only. Both are now spent.
+
+| One-time check | Adopted rules | Benchmark | Verdict |
+|---|---|---|---|
+| Sealed year, 1 Oct 2025 – 16 Oct 2026 | +4.5%, worst fall −13.0% | MID150BEES +2.8%, −14.2% | Passed, thinly: ahead in 5 of 13 months; −0.1% with next-day fills and double costs |
+| Apr 2017 – Sep 2020 (2018 midcap fall, 2020 crash) | +38.7% (+9.8% a year), worst fall −32.3% | Midcap 150 total return less 0.20% a year: +15.6%, −43.3% | Passed; 21 of 322 members have no prices, so it may be flattered |
+| Same window, five variants | Residual momentum +58.7% (+14.1% a year) | | Only residual momentum passed; it must now beat the adopted rules over 12 months of paper trading |
 
 Results and how to run each study are in the [full guide](docs/guide.md#keeping-score).
 
@@ -119,7 +127,7 @@ Results and how to run each study are in the [full guide](docs/guide.md#keeping-
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q -n auto      # 1,944 offline tests: fake broker, fake NSE, fake Groww, a scripted Claude
+python -m pytest -q -n auto      # 1,949 offline tests: fake broker, fake NSE, fake Groww, a scripted Claude
 ruff check trading_agent tests && mypy trading_agent
 ```
 
