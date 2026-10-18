@@ -1054,10 +1054,10 @@ def cmd_research_batch3(args: argparse.Namespace) -> int:
 
 
 def cmd_research_replication(args: argparse.Namespace) -> int:
-    """The adopted rules on US or Japanese midcaps, ONCE per market (pre-registered 18 Oct 2026). Refused without
+    """The adopted rules on US, Japanese or UK midcaps, ONCE per market (pre-registered 18 Oct 2026). Refused without
     --confirm and after the first time (the trial log records it)."""
     from .gap_diagnosis import log_trial
-    from .research_replication import (MARKETS, PREREGISTRATION, WINDOW_END, fetch_members, format_replication,
+    from .research_replication import (MARKETS, WINDOW_END, fetch_members, format_replication,
                                        load_replication_market, prices_for, replicate)
     from .research_studies import prior_trials
     settings = _settings(args)
@@ -1067,17 +1067,21 @@ def cmd_research_replication(args: argparse.Namespace) -> int:
     if _once_used(settings, study):
         return 2
     if not args.confirm:
-        print(f"This runs the pre-registered replication ({PREREGISTRATION}) on the {spec['index']} ({spec['name']}), "
+        print(f"This runs the pre-registered replication ({spec['plan']}) on the {spec['index']} ({spec['name']}), "
               f"Oct 2016 to Sep 2026, ONCE. The result is final and this market is spent. Run again with --confirm.")
         return 2
     print(f"Loading today's {spec['index']} members…")
     current, changes = fetch_members(market)
-    if len(current) < 300:
+    if len(current) < spec["min_members"]:
         print(f"Only {len(current)} members were read; not running (nothing is spent).")
         return 1
     print(f"Loading prices for {len(current)} members and {spec['benchmark']} since 2015 (this takes a few minutes)…")
     m, notes = load_replication_market(market, prices_for(market, settings.state_dir), current, changes)
     _leakage_guard(m, holdout_start=WINDOW_END)
+    if m.unit_jumps:   # a pence/pound mix-up would fake a 100x move; stop before anything is spent
+        print(f"Prices jump more than 50x in a day for {', '.join(m.unit_jumps)} (a unit mix-up in the data). "
+              "Not running (nothing is spent).")
+        return 1
     if not _claim_once(settings, study):   # after the data loaded: a refused download does not spend it
         return 2
     r = replicate(market, m, extra_trials=prior_trials(settings.state_dir))
@@ -2058,10 +2062,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--confirm", action="store_true", help="really run it (once)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_research_batch3)
-    sp = sub.add_parser("research-replication", help="research: the adopted rules on US or Japanese midcaps, ONCE "
+    sp = sub.add_parser("research-replication", help="research: the adopted rules on US, Japanese or UK midcaps, ONCE "
                                                      "per market (pre-registered)")
     # its own dest: an argument named "market" would be read by _settings as the app's MARKET (in / us)
-    sp.add_argument("--market", dest="replication_market", choices=("us", "jp"), required=True)
+    sp.add_argument("--market", dest="replication_market", choices=("us", "jp", "uk"), required=True)
     sp.add_argument("--confirm", action="store_true", help="really run it (once per market)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_research_replication)

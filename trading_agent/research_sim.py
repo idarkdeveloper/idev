@@ -142,11 +142,11 @@ def vol60(adj: list[float | None]) -> list[float | None]:
     rets: list[float] = []
     prev = None
     for v in adj:
-        if v is not None and prev:
+        if v is not None and v > 0 and prev:
             rets.append(math.log(v / prev))
             if len(rets) > 60:
                 rets.pop(0)
-        if v is not None:
+        if v is not None and v > 0:   # a zero or negative price is bad data: never a log input or a base
             prev = v
         if len(rets) == 60:   # population sd with fsum: equal to statistics.pstdev to ~1e-15, far faster
             mu = math.fsum(rets) / 60
@@ -181,6 +181,7 @@ class Market:
         self.flows = flows or {}
         self.missing: list[str] = []
         self.point_in_time = False   # membership taken at each date (load_market with a membership history)
+        self.unit_jumps: list[str] = []   # stocks whose close jumps >50x in a day (a pence/pound mix-up)
         self.start_day = calendar[0] if calendar else ""   # the test window's first day (load_market sets it)
         self._atr: dict[str, list[float | None]] = {}
         self._ema50: dict[str, list[float | None]] = {}
