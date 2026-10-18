@@ -936,4 +936,5 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   .ws-tabs button { font-size: 14px; padding: 0 10px; white-space: nowrap; }
   .side-chip, .act { min-height: 0; padding: 2px 7px; font-size: 11px; line-height: 1.3; }
   .chips-row button.chip, .chips-row .chip-add { min-height: 32px; font-size: 12px; padding: 0 10px; }
+  .card button.chip { min-height: 34px; font-size: 13px; padding: 0 10px; }   /* the Replay deal filters */
 }
