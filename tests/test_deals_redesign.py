@@ -61,7 +61,7 @@ def test_deals_are_grouped_by_day_and_shown_eight_then_ten_more():
 
 
 def test_css_one_chip_row_44px_targets_sticky_day_and_tokens_only():
-    block = CSS[CSS.index("/* Disclosed deals: one scrolling chip row"):]
+    block = CSS[CSS.index("/* Disclosed deals: one scrolling chip row"):CSS.index("/* Screener on a phone, tidier")]
     assert "flex-wrap: nowrap; overflow-x: auto" in block and "mask-image: linear-gradient(to right, black" in block
     assert re.search(r"button\.chip, \.chips-row\.dl-chips \.chip-add[^{]*\{[^}]*min-height: 44px", block)
     assert 'aria-pressed="true"]::before { content: "✓"' in block                                                           # selected = filled and a tick
