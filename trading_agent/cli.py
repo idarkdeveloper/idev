@@ -590,6 +590,12 @@ def cmd_gtt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_telegram_preview(args: argparse.Namespace) -> int:
+    """Print a sample Telegram alert as it would be sent (nothing is sent; no settings, keys or state are read)."""
+    from .telegram_preview import run
+    return run(args.type, args.base_url or None)
+
+
 def cmd_kill_switch(args: argparse.Namespace) -> int:
     """Stop all trading (state/HALT), or with --release allow it again."""
     from . import killswitch
@@ -613,7 +619,7 @@ def cmd_kill_switch(args: argparse.Namespace) -> int:
 # Under HALT the CLI refuses everything (exit 1) except the switch itself, the dashboard (its order routes refuse),
 # the watch (it idles, so systemd / Docker do not restart it in a loop) and offline commands that cannot trade or
 # reach Groww.
-HALT_ALLOWED = {"kill-switch", "app-device", "app-api", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
+HALT_ALLOWED = {"telegram-preview", "kill-switch", "app-device", "app-api", "ui", "watch", "history", "backtest", "momentum", "news", "screen", "scorecard",
                 "factor-backtest", "fundamentals-history", "index-history", "signal-lab", "costs", "replay",
                 "market-data", "insider-history", "research-gap", "research-stops", "research-portfolio",
                 "research-pead", "research-coffee-can", "research-barrier", "research-cpcv", "research-meta",
@@ -2198,6 +2204,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--ip", action="store_true",
                     help="only print this machine's public IP and whether it matches GROWW_ALLOWED_IP (no credentials)")
     sp.set_defaults(func=cmd_groww_check)
+    sp = sub.add_parser("telegram-preview", help="print the Telegram look of a sample alert (HTML and plain text); sends nothing, reads no settings")
+    sp.add_argument("--type", choices=["deal", "news", "group", "brief", "all"], default="all")
+    sp.add_argument("--base-url", default="https://box.tailnet.ts.net", help="the dashboard address for the link buttons ('' = no buttons)")
+    sp.set_defaults(func=cmd_telegram_preview)
     sp = sub.add_parser("kill-switch", help="stop ALL trading now (state/HALT); --release allows it again")
     sp.add_argument("--cancel-gtt", action="store_true",
                     help="also cancel the agent's GTT stop-losses at Groww (by default they stay and keep protecting)")

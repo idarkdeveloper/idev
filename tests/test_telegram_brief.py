@@ -43,7 +43,7 @@ def evening():
 
 def test_morning_wait_day_shape():
     h = telegram_brief(morning())["html"]
-    assert h.startswith("<b>🌅 Morning brief · Mon 12 Oct</b>")
+    assert h.startswith("<b>Morning brief · Mon 12 Oct IST</b>") and "<b>Market</b>" in h and "<blockquote expandable>" in h and h.index("<b>Market</b>") < h.index("<blockquote")
     assert "🟡 <code>NEUTRAL</code> · Nifty below 200-day avg, downtrend" in h
     assert "⛔ No new buys (2 pass the screen, held back)" in h
     assert "🌍 US 🟢 · Asia 🟡\n🇮🇳 The rupee is near its weakest of the year" in h
@@ -97,7 +97,7 @@ def test_escaping_of_names_and_codes():
 
 def test_evening_lines_and_deals():
     h = telegram_brief(evening())["html"]
-    assert h.startswith("<b>🌆 Close · Mon 12 Oct</b>")
+    assert h.startswith("<b>Evening close · Mon 12 Oct IST</b>") and "<b>Your portfolio</b>" in h
     assert ("💼 <b>Portfolio</b>\n━━━━━━━━━━━━\nValue: <b>₹1,23,456</b>\nToday: +₹500 (+0.4%)\n"
             "Total P&amp;L: −₹2,000 (−1.6%)\n━━━━━━━━━━━━\n📈 Nifty 24,100.50 (−0.40%)") in h
     assert "🤝 <b>Deals:</b> 1 new\nX bought Infosys (INFY) ₹12 cr (NSE)" in h
@@ -197,7 +197,7 @@ def test_evening_stale_day_says_no_trading_once():
     ev = evening()
     ev["data"]["stale_close"] = {"reason": "no trading today"}
     h = telegram_brief(ev)["html"]
-    assert "Today: no trading" in h and h.lower().count("no trading") == 1
+    assert "Today: no trading" in h and h.split("<blockquote")[0].lower().count("no trading") == 1 and h.lower().count("no trading") == 2   # said once up top, once in the collapsed detail
     ev["data"]["stale_close"] = {"reason": "not closed"}
     assert "Today: not closed yet" in telegram_brief(ev)["html"]
 

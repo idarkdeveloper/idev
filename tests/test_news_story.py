@@ -330,9 +330,9 @@ def test_text_part_and_telegram():
     assert "KEY TAKEAWAYS\n• Quant Mutual Fund sold 12,50,000 shares" in t and "FULL STORY\n" in t
     assert f"Read the original on Rediff MoneyWiz: {REDIFF}" in t
     tg, plain, button = ns.render_telegram(card())
-    assert tg.startswith("🔴 <b>NEWS · JUBLPHARMA · Jubilant Pharmova</b>\n<b>Quant MF sells Jubilant Pharmova stake")
-    assert "• Holding cut to 1.8% from 2.6%" in tg and len(tg) <= 4000 and "<b>" not in plain
-    assert button == {"inline_keyboard": [[{"text": "📰 Read on Rediff MoneyWiz", "url": REDIFF}]]}
+    assert tg.startswith("<b>▼ NEWS · JUBLPHARMA · Negative</b>\n<b>Quant MF sells Jubilant Pharmova stake")
+    assert "• Holding cut to 1.8% from 2.6%" in tg and len(tg) <= 4096 and "<b>" not in plain
+    assert button == {"inline_keyboard": [[{"text": "Read on Rediff MoneyWiz", "url": REDIFF}]]}
     assert ns.subject(card()) == "[NEWS] JUBLPHARMA: Quant Mutual Fund offloads stake in Jubilant Pharmova"
 
 
@@ -411,7 +411,7 @@ def test_watch_sends_the_story_card_from_its_own_thread(settings):
     assert asked == [("JUBLPHARMA", "held in your portfolio")]
     assert sent["subject"] == "[NEWS] JUBLPHARMA: Quant Mutual Fund offloads stake in Jubilant Pharmova"
     assert "TRADING AGENT · NEWS ALERT" in sent["html"] and "FULL STORY" in sent["body"]
-    assert sent["telegram_button"]["inline_keyboard"][0][0]["url"] == REDIFF and "<b>NEWS · JUBLPHARMA" in sent["telegram_html"]
+    assert sent["telegram_button"]["inline_keyboard"][0][0]["url"] == REDIFF and "NEWS · JUBLPHARMA · Negative" in sent["telegram_html"]
 
 
 def test_a_failing_story_still_sends_the_headline_card(settings):
