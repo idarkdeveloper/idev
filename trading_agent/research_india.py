@@ -44,7 +44,7 @@ SPLIT_TOLERANCE = 0.015
 SPLIT_WINDOW = 3                 # sessions either side
 FUND_PATTERN = re.compile(r"BEES$|ETF|^GOLD|^LIQUID|^NIFTY|^BANKNIFTY|^JUNIOR|^PSUBNK|^INFRA|^SHARIA")
 STUDY = "India-2007-2016"
-PREREGISTRATION = "docs/research/preregistered-india-2007-2016.md (commit 75a27ba)"
+PREREGISTRATION = "docs/research/preregistered-india-2007-2016.md (commit 75a27ba) + addendum"
 # ------------------------------------------------------------------------------------------------------------------ #
 
 TRI_NAME = "NIFTY 500"
@@ -358,7 +358,12 @@ def rule_sets() -> list[tuple[str, str, Any, Callable[..., list[str]] | None]]:
     from .research_studies import FINALIST
     return [("A0", "the adopted rules", FINALIST, None),
             ("B", "top 10", with_rules(FINALIST, top=10, buffer=18, tax_aware_floor=25), None),
-            ("E", "residual momentum", FINALIST, residual_momentum_ranker())]
+            ("E", "residual momentum", FINALIST, residual_momentum_ranker()),
+            # addendum (preregistered-india-2007-2016-addendum.md): four ideas that failed in the research years
+            ("BRK", "drawdown brake (100-day)", with_rules(FINALIST, brake="sma100"), None),
+            ("STP", "stop-loss 3x ATR", with_rules(FINALIST, stop="atr3"), None),
+            ("IVW", "inverse-volatility weights", with_rules(FINALIST, weights="inverse_vol"), None),
+            ("PLN", "plain top 20, no buffer", with_rules(FINALIST, buffer=None, tax_aware=False), None)]
 
 
 def make_market(days: list[str], series: dict[str, list[dict[str, Any]]], bench: list[dict[str, Any]],
@@ -445,11 +450,11 @@ def format_india(r: dict[str, Any], notes: list[str]) -> str:
              f"value, after charges x{COST_MULT_PRIMARY:g} and tax as it applied then.",
              f"  Benchmark: Nifty 500 total return index less {FUND_FEE * 100:.2f}% a year: "
              f"{pct(a0['fund_total_return'])}, worst fall {pct(a0['fund_max_drawdown'])}.",
-             f"  {'rule set':<24}{'return':>10}{'vs bench':>10}{'a year':>8}{'worst fall':>11}{'turnover':>9}"
+             f"  {'rule set':<34}{'return':>10}{'vs bench':>10}{'a year':>8}{'worst fall':>11}{'turnover':>9}"
              f"{'skill':>7}  verdict"]
     for k, x in p.items():
         sp = x["skill"].get("probability")
-        lines.append(f"  {k + ' ' + x['name']:<24}{pct(x['total_return']):>10}{pct(x['excess']):>10}{pct(x['cagr']):>8}"
+        lines.append(f"  {k + ' ' + x['name']:<34}{pct(x['total_return']):>10}{pct(x['excess']):>10}{pct(x['cagr']):>8}"
                      f"{pct(x['max_drawdown']):>11}{pct(x['turnover'], '.0f'):>9}"
                      f"{'n/a' if sp is None else f'{sp:.2f}':>7}  {'PASS' if x['passes'] else 'fail'}")
     for k, x in p.items():
@@ -457,7 +462,8 @@ def format_india(r: dict[str, Any], notes: list[str]) -> str:
         if failed:
             lines.append(f"  {k} misses: {'; '.join(failed)}.")
     lines.append(f"  A0 verdict: {'PASSED' if a0['passes'] else 'NOT passed'}. B and E are information for their paper "
-                 "accounts; nothing is adopted from this test.")
+                 "accounts; BRK, STP or IVW passing earns a paper account; PLN failing supports the rank buffer. "
+                 "Nothing is adopted from this test.")
     lines.append(pbo_line(r["pbo"]))
     s = r["sensitivity"]
     lines.append("  Sensitivity, charges x1 (reported, not judged): " + "; ".join(

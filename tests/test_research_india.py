@@ -139,3 +139,15 @@ def test_constants_match_the_preregistration():
         assert needle in text
     assert (ri.DATA_FROM, ri.TRADING_FROM, ri.WINDOW_END) == ("2006-07-01", "2007-10-01", "2016-04-01")
     assert (ri.UNIVERSE_SIZE, ri.COST_MULT_PRIMARY, ri.GATE_MAX_UNRECORDED) == (500, 2.0, 15)
+
+
+def test_rule_sets_are_the_preregistered_seven():
+    from trading_agent.research_studies import FINALIST
+    sets = {k: r for k, _, r, _ in ri.rule_sets()}
+    assert list(sets) == ["A0", "B", "E", "BRK", "STP", "IVW", "PLN"]
+    assert sets["A0"] is FINALIST and sets["E"] is FINALIST
+    assert (sets["BRK"].brake, sets["STP"].stop, sets["IVW"].weights) == ("sma100", "atr3", "inverse_vol")
+    assert sets["PLN"].buffer is None and not sets["PLN"].tax_aware and sets["PLN"].floor == FINALIST.floor
+    add = open("docs/research/preregistered-india-2007-2016-addendum.md", encoding="utf-8").read()
+    for needle in ('brake="sma100"', 'stop="atr3"', 'weights="inverse_vol"', "buffer=None, tax_aware=False", "7 trials"):
+        assert needle in add
