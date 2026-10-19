@@ -29,3 +29,18 @@ def test_css_tokens_only_and_phone_targets():
     import re
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b|rgb\(|hsl\(", block)
     assert "min-height: 44px" in block and "@media (max-width: 700px)" in block
+
+
+def test_css_braces_are_balanced():
+    """One unclosed @media block once swallowed every rule after it (Live/Practice header, order cards, P/L colours)."""
+    import re
+    css = re.sub(r"/\*.*?\*/", "", CSS, flags=re.S)
+    assert css.count("{") == css.count("}")
+
+
+def test_every_page_loads_the_shared_palette_before_nocturne():
+    from trading_agent.ui import STATIC_FILES
+    assert "/static/colors.css" in STATIC_FILES
+    for page in ("index.html", "replay.html", "screener.html"):
+        html = (UI / page).read_text(encoding="utf-8")
+        assert html.index("/static/colors.css") < html.index("/static/nocturne.css"), page

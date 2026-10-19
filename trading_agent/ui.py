@@ -52,6 +52,7 @@ MEMBERS_TTL_SECONDS = 12 * 3600    # the NSE index constituent lists behind indu
 # The only static files besides the page: Inter, served locally so the page needs no network.
 FONT_FILES = {"/fonts/inter-latin.woff2", "/fonts/inter-latin-ext.woff2"}
 STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-8"),
+                "/static/colors.css": ("colors.css", "text/css; charset=utf-8"),
                 "/static/common.js": ("common.js", "text/javascript; charset=utf-8"),
                 "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8"),
                 "/static/palette.js": ("palette.js", "text/javascript; charset=utf-8"),

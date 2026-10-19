@@ -1,0 +1,45 @@
+/* The shared colour palette: three source colours (teal #2bb5a0, blue #4c8df6, amber #e0a030), Tailwind-style stops 50-950, OKLCH.
+   Made with the ui-color-palette tool. Every page loads this before nocturne.css; nocturne.css maps these to its --color-* tokens. */
+:root {
+  /* teal */
+  --teal-50: #affff4;
+  --teal-100: #8cedda;
+  --teal-200: #68d4c0;
+  --teal-300: #44bba7;
+  --teal-400: #13a28e;
+  --teal-500: #008a77;
+  --teal-600: #007160;
+  --teal-700: #005a4a;
+  --teal-800: #004235;
+  --teal-900: #002c21;
+  --teal-950: #00160e;
+  --teal-source: #2bb5a0;
+
+  /* blue */
+  --blue-50: #bff3ff;
+  --blue-100: #9fd8ff;
+  --blue-200: #82beff;
+  --blue-300: #66a3ff;
+  --blue-400: #4b8aef;
+  --blue-500: #3270d5;
+  --blue-600: #1958b9;
+  --blue-700: #00409c;
+  --blue-800: #00297e;
+  --blue-900: #00125f;
+  --blue-950: #00003e;
+  --blue-source: #4c8df6;
+
+  /* amber */
+  --amber-50: #ffe99f;
+  --amber-100: #ffcd7b;
+  --amber-200: #ecb258;
+  --amber-300: #d39833;
+  --amber-400: #ba7f00;
+  --amber-500: #a16600;
+  --amber-600: #884f00;
+  --amber-700: #6f3800;
+  --amber-800: #552300;
+  --amber-900: #3c1000;
+  --amber-950: #220100;
+  --amber-source: #e0a030;
+}

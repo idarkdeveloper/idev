@@ -10,7 +10,7 @@ const OFFLINE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><met
 <style>html,body{height:100%;margin:0;background:#161826;color:#e9e9ed;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 main{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;box-sizing:border-box}
 h1{font-size:20px;margin:0}p{margin:0;max-width:30em;line-height:1.5;color:#b9bbca}
-button{min-height:48px;padding:0 28px;border-radius:12px;border:1px solid #9184d9;background:#9184d9;color:#161826;font-size:16px;font-weight:600}</style></head>
+button{min-height:48px;padding:0 28px;border-radius:12px;border:1px solid #2bb5a0;background:#2bb5a0;color:#161826;font-size:16px;font-weight:600}</style></head>
 <body><main><h1>Trading Agent is offline</h1>
 <p>Your phone cannot reach the server. Check that Tailscale is connected, then reload.</p>
 <button type="button" onclick="location.reload()">Reload</button></main></body></html>`;
