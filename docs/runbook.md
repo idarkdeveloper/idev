@@ -112,7 +112,7 @@ sudo systemctl restart trading-agent-watch trading-agent-dashboard   # apply
 |---|---|---|
 | `MARKET` | `in` | India (NSE + Groww) |
 | `INVESTORS` | `ASHISH KACHOLIA, VIJAY KEDIA` | up to 10 names, comma separated |
-| `WATCH_SOURCE` | `deals` | `deals` (bulk + block), `bulk`, `block`, `insider` |
+| `WATCH_SOURCE` | `deals` | `deals` (bulk + block), `bulk`, `block`, `insider` (instead of deals), `all` (deals + insider filings) |
 | `PAPER_STARTING_CASH` | `100000` | practice account size |
 | `NOTIFY_EMAIL_TO` / `NOTIFY_EMAIL_FROM` | `affafhashmi02@gmail.com` / `Trading Agent <onboarding@resend.dev>` | with Resend's test sender, mail only reaches your Resend account address; verify a domain at resend.com/domains to use any address |
 | `NEWS_TAGGER` | `auto` | Ollama if running, else none (Claude only if set to `claude`) |

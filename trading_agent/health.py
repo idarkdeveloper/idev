@@ -282,7 +282,9 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
     cache = sd / "cache"
     runs = read_runs(sd)
     nse = str(getattr(settings, "data_source", "nse") or "nse") == "nse"
-    insider = str(getattr(settings, "watch_source", "") or "") == "insider"
+    src = str(getattr(settings, "watch_source", "") or "")
+    insider = src == "insider"                       # insider filings instead of the deals
+    insider_on = src in ("insider", "all")           # "all": insider filings beside the deals
     nse_off = _nse_backoff(sd) if nse else None
     rows: list[dict[str, Any]] = []
     due_intra = intraday_due(now, cal)
@@ -301,9 +303,10 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
                      due=due_intra, schedule=intra + "; today's deals after 16:00", error=err, error_at=err_at, now=now,
                      detail="paused 15 min after a failure"))
     ok, n, err, err_at = _run(runs, "insider")
-    rows.append(_row("insider", "Insider filings (NSE PIT)", [AGENT, ALERTS, MORNING, EVENING], configured=insider and nse,
+    rows.append(_row("insider", "Insider filings (NSE PIT)", [AGENT, ALERTS, MORNING, EVENING], configured=insider_on and nse,
                      last_ok=ok or _newest_mtime(list((cache / "nse_pit").glob("*.json"))), rows=n, due=due_intra,
-                     schedule=intra, error=err, error_at=err_at, failing=bool(nse_off), backoff=nse_off, now=now))
+                     schedule=intra if insider else "every 15 minutes beside the deals, 09:15–18:30 IST on trading days",
+                     error=err, error_at=err_at, failing=bool(nse_off), backoff=nse_off, now=now))
     ok, n, err, err_at = _run(runs, "announcements")
     rows.append(_row("announcements", "NSE announcements", [AGENT, ALERTS, MORNING, DASH], configured=nse, last_ok=ok,
                      rows=n, due=due_intra, schedule=intra + " for held and recommended stocks", error=err,

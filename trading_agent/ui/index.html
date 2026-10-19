@@ -689,7 +689,7 @@
   let MP = null;  // the last My Groww portfolio answer: it fills the Live tiles
   const LIVE_TILES = ["Holdings value", "Cash", "Profit / loss", "Today", "Holdings"];
   if(MODE !== "demo") $("tiles").innerHTML = LIVE_TILES.map(l => tile(l, "…", "Loading your holdings…")).join("");
-  const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"]],
+  const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"],["all","Bulk + block deals and insider filings"]],
                    us:[["congress","Congress trades"],["insider","Insider filings"]]};
   const WHO = {promoter_insider:"Promoter", institution:"Institution", individual:"Individual", broker_desk:"Broker desk", corporate:"Corporate", unknown:"?"};
   const toneOf = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
