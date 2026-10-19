@@ -765,7 +765,11 @@ on Indian markets supports:
   individual, corporate or broker desk, from the name as NSE prints it. Promoter and
   institutional deals are weighted up; broker desks and corporate treasuries down.
 
-`WATCH_SOURCE`: `deals` (bulk + block, default), `bulk`, `block`, or `insider`.
+`WATCH_SOURCE`: `deals` (bulk + block, default), `bulk`, `block`, `insider` (NSE insider/PIT filings *instead of*
+the deals), or `all` (bulk + block deals *and* insider filings). With `all` the deals are read as usual and the insider
+filings at most every 15 minutes beside them (a filing reaches NSE days after the trade); an insider failure keeps the
+last insider rows and never stops the deals. Insider filings are filtered to the followed names like the deals, so they
+add something only when a followed investor files one (for example as a promoter or on crossing a holding threshold).
 
 `BSE_DEALS` (default `true`): also read BSE's bulk and block deals (public page, no login) beside NSE's,
 so mid and small-cap deals made only on BSE are followed too. They show in the deals table with an

@@ -51,6 +51,7 @@ def log_bse_failure_once(error: Exception) -> None:
     warn_once_per_day(error)
 
 BASE_URL = "https://www.nseindia.com"
+INSIDER_EVERY_S = 15 * 60   # source "all": insider filings are read at most this often beside the deals
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
@@ -274,6 +275,7 @@ class NSEClient:
         self.pit_cache = Path(cache_dir) / "nse_pit" if cache_dir else None
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self._pit_mem: dict[str, list[DisclosedTrade]] = {}
+        self._insider_side: tuple[float, int, list[DisclosedTrade]] | None = None   # source "all": (monotonic, days, rows)
         self.max_insider_filings = max_insider_filings
         self.max_new_downloads = max_new_downloads  # the rest wait for the next run
         self.pause = pause
@@ -545,7 +547,8 @@ class NSEClient:
                             days: int = 30) -> list[DisclosedTrade]:
         """Recent disclosed trades whose client / acquirer name contains ``investor``.
 
-        ``source``: ``deals`` (bulk + block, default), ``bulk``, ``block`` or ``insider``.
+        ``source``: ``deals`` (bulk + block, default), ``bulk``, ``block``, ``insider``, or ``all`` (bulk + block +
+        insider filings).
         """
         rows = self._rows(source, days) + self._bse_rows(source, days, [investor])
         return _dedupe(filter_by_investor(rows, investor))
@@ -559,17 +562,44 @@ class NSEClient:
 
     def _rows(self, source: str, days: int) -> list[DisclosedTrade]:
         rows: list[DisclosedTrade] = []
-        if source in {"deals", "bulk"}:
+        if source in {"deals", "bulk", "all"}:
             rows += self.historical_deals(days, "bulk")
-        if source in {"deals", "block"}:
+        if source in {"deals", "block", "all"}:
             rows += self.historical_deals(days, "block")
         if source == "insider":
             rows += self.insider_trades(days)
+        if source == "all":
+            rows += self._insider_beside_deals(days)
         return rows
+
+    def _insider_beside_deals(self, days: int) -> list[DisclosedTrade]:
+        """Source "all": NSE insider filings next to the deals, read at most every INSIDER_EVERY_S (a filing reaches NSE
+        days after the trade, so a minute-by-minute read adds load and nothing else). A failure keeps the last rows
+        and never stops the deals; its outcome is recorded as the "insider" run for the Health page."""
+        now = time.monotonic()
+        last = self._insider_side
+        if last is not None and last[1] == days and now - last[0] < INSIDER_EVERY_S:
+            return list(last[2])
+        try:
+            rows = self.insider_trades(days)
+        except Exception as e:  # noqa: BLE001 - a second source: the deals still go out
+            log.warning("insider filings unavailable, deals only this time: %s", e)
+            self._note_insider(ok=False, error=f"{type(e).__name__}: {e}")
+            self._insider_side = (now, days, list(last[2]) if last else [])
+            return list(last[2]) if last else []
+        self._note_insider(ok=True, rows=len(rows))
+        self._insider_side = (now, days, rows)
+        return list(rows)
+
+    def _note_insider(self, **kw: Any) -> None:
+        if self.cache_dir is None:
+            return
+        from .health import note_run
+        note_run(self.cache_dir.parent, "insider", **kw)
 
     def _bse_rows(self, source: str, days: int, investors: Iterable[str] | None) -> list[DisclosedTrade]:
         """BSE's bulk/block deals for the followed names, or nothing: BSE problems never break the NSE read."""
-        kinds = {"deals": ("bulk", "block"), "bulk": ("bulk",), "block": ("block",)}.get(source, ())
+        kinds = {"deals": ("bulk", "block"), "all": ("bulk", "block"), "bulk": ("bulk",), "block": ("block",)}.get(source, ())
         bse = getattr(self, "bse", None)
         if bse is None or not kinds:  # off, or insider filings (BSE has no equivalent here)
             return []

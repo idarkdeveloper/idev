@@ -32,7 +32,8 @@ from ..untrusted import wrap_json
 
 log = logging.getLogger(__name__)
 
-KINDS_BY_SOURCE = {"deals": ("bulk", "block"), "bulk": ("bulk",), "block": ("block",), "insider": ("insider",)}
+KINDS_BY_SOURCE = {"deals": ("bulk", "block"), "bulk": ("bulk",), "block": ("block",), "insider": ("insider",),
+                   "all": ("bulk", "block", "insider")}
 LOOKBACK_FETCH_DAYS = 45      # filings made a few weeks before the window can still be the ones that became public in it
 MAX_WINDOW_DAYS = 120
 _TRADE_FIELDS = ("source", "investor", "ticker", "transaction", "transaction_date", "report_date", "size", "raw",

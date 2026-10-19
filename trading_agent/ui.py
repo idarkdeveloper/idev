@@ -2174,7 +2174,7 @@ def _cost_table(market: str) -> dict[str, Any]:
             "slippage_bps_one_way": m.slippage_bps}
 
 
-WATCH_SOURCES = {"in": {"deals", "bulk", "block", "insider"}, "us": {"congress", "insider"}}
+WATCH_SOURCES = {"in": {"deals", "bulk", "block", "insider", "all"}, "us": {"congress", "insider"}}
 
 
 _TRUE_WORDS, _FALSE_WORDS = {"true", "1", "yes", "on"}, {"false", "0", "no", "off"}
