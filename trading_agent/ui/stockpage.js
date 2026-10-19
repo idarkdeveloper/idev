@@ -442,6 +442,24 @@
       }).catch(e => { if(my === seq && !dead){ st.news = {items: [], errors: ["News unavailable: " + e.message], tagger: "none"}; paintNews(); } });
       await loadStock(my);
     }
+    // A quiet price refresh (the page calls it while the market is open): new price and day change in the header and the
+    // holding card only; the chart, the open sections and the scroll position are left alone.
+    async function refresh(){
+      if(dead || !st.r || !st.ticker) return;
+      const my = seq;
+      try {
+        const [r, d] = await Promise.all([api("/api/lookup?ticker=" + encodeURIComponent(st.ticker)),
+                                          api("/api/stock?ticker=" + encodeURIComponent(st.ticker) + "&exchange=" + st.exchange)]);
+        if(my !== seq || dead) return;
+        st.r = Object.assign(st.r, {price: r.price, history: r.history || st.r.history});
+        if(d && !d.error && d.price && st.exchange === "NSE" && isNum(r.price)){   // the stock figures are cached for minutes: re-base them on the lookup's fresher price
+          const p = d.price, prev = isNum(p.last) && isNum(p.change) ? p.last - p.change : null;
+          const unit = prev && isNum(p.change_pct) && p.change ? p.change_pct / (p.change / prev) : 100;
+          st.stock = Object.assign(st.stock || {}, {price: prev ? Object.assign({}, p, {last: r.price, change: r.price - prev, change_pct: (r.price - prev) / prev * unit}) : p});
+        } else if(d && !d.error && d.price){ st.stock = Object.assign(st.stock || {}, {price: d.price}); }
+        paintHead(); paintHolding();
+      } catch(e){ /* keep what is shown */ }
+    }
     function setExchange(x){
       x = x === "BSE" ? "BSE" : "NSE";
       if(dead || !st.r || x === st.exchange) return;
@@ -480,7 +498,7 @@
     host.appendChild(root);
     if(ticker) load(ticker);
     return {
-      load, setExchange,
+      load, setExchange, refresh,
       destroy(){ dead = true; seq++; if(chartCtl){ chartCtl.destroy(); chartCtl = null; } root.removeEventListener("click", onClick); root.removeEventListener("keydown", onKey); root.removeEventListener("toggle", onToggle, true); if(root.parentNode) root.parentNode.removeChild(root); },
       get ticker(){ return st.ticker; }, get exchange(){ return st.exchange; }, get element(){ return root; }
     };

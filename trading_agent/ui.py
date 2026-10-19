@@ -550,7 +550,7 @@ class App:
         regime = None
         if self.context is not None:
             try:
-                r = self.context.fetch()
+                r = self._regime_view().fetch()
                 regime = {k: r[k] for k in ("regime", "score", "signals", "guidance", "summary", "markets")}
             except Exception as e:  # noqa: BLE001
                 regime = {"error": str(e)}
@@ -1761,7 +1761,34 @@ class App:
         except Exception:  # noqa: BLE001
             out["corp_actions"], out["corp_actions_note"] = {}, None
         self._my_portfolio, self._my_portfolio_at = out, time.time()
+        try:   # the freshness chip's "prices from" date: a priced read while the NSE is open means today's prices, not the last close
+            from .timezones import IST as _IST
+            now = self._now_dt()
+            if out.get("holdings") and not out.get("source") == "saved" and safety.market_open(now, self._safe_holidays()):
+                self.note_bar({"history": [{"d": now.astimezone(_IST).date().isoformat()}]})
+        except Exception:  # noqa: BLE001 - a nicety
+            pass
         return self._live(out)
+
+    def _regime_view(self) -> Any:
+        """The context the page's market strip reads. For the real GlobalContext that is a display-only copy (its own Yahoo
+        source) cached 60 s while the NSE is open, so the agent's 15-minute context and caches are never touched."""
+        from .regime import GlobalContext
+        ctx = self.context
+        if not isinstance(ctx, GlobalContext) or not hasattr(getattr(ctx, "source", None), "ttl_fn"):
+            return ctx
+        view = getattr(self, "_regime_copy", None)
+        if view is None:
+            from .prices import YahooPrices, price_ttl
+            src = ctx.source
+            vsrc = YahooPrices(suffix=src.suffix, session=getattr(src.session, "inner", src.session), cache_dir=src.cache_dir,
+                              cache_ttl=src.cache_ttl, archive=src.archive)
+            fn = lambda d: price_ttl(datetime.now(timezone.utc), d, self._safe_holidays())  # noqa: E731
+            vsrc.ttl_fn = fn
+            view = GlobalContext(vsrc, ttl=ctx.ttl)
+            view.ttl_fn = fn
+            self._regime_copy = view
+        return view
 
     def _live(self, out: dict[str, Any]) -> dict[str, Any]:
         """Groww's live prices (state/app/live_prices.json, written by the watch service; fresh under 180 s) on the

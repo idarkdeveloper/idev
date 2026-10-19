@@ -63,6 +63,7 @@
           <div class="regime-meta">
             <span class="pill fresh idle" id="freshness" role="status" title=""><span class="dot" aria-hidden="true"></span><span id="fresh-text">Checking data freshness…</span></span>
             <span class="pill fresh idle" id="integ-chip" role="status" title=""><span class="dot" aria-hidden="true"></span><span id="integ-text">Integration: checking…</span></span>
+            <span class="sub" id="poll-stamp" role="status" style="font-size:12px"></span>
             <button type="button" class="small icon-btn" id="btn-regime" aria-label="Refresh global context" title="Refresh global context"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.5 15a9 9 0 1 1-2.1-9.4L23 10"></path></svg></button>
           </div>
         </div>
@@ -79,6 +80,7 @@
           <button type="button" class="small" id="mp-refresh">Refresh</button>
           <button type="button" class="small" id="mp-groww-refresh" hidden title="Read your holdings from Groww now, even outside market hours (read-only)">Refresh from Groww</button></div>
         <div class="tiles" id="tiles"></div>
+      <div class="sub" id="live-stamp" role="status" style="margin:-4px 0 8px;padding-left:18px;font-size:12px"></div>
         <div class="cardbody" id="copy-confirm" role="group" aria-label="Confirm copying your Groww portfolio" hidden>
           <div class="row"><span id="copy-confirm-text"></span>
             <button type="button" class="small primary" id="copy-yes">Yes, copy</button>
@@ -583,9 +585,20 @@
   const protFor = (sym) => { const P = S && S.protection; return P ? ((P.by_symbol || {})[String(sym).toUpperCase()] || P.default) : null; };
   const protTitle = (sym) => { const p = protFor(sym); return p ? [p.text, p.warning].filter(Boolean).join(" · ") : ""; };
   const protHtml = (sym) => { const p = protFor(sym); return p ? SAFE.protectionHtml(p) : '<span class="sub">checking…</span>'; };
+  // When each indicator was last refreshed (IST), and a muted "updates paused" note after three failed polls in a row.
+  const pollStat = {fresh: {ok: null, fails: 0, why: ""}, integ: {ok: null, fails: 0, why: ""}, health: {ok: null, fails: 0, why: ""}};
+  const POLL_NAME = {fresh: "data freshness", integ: "integration check", health: "data health"};
+  function pollNote(k, e){
+    const p = pollStat[k];
+    if(e){ p.fails++; p.why = (e && e.message) || ""; } else { p.ok = new Date(); p.fails = 0; p.why = ""; }
+    const el = $("poll-stamp"); if(!el) return;
+    const bad = Object.keys(pollStat).filter(x => pollStat[x].fails >= 3), okAt = Object.values(pollStat).map(x => x.ok).filter(Boolean).sort().pop();
+    el.textContent = bad.length ? `updates paused: ${bad.map(x => POLL_NAME[x]).join(", ")} (${pollStat[bad[0]].why || "no answer"})`
+      : okAt ? "checked " + istClock(okAt, true) : "";
+  }
   async function loadFreshness(){
-    try { SAFE.paintChip(SAFE.freshnessChip(await api("/api/freshness"))); }
-    catch(e){ SAFE.paintChip({level: "idle", text: "Freshness unavailable", title: e.message}); }
+    try { SAFE.paintChip(SAFE.freshnessChip(await api("/api/freshness"))); pollNote("fresh"); }
+    catch(e){ SAFE.paintChip({level: "idle", text: "Freshness unavailable", title: e.message}); pollNote("fresh", e); }
   }
 
   // ---- the daily live-services check: a line beside the freshness chip, and the Settings button ----
@@ -635,7 +648,8 @@
       $("wst-health").setAttribute("aria-label", c.failing ? `Health, ${c.failing} failing` : "Health");
       paintGrowwLogins(h.groww);
       paintHalt(h.halt);
-    } catch(e){ $("hl-sub").textContent = "Couldn't load: " + e.message; }
+      pollNote("health");
+    } catch(e){ $("hl-sub").textContent = "Couldn't load: " + e.message; pollNote("health", e); }
   }
   $("hl-refresh").addEventListener("click", loadHealth);
   // ---- Kill switch: the word HALT must be typed; release only on the server (kill-switch --release) ----
@@ -656,8 +670,8 @@
     loadHealth(); refresh();
   });
   async function loadIntegration(){
-    try { const j = await api("/api/integration"); paintIntegration(j); if(j.running && !integPoll) integPoll = setInterval(loadIntegration, 3000); if(!j.running && integPoll){ clearInterval(integPoll); integPoll = null; } }
-    catch(e){ paintIntegration({line: {level: "idle", text: "Integration unavailable", title: e.message}}); }
+    try { const j = await api("/api/integration"); pollNote("integ"); paintIntegration(j); if(j.running && !integPoll) integPoll = setInterval(loadIntegration, 3000); if(!j.running && integPoll){ clearInterval(integPoll); integPoll = null; } }
+    catch(e){ paintIntegration({line: {level: "idle", text: "Integration unavailable", title: e.message}}); pollNote("integ", e); }
   }
   $("btn-integ").addEventListener("click", async () => {
     $("btn-integ").disabled = true;
@@ -1124,10 +1138,21 @@
   });
 
   // ---- My Groww portfolio: real holdings, read-only ----
+  // "Updated HH:MM:SS IST" under the tiles: the last successful refresh. Three failures in a row replace it with a muted
+  // "updates paused" note, so old numbers are never shown as if they were live.
+  const liveStat = {ok: null, fails: 0, why: ""};
+  function paintStamp(){
+    const el = $("live-stamp"); if(!el) return;
+    el.textContent = liveStat.fails >= 3 ? `updates paused: ${liveStat.why || "could not reach the server"}${liveStat.ok ? " · last update " + istClock(liveStat.ok) : ""}`
+      : liveStat.ok ? "Updated " + istClock(liveStat.ok, true) : "";
+  }
+  const istClock = (d, secs) => d.toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", ...(secs ? {second: "2-digit"} : {}), hour12: false}) + " IST";
+  const liveOk = () => { liveStat.ok = new Date(); liveStat.fails = 0; liveStat.why = ""; paintStamp(); };
+  const liveFail = (e) => { liveStat.fails++; liveStat.why = (e && e.message) || ""; paintStamp(); };
   async function loadMyPortfolio(refresh){
     const btn = $("mp-refresh"); btn.disabled = true;
-    try { renderMyPortfolio(await api("/api/my-portfolio" + (refresh ? "?refresh=1" : ""))); }
-    catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; MP = {linked: true, error: e.message}; if(S) renderTiles(); }
+    try { renderMyPortfolio(await api("/api/my-portfolio" + (refresh ? "?refresh=1" : ""))); liveOk(); }
+    catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; MP = {linked: true, error: e.message}; if(S) renderTiles(); liveFail(e); }
     finally { btn.disabled = false; }
   }
   const MPCOLS = MODE === "demo" ? 6 : 7;   // the Stop column is a Live-page thing: the Demo page has its own stops
@@ -1421,7 +1446,7 @@
     drawMonteCarlo((r.validation || {}).monte_carlo);
   }
 
-  async function refresh(){ try { S = await api("/api/state"); const first = !urlApplied; applyUrlOnce(); if(first) restoreAnchor(); render(stopEdit !== null || (sellEdit !== null && sellEdit.source === "practice")); } catch(e){ toast("Could not load: "+e.message); SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: "unknown"})); } }
+  async function refresh(){ try { S = await api("/api/state"); liveOk(); const first = !urlApplied; applyUrlOnce(); if(first) restoreAnchor(); render(stopEdit !== null || (sellEdit !== null && sellEdit.source === "practice")); } catch(e){ liveFail(e); toast("Could not load: "+e.message); SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: "unknown"})); } }
   const VERDICT = {"predictive": ["ok", "Predictive"], "could be luck": ["warn", "Could be luck"], "too small to trade": ["warn", "Too small to trade"],
                    "reversed": ["bad", "Reversed"], "no edge": ["", "No edge"], "not enough data": ["", "Not enough data"]};
   function tBars(el, rows, cfg){
@@ -1918,13 +1943,33 @@
   refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); });
   loadMyPortfolio(false);
   if(urlStock) lookup(urlStock);   // ?stock=SYM: the stock page opens on it
-  setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 60000);   // the server caches the Groww read for 60 s, so this is at most one read a minute
+  setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 62000);   // just over the server's 60 s Groww cache: every poll gets a fresh read, and never more than one a minute
+  // While the NSE is open the price shown beside a stock (order form, Look up card, stock drawer) follows the market too.
+  // Quiet updates only: the text changes in place; nothing is rebuilt, so no panel closes and the page does not jump.
+  setInterval(async () => {
+    if(document.hidden || !nseOpenNow()) return;
+    if($("tk-symbol").value.trim()) tkPx.update($("tk-symbol").value, true, true);
+    if(spDrawer && $("sp-drawer").open && spDrawer.refresh) spDrawer.refresh();
+    if(curStock && $("lk-result").querySelector(".lk-price")){
+      const my = lkSeq;
+      try { const r = await api("/api/lookup?ticker=" + encodeURIComponent(curStock)); if(my !== lkSeq || r.price == null) return;
+        $("lk-result").querySelector(".lk-price").textContent = inr(r.price, 2);
+        const d = lkDay(r), t = $("lk-result").querySelector(".lk-px span:not(.lk-price)"); if(t && d != null){ t.textContent = spct(d) + " today"; t.className = toneOf(d); } } catch(e){}
+    }
+  }, 60000);
   // State: every 30 s while the NSE is open (09:15-15:30 IST, Mon-Fri; a holiday just serves the server's cache), else every 60 s.
   // Not faster when Groww is linked: the practice account is priced from Groww on each state read. A hidden tab does not poll.
   let stTick = 0;
   const nseOpenNow = () => { const p = new Intl.DateTimeFormat("en-GB", {timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false}).formatToParts(new Date()).reduce((o, x) => (o[x.type] = x.value, o), {}); const m = Number(p.hour) * 60 + Number(p.minute); return !/^(Sat|Sun)$/.test(p.weekday) && m >= 555 && m <= 930; };
   setInterval(() => { if(document.hidden) return; const fast = nseOpenNow() && !(S && S.connections && S.connections.groww); if(fast || stTick++ % 2) refresh(); }, 30000);
   loadFreshness(); loadIntegration(); calcCosts(); loadHealth(); loadPaper();
+  // Back on a tab that was hidden: catch up at once instead of waiting for the next timer.
+  let hiddenAt = 0;
+  document.addEventListener("visibilitychange", () => {
+    if(document.hidden){ hiddenAt = Date.now(); return; }
+    if(hiddenAt && Date.now() - hiddenAt > 30000){ refresh(); loadMyPortfolio(false); loadFreshness(); loadIntegration(); loadHealth(); }
+    hiddenAt = 0;
+  });
   setInterval(() => { if(!document.hidden){ loadFreshness(); loadIntegration(); } }, 60000);
   setInterval(() => { if(!document.hidden) loadHealth(); }, 120000);   // the tab badge counts failing sources
   document.addEventListener("visibilitychange", () => { if(!document.hidden){ loadFreshness(); refresh(); } });

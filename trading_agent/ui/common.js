@@ -969,9 +969,9 @@ window.TA = (function(){
   function priceLine(el, fetchLookup, opts){
     let seq = 0, timer = 0;
     const show = (html) => { el.innerHTML = html; el.hidden = !html; };
-    async function run(sym){
+    async function run(sym, quiet){
       const my = ++seq;
-      show(`<span class="sub">Price of ${esc(sym)}…</span>`);
+      if(!quiet) show(`<span class="sub">Price of ${esc(sym)}…</span>`);   // a quiet refresh keeps the line as it is until the new price arrives
       try {
         const r = await fetchLookup(sym); if(my !== seq) return;
         const m = priceMove(r, (r && r.today) || opts.today());
@@ -980,13 +980,13 @@ window.TA = (function(){
           + (m.chg == null ? "" : ` <span class="${m.chg > 0 ? "pl-profit" : m.chg < 0 ? "pl-loss" : ""}">${spct(m.chg)}${opts.chgLabel || " today"}</span>`)
           + ` <span class="sub">· ${esc(opts.source)}</span>`);
         if(opts.onPrice) opts.onPrice(m.price);
-      } catch(e){ if(my === seq){ show(`<span class="sub">no price for ${esc(sym)}</span>`); if(opts.onPrice) opts.onPrice(null); } }
+      } catch(e){ if(my === seq && !quiet){ show(`<span class="sub">no price for ${esc(sym)}</span>`); if(opts.onPrice) opts.onPrice(null); } }
     }
-    return {update(text, now){
+    return {update(text, now, quiet){
       clearTimeout(timer); seq++;
       const sym = String(text || "").trim().toUpperCase();
       if(!sym){ show(""); if(opts.onPrice) opts.onPrice(null); return; }
-      if(now) run(sym); else timer = setTimeout(() => run(sym), 400);
+      if(now) run(sym, quiet); else timer = setTimeout(() => run(sym, false), 400);
     }};
   }
 
