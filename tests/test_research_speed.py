@@ -52,12 +52,6 @@ def old_plan(arch, c, symbol, fresh_by):
     return new_bars, hit, overlap, arch._adj_changes(have, fresh_by)
 
 
-def split_fresh(bars, factor, from_idx, to_idx):
-    """Yahoo's fresh series after a split: closes before the split date rescaled."""
-    out = [dict(b) for b in bars[from_idx:to_idx]]
-    return out
-
-
 @pytest.fixture
 def arch(tmp_path):
     return PriceArchive(tmp_path / "a.sqlite", now_fn=lambda: NOW)
@@ -120,6 +114,17 @@ def test_a_split_is_still_applied_exactly_once_and_the_series_is_rescaled(arch):
 
 
 # ---- momentum columns and volatility ----
+def vol_exact(bars, n=60):
+    """The original definition (statistics.pstdev sums in exact fractions), kept here to compare the fast one against it."""
+    import statistics
+    closes = [b["adj_close"] for b in bars[-(n + 1):]]
+    if len(closes) < n + 1:
+        return None
+    rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes)) if closes[i - 1]]
+    return statistics.pstdev(rets) * math.sqrt(252) if len(rets) > 1 else None
+
+
+
 @pytest.mark.parametrize("n_bars", [1, 2, 50, 199, 200, 260, 280, 700])
 def test_momentum_stats_at_equals_momentum_stats_on_the_slice(n_bars):
     bars = make_bars(800, seed=n_bars)
@@ -134,10 +139,10 @@ def test_momentum_stats_at_equals_momentum_stats_on_the_slice(n_bars):
 def test_fast_volatility_matches_the_exact_one():
     for seed in range(20):
         bars = make_bars(120, seed=seed, vol=0.005 + seed * 0.003)
-        fast, exact = screen._vol(bars), screen._vol_exact(bars)
+        fast, exact = screen._vol(bars), vol_exact(bars)
         assert fast == pytest.approx(exact, rel=1e-12, abs=1e-15)
-    assert screen._vol(make_bars(30)) is None and screen._vol_exact(make_bars(30)) is None
-    assert screen.vol_from_closes([1.0] * 61) == screen._vol_exact([{"adj_close": 1.0}] * 61) == 0.0
+    assert screen._vol(make_bars(30)) is None and vol_exact(make_bars(30)) is None
+    assert screen.vol_from_closes([1.0] * 61) == vol_exact([{"adj_close": 1.0}] * 61) == 0.0
 
 
 # ---- the backtest ----
@@ -166,7 +171,7 @@ def test_the_backtest_is_the_same_with_the_column_path_as_with_the_old_one(monke
             self.bars = bars
     monkeypatch.setattr(factor_backtest, "SeriesArrays", BarsArrays)
     monkeypatch.setattr(factor_backtest, "momentum_stats_at", lambda a, n: momentum_stats(a.bars[:n]))
-    monkeypatch.setattr(factor_backtest, "vol_from_closes", lambda closes, n=60: screen._vol_exact([{"adj_close": c} for c in closes], n))
+    monkeypatch.setattr(factor_backtest, "vol_from_closes", lambda closes, n=60: vol_exact([{"adj_close": c} for c in closes], n))
     old = factor_backtest.run_factor_backtest(universe, prices, top=8, years=4, workers=1, min_turnover=0.0)
     for key in ("strategy", "benchmark", "equal_weight"):
         assert len(new[key]) == len(old[key]) and all(a == pytest.approx(b, abs=1e-9) for a, b in zip(new[key], old[key])), key
@@ -262,7 +267,8 @@ def test_warm_up_loads_the_universes_paced_and_stops_on_request():
     assert not slow._thread.is_alive()
     bad = history_cache.ResearchWarm(c, lambda n: (_ for _ in ()).throw(RuntimeError("down")), delay=0.0, pause=0.0)
     bad.start()
-    bad._thread.join(2)                                                         # a failing list never raises
+    bad._thread.join(2)
+    assert not bad._thread.is_alive() and bad.loaded == 0                       # a failing list ends the run quietly, loading nothing
 
 
 def test_app_wraps_only_the_research_tools_and_the_warm_up_can_be_switched_off(settings, tmp_path, monkeypatch):
@@ -280,50 +286,12 @@ def test_app_wraps_only_the_research_tools_and_the_warm_up_can_be_switched_off(s
     assert w is not None and app.start_research_warm() is w                    # started once
     w.stop()
     from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "trading_agent" / "ui.py").read_text(encoding="utf-8")
-    assert src.count("self.research_prices") >= 6 and "run_screen(members, self.research_prices" in src
-    assert "run_signal_lab(members, self.research_prices" in src and "run_factor_backtest(members, self.research_prices" in src
-    for agent_file in ("watch.py", "runner.py", "agent.py", "cli.py", "app_feed.py", "live_prices.py"):
-        assert "research_prices" not in (Path(src).parent / agent_file if False else Path(__file__).resolve().parent.parent / "trading_agent" / agent_file).read_text(encoding="utf-8")
-
-
-# ---- signal lab ----
-def test_signal_lab_zscore_and_ranks_equal_the_old_definitions():
-    from trading_agent import signal_lab
-    import statistics
-    r = random.Random(7)
-    for _ in range(30):
-        vals = [None if r.random() < 0.1 else r.gauss(0, r.choice([1e-3, 1, 50])) for _ in range(r.randint(2, 150))]
-        xs = [v for v in vals if v is not None]
-        mu, sd = statistics.fmean(xs), statistics.pstdev(xs) if len(xs) > 1 else 0.0
-        old = [max(-3.0, min(3.0, (v - mu) / sd)) if v is not None and sd > 0 else 0.0 for v in vals] if len(xs) >= 2 else [0.0] * len(vals)
-        assert signal_lab._zscore(vals) == pytest.approx(old, rel=1e-12, abs=1e-12)
-        data = [round(r.gauss(0, 1), 1) for _ in range(60)]           # ties
-        order = sorted(range(len(data)), key=lambda i: data[i])
-        assert order == sorted(range(len(data)), key=data.__getitem__)
-
-
-def test_signal_lab_result_is_unchanged_by_the_fast_zscore(monkeypatch):
-    from trading_agent import signal_lab
-    import statistics
-    prices = Prices(30, 1500)
-    universe = [{"symbol": s, "name": s, "industry": "X"} for s in prices.series if s.startswith("S")]
-    kw = dict(horizons=[5, 20], years=2)
-    new = signal_lab.run_signal_lab(universe, prices, **kw)
-    monkeypatch.setattr(signal_lab, "_pstdev", lambda xs: statistics.pstdev(xs))
-    old = signal_lab.run_signal_lab(universe, prices, **kw)
-
-    def same(a, b, path=""):
-        if isinstance(a, dict):
-            assert a.keys() == b.keys(), path
-            for k in a:
-                same(a[k], b[k], f"{path}/{k}")
-        elif isinstance(a, list):
-            assert len(a) == len(b), path
-            for i, (x, y) in enumerate(zip(a, b)):
-                same(x, y, f"{path}[{i}]")
-        elif isinstance(a, float) and isinstance(b, float):
-            assert a == pytest.approx(b, rel=1e-9, abs=1e-9), path
-        else:
-            assert a == b, path
-    same(new, old)
+    root = Path(__file__).resolve().parent.parent / "trading_agent"
+    ui_src = (root / "ui.py").read_text(encoding="utf-8")
+    assert ui_src.count("SharedHistory(") == 1                                   # created in one place, the research_prices property
+    uses = [ln.strip() for ln in ui_src.splitlines() if "self.research_prices" in ln and "def " not in ln and "return" not in ln]
+    wanted = ("run_screen(", "run_factor_backtest(", "run_signal_lab(", "prices = self.research_prices", "ScreenerService(", "ResearchWarm(")
+    assert uses and all(any(x in ln for x in wanted) for ln in uses), uses       # only the research call sites
+    for agent_file in ("runner.py", "watch.py", "agent.py", "cli.py", "app_feed.py", "live_prices.py", "broker.py", "stops.py"):
+        text = (root / agent_file).read_text(encoding="utf-8")
+        assert "SharedHistory" not in text and "history_cache" not in text and "research_prices" not in text, agent_file

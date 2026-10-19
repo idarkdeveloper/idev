@@ -468,8 +468,12 @@ class App:
                     cap = int(os.environ.get("RESEARCH_CACHE_MAX") or DEFAULT_MAX_ENTRIES)
                 except ValueError:
                     cap = DEFAULT_MAX_ENTRIES
-                self._research = SharedHistory(self.prices, ttl=600.0, max_entries=cap)
+                self._research = SharedHistory(self.prices, ttl=600.0, max_entries=cap, market_open=self._nse_open)
             return self._research
+
+    def _nse_open(self) -> bool:
+        """True while the NSE is open (the helper the price TTL uses): research caches then keep the normal 10 minutes."""
+        return safety.market_open(datetime.now(timezone.utc), self._safe_holidays())
 
     def start_research_warm(self, delay: float = 30.0) -> Any | None:
         """After ``delay`` seconds load the default universes' histories into the research cache (daemon thread, paced). Off
@@ -481,7 +485,8 @@ class App:
             return None
         from .history_cache import ResearchWarm
         from .screen import load_universe
-        self._research_warm = ResearchWarm(self.research_prices, lambda name: [m["symbol"] for m in load_universe(name)], delay=delay)
+        self._research_warm = ResearchWarm(self.research_prices, lambda name: [m["symbol"] for m in load_universe(name)], delay=delay,
+                                           pause=0.5, is_open=self._nse_open)
         self._research_warm.start()
         return self._research_warm
 

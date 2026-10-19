@@ -55,9 +55,12 @@ def _pstdev(xs: list[float]) -> float:
     """Population standard deviation by the two-pass formula with exact (fsum) sums: within an ulp or two of
     ``statistics.pstdev`` (which sums in exact fractions, 30x slower, and matters in a backtest that asks for it for every
     stock at every month)."""
+    if max(xs) == min(xs):
+        return 0.0   # a constant group has no spread (the mean of identical floats can differ from them in the last bit)
     n = len(xs)
     mu = math.fsum(xs) / n
-    return math.sqrt(math.fsum((x - mu) * (x - mu) for x in xs) / n)
+    sd = math.sqrt(math.fsum((x - mu) * (x - mu) for x in xs) / n)
+    return 0.0 if sd <= 1e-12 * max(1.0, abs(mu)) else sd   # rounding noise, not spread
 
 
 def vol_from_closes(closes: list[float], n: int = 60) -> float | None:
@@ -72,13 +75,6 @@ def _vol(bars: list[dict[str, Any]], n: int = 60) -> float | None:
     return vol_from_closes([b["adj_close"] for b in bars[-(n + 1):]], n)
 
 
-def _vol_exact(bars: list[dict[str, Any]], n: int = 60) -> float | None:
-    """The original definition, kept so tests can compare the fast one against it."""
-    closes = [b["adj_close"] for b in bars[-(n + 1):]]
-    if len(closes) < n + 1:
-        return None
-    rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes)) if closes[i - 1]]
-    return statistics.pstdev(rets) * math.sqrt(252) if len(rets) > 1 else None
 
 
 def _z(values: list[float | None]) -> list[float | None]:
