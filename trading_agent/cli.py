@@ -627,7 +627,7 @@ HALT_ALLOWED = {"telegram-preview", "kill-switch", "app-device", "app-api", "ui"
                 "research-capacity", "research-leakage",
                 "research-momentum", "research-holdout",
                 "research-macro", "research-sectors", "research-backward", "research-replication",
-                "research-batch3", "research-circuits"}
+                "research-batch3", "research-circuits", "research-india-2007"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -1368,6 +1368,108 @@ def cmd_research_backward(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research_india_2007(args: argparse.Namespace) -> int:
+    """The pre-registered India test (Oct 2007 to Mar 2016), ONCE: data gate first, then A0, B and E. Refused
+    without --confirm and after the first run (the trial log records it)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    import requests
+
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .index_history import current_symbol, load_symbol_changes
+    from .nse import NSEClient
+    from .research_backward import fetch_tri, with_fee
+    from .research_india import (DATA_FROM, PREREGISTRATION, STUDY, TRADING_FROM, TRI_NAME, WINDOW_END, build_series,
+                                 classify_flagged, fetch_actions, fetch_bhav, fetch_bse_rows, format_gate,
+                                 format_india, gate, make_market, parse_actions, run_india, universe_by_month,
+                                 unrecorded_splits, with_mends)
+    from .research_studies import prior_trials
+    settings = _settings(args)
+    if _once_used(settings, STUDY):
+        return 2
+    if not args.confirm:
+        print(f"This runs the pre-registered India test ({PREREGISTRATION}) on Oct 2007 to Mar 2016, ONCE. The data "
+              "gate is checked first; if it passes the result is final. Run again with --confirm to run it.")
+        return 2
+    cache = settings.state_dir / "india2007"
+    print(f"Loading the {TRI_NAME} total return index…")
+    tri = fetch_tri(cache, start=DATA_FROM, end=WINDOW_END, name=TRI_NAME)
+    bench = [b for b in with_fee(tri) if DATA_FROM <= b["date"] < WINDOW_END]
+    days = [b["date"] for b in bench]
+    print(f"Downloading {len(days)} NSE daily files (cached; first time takes a while)…")
+
+    def one(day: str) -> tuple[str, Any]:
+        s = requests.Session()
+        for _ in range(3):
+            try:
+                return day, fetch_bhav(day, cache / "bhav", s)
+            except requests.RequestException:
+                continue
+        return day, None
+
+    files: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for k, (day, rows) in enumerate(ex.map(one, days), 1):
+            if rows:
+                files[day] = rows
+            if k % 250 == 0:
+                print(f"  {k}/{len(days)}")
+    renames = load_symbol_changes()
+    print("Loading NSE's corporate actions…")
+    actions = parse_actions(fetch_actions(cache, NSEClient()))
+    rename = lambda s, d: current_symbol(s, d, renames)  # noqa: E731
+    series, info = build_series(days, files, rename, actions)
+    members = universe_by_month(days, series, info["funds"])
+    # addendum 2: classify the split-like moves (crash days, BSE flags), mend BSE-flagged bonuses, rebuild
+    bse_session = requests.Session()
+
+    def bse_rows(day: str) -> list[list[str]]:
+        for _ in range(5):
+            try:
+                return fetch_bse_rows(day, cache / "bse", bse_session)
+            except requests.RequestException:
+                continue
+        return []
+
+    bench_close = {b["date"]: b["close"] for b in tri}
+    flagged = unrecorded_splits(days, series, members, actions)
+    classified, mends = classify_flagged(flagged, days, bench_close, series, bse_rows)
+    if mends:
+        actions = with_mends(actions, mends)
+        series, info = build_series(days, files, rename, actions)
+        members = universe_by_month(days, series, info["funds"])
+    trading_months = sorted({d[:7] for d in days if d >= TRADING_FROM})
+    g = gate(days=days, present=set(files), actions=actions, series=series, members=members,
+             trading_months=trading_months, classified=classified)
+    print(format_gate(g))
+    if not g["passes"]:
+        print("The data gate failed, so nothing was simulated and nothing is spent. Mend the data under a committed "
+              "addendum, then run again.")
+        return 1
+    m = make_market(days, series, bench, members)
+    _leakage_guard(m, holdout_start=WINDOW_END)
+    if not _claim_once(settings, STUDY):
+        return 2
+    r = run_india(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                  extra_trials=prior_trials(settings.state_dir), unexplained=g["unrecorded"])
+    for vid, x in r["primary"].items():   # logged before printing: once run, the window is spent
+        log_trial(settings.state_dir, STUDY, {"variant": vid, "name": x["name"], "from": r["start"], "to": r["end"]},
+                  {"return": x["total_return"], "excess": x["excess"], "cagr": x["cagr"],
+                   "max_drawdown": x["max_drawdown"], "turnover": x["turnover"], "passes": x["passes"],
+                   "skill": x["skill"].get("probability")})
+    notes = [f"mended from BSE's flags (addendum 2): {', '.join(f'{s} {d} shares x{x:g}' for s, d, x in mends) or 'none'}.",
+             f"{len(files)} of {len(days)} daily files; {len(series)} stocks traded; "
+             f"{sum(len(v) for v in members.values()) // max(1, len(members))} members a month on average.",
+             f"{info['dividends_skipped']} dividend record(s) not applied (amount over 30% of the price).",
+             f"{len(m.excluded)} stock(s) left out for a one-day move over 50x: {', '.join(m.excluded[:12]) or 'none'}.",
+             "price bands and ASM/GSM lists not applied (not available for these years)."]
+    print(format_india(r, notes))
+    if args.json:
+        print(json.dumps({k: v for k, v in r.items() if k != "pbo"}, default=str))
+    return 0
+
+
 def cmd_research_leakage(args: argparse.Namespace) -> int:
     """The full leakage test: every rebalance day and four end-to-end cuts of the adopted rules."""
     from .costs import cost_model_for
@@ -1498,6 +1600,27 @@ def cmd_top10_paper(args: argparse.Namespace) -> int:
         return 0
     s = {**tp.ft.summary(), "rebalanced": None}
     print(format_top10_paper(s, control_over(settings.state_dir, settings.forward_universe, s.get("started"))))
+    return 0
+
+
+def cmd_brake_paper(args: argparse.Namespace) -> int:
+    """The drawdown brake's paper account: show it, or with --run do today's after-close run now."""
+    from .brake_paper import BrakePaper, format_brake_paper, run_brake_paper_due
+    from .resmom_paper import control_over
+    from .runner import free_prices
+    settings = _settings(args)
+    prices = free_prices(settings)
+    if args.run:
+        print(run_brake_paper_due(settings, prices, _market_holidays(settings)))
+        return 0
+    bp = BrakePaper(settings.state_dir, universe=settings.forward_universe, capital=settings.paper_starting_cash,
+                    price_fn=prices.latest_price)
+    if not bp.ft.started:
+        print("Brake paper account: not started (starts "
+              f"{settings.brake_paper_start or 'never: BRAKE_PAPER_START=off'}, after the close, from the watch service).")
+        return 0
+    s = {**bp.ft.summary(), "rebalanced": None, "braked": bool(bp.ft.data.get("braked"))}
+    print(format_brake_paper(s, control_over(settings.state_dir, settings.forward_universe, s.get("started"))))
     return 0
 
 
@@ -2047,6 +2170,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
         print(run_resmom_paper_due(settings, forward_prices, holidays))
         from .top10_paper import run_top10_paper_due   # variant B's own paper account (never raises)
         print(run_top10_paper_due(settings, forward_prices, holidays))
+        from .brake_paper import run_brake_paper_due   # the drawdown brake's own paper account (never raises)
+        print(run_brake_paper_due(settings, forward_prices, holidays))
     forward = ForwardScheduler(settings.state_dir, after_close, holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
                 integration=make_integration_scheduler(settings, notifier, holidays),
@@ -2271,6 +2396,11 @@ def build_parser() -> argparse.ArgumentParser:
                                                     "(instead of fetching it)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_research_backward)
+    sp = sub.add_parser("research-india-2007", help="the pre-registered India test on Oct 2007 to Mar 2016, ONCE "
+                                                   "(needs --confirm; a data gate runs first)")
+    sp.add_argument("--confirm", action="store_true", help="really run it: the result is final and the window is spent")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_research_india_2007)
     sp = sub.add_parser("research-holdout", help="open the sealed holdout ONCE for the adopted rules (needs --confirm)")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--confirm", action="store_true", help="really open it: the result is final and the holdout is spent")
@@ -2351,6 +2481,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("top10-paper", help="variant B's (top 10) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (start, monthly rebalance, mark)")
     sp.set_defaults(func=cmd_top10_paper)
+    sp = sub.add_parser("brake-paper", help="the drawdown brake's (100-day average) paper account (practice money only)")
+    sp.add_argument("--run", action="store_true", help="do today's after-close run now (brake check, monthly rebalance, mark)")
+    sp.set_defaults(func=cmd_brake_paper)
     sp = sub.add_parser("research-pead", help="research: post-results drift and promoter-buying signals")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--years", type=int, default=5)
