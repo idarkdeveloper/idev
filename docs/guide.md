@@ -771,6 +771,26 @@ filings at most every 15 minutes beside them (a filing reaches NSE days after th
 last insider rows and never stops the deals. Insider filings are filtered to the followed names like the deals, so they
 add something only when a followed investor files one (for example as a promoter or on crossing a holding threshold).
 
+**Insider trades, all NSE companies** (`INSIDER_TRADES`, default `true`): the watch service reads every NSE
+insider-trading (PIT) filing every 15 minutes, 07:00–22:00 IST, on its own thread (`trading_agent/insider_watch.py`,
+stored in `state/insider_book.json`), whatever `WATCH_SOURCE` says. It gives:
+- an alert when a promoter, director or key manager buys or sells a stock you hold or that is recommended (the first
+  read only marks what is already filed, so it never sends a month of old filings);
+- an "Insider buying" / "Insider sale" mark on the portfolio row and an *Insider trades* section on the stock page;
+- the *Promoter and director buying* card (Research): open-market buys of `INSIDER_MIN_BUY` rupees or more (default
+  ₹1 crore, `10000000`), summed per person and stock. ESOPs, gifts, transfers between promoters and pledges are left out.
+`python -m trading_agent insider [--refresh] [--symbol SYM]` shows the same from the command line. The Health page row
+"Insider trades, all NSE companies" shows when it last read. Read-only public filings: no login, no orders.
+
+**Funds in every stock's deals** (`BIG_MONEY`, default `true`): beside the insider book, the watch reads the last 30
+days of NSE and BSE bulk and block deals every 15 minutes (`trading_agent/big_money.py`, `state/big_money.json`) and
+keeps the institutions: mutual funds, foreign funds (FPIs), insurers, banks, pension and sovereign funds (brokers'
+trading desks are left out; names are classified by `investors.classify_client`, so a promoter family trust can look
+like a fund). It gives an alert when one buys or sells a stock you hold or that is recommended, a "Funds buying" /
+"Funds selling" mark on the portfolio row, a *Fund deals* section on the stock page and the *Funds buying and selling*
+card (Research): deals of `BIG_MONEY_MIN` rupees or more (default ₹10 crore), summed per fund, stock and side.
+`python -m trading_agent funds [--refresh] [--symbol SYM]` shows the same.
+
 `BSE_DEALS` (default `true`): also read BSE's bulk and block deals (public page, no login) beside NSE's,
 so mid and small-cap deals made only on BSE are followed too. They show in the deals table with an
 Exchange column, in alerts ("on BSE"), the Claude check, the daily emails and the deal backtest. Set

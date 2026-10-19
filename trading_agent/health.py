@@ -307,6 +307,18 @@ def report(settings: Any, now: datetime | None = None, holidays: Any | None = No
                      last_ok=ok or _newest_mtime(list((cache / "nse_pit").glob("*.json"))), rows=n, due=due_intra,
                      schedule=intra if insider else "every 15 minutes beside the deals, 09:15–18:30 IST on trading days",
                      error=err, error_at=err_at, failing=bool(nse_off), backoff=nse_off, now=now))
+    ok, n, err, err_at = _run(runs, "insider_market")
+    rows.append(_row("insider_market", "Insider trades, all NSE companies", [ALERTS, DASH],
+                     configured=bool(getattr(settings, "insider_trades", False)) and nse, last_ok=ok, rows=n,
+                     due=due_intra, schedule="every 15 minutes, 07:00–22:00 IST (watch service)", error=err,
+                     error_at=err_at, failing=bool(nse_off), backoff=nse_off, now=now,
+                     detail="promoter and director trades in your stocks, and big insider buys"))
+    ok, n, err, err_at = _run(runs, "big_money")
+    rows.append(_row("big_money", "Institutions' bulk and block deals, all stocks", [ALERTS, DASH],
+                     configured=bool(getattr(settings, "big_money", False)) and nse, last_ok=ok, rows=n,
+                     due=due_intra, schedule="every 15 minutes, 07:00–22:00 IST (watch service)", error=err,
+                     error_at=err_at, failing=bool(nse_off), backoff=nse_off, now=now,
+                     detail="mutual funds, foreign funds and insurers buying or selling, in your stocks and big ones anywhere"))
     ok, n, err, err_at = _run(runs, "announcements")
     rows.append(_row("announcements", "NSE announcements", [AGENT, ALERTS, MORNING, DASH], configured=nse, last_ok=ok,
                      rows=n, due=due_intra, schedule=intra + " for held and recommended stocks", error=err,

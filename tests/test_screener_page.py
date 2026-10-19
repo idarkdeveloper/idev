@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -180,7 +181,38 @@ def test_add_filter_popup_is_not_closed_by_a_height_only_resize():
 
 def test_the_page_groups_universes_by_market_and_switches_currency_and_hides_india_only_parts():
     assert 'id="sc-market"' in HTML
-    for needle in ("UNIVERSE_GROUPS", "<optgroup label=", "function applyMarket", "INDIA_ONLY.indexOf(", "numLocale = cur().loc", "view-only; prices delayed",
+    for needle in ("UNIVERSE_GROUPS", "function switchMarket", "function applyMarket", "INDIA_ONLY.indexOf(", "numLocale = cur().loc", "view-only; prices delayed",
                    "Loading ${Math.max(0, d.total - d.pending)} of ${d.total} stocks", "r.code || r.symbol", "!(foreign() && p.india)", "cur().sym"):
         assert needle in JS, needle
     assert "/api/screener?universe=" in JS and "/api/order" not in JS
+
+
+def test_screener_v3_market_tabs_title_all_chip_and_phone_cards():
+    """Screener v3: India / US / UK / Japan tabs over the card (each with its exchanges and an open/closed line), the
+    list's name as the title, an "All" chip before the presets, and on phones a card per stock with a Sort control."""
+    assert '<div class="sc-markets" id="sc-markets" role="group" aria-label="Market"></div>' in HTML
+    assert 'id="sc-sortbar"' in HTML and 'id="sc-cards"' in HTML
+    for needle in ('function renderMarkets', 'function fillUniverse', 'function renderCards', 'data-preset="" aria-pressed=',
+                   'if(!id){ st.preset = ""; st.filters = [];', '$("sc-title").textContent = titleOf(st.universe);',
+                   '$("sc-cards").hidden = !on; $("sc-sortbar").hidden = !on;'):
+        assert needle in JS, needle
+    assert ".sc-main { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }" in CSS   # room for the Ask bar
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_market_tabs_cover_every_list_and_nse_hours(tmp_path):
+    f = tmp_path / "t.js"
+    f.write_text(textwrap.dedent("""
+        const L = require(process.argv[2]);
+        const all = [].concat(...L.MARKET_TABS.map(m => m.universes)).sort();
+        const at = (iso) => L.nseOpen(new Date(iso)).open;
+        console.log(JSON.stringify({all, uni: L.UNIVERSES.slice().sort(), ids: L.MARKET_TABS.map(m => m.id),
+          titles: [L.titleOf("NIFTY50"), L.titleOf("NIFTYMIDCAP150"), L.titleOf("SP500_US"), L.titleOf("HOLDINGS")],
+          open: [at("2026-10-19T04:00:00Z"), at("2026-10-19T03:40:00Z"), at("2026-10-19T10:05:00Z"), at("2026-10-18T05:00:00Z")]}));
+    """), encoding="utf-8")
+    r = subprocess.run(["node", str(f), str(UI / "screener.js")], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    o = json.loads(r.stdout)
+    assert o["all"] == o["uni"] and o["ids"] == ["IN", "US", "UK", "JP"]
+    assert o["titles"] == ["Nifty 50", "Nifty Midcap 150", "S&P 500", "My holdings"]
+    assert o["open"] == [True, False, False, False]   # Mon 09:30 IST open; 09:10 before; 15:35 after; Sunday closed

@@ -79,7 +79,7 @@ def test_stock_page_code_has_no_way_to_send_an_order():
                    "groww", "Groww", "GROWW", "live_orders", "liveOrders", "paper_order", "confirm(", "submit("):
         assert needle not in code, needle
     # the only server calls are GET reads through the page's api helper
-    assert sorted(set(re.findall(r"""["'`](/api/[^"'`?]*)""", code))) == ["/api/announcements", "/api/candles", "/api/lookup", "/api/news", "/api/stock"]
+    assert sorted(set(re.findall(r"""["'`](/api/[^"'`?]*)""", code))) == ["/api/announcements", "/api/big-money", "/api/candles", "/api/insider", "/api/lookup", "/api/news", "/api/stock"]
 
 
 def test_buttons_are_labelled_practice_and_only_call_the_host():

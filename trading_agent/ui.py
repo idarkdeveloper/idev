@@ -2629,6 +2629,22 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 from urllib.parse import parse_qs
                 force = (parse_qs(urlparse(self.path).query).get("refresh") or ["0"])[0] in ("1", "true")
                 self._json(app.context.fetch(force=force) if app.context else {"error": "not configured"})
+            elif path == "/api/big-money":   # institutions' bulk/block deals: the big ones, or one stock's
+                from urllib.parse import parse_qs
+                sym = (parse_qs(urlparse(self.path).query).get("symbol") or [""])[0].strip().upper()
+                if sym and not re.fullmatch(r"[A-Z0-9&.\-]{1,20}", sym):
+                    self._json({"error": "bad symbol"}, HTTPStatus.BAD_REQUEST)
+                else:
+                    from .big_money import book_for as money_book_for
+                    self._json(money_book_for(app.settings).view(sym or None))
+            elif path == "/api/insider":   # NSE insider (PIT) trades: big insider buys, or one stock's trades
+                from urllib.parse import parse_qs
+                sym = (parse_qs(urlparse(self.path).query).get("symbol") or [""])[0].strip().upper()
+                if sym and not re.fullmatch(r"[A-Z0-9&.\-]{1,20}", sym):
+                    self._json({"error": "bad symbol"}, HTTPStatus.BAD_REQUEST)
+                else:
+                    from .insider_watch import book_for as insider_book_for
+                    self._json(insider_book_for(app.settings).view(sym or None))
             elif path == "/api/search":
                 from urllib.parse import parse_qs
                 qs = parse_qs(urlparse(self.path).query)
