@@ -243,6 +243,7 @@
   tbody tr { background: var(--fade-rule) no-repeat bottom / 100% 1px; }
   tbody tr:last-child { background: none; }
   tbody tr:hover { background: linear-gradient(var(--color-row-hover), var(--color-row-hover)) no-repeat 0 0 / 100% 100%, var(--fade-rule) no-repeat bottom / 100% 1px; }
+  .pxline { margin: -4px 0 0; font-size: 13px; overflow-wrap: anywhere; } .pxline .pxnum { font-weight: 600; }
   td.num, th.num { text-align: right; } .mono { font-variant-numeric: tabular-nums; }
 
   /* recommendations */

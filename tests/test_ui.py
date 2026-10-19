@@ -1681,3 +1681,14 @@ def test_paper_accounts_tab_lists_all_four_and_the_forward_card_reads_its_own_fi
     assert {h["symbol"] for h in acc["model"]["holdings"]} == {"C", "B"} and acc["model"]["capital"] == 500_000
     assert acc["model"]["history"][0]["date"] and acc["model"]["value"] is not None and acc["model"]["since"] == "2026-10-19"
     assert not acc["resmom"]["started"] and not acc["top10"]["started"] and acc["top10"]["about"]
+
+
+def test_order_forms_show_a_live_price_line_from_the_read_only_lookup():
+    ui = Path(__file__).resolve().parent.parent / "trading_agent" / "ui"
+    index, replay_js = (ui / "index.html").read_text(encoding="utf-8"), (ui / "replay.js").read_text(encoding="utf-8")
+    common, replay_html = (ui / "common.js").read_text(encoding="utf-8"), (ui / "replay.html").read_text(encoding="utf-8")
+    assert 'id="tk-price"' in index and 'id="ro-price"' in replay_html
+    assert 'TA.priceLine($("tk-price")' in index and '"/api/lookup?ticker="' in index and "tkPx.update(s, true)" in index
+    assert 'TA.priceLine($("ro-price")' in replay_js and "/lookup?ticker=" in replay_js and "roPx.update(" in replay_js
+    assert "400" in common[common.index("function priceLine"):] and "seq++" in common and "no price for" in common
+    assert "placeholder = p != null" in index and "a share" in index

@@ -921,7 +921,43 @@ window.TA = (function(){
     };
   }
 
-  return {$, esc, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
+  // ---- a live price line under an order form's ticker ----
+  // priceMove(r, today): {price, chg} from a lookup payload (price, history [{d, c}]); chg is today vs the previous close, a fraction, or null.
+  function priceMove(r, today){
+    const h = (r && r.history) || [];
+    const last = h.length ? h[h.length - 1] : null;
+    const price = r && r.price != null ? r.price : (last ? last.c : null);
+    if(price == null) return {price: null, chg: null};
+    const prev = last && last.d < today ? last : (h.length > 1 ? h[h.length - 2] : null);
+    return {price, chg: prev && prev.c ? price / prev.c - 1 : null};
+  }
+  // priceLine(el, fetchLookup(sym) -> lookup payload, {today() -> "YYYY-MM-DD", source, onPrice(price|null)}) -> {update(text, now)}.
+  // Typing waits 400 ms; picking a suggestion or pre-filling passes now=true. A newer request cancels an older answer.
+  function priceLine(el, fetchLookup, opts){
+    let seq = 0, timer = 0;
+    const show = (html) => { el.innerHTML = html; el.hidden = !html; };
+    async function run(sym){
+      const my = ++seq;
+      show(`<span class="sub">Price of ${esc(sym)}…</span>`);
+      try {
+        const r = await fetchLookup(sym); if(my !== seq) return;
+        const m = priceMove(r, (r && r.today) || opts.today());
+        if(m.price == null){ show(`<span class="sub">no price for ${esc(sym)}</span>`); if(opts.onPrice) opts.onPrice(null); return; }
+        show(`<b>${esc(r.ticker || sym)}</b> <span class="mono pxnum">${inr(m.price, 2)}</span>`
+          + (m.chg == null ? "" : ` <span class="${m.chg > 0 ? "pl-profit" : m.chg < 0 ? "pl-loss" : ""}">${spct(m.chg)}${opts.chgLabel || " today"}</span>`)
+          + ` <span class="sub">· ${esc(opts.source)}</span>`);
+        if(opts.onPrice) opts.onPrice(m.price);
+      } catch(e){ if(my === seq){ show(`<span class="sub">no price for ${esc(sym)}</span>`); if(opts.onPrice) opts.onPrice(null); } }
+    }
+    return {update(text, now){
+      clearTimeout(timer); seq++;
+      const sym = String(text || "").trim().toUpperCase();
+      if(!sym){ show(""); if(opts.onPrice) opts.onPrice(null); return; }
+      if(now) run(sym); else timer = setTimeout(() => run(sym), 400);
+    }};
+  }
+
+  return {$, esc, priceMove, priceLine, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct, quoteHtml, rangePos, quoteAge,
           daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart};
 })();
