@@ -409,7 +409,7 @@
 <script>
 (function(){
   const {$, esc, money, signed, pct, when, cap, toast, api, tile, C, NS, niceTicks, shortDate, lineChart,
-         histogram, rupeesShort, inr, sinr, spct, daysAgo, shortDay, clip, lookupTakeaway, attachSuggest,
+         histogram, ddHistogram, rupeesShort, inr, sinr, spct, daysAgo, shortDay, clip, lookupTakeaway, attachSuggest,
          currency, sym, quoteHtml, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway} = TA;
   let S = null, pollTimer = null;
   TA.setCurrency(() => (S && S.settings && S.settings.currency) || "INR");
@@ -1351,7 +1351,37 @@
       <p style="margin:6px 0">${esc(v.summary || "")}</p>
       ${yrs ? `<div class="scroll"><table><thead><tr><th>Year</th><th class="num">Stocks held (chosen from earlier years)</th><th class="num">Return</th><th class="num">Comparison</th></tr></thead><tbody>${yrs}</tbody></table></div>` : ""}
       ${d.probability != null ? `<div class="sub">Odds it truly beats ${esc((v.comparison || {}).symbol || "the comparison")} after ${d.trials} tries: <b>${p0(d.probability)}</b> (only the portfolio sizes are counted; the factors and filters chosen with hindsight aren't, so treat the odds as an upper bound)</div>` : ""}
-      ${mc ? `<div class="sub">In 90% of resamples the worst fall was between ${z0(mc.max_drawdown.p5)} and ${z0(mc.max_drawdown.p95)}; final return between ${pct(mc.final_return.p5, 0)} and ${pct(mc.final_return.p95, 0)}.</div>` : ""}</div>`;
+      ${mc ? `<div class="sub">In 90% of resamples the worst fall was between ${z0(mc.max_drawdown.p5)} and ${z0(mc.max_drawdown.p95)}; final return between ${pct(mc.final_return.p5, 0)} and ${pct(mc.final_return.p95, 0)}.</div>` : ""}
+      ${mc && mc.fan && mc.drawdown_hist ? `<div class="mc-box">
+        <h4 style="margin:10px 0 2px">Stress test: the same monthly returns, reshuffled ${Number(mc.paths).toLocaleString("en-IN")} times</h4>
+        <div class="sub">Each reshuffle keeps every month's return but changes the order (in blocks of ${mc.block} months, so streaks stay together). It shows how much of the result was the luck of the order. It does not predict new returns.</div>
+        <div class="chart" id="mc-fan"></div>
+        <div class="mc-limit-row"><label for="mc-limit" class="sub" style="margin:0">Loss limit</label><input id="mc-limit" type="number" min="1" max="95" step="1" value="${mcLimit()}" inputmode="numeric"><span class="sub" style="margin:0">% fall from a peak</span></div>
+        <div class="sub" id="mc-breach" aria-live="polite"></div>
+        <div class="chart" id="mc-hist"></div></div>` : ""}</div>`;
+  }
+  // The stress test's loss limit is a per-viewer preference; storage can throw, so it is guarded.
+  function mcLimit(){ try { const v = parseInt(localStorage.getItem("mcLimit"), 10); if(v >= 1 && v <= 95) return v; } catch(e){} return 20; }
+  function drawMonteCarlo(mc){
+    const fanEl = $("mc-fan"), histEl = $("mc-hist");
+    if(!mc || !mc.fan || !fanEl || !histEl) return;
+    const f = mc.fan, g = a => a.map(v => v * 100), x = f.p50.map((_, i) => i === 0 ? "Start" : `Month ${i}`);
+    lineChart(fanEl, {x, xFmt: v => v, legend: true, height: 220, left: 44, yFmt: v => Math.round(v).toString(),
+      label: "Growth of 100 across the reshuffles, with this backtest's own order", refs: [{y: 100, label: "Start"}],
+      bands: [{name: "90% of reshuffles", lo: g(f.p5), hi: g(f.p95), color: C.s1, opacity: 0.12},
+              {name: "Middle half", lo: g(f.p25), hi: g(f.p75), color: C.s1, opacity: 0.22}],
+      series: [{name: "Median reshuffle", color: C.s1, values: g(f.p50)},
+               {name: "This backtest", color: C.s2, values: g(f.actual)}]});
+    const inp = $("mc-limit");
+    const paint = () => {
+      let L = parseInt(inp.value, 10); if(!(L >= 1 && L <= 95)) L = mcLimit();
+      try { localStorage.setItem("mcLimit", String(L)); } catch(e){}
+      const over = mc.drawdown_hist.slice(L).reduce((a, b) => a + b, 0), share = over / mc.paths, own = -mc.actual_drawdown * 100;
+      $("mc-breach").innerHTML = `<b>${(share * 100).toFixed(share > 0 && share < 0.01 ? 1 : 0)}%</b> of reshuffles fell ${L}% or more from a peak at some point. This backtest's own worst fall was ${own.toFixed(1)}%${own >= L ? ", past the limit" : ""}.`;
+      ddHistogram(histEl, mc.drawdown_hist, {limit: L, actual: mc.actual_drawdown, label: `Worst fall in each reshuffle; loss limit ${L}%`});
+    };
+    inp.addEventListener("input", paint);
+    paint();
   }
 
   function renderFactor(r){
@@ -1376,6 +1406,7 @@
                {name: benchName, label:"NIFTY 50", color:C.s2, values: idx(r.benchmark)},
                {name:"Equal weight", label:"Equal wt", color:C.ctx, width:1.5, values: idx(r.equal_weight)}]
                .concat(r.index_fund ? [{name: `Index fund (${r.index_fund_symbol})`, label: "Fund", color: C.s3, width: 1.5, values: idx(r.index_fund)}] : [])});
+    drawMonteCarlo((r.validation || {}).monte_carlo);
   }
 
   async function refresh(){ try { S = await api("/api/state"); const first = !urlApplied; applyUrlOnce(); if(first) restoreAnchor(); render(stopEdit !== null || (sellEdit !== null && sellEdit.source === "practice")); } catch(e){ toast("Could not load: "+e.message); SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: "unknown"})); } }

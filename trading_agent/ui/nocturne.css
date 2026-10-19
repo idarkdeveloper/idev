@@ -1275,6 +1275,10 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #mp-card #mp-rows td.num:nth-child(4)::before, #mp-card #mp-rows td.num:nth-child(5)::before { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; display: inline; font-size: 12px; color: var(--color-muted); letter-spacing: 0; text-transform: none; margin-right: 4px; }
   #mp-card #mp-rows td.num:nth-child(4)::before { content: "Today"; } #mp-card #mp-rows td.num:nth-child(5)::before { content: "Value"; }
 }
+/* Monte Carlo stress test: the loss-limit box stays narrow at every width */
+.mc-limit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.mc-limit-row > #mc-limit { width: 5.5em; flex: 0 0 auto; }
+
 @media (max-width: 700px) {
   #mp-card #mp-rows tr[data-open-stock] { padding: 8px 16px; gap: 1px 10px; }
   #mp-card #mp-rows .stock-cell > .sym-line { grid-column: 1 / 3; }

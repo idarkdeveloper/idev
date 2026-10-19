@@ -368,3 +368,43 @@ def test_trial_log_records_the_code_version(tmp_path):
     path = gd.log_trial(tmp_path, "X", {"a": 1}, {"b": 2})
     row = _json.loads(path.read_text().splitlines()[0])
     assert "code" in row and (row["code"] is None or len(row["code"]) == 12)
+
+
+def test_monte_carlo_returns_the_fan_and_the_worst_fall_histogram():
+    from trading_agent.validation import breach_share
+    rets = [0.05, -0.04, 0.02, -0.06, 0.03, 0.01, -0.02, 0.04, -0.01, 0.02, -0.08, 0.06]
+    mc = monte_carlo(rets, n_paths=400, seed=5)
+    f = mc["fan"]
+    assert all(len(f[k]) == len(rets) + 1 for k in ("p5", "p25", "p50", "p75", "p95", "actual"))
+    assert all(f[k][0] == 1.0 for k in f)                                     # every path starts at 1
+    assert all(f["p5"][i] <= f["p25"][i] <= f["p50"][i] <= f["p75"][i] <= f["p95"][i] for i in range(len(rets) + 1))
+    v = 1.0
+    for r in rets:
+        v *= 1 + r
+    assert f["actual"][-1] == pytest.approx(v, abs=1e-5)                       # the real order, not a reshuffle
+    hist = mc["drawdown_hist"]
+    assert sum(hist) == 400 and hist[-1] > 0
+    # the histogram agrees with the reshuffled worst falls it summarises
+    assert breach_share(mc, 0) == 1.0
+    worst = mc["max_drawdown"]["p5"]                                           # 5% of paths fell at least this far
+    assert breach_share(mc, int(-worst * 100) + 1) <= 0.05 + 1e-9
+    assert breach_share(mc, 99) == 0.0
+    assert mc["actual_drawdown"] <= 0
+    assert breach_share({"paths": 10}, 5) is None                              # a result saved before the histogram
+
+
+def test_monte_carlo_histogram_bins_by_whole_percent():
+    rets = [0.10, -0.20, 0.10, 0.10, -0.10, 0.05]                              # worst fall exactly 20%
+    mc = monte_carlo(rets, n_paths=20, block=len(rets))
+    assert mc["drawdown_hist"][20] == 20 and sum(mc["drawdown_hist"][:20]) == 0
+    assert mc["actual_drawdown"] == pytest.approx(-0.2)
+
+
+def test_the_backtest_page_draws_the_stress_test():
+    from pathlib import Path
+    ui = Path(__file__).resolve().parents[1] / "trading_agent" / "ui"
+    html, js = (ui / "index.html").read_text(), (ui / "common.js").read_text()
+    assert 'id="mc-fan"' in html and 'id="mc-hist"' in html and 'id="mc-limit"' in html
+    assert "drawMonteCarlo((r.validation || {}).monte_carlo)" in html
+    assert "mc.fan && mc.drawdown_hist" in html          # an older saved result without them shows the text only
+    assert "function ddHistogram" in js and "bands" in js
