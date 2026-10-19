@@ -55,6 +55,7 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8"),
                 "/static/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
                 "/static/screener.js": ("screener.js", "text/javascript; charset=utf-8"),
+                "/static/ask.js": ("ask.js", "text/javascript; charset=utf-8"),
                 "/static/stockpage.js": ("stockpage.js", "text/javascript; charset=utf-8"),
                 # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
@@ -178,6 +179,7 @@ class App:
             from .prices import price_ttl
             self.prices.ttl_fn = lambda d: price_ttl(datetime.now(timezone.utc), d, self._safe_holidays())
         self.momentum = MomentumScreen(self.prices)
+        self._ask_limit: Any | None = None   # ask.RateLimit, built on first use
         self._research: Any | None = None   # SharedHistory over self.prices, for the read-only research tools only
         self._research_warm: Any | None = None
         self.last_backtest: dict[str, Any] | None = None
@@ -489,6 +491,85 @@ class App:
                                            pause=0.5, is_open=self._nse_open)
         self._research_warm.start()
         return self._research_warm
+
+    # -- Ask: sentences to read-only actions -------------------------------------
+    def ask(self, text: Any, client: str = "") -> dict[str, Any]:
+        """POST /api/ask {"text"}: {"intent", "args", "say", "via"} (see ask.py). Read-only: opens pages, reads the news."""
+        from . import ask as ask_mod
+        s = self.settings
+        if not getattr(s, "ask_enabled", True):
+            raise PermissionError("Ask is switched off (ASK_ENABLED=false)")
+        if not isinstance(text, str):
+            raise ValueError("text must be a string")
+        root = self._parent or self
+        with self._lazy_lock:
+            if root._ask_limit is None:
+                root._ask_limit = ask_mod.RateLimit(getattr(s, "ask_rate_per_min", 30))
+        if not root._ask_limit.allow(client or "-"):
+            raise ask_mod.RateLimited("Too many questions in a minute; wait a little.")
+        out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)))
+        log.info("ask: intent=%s via=%s", out["intent"], out["via"])
+        log.debug("ask: text=%.60r", text)
+        return out
+
+    def news_today(self, scope: str = "portfolio", ticker: str | None = None) -> dict[str, Any]:
+        """GET /api/news/today: today's tagged headlines (IST date), newest first, at most 10, from the cached news service
+        for your holdings or one stock; when today has none, the last 24 hours (and ``note`` says so). ``speech`` is the text
+        the page reads aloud."""
+        from . import ask as ask_mod
+        from .nse import check_ticker
+        from .timezones import IST
+        scope = scope if scope in ("portfolio", "market", "stock") else "portfolio"
+        svc = self.news
+        note: str | None = None
+        if svc is None:
+            return {"scope": scope, "items": [], "note": "News is not available.", "speech": ask_mod.compose_speech([]), "as_of": _now()}
+        names: dict[str, str] = {}
+        if scope == "stock":
+            sym = check_ticker(ticker or "")
+            symbols = [sym]
+            try:
+                names[sym] = self.resolve(sym)[1] or ""
+            except Exception:  # noqa: BLE001
+                names[sym] = ""
+        else:
+            symbols = sorted(self._held_symbols())[:30]
+            if scope == "market":
+                note = "Market headlines are not available here; these are the news on your holdings."
+            try:
+                names = {k: v for k, v in (self._screener_names(symbols) or {}).items() if v}
+            except Exception:  # noqa: BLE001
+                names = {}
+        now = self._now_dt().astimezone(IST)
+        rows: list[tuple[Any, dict[str, Any]]] = []
+        for sym in symbols:
+            try:
+                res = svc.for_symbol(sym, names.get(sym) or None, background=True)
+            except Exception as e:  # noqa: BLE001 - one stock's feed failing must not hide the rest
+                log.debug("news today: %s unavailable: %s", sym, e)
+                continue
+            for it in res.get("items") or []:
+                try:
+                    at = datetime.fromisoformat(str(it.get("published")))
+                except ValueError:
+                    continue
+                at = (at if at.tzinfo else at.replace(tzinfo=IST)).astimezone(IST)
+                rows.append((at, {"symbol": sym, "name": names.get(sym, ""), "title": str(it.get("title") or "")[:200],
+                                  "tag": it.get("sentiment") if it.get("sentiment") in ("positive", "negative", "neutral") else "neutral",
+                                  "source": str(it.get("source") or "")[:60], "time_ist": at.strftime("%H:%M"),
+                                  "published": at.isoformat(timespec="seconds")}))
+        today = [r for r in rows if r[0].date() == now.date()]
+        if not today:
+            recent = [r for r in rows if 0 <= (now - r[0]).total_seconds() <= 86400]
+            if recent:
+                today, note = recent, "Nothing is dated today yet; these are from the last 24 hours."
+            else:
+                note = note or "No news items found."
+        today.sort(key=lambda r: r[0], reverse=True)
+        items = [r[1] for r in today[:10]]
+        label = "today's" if note is None or "Market headlines" in (note or "") else "recent"
+        return {"scope": scope, "items": items, "note": note, "as_of": _now(),
+                "speech": ask_mod.compose_speech(items, label, note)}
 
     def foreign_screener(self, key: str) -> Any:
         """The service of one US / UK / Japan list (screener_markets): Yahoo history and fundamentals, view only."""
@@ -2427,6 +2508,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.my_portfolio(refresh=(q.get("refresh") or ["0"])[0] in ("1", "true")))
             elif path == "/api/jobs":
                 self._json([j.to_dict() for j in app.jobs])
+            elif path == "/api/news/today":
+                from urllib.parse import parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                self._json(app.news_today((q.get("scope") or ["portfolio"])[0], (q.get("ticker") or [""])[0] or None))
             elif path == "/api/regime":
                 from urllib.parse import parse_qs
                 force = (parse_qs(urlparse(self.path).query).get("refresh") or ["0"])[0] in ("1", "true")
@@ -2624,7 +2709,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 body = self._body()
                 if path in HALT_REFUSED_POSTS:
                     app.halted(f"use {path}")
-                if path == "/api/kill-switch":
+                if path == "/api/ask":
+                    from .ask import RateLimited
+                    try:
+                        self._json(app.ask(body.get("text"), self.client_address[0]))
+                    except RateLimited as e:
+                        self._json({"error": str(e)}, HTTPStatus.TOO_MANY_REQUESTS)
+                elif path == "/api/kill-switch":
                     self._json(app.kill_switch(body.get("confirm"), body.get("cancel_gtt") is True))
                 elif path == "/api/integration/run":
                     self._json(app.run_integration(), HTTPStatus.ACCEPTED)
