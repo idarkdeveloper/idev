@@ -76,6 +76,7 @@
       out.push({id: "hold-" + s, group: "Your holdings", label: "Open stock " + s, keywords: "holding stock view look up " + String((h && h.name) || ""), run: {kind: "stock", op: "lookup", symbol: s}});
     }
     if(opts.refresh) out.push({id: "refresh", group: "Data", label: "Refresh data", keywords: "reload update fetch latest", run: {kind: "refresh"}});
+    if(opts.ask) out.push({id: "ask-news", group: "Ask", label: "Read today's news", keywords: "read news headlines listen speak aloud voice", run: {kind: "ask", text: "read today's news"}});
     return out;
   }
   // Score one command against the query: 0 = label (or a word of it) starts with every token, 1 = every token appears
@@ -102,7 +103,7 @@
   // Items are {id, type: "stock"|"cmd"|"op"|"note", label, detail, group, run?, symbol?, op?}. "note" rows cannot be chosen.
   function createModel(opts){
     opts = opts || {};
-    const commands = opts.commands || [];
+    const commands = opts.commands || [], askOn = !!opts.ask;
     const st = {query: "", stage: null, hits: null, searching: false, error: false, active: 0};
     const stockItems = (withTyped) => {
       const rows = [], seen = {};
@@ -134,6 +135,9 @@
         else if(q.length >= 2 && st.error) rows.push({type: "note", label: "Stock search is unavailable right now", detail: "", group: ""});
         else if(q.length >= 2 && !rows.length) rows.push({type: "note", label: "No match", detail: "", group: ""});
         else if(q.length < 2 && !rows.length) rows.push({type: "note", label: "No match", detail: "", group: ""});
+        // a sentence (or words that match nothing) can be asked: "Ask: tell me Tata Motors detail" opens it, "Ask: read the news" reads it
+        if(askOn && q.length >= 3 && (/\s/.test(q) || (!stocks.length && !strong.length)))
+          rows = [{type: "cmd", id: "ask", label: "Ask: " + q, detail: "open it, or read the news", group: "Ask", run: {kind: "ask", text: q}}].concat(rows.filter(r => !(r.type === "note" && r.label === "No match")));
       }
       rows.forEach((r, i) => { r.index = i; });
       return rows;
@@ -211,7 +215,7 @@
     let dlg = null, input, list, status, titleEl, model, searcher, opener = null, built = false;
 
     function commands(){
-      return buildCommands({mode, workspaces: typeof host.workspaces === "function" ? host.workspaces() : [],
+      return buildCommands({mode, ask: !!TA.ask, workspaces: typeof host.workspaces === "function" ? host.workspaces() : [],
         sections: typeof host.sections === "function" ? host.sections() : [],
         holdings: typeof host.holdings === "function" ? host.holdings() : [], refresh: typeof host.refresh === "function"});
     }
@@ -228,6 +232,7 @@
         <div class="pal-foot sub" aria-hidden="true">&uarr; &darr; move &middot; Enter choose &middot; Esc close &middot; practice buy only ever opens a form you confirm</div>
         <div id="pal-status" class="sr-only" role="status" aria-live="polite"></div>`;
       document.body.appendChild(dlg);
+      addVoice();
       input = dlg.querySelector("#pal-input"); list = dlg.querySelector("#pal-list"); status = dlg.querySelector("#pal-status"); titleEl = dlg.querySelector("#pal-title");
       searcher = createSearcher({
         fetchJson: (u) => TA.api(u),
@@ -245,6 +250,36 @@
       dlg.addEventListener("click", (e) => { if(e.target === dlg) close(); });   // the backdrop
       dlg.addEventListener("close", onClosed);
       dlg.addEventListener("cancel", () => { /* Esc: the browser closes it; onClosed returns focus */ });
+    }
+    // The microphone (only where the browser has speech recognition) and a "Read the news" chip. Filling the box and asking is
+    // all they do; the spoken sentence goes through the same Ask as a typed one.
+    let mic = null, micCtl = null, micNote = null;
+    function addVoice(){
+      if(!TA.ask) return;
+      const field = dlg.querySelector(".pal-field");
+      const chips = document.createElement("div");
+      chips.className = "pal-chips";
+      chips.innerHTML = '<button type="button" class="small pal-chip" id="pal-read-news">Read the news</button>';
+      field.parentNode.insertBefore(chips, field.nextSibling);
+      chips.querySelector("#pal-read-news").addEventListener("click", () => { close(); setTimeout(() => TA.ask.run("read today's news", host), 0); });
+      micNote = document.createElement("div"); micNote.className = "pal-micnote sub"; micNote.setAttribute("role", "status"); micNote.hidden = true;
+      chips.parentNode.insertBefore(micNote, chips.nextSibling);
+      if(!TA.ask.micSupported()) return;
+      mic = document.createElement("button");
+      mic.type = "button"; mic.className = "pal-mic"; mic.id = "pal-mic"; mic.setAttribute("aria-label", "Speak a command"); mic.setAttribute("aria-pressed", "false");
+      const icon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>';
+      mic.innerHTML = icon;
+      field.appendChild(mic);
+      mic.addEventListener("click", () => {
+        if(micCtl){ micCtl.stop(); return; }
+        micNote.hidden = true;
+        micCtl = TA.ask.listen({
+          onState: (on) => { mic.classList.toggle("on", on); mic.setAttribute("aria-pressed", String(on)); mic.innerHTML = on ? TA.loader.spinner() : icon;
+                             if(on){ micNote.textContent = "Listening…"; micNote.hidden = false; } else { micCtl = null; if(micNote.textContent === "Listening…") micNote.hidden = true; } },
+          onText: (t) => { input.value = t; model.setQuery(t); paint(); close(); setTimeout(() => TA.ask.run(t, host), 0); },
+          onError: (m) => { micNote.textContent = m; micNote.hidden = false; },
+        });
+      });
     }
     function paint(){
       const rows = model.items(), st = model.state;
@@ -298,6 +333,7 @@
         else if(run.kind === "section"){ if(typeof host.goSection === "function") host.goSection(run.id); }
         else if(run.kind === "theme"){ TA.theme.set(run.choice); TA.toast("Theme: " + run.choice); }
         else if(run.kind === "refresh"){ if(typeof host.refresh === "function") Promise.resolve(host.refresh()).then(() => TA.toast("Refreshed"), (e) => TA.toast(e && e.message ? e.message : "Refresh failed")); }
+        else if(run.kind === "ask"){ if(TA.ask) TA.ask.run(run.text, host); }
         else if(run.kind === "stock"){
           const t = routeStockOp(run.op, run.symbol, mode, host);
           if(!t) return;
@@ -310,7 +346,7 @@
       build();
       if(dlg.open) { input.focus(); return; }
       opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : document.getElementById("btn-palette");
-      model = createModel({commands: commands()});
+      model = createModel({commands: commands(), ask: !!TA.ask});
       input.value = ""; searcher.cancel(); paint();
       if(typeof dlg.showModal === "function") dlg.showModal(); else dlg.setAttribute("open", "");
       input.focus();
