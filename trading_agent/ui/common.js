@@ -8,7 +8,7 @@ window.TA = (function(){
   const money = (v, d=0) => v == null ? "n/a" : sym() + Number(v).toLocaleString(currency() === "INR" ? "en-IN" : "en-US", {maximumFractionDigits:d, minimumFractionDigits:d});
   const signed = (v, d=0) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + money(Math.abs(v), d);
   const pct = (v, d=1) => v == null ? "n/a" : (v >= 0 ? "+" : "") + (v*100).toFixed(d) + "%";
-  const when = (iso) => { if(!iso) return ""; const dt = new Date(iso); return dt.toLocaleString(undefined,{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); };
+  const when = (iso) => { if(!iso) return ""; const dt = new Date(iso); return isNaN(dt) ? "" : dt.toLocaleString("en-IN",{timeZone:"Asia/Kolkata",day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit",hour12:false}) + " IST"; };   // always Indian time, whatever the phone's zone is
   const cap = (s) => s ? s[0].toUpperCase()+s.slice(1) : "";
   const toast = (m) => { const t=$("toast"); t.textContent=m; t.style.display="block"; clearTimeout(t._t); t._t=setTimeout(()=>t.style.display="none",4500); };
   // The Demo page sets <body data-api="/demo">, so the same page talks to the practice-account app.
