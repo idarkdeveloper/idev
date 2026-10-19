@@ -131,15 +131,20 @@ class PriceArchive:
         return day < today.isoformat() or (day == today.isoformat() and now.time() >= CLOSED_AFTER)
 
     # -- reads ----------------------------------------------------------------
-    def bars(self, symbol: str, raw: bool = False) -> list[dict[str, Any]]:
+    def bars(self, symbol: str, raw: bool = False, since: str | None = None) -> list[dict[str, Any]]:
         """Archived bars, oldest first. ``raw=True``: close and volume exactly as first seen; default: in today's share
-        units (split-adjusted)."""
+        units (split-adjusted). ``since`` (ISO date): only bars on or after it, read with an indexed range so a caller that
+        needs two years does not read ten."""
         c = self._conn()
         try:
             c.row_factory = None   # plain tuples: far cheaper than sqlite3.Row on a 1M-row universe
             close, vol = ("close_raw", "volume_raw") if raw else ("close", "volume")
-            rows = c.execute(f"SELECT date, {close}, adj_close, {vol} FROM bars WHERE symbol=? ORDER BY date",
-                             (symbol,)).fetchall()
+            if since:
+                rows = c.execute(f"SELECT date, {close}, adj_close, {vol} FROM bars WHERE symbol=? AND date>=? ORDER BY date",
+                                 (symbol, since)).fetchall()
+            else:
+                rows = c.execute(f"SELECT date, {close}, adj_close, {vol} FROM bars WHERE symbol=? ORDER BY date",
+                                 (symbol,)).fetchall()
         finally:
             c.close()
         return [{"date": d, "close": cl, "adj_close": ad, "volume": v} for d, cl, ad, v in rows]
@@ -166,29 +171,49 @@ class PriceArchive:
             except Exception:  # noqa: BLE001 - the archive must never break a price read
                 log.exception("price archive update failed for %s", symbol)
                 return fresh
+        days = _RANGE_DAYS.get(range_)
+        cutoff = (self.now_fn().date() - timedelta(days=days)).isoformat() if days else None
         try:
-            arch = self.bars(symbol)
+            arch = self.bars(symbol, since=cutoff)   # only the window that is returned below: not every archived year
         except Exception:  # noqa: BLE001
             return fresh
         by_date = {b["date"]: b for b in arch}
         for b in fresh:   # the archive wins for a stored date; a date only Yahoo has (today's open bar, ...) comes along
             by_date.setdefault(b["date"], b)
         out = [by_date[d] for d in sorted(by_date)]
-        days = _RANGE_DAYS.get(range_)
-        if days and out:
-            cutoff = (self.now_fn().date() - timedelta(days=days)).isoformat()
+        if cutoff and out:
             out = [b for b in out if b["date"] >= cutoff]
         return out
 
     def _plan(self, c: sqlite3.Connection, symbol: str, fresh_by: dict[str, dict[str, Any]]):
         """What a fresh series would change, judged against the rows as they are RIGHT NOW in ``c``."""
         fresh_close = {d: float(b["close"]) for d, b in fresh_by.items()}
-        have = {r["date"]: r for r in c.execute("SELECT * FROM bars WHERE symbol=?", (symbol,))}
-        new_bars = [b for d, b in fresh_by.items() if d not in have and self.is_closed(d, symbol)]
+        have = self._have(c, symbol, fresh_by)
+        closed = self._closed_fn(symbol)
+        new_bars = [b for d, b in fresh_by.items() if d not in have and closed(d)]
         hit = find_split({d: r["close"] for d, r in have.items()}, fresh_close) if have else None
         overlap = sorted(d for d in have if d in fresh_by)
         adj_changes = self._adj_changes(have, fresh_by)
         return have, new_bars, hit, overlap, adj_changes, fresh_close
+
+    @staticmethod
+    def _have(c: sqlite3.Connection, symbol: str, fresh_by: dict[str, Any]) -> dict[str, dict[str, float]]:
+        """The archived rows that can matter to ``fresh_by``: those on or after its first date (a plan only ever looks at
+        dates the fresh series has, or lacks and could add), as {date: {"close", "adj_close"}} read as plain tuples."""
+        first = min(fresh_by) if fresh_by else ""
+        cur = c.execute("SELECT date, close, adj_close FROM bars WHERE symbol=? AND date>=?", (symbol, first))
+        return {d: {"close": cl, "adj_close": ad} for d, cl, ad in cur}
+
+    def _closed_fn(self, symbol: str) -> Callable[[str], bool]:
+        """``is_closed`` for one symbol with the clock read once (a plan judges a whole series against one moment)."""
+        now = self.now_fn()
+        now = now.astimezone(IST) if now.tzinfo else now
+        today, indian = now.date().isoformat(), is_indian(symbol)
+        limit = (now.date() - timedelta(days=2)).isoformat()
+        after = now.time() >= CLOSED_AFTER
+        if not indian:
+            return lambda day: day <= limit
+        return lambda day: day < today or (day == today and after)
 
     @staticmethod
     def _adj_changes(have: dict[str, Any], fresh_by: dict[str, dict[str, Any]]) -> list[tuple[float, str]]:
@@ -230,7 +255,7 @@ class PriceArchive:
                                   f"WHERE symbol=? {where}", (f, f, f, symbol, *args))
                         c.execute("INSERT INTO splits VALUES (?,?,?,?,?)", (symbol, now[:10], f, len(overlap), boundary))
                         log.info("price archive: %s split detected, factor %s from %s", symbol, f, boundary or "all dates")
-                        have = {r["date"]: r for r in c.execute("SELECT * FROM bars WHERE symbol=?", (symbol,))}
+                        have = self._have(c, symbol, fresh_by)
                         adj_changes = self._adj_changes(have, fresh_by)
                     ov = sorted(d for d in have if d in fresh_by)
                     if ov:
