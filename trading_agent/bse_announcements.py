@@ -54,6 +54,34 @@ class BSEAnnouncementError(RuntimeError):
     """Neither BSE source could be read and nothing is cached."""
 
 
+_CODES: dict[tuple[str, float], dict[str, str]] = {}
+
+
+def cached_bse_code(cache_dir: Path, symbol: str) -> str | None:
+    """The BSE scrip code of a BSE trading symbol (a holding such as ``NSE``), from the Groww instrument list already
+    cached on this machine (``groww_instruments.csv``). Offline: never downloads anything; None when the file is missing
+    or the symbol is not in it."""
+    import csv
+    path = Path(cache_dir) / "groww_instruments.csv"
+    try:
+        key = (str(path), path.stat().st_mtime)
+        table = _CODES.get(key)
+        if table is None:
+            table = {}
+            with path.open(encoding="utf-8", errors="replace", newline="") as f:
+                for r in csv.DictReader(f):
+                    if (r.get("exchange") or "").upper() == "BSE" and (r.get("segment") or "").upper() == "CASH":
+                        code = (r.get("exchange_token") or "").strip()
+                        sym = (r.get("trading_symbol") or "").strip().upper()
+                        if sym and CODE.fullmatch(code):
+                            table.setdefault(sym, code)
+            _CODES.clear()
+            _CODES[key] = table
+        return table.get(str(symbol or "").strip().upper().removesuffix(".BO"))
+    except OSError:
+        return None
+
+
 def scrip_code(symbol: str) -> str | None:
     """'543287.BO' or '543287' -> '543287'; None for anything that is not a BSE scrip code."""
     s = str(symbol or "").strip().upper().removesuffix(".BO")

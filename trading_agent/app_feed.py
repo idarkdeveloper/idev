@@ -12,6 +12,7 @@ import math
 import os
 import re
 import threading
+import time as time_mod
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -129,27 +130,49 @@ class AppFeed:
         self.trend_fn = trend_fn
         self.holidays = holidays
         self._last: datetime | None = None
+        self._miss: dict[str, float] = {}   # symbol -> when Yahoo last said it has no data (not asked again for a day)
 
     def _path(self) -> Path:
         return app_dir(self.settings.state_dir) / FEED_FILE
 
+    def _yahoo_skip(self, h: dict[str, Any]) -> bool:
+        """Holdings Yahoo cannot serve under NSE codes: bonds and funds, BSE-listed names, and any symbol that answered
+        "no data" within the last day (retried once a day). Skipped quietly; the feed fields stay empty as before."""
+        sym = str(h["symbol"])
+        if (h.get("kind") or "equity") != "equity" or str(h.get("exchange") or "").upper() == "BSE" or "." in sym:
+            return True
+        t = self._miss.get(sym)
+        return t is not None and time_mod.monotonic() - t < 86400
+
     def _holding(self, h: dict[str, Any]) -> dict[str, Any]:
         sym, qty, price = h["symbol"], h["qty"], h.get("price")
         day = day_pct = None
+        trend: list[float] = []
+        if self._yahoo_skip(h):
+            log.debug("no Yahoo trend or previous close for %s (not an NSE equity, or known to have no data)", sym)
+            return {"symbol": sym, "name": h.get("name"), "qty": qty, "avg_price": h.get("avg_price"), "price": price,
+                    "value": h.get("value"), "pl": h.get("pl"), "pl_pct": h.get("pl_pct"),
+                    "day_change": None, "day_change_pct": None, "trend": []}
         try:
             prev = self.prev_close_fn(sym)
             if prev and price is not None:
                 day, day_pct = round((price - prev) * qty, 2), price / prev - 1
         except Exception as e:  # noqa: BLE001 - one bad quote must not hide the rest
+            self._remember_miss(sym, e)
             log.warning("no previous close for %s: %s", sym, e)
         try:
             trend = list(self.trend_fn(sym))[-30:]   # the contract: at most 30 closes, oldest first
         except Exception as e:  # noqa: BLE001
+            self._remember_miss(sym, e)
             log.warning("no trend for %s: %s", sym, e)
             trend = []
         return {"symbol": sym, "name": h.get("name"), "qty": qty, "avg_price": h.get("avg_price"), "price": price,
                 "value": h.get("value"), "pl": h.get("pl"), "pl_pct": h.get("pl_pct"),
                 "day_change": day, "day_change_pct": day_pct, "trend": trend}
+
+    def _remember_miss(self, sym: str, e: BaseException) -> None:
+        if "404" in str(e) or "has no data" in str(e):
+            self._miss[sym] = time_mod.monotonic()
 
     def _cash(self) -> float | None:
         try:
