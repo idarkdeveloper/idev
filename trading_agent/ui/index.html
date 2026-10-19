@@ -1160,7 +1160,7 @@
     if(m.corp_actions_note) $("mp-sub").textContent += " · " + m.corp_actions_note;
     const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
     stats.innerHTML = stat("Invested", inr(m.invested), "what you paid, all holdings")
-      + stat("Value now", inr(m.value), m.unpriced.length ? `excludes ${m.unpriced.map(esc).join(", ")} (no market price)` : "at current prices")
+      + stat("Value now", inr(m.value), (m.unpriced.length ? `excludes ${m.unpriced.map(esc).join(", ")} (no market price)` : "at current prices") + (m.at ? ` · as of ${new Date(m.at).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false})} IST` : ""))
       + stat("Profit / loss", sinr(m.pl), "on holdings with a price", tone(m.pl))
       + stat("Return", spct(m.pl_pct), "vs what you paid", tone(m.pl_pct));
     const total = m.holdings.reduce((t, h) => t + (h.value || 0), 0);
@@ -1875,8 +1875,12 @@
   refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); });
   loadMyPortfolio(false);
   if(urlStock) lookup(urlStock);   // ?stock=SYM: the stock page opens on it
-  setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 120000);
-  setInterval(() => { if(!document.hidden) refresh(); }, 60000);   // a hidden tab does not poll
+  setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 60000);   // the server caches the Groww read for 60 s, so this is at most one read a minute
+  // State: every 30 s while the NSE is open (09:15-15:30 IST, Mon-Fri; a holiday just serves the server's cache), else every 60 s.
+  // Not faster when Groww is linked: the practice account is priced from Groww on each state read. A hidden tab does not poll.
+  let stTick = 0;
+  const nseOpenNow = () => { const p = new Intl.DateTimeFormat("en-GB", {timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false}).formatToParts(new Date()).reduce((o, x) => (o[x.type] = x.value, o), {}); const m = Number(p.hour) * 60 + Number(p.minute); return !/^(Sat|Sun)$/.test(p.weekday) && m >= 555 && m <= 930; };
+  setInterval(() => { if(document.hidden) return; const fast = nseOpenNow() && !(S && S.connections && S.connections.groww); if(fast || stTick++ % 2) refresh(); }, 30000);
   loadFreshness(); loadIntegration(); calcCosts(); loadHealth(); loadPaper();
   setInterval(() => { if(!document.hidden){ loadFreshness(); loadIntegration(); } }, 60000);
   setInterval(() => { if(!document.hidden) loadHealth(); }, 120000);   // the tab badge counts failing sources

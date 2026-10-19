@@ -167,6 +167,9 @@ class App:
         self._data = data
         self.context = context  # GlobalContext or None
         self.prices = prices or free_prices(settings)
+        if hasattr(self.prices, "ttl_fn"):   # the dashboard reads Yahoo fresher (60 s) while the market is open; the agent's own prices object is untouched
+            from .prices import price_ttl
+            self.prices.ttl_fn = lambda d: price_ttl(datetime.now(timezone.utc), d, self._safe_holidays())
         self.momentum = MomentumScreen(self.prices)
         self.last_backtest: dict[str, Any] | None = None
         self.last_screen: dict[str, Any] | None = None

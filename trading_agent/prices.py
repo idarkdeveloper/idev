@@ -47,6 +47,16 @@ def _check_status(resp: Any, ysym: str) -> None:
     resp.raise_for_status()
 
 
+FRESH_TTL = 60.0   # seconds a dashboard price read may be cached while the NSE is open
+
+
+def price_ttl(now: datetime, default: float, holidays: Any | None = None) -> float:
+    """Cache lifetime for the dashboard's price reads: 60 s (never more than ``default``) during NSE hours on a trading
+    day, ``default`` otherwise. Only the dashboard App installs this (YahooPrices.ttl_fn); the agent never does."""
+    from .safety import market_open
+    return min(default, FRESH_TTL) if market_open(now, holidays) else default
+
+
 class YahooPrices:
     def __init__(self, suffix: str = ".NS", session: requests.Session | None = None,
                  timeout: float = 20.0, cache_dir: Path | None = None,
@@ -60,8 +70,12 @@ class YahooPrices:
         self.timeout = timeout
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.cache_ttl = cache_ttl
+        self.ttl_fn: Any | None = None   # (default_ttl) -> ttl; set by the dashboard only, so the agent keeps the plain TTLs
         self.fill: Any | None = None   # groww_fill.GrowwFill: a daily bar Yahoo has not posted yet, from NSE's daily file
         self.clock = time.time         # for the provisional close (tests replace it)
+
+    def _ttl(self, default: float) -> float:
+        return default if self.ttl_fn is None else self.ttl_fn(default)
 
     def yahoo_symbol(self, symbol: str) -> str:
         symbol = symbol.upper()
@@ -152,7 +166,7 @@ class YahooPrices:
         # it, so a monthly file cached before this fix is never read.
         key = "maxd" if range_ == "max" else range_
         cache = self.cache_dir / f"yahoo_{ysym.replace('^', 'IDX_')}_{key}.json" if self.cache_dir else None
-        if cache and cache.exists() and time.time() - cache.stat().st_mtime < self.cache_ttl:
+        if cache and cache.exists() and time.time() - cache.stat().st_mtime < self._ttl(self.cache_ttl):
             return json.loads(cache.read_text())
         params: dict[str, Any] = ({"period1": 0, "period2": int(time.time()) + 86400, "interval": "1d"}
                                   if range_ == "max" else {"range": range_, "interval": "1d"})
@@ -262,13 +276,13 @@ class YahooPrices:
 
     def history_ohlc(self, symbol: str, range_: str = "1y", ttl: float | None = None) -> list[dict[str, Any]]:
         """Daily OHLC bars (see ``_ohlc``). Cached for at most 15 minutes, so an evening read sees the day's final bar."""
-        return self._ohlc(symbol, range_, "1d", min(self.cache_ttl, 900.0) if ttl is None else ttl)
+        return self._ohlc(symbol, range_, "1d", self._ttl(min(self.cache_ttl, 900.0)) if ttl is None else ttl)
 
     def history_intraday(self, symbol: str, interval: str = "15m", range_: str = "5d",
                          ttl: float = 300.0) -> list[dict[str, Any]]:
         """Intraday OHLC bars (15m, 1h ...), oldest first. Same cache conventions as ``history`` but a short TTL
         (5 minutes), since the last session is what matters."""
-        return self._ohlc(symbol, range_, interval, ttl)
+        return self._ohlc(symbol, range_, interval, self._ttl(ttl))
 
     def dividends(self, symbol: str, range_: str = "10y") -> list[dict[str, Any]]:
         """Dividends per share by ex-date, oldest first: [{date, amount}]. Cached on disk."""
