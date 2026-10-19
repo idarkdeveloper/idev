@@ -1629,3 +1629,28 @@ def test_an_empty_bse_list_says_when_bse_refused_the_server(server):
     app._data = Data()
     _, j = _get(base + "/api/announcements?ticker=TATASTEEL&exchange=BSE")
     assert j["announcements"] == [] and "refused this server" in j["error"]
+
+
+def test_demo_limit_orders_wait_fill_or_cancel(two_pages):
+    base, app, fake, settings = two_pages
+    status, j = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 2, "limit_price": 1,
+                                                 "validity": "gtc"})
+    assert status == 200 and j["order"]["pending"] is True and j["order"]["status"] == "open"
+    oid = j["order"]["id"]
+    _, demo = _get(base + "/demo/api/state")
+    assert [o["id"] for o in demo["limit_orders"]] == [oid] and "SENCO" not in [p["symbol"] for p in demo["positions"]]
+    _, live = _get(base + "/api/state")
+    assert live["limit_orders"] == []                                      # practice orders live on the Demo page only
+    status, j = _post(base + "/demo/api/order/cancel", {"id": oid})
+    assert status == 200 and j["order"]["status"] == "cancelled"
+    # a limit already at or better than the price fills now, at the latest price
+    status, j = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 2, "limit_price": 1e9})
+    assert status == 200 and not j["order"].get("pending") and j["order"]["qty"] == 2
+    # a waiting sell needs shares to sell; the Live page cannot cancel practice orders
+    status, j = _post(base + "/demo/api/order", {"symbol": "INFY", "side": "sell", "qty": 1, "limit_price": 1e9})
+    assert status == 400 and "holds no INFY" in j["error"]
+    status, j = _post(base + "/api/order/cancel", {"id": oid})
+    assert status == 403
+    status, j = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 1, "limit_price": "abc"})
+    assert status == 400
+    assert fake.writes == []
