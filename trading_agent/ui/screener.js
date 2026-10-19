@@ -65,7 +65,10 @@
     try {
       const p = new Intl.DateTimeFormat("en-GB", {timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false}).formatToParts(d || new Date()).reduce((o, x) => (o[x.type] = x.value, o), {});
       const m = Number(p.hour) * 60 + Number(p.minute);
-      return {open: !/^(Sat|Sun)$/.test(p.weekday) && m >= 555 && m < 930, time: p.hour + ":" + p.minute};
+      const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], wd = days.indexOf(p.weekday), weekday = wd >= 0 && wd < 5, open = weekday && m >= 555 && m < 930;
+      let next = "";
+      if(!open){ if(weekday && m < 555) next = "today 9:15"; else { let i = 1; while(wd >= 0 && (wd + i) % 7 > 4 && i < 8) i++; next = days[(Math.max(wd, 0) + i) % 7] + " 9:15"; } }
+      return {open, time: p.hour + ":" + p.minute, next};
     } catch(e){ return {open: false, time: ""}; }
   };
   const INDIA_ONLY = ["band", "filter_flags", "filter_block", "held", "deal", "market_cap_cr", "avg_turnover_cr"];
@@ -315,7 +318,7 @@
     el.innerHTML = MARKET_TABS.map(m => `<button type="button" class="sc-mtab" data-market="${esc(m.id)}" aria-pressed="${m.id === t.id}">`
       + `<span class="sc-mlabel">${esc(m.label)}</span><span class="sc-mex">${esc(m.exchange)}</span></button>`).join("");
     let open = false, text = "";
-    if(t.id === "IN"){ const n = nseOpen(); open = n.open; text = `NSE ${open ? "open" : "closed"}${n.time ? " · " + n.time + " IST" : ""}`; }
+    if(t.id === "IN"){ const n = nseOpen(); open = n.open; text = `NSE ${open ? "open" : "closed"}${n.time ? " · " + n.time + " IST" : ""}${!open && n.next ? " · opens " + n.next : ""}`; }
     else {
       const m = st.data && st.data.market;
       if(m){ open = !!m.open; text = `${t.exchange.split(" · ")[0]} ${open ? "open" : "closed"} · ${m.local} local, ${m.ist} IST · view only`; }
@@ -342,7 +345,10 @@
     sk.innerHTML = opts.map(c => `<option value="${esc(c.key)}">${esc(colLabel(c))}</option>`).join("")
       + (opts.some(c => c.key === st.sort.key) || !sc ? "" : `<option value="${esc(sc.key)}">${esc(colLabel(sc))}</option>`);
     sk.value = st.sort.key;
-    $("sc-sortdir").textContent = st.sort.dir === "asc" ? "Low → high" : "High → low";
+    const asc = st.sort.dir === "asc";
+    $("sc-sortdir").innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${asc ? "M12 19V5M6 11l6-6 6 6" : "M12 5v14M6 13l6 6 6-6"}"></path></svg>`;
+    $("sc-sortdir").setAttribute("aria-label", asc ? "Sorted low to high. Tap to reverse" : "Sorted high to low. Tap to reverse");
+    $("sc-sortdir").title = asc ? "Low to high" : "High to low";
     const all = baseRows().length;
     if(!rows.length){ $("sc-cards").innerHTML = `<div class="empty">${!all ? (st.data && st.data.error ? esc(st.data.error) : "Loading the stock list…") : "No stock matches these filters."}</div>`; return; }
     const chg = colByKey("chg_1d"), showSort = sc && ["chg_1d", "price", "symbol"].indexOf(sc.key) < 0;
@@ -350,10 +356,11 @@
       + `<div class="sc-cr-sym"><span class="sc-sym">${esc(shortSym(r.symbol))}</span>${badges(r)}</div>`
       + `<div class="sc-cr-spark">${spark(r)}</div><div class="sc-cr-px">${fmt(colByKey("price"), r.price)}</div>`
       + `<div class="sc-cr-name">${esc(r.name || "")}</div>`
-      + `<div class="sc-cr-sort">${showSort ? `${esc(colLabel(sc, true))} <span class="${sc.tone ? toneCls(r[sc.key]) : ""}">${fmt(sc, r[sc.key])}</span>` : ""}</div>`
-      + `<div class="sc-cr-chg ${toneCls(r.chg_1d)}">${chg ? fmt(chg, r.chg_1d) : ""}</div></div>`).join("");
+      + `<div class="sc-cr-sort">${showSort ? `<span class="sc-metric">${esc(colLabel(sc, true))} <b class="${sc.tone ? toneCls(r[sc.key]) : ""}">${fmt(sc, r[sc.key])}</b></span>` : ""}</div>`
+      + `<div class="sc-cr-chg ${toneCls(r.chg_1d)}">${chg && !missing(r.chg_1d) ? `<span aria-hidden="true">${r.chg_1d > 0 ? "▲" : r.chg_1d < 0 ? "▼" : ""}</span> ` : ""}${chg ? fmt(chg, r.chg_1d) : ""}</div></div>`).join("");
   }
 
+  let scrolledTo = null;
   function renderPresets(){
     const rows = baseRows(), have = rows.length > 0;
     const count = (filters) => have ? applyFilters(rows, filters, "").length : null;
@@ -365,6 +372,11 @@
       + (st.preset === "s:" + i ? `<button type="button" class="sc-link sc-delsaved" data-del="${i}" aria-label="Delete saved view ${esc(p.name)}">Delete</button>` : ""));
     const allPill = `<button type="button" class="sc-pill sc-pillall" data-preset="" aria-pressed="${!st.preset && !st.filters.length}" title="No preset and no filters"><span>All</span></button>`;
     $("sc-presets").innerHTML = allPill + built.concat(mine).join("");
+    if(narrow() && scrolledTo !== st.preset){   // a phone: the row starts at the chosen preset (once per choice, so a refresh never undoes your own scrolling)
+      scrolledTo = st.preset;
+      const on = $("sc-presets").querySelector('[aria-pressed="true"]');
+      if(on) $("sc-presets").scrollLeft = Math.max(0, on.offsetLeft - 12 - 96);
+    }
     const sel = /^b:/.test(st.preset) ? presetById(st.preset.slice(2)) : null;
     $("sc-presetnote").textContent = sel ? sel.note : "";
     $("sc-presetnote").hidden = !sel;
