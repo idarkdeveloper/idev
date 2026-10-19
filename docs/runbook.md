@@ -571,3 +571,20 @@ so the worst case is about 540 MB (NIFTY200's 10-year series alone are about 180
 off. The warm-up starts 30 s after the dashboard, fetches from Yahoo (0.5 s between symbols), so it is skipped, with one INFO
 line, while the NSE is open, and it stops if the market opens; it mainly prepares the price archive and the disk cache.
 The order-form price line, Look up and the agent never use this cache.
+
+## Voice and Ask
+
+The Ctrl+K palette (every page) understands sentences: type or tap the microphone and say "tell me Tata Motors detail" (opens its
+page), "show Infosys chart", "position size for TCS", "go to screener", "show my portfolio", "health", "any news on Infosys" or
+"read today's news" (the headlines are shown and read aloud, with Pause and Stop). It only opens pages and reads the news: a
+request to buy or sell is refused, and nothing can prepare an order.
+
+* Rules answer first (offline, instant). Only when no rule fits, the local Ollama model (`OLLAMA_MODEL`, default `qwen2.5:3b`,
+  8 s limit) is asked for ONE intent from a fixed list; its answer is validated like untrusted input, company names are
+  resolved by the dashboard itself, and a down Ollama just gives a hint with example commands.
+* The microphone uses the browser's speech recognition (Chrome on Android; the audio goes to Google's speech service, which
+  needs the internet and HTTPS, so open the Tailscale HTTPS address). The first use asks for microphone permission; if it was
+  blocked, allow it in the site settings. Reading aloud uses the phone's own voices (`en-IN` when it has one).
+* Settings (env only): `ASK_ENABLED` (default true), `ASK_OLLAMA` (default true), `ASK_RATE_PER_MIN` (default 30 per client).
+  The log keeps the intent and whether rules or Ollama answered, not the sentence (60 characters at debug level only).
+* Privacy and limits: a company-name lookup (for example a US, UK or Japan name) may send the name fragment to Yahoo search; the Ask and news rate limits are per client address, and behind `tailscale serve` every device shares one address, so they share one limit.
