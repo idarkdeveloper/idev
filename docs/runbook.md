@@ -116,6 +116,7 @@ sudo systemctl restart trading-agent-watch trading-agent-dashboard   # apply
 | `PAPER_STARTING_CASH` | `100000` | practice account size |
 | `NOTIFY_EMAIL_TO` / `NOTIFY_EMAIL_FROM` | `affafhashmi02@gmail.com` / `Trading Agent <onboarding@resend.dev>` | with Resend's test sender, mail only reaches your Resend account address; verify a domain at resend.com/domains to use any address |
 | `NEWS_TAGGER` | `auto` | Ollama if running, else none (Claude only if set to `claude`) |
+| `NEWS_ALERT_CHANNELS` | empty | Where each news alert goes: `telegram` (push only, no email), `email`, or `both`. Empty = Telegram when `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and `TELEGRAM_ALERTS` are set, else email. A Telegram failure sends that one alert by email. By email at most one alert per stock per 30 min; all of them are in the digests' "News today". To stop the news emails: `NEWS_ALERT_CHANNELS=telegram` (or leave it empty with Telegram set up), then restart the watch service. |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | `http://127.0.0.1:11434` / `qwen2.5:3b` | local language model for news tags and email summaries |
 | `DIGEST_ENABLED`, `DIGEST_MORNING_ON`, `DIGEST_EVENING_ON` | `true` | daily emails on/off |
 | `DIGEST_MORNING` / `DIGEST_EVENING` | `09:00` / `15:45` | IST send times (before the open / after the close) |

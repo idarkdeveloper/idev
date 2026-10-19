@@ -23,6 +23,7 @@ from .state import STATE_LOCK, State
 from .timezones import IST
 
 log = logging.getLogger(__name__)
+NEWS_EMAIL_WINDOW_S = 30 * 60   # by email, at most one news alert per stock in this window (Telegram gets every one)
 ALIVE_EVERY_S = 30.0   # state/watch_alive.json is rewritten at most this often
 
 
@@ -97,6 +98,9 @@ class Watcher:
         self._news = news  # NewsService: negative headlines for held stocks
         self._story_jobs: list[tuple[dict[str, Any], str]] = []   # news alerts waiting for their article (own thread)
         self._story_lock = threading.Lock()
+        self._news_email_at: dict[str, float] = {}   # symbol -> when its last news email went (one a window)
+        self._news_clock: Callable[[], float] = time.time
+        self._warned_news_tg = False
         self._story_thread: threading.Thread | None = None
         self._digest = digest  # DigestScheduler: the morning and evening emails (own worker thread)
         self._forward = forward  # ForwardScheduler: the paper forward test, once a trading day after the close
@@ -340,11 +344,34 @@ class Watcher:
                 log.exception("news alert not sent for %s", item.get("symbol"))
 
     def _send_news_card(self, card: dict[str, Any]) -> None:
+        """One news alert, by the channels NEWS_ALERT_CHANNELS says: a push (Telegram, webhook) and/or an email. A push that
+        does not arrive sends that one alert by email, so it is never lost; by email a stock gets one a window (the rest are
+        in the digests' "News today")."""
         from .news_story import render_html, render_telegram, render_text, subject
         tg_html, tg_plain, tg_button = render_telegram(card)
         assert self._notifier is not None
-        self._notifier.send(_plain(subject(card)), _plain(render_text(card)), html=render_html(card),
-                            telegram_html=tg_html, telegram_plain=tg_plain, telegram_button=tg_button)
+        mode = getattr(self.settings, "news_alert_mode", "both")
+        subj, text, html = _plain(subject(card)), _plain(render_text(card)), render_html(card)
+        mail = mode in ("email", "both")
+        if mode in ("telegram", "both"):
+            sent = self._notifier.send(subj, text, html=html, telegram_html=tg_html, telegram_plain=tg_plain,
+                                       telegram_button=tg_button, only=("telegram", "webhook"))
+            if mode == "telegram" and "telegram" not in sent:   # not delivered: this one alert goes by email
+                if not self._warned_news_tg:
+                    self._warned_news_tg = True
+                    log.warning("news alert not delivered by Telegram; sending it by email instead")
+                self._notifier.send(subj, text, html=html, telegram_html=tg_html, telegram_plain=tg_plain,
+                                    telegram_button=tg_button, only=("email",))
+                return
+        if mail:
+            sym = str(card.get("symbol") or "")
+            now = self._news_clock()
+            if now - self._news_email_at.get(sym, -1e12) >= NEWS_EMAIL_WINDOW_S:
+                self._news_email_at[sym] = now
+                self._notifier.send(subj, text, html=html, telegram_html=tg_html, telegram_plain=tg_plain,
+                                    telegram_button=tg_button, only=("email",))
+            else:
+                log.info("news email for %s held back (one per %d min); it is in the digest", sym, NEWS_EMAIL_WINDOW_S // 60)
 
     def check_trailing_stops(self) -> list[dict[str, Any]]:
         if self._broker is None or self._groww_paused:

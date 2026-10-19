@@ -272,6 +272,8 @@ class Settings:
     anthropic_workspace_id: str | None = None
     # News headline tagging: auto = local Ollama when it is running, else untagged (never Claude implicitly)
     news_tagger: str = "auto"  # auto | ollama | claude | none
+    # Where each news alert goes: "" (the default) = Telegram only when Telegram is set up, else email; or both | telegram | email
+    news_alert_channels: str = ""
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:3b"
     news_claude_model: str = "claude-haiku-4-5"
@@ -326,6 +328,15 @@ class Settings:
 
     def __post_init__(self) -> None:
         self.watch_investors = list(self.watch_investors)  # never shared between copies of the settings
+
+    @property
+    def news_alert_mode(self) -> str:
+        """both | telegram | email for the news alerts. Telegram (alone or as the default) needs Telegram to be set up: without
+        it the alert goes by email, so nothing silently disappears."""
+        want = self.news_alert_channels or "telegram"
+        if want in ("telegram", "both") and not self.telegram_on:
+            return "email"
+        return want
 
     @property
     def telegram_on(self) -> bool:
@@ -422,6 +433,9 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
     news_tagger = (env("NEWS_TAGGER") or "auto").lower()
     if news_tagger not in {"auto", "ollama", "claude", "none"}:
         raise SystemExit(f"NEWS_TAGGER must be auto, ollama, claude or none, got {news_tagger!r}")
+    news_alert_channels = (env("NEWS_ALERT_CHANNELS") or "").strip().lower()
+    if news_alert_channels not in {"", "both", "telegram", "email"}:
+        raise SystemExit(f"NEWS_ALERT_CHANNELS must be both, telegram or email (or empty), got {news_alert_channels!r}")
     bse_host = (env("BSE_HOST") or "beta.bseindia.com").strip().lower()
     if not re.fullmatch(r"[a-z0-9.-]+\.bseindia\.com", bse_host):
         raise SystemExit(f"BSE_HOST must be a bseindia.com host such as beta.bseindia.com, got {bse_host!r}")
@@ -497,6 +511,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         live_prices_every_s=int(_number("LIVE_PRICES_EVERY_S", env("LIVE_PRICES_EVERY_S"), 60, 30, 3600)),
         anthropic_workspace_id=env("ANTHROPIC_WORKSPACE_ID") or None,
         news_tagger=news_tagger,
+        news_alert_channels=news_alert_channels,
         ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),
         ollama_model=env("OLLAMA_MODEL") or "qwen2.5:3b",
         news_claude_model=env("NEWS_CLAUDE_MODEL") or "claude-haiku-4-5",
