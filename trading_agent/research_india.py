@@ -43,8 +43,13 @@ SPLIT_RATIOS = (1 / 2, 1 / 3, 2 / 3, 1 / 4, 3 / 4, 1 / 5, 2 / 5, 1 / 10, 1 / 2.5
 SPLIT_TOLERANCE = 0.015
 SPLIT_WINDOW = 3                 # sessions either side
 FUND_PATTERN = re.compile(r"BEES$|ETF|^GOLD|^LIQUID|^NIFTY|^BANKNIFTY|^JUNIOR|^PSUBNK|^INFRA|^SHARIA")
+# addendum 2 (preregistered-india-2007-2016-addendum-2.md), approved before any simulation
+CRASH_DAY_FALL = -0.05           # a flagged move on a day the benchmark fell this much or more is a genuine fall
+BSE_GENUINE_FLAGS = ("XR", "SA")             # rights, scheme of arrangement: not adjusted under the plan
+BSE_SPLIT_FLAGS = ("XB", "XS", "SS", "CS")   # bonus / split / consolidation: added as an action
+BSE_PRICE_MATCH = 0.03
 STUDY = "India-2007-2016"
-PREREGISTRATION = "docs/research/preregistered-india-2007-2016.md (commit 75a27ba) + addendum"
+PREREGISTRATION = "docs/research/preregistered-india-2007-2016.md (commit 75a27ba) + addenda 1 and 2"
 # ------------------------------------------------------------------------------------------------------------------ #
 
 TRI_NAME = "NIFTY 500"
@@ -271,7 +276,8 @@ def unrecorded_splits(days: list[str], series: dict[str, list[dict[str, Any]]], 
 
 
 def gate(*, days: list[str], present: set[str], actions: dict[str, Any], series: dict[str, list[dict[str, Any]]],
-         members: dict[str, set[str]], trading_months: list[str]) -> dict[str, Any]:
+         members: dict[str, set[str]], trading_months: list[str],
+         classified: dict[tuple[str, str], str] | None = None) -> dict[str, Any]:
     """The five pre-registered data checks. ``days``: the benchmark's sessions in the window; ``present``: the days
     with a price file."""
     n, read = actions["split_rows"], actions["split_read"]
@@ -283,7 +289,11 @@ def gate(*, days: list[str], present: set[str], actions: dict[str, Any], series:
     matched = sum(1 for s, ex in recs if s in by_month.get(ex[:7], ()))
     sizes = {mth: len(members.get(mth, ())) for mth in trading_months}
     smallest = min(sizes.items(), key=lambda kv: kv[1]) if sizes else ("", 0)
-    unrec = unrecorded_splits(days, series, members, actions)
+    flagged = unrecorded_splits(days, series, members, actions)
+    cls = classified or {}
+    for u in flagged:
+        u["class"] = cls.get((u["symbol"], u["date"]), "unexplained")
+    unrec = [u for u in flagged if u["class"] == "unexplained"]
     checks = {
         f"split and bonus ratios read >= {GATE_RATIO_READ:.0%} ({read} of {n})": n > 0 and read / n >= GATE_RATIO_READ,
         f"universe >= {GATE_MIN_MEMBERS} at every month start (smallest {smallest[1]}, {smallest[0]})":
@@ -292,17 +302,97 @@ def gate(*, days: list[str], present: set[str], actions: dict[str, Any], series:
             bool(days) and len(present & set(days)) / len(days) >= GATE_FILES,
         f"split and bonus records matching a traded symbol >= {GATE_SYMBOL_MATCH:.0%} ({matched} of {len(recs)})":
             bool(recs) and matched / len(recs) >= GATE_SYMBOL_MATCH,
-        f"unrecorded split-like moves <= {GATE_MAX_UNRECORDED} ({len(unrec)})": len(unrec) <= GATE_MAX_UNRECORDED,
+        f"unexplained split-like moves <= {GATE_MAX_UNRECORDED} ({len(unrec)} of {len(flagged)} flagged)":
+            len(unrec) <= GATE_MAX_UNRECORDED,
     }
-    return {"passes": all(checks.values()), "checks": checks, "unrecorded": unrec}
+    return {"passes": all(checks.values()), "checks": checks, "unrecorded": unrec, "flagged": flagged}
 
 
 def format_gate(g: dict[str, Any]) -> str:
     lines = ["DATA GATE (pre-registered; checked before any rule set is simulated):"]
     lines += [f"  [{'ok' if ok else 'FAIL'}] {name}" for name, ok in g["checks"].items()]
-    for u in g["unrecorded"][:40]:
-        lines.append(f"    split-like move without a record: {u['symbol']} {u['date']} x{u['ratio']}")
+    for u in g.get("flagged", g["unrecorded"])[:60]:
+        lines.append(f"    split-like move without a record: {u['symbol']} {u['date']} x{u['ratio']} "
+                     f"({u.get('class', 'unexplained')})")
     return "\n".join(lines)
+
+
+def bse_flag_near(sym_bars: dict[str, float], k: int, days: list[str],
+                  bse_rows: Callable[[str], list[list[str]]]) -> tuple[str, str] | None:
+    """BSE's ex-date flag (other than XD) for the same stock within SPLIT_WINDOW sessions of day ``k``: a BSE row whose
+    close is within BSE_PRICE_MATCH of the NSE raw close that day. (flag date, code) or None."""
+    found = None
+    for j in range(max(0, k - SPLIT_WINDOW), min(len(days), k + SPLIT_WINDOW + 1)):
+        ref = sym_bars.get(days[j])
+        if not ref:
+            continue
+        for r in bse_rows(days[j])[1:]:
+            if len(r) < 14:
+                continue
+            code = r[13].strip()
+            try:
+                close = float(r[7])
+            except ValueError:
+                continue
+            if code and code != "XD" and abs(close / ref - 1) < BSE_PRICE_MATCH:
+                found = (days[j], code)
+    return found
+
+
+def classify_flagged(flagged: list[dict[str, Any]], days: list[str], bench_close: dict[str, float],
+                     series: dict[str, list[dict[str, Any]]],
+                     bse_rows: Callable[[str], list[list[str]]]) -> tuple[dict[tuple[str, str], str], list[tuple[str, str, float]]]:
+    """Addendum 2: each flagged move -> "crash day" | "rights or scheme (XR/SA)" | "mended (XB...)" | "unexplained";
+    and the mends [(symbol, ex-date, shares ratio)]."""
+    pos = {d: i for i, d in enumerate(days)}
+    cls: dict[tuple[str, str], str] = {}
+    mends: list[tuple[str, str, float]] = []
+    for u in flagged:
+        k = pos[u["date"]]
+        prev = bench_close.get(days[k - 1]) if k else None
+        move = bench_close[u["date"]] / prev - 1 if prev else 0.0
+        if move <= CRASH_DAY_FALL:
+            cls[(u["symbol"], u["date"])] = "crash day"
+            continue
+        raw = {b["date"]: b["raw_close"] for b in series[u["symbol"]]}
+        flag = bse_flag_near(raw, k, days, bse_rows)
+        if flag and flag[1] in BSE_GENUINE_FLAGS:
+            cls[(u["symbol"], u["date"])] = f"rights or scheme (BSE {flag[1]})"
+        elif flag and flag[1] in BSE_SPLIT_FLAGS:
+            price = min(SPLIT_RATIOS, key=lambda x: abs(x - u["ratio"]))
+            mends.append((u["symbol"], flag[0], round(1 / price, 6)))
+            cls[(u["symbol"], u["date"])] = f"mended (BSE {flag[1]}, shares x{1 / price:g})"
+        else:
+            cls[(u["symbol"], u["date"])] = "unexplained"
+    return cls, mends
+
+
+def with_mends(actions: dict[str, Any], mends: list[tuple[str, str, float]]) -> dict[str, Any]:
+    """The actions with addendum 2's mended splits and bonuses added (and recorded, so the check sees them)."""
+    splits = {k: list(v) for k, v in actions["splits"].items()}
+    records = list(actions["split_records"])
+    for sym, ex, ratio in mends:
+        splits.setdefault(sym, []).append((ex, ratio))
+        records.append((sym, ex))
+    return {**actions, "splits": splits, "split_records": records}
+
+
+def fetch_bse_rows(day: str, cache: Path, session: Any) -> list[list[str]]:
+    """BSE's daily equity file for ``day`` as CSV rows (cached); [] when BSE has none."""
+    cache.mkdir(parents=True, exist_ok=True)
+    f = cache / f"{day}.csv"
+    if f.exists():
+        return list(csv.reader(io.StringIO(f.read_text(encoding="latin-1"))))
+    d = date.fromisoformat(day)
+    url = f"https://www.bseindia.com/download/BhavCopy/Equity/EQ{d:%d%m%y}_CSV.ZIP"
+    r = session.get(url, headers=HEADERS, timeout=60)
+    if not r.content.startswith(b"PK"):
+        f.write_text("", encoding="latin-1")
+        return []
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    text = z.read(z.namelist()[0]).decode("latin-1")
+    f.write_text(text, encoding="latin-1")
+    return list(csv.reader(io.StringIO(text)))
 
 
 # --------------------------------------------------------------------------- #
@@ -393,7 +483,17 @@ def delisting_exits(run: dict[str, Any], m: Any) -> tuple[int, float]:
     return n, (n / len(run["trades"]) if run["trades"] else 0.0)
 
 
-def run_india(m: Any, *, cost_model: Any, capital: float = 500_000.0, extra_trials: int = 0) -> dict[str, Any]:
+def held_through(run: dict[str, Any], moves: list[dict[str, Any]], last_day: str) -> int:
+    """How many of ``moves`` (symbol, date) a run held across: bought before the move, sold on or after it."""
+    n = 0
+    for u in moves:
+        if any(tr["symbol"] == u["symbol"] and tr["entry"] < u["date"] <= tr["exit"] for tr in run["trades"]):
+            n += 1
+    return n
+
+
+def run_india(m: Any, *, cost_model: Any, capital: float = 500_000.0, extra_trials: int = 0,
+              unexplained: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """The pre-registered run: A0, B and E at charges x2 (judged) and x1 (reported only)."""
     from .research_backward import CONTROL_FALL_MARGIN, MAX_TURNOVER_RATIO, MIN_CAGR_GAIN, VARIANT_FALL_MARGIN
     from .research_sim import simulate, summarize, with_rules
@@ -412,6 +512,7 @@ def run_india(m: Any, *, cost_model: Any, capital: float = 500_000.0, extra_tria
         for k, x in results.items():
             x["name"] = names[k]
             x["delisting_exits"] = delisting_exits(runs[k], m)[0]
+            x["held_unexplained"] = held_through(runs[k], unexplained or [], m.dates[end])
         if label == "primary":
             skill = _skill(runs, m, start, end, extra_trials)
             c = results["A0"]
@@ -470,5 +571,7 @@ def format_india(r: dict[str, Any], notes: list[str]) -> str:
         f"{k} {pct(x['total_return'])} ({pct(x['excess'])} vs bench)" for k, x in s.items()) + ".")
     lines.append("  Positions sold after their stock stopped trading (at its last close, no haircut): "
                  + ", ".join(f"{k} {x['delisting_exits']}" for k, x in p.items()) + ".")
+    lines.append("  Unexplained split-like moves (addendum 2) held through by each rule set: "
+                 + ", ".join(f"{k} {x['held_unexplained']}" for k, x in p.items()) + ".")
     lines += [f"  Data: {n}" for n in notes]
     return "\n".join(lines)

@@ -1375,8 +1375,9 @@ def cmd_research_india_2007(args: argparse.Namespace) -> int:
     from .nse import NSEClient
     from .research_backward import fetch_tri, with_fee
     from .research_india import (DATA_FROM, PREREGISTRATION, STUDY, TRADING_FROM, TRI_NAME, WINDOW_END, build_series,
-                                 fetch_actions, fetch_bhav, format_gate, format_india, gate, make_market,
-                                 parse_actions, run_india, universe_by_month)
+                                 classify_flagged, fetch_actions, fetch_bhav, fetch_bse_rows, format_gate,
+                                 format_india, gate, make_market, parse_actions, run_india, universe_by_month,
+                                 unrecorded_splits, with_mends)
     from .research_studies import prior_trials
     settings = _settings(args)
     if _once_used(settings, STUDY):
@@ -1411,11 +1412,30 @@ def cmd_research_india_2007(args: argparse.Namespace) -> int:
     renames = load_symbol_changes()
     print("Loading NSE's corporate actions…")
     actions = parse_actions(fetch_actions(cache, NSEClient()))
-    series, info = build_series(days, files, lambda s, d: current_symbol(s, d, renames), actions)
+    rename = lambda s, d: current_symbol(s, d, renames)  # noqa: E731
+    series, info = build_series(days, files, rename, actions)
     members = universe_by_month(days, series, info["funds"])
+    # addendum 2: classify the split-like moves (crash days, BSE flags), mend BSE-flagged bonuses, rebuild
+    bse_session = requests.Session()
+
+    def bse_rows(day: str) -> list[list[str]]:
+        for _ in range(5):
+            try:
+                return fetch_bse_rows(day, cache / "bse", bse_session)
+            except requests.RequestException:
+                continue
+        return []
+
+    bench_close = {b["date"]: b["close"] for b in tri}
+    flagged = unrecorded_splits(days, series, members, actions)
+    classified, mends = classify_flagged(flagged, days, bench_close, series, bse_rows)
+    if mends:
+        actions = with_mends(actions, mends)
+        series, info = build_series(days, files, rename, actions)
+        members = universe_by_month(days, series, info["funds"])
     trading_months = sorted({d[:7] for d in days if d >= TRADING_FROM})
     g = gate(days=days, present=set(files), actions=actions, series=series, members=members,
-             trading_months=trading_months)
+             trading_months=trading_months, classified=classified)
     print(format_gate(g))
     if not g["passes"]:
         print("The data gate failed, so nothing was simulated and nothing is spent. Mend the data under a committed "
@@ -1426,13 +1446,14 @@ def cmd_research_india_2007(args: argparse.Namespace) -> int:
     if not _claim_once(settings, STUDY):
         return 2
     r = run_india(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
-                  extra_trials=prior_trials(settings.state_dir))
+                  extra_trials=prior_trials(settings.state_dir), unexplained=g["unrecorded"])
     for vid, x in r["primary"].items():   # logged before printing: once run, the window is spent
         log_trial(settings.state_dir, STUDY, {"variant": vid, "name": x["name"], "from": r["start"], "to": r["end"]},
                   {"return": x["total_return"], "excess": x["excess"], "cagr": x["cagr"],
                    "max_drawdown": x["max_drawdown"], "turnover": x["turnover"], "passes": x["passes"],
                    "skill": x["skill"].get("probability")})
-    notes = [f"{len(files)} of {len(days)} daily files; {len(series)} stocks traded; "
+    notes = [f"mended from BSE's flags (addendum 2): {', '.join(f'{s} {d} shares x{x:g}' for s, d, x in mends) or 'none'}.",
+             f"{len(files)} of {len(days)} daily files; {len(series)} stocks traded; "
              f"{sum(len(v) for v in members.values()) // max(1, len(members))} members a month on average.",
              f"{info['dividends_skipped']} dividend record(s) not applied (amount over 30% of the price).",
              f"{len(m.excluded)} stock(s) left out for a one-day move over 50x: {', '.join(m.excluded[:12]) or 'none'}.",

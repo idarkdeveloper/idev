@@ -151,3 +151,77 @@ def test_rule_sets_are_the_preregistered_seven():
     add = open("docs/research/preregistered-india-2007-2016-addendum.md", encoding="utf-8").read()
     for needle in ('brake="sma100"', 'stop="atr3"', 'weights="inverse_vol"', "buffer=None, tax_aware=False", "7 trials"):
         assert needle in add
+
+
+def _bse(rows_by_day):
+    head = ["SC_CODE", "SC_NAME", "SC_GROUP", "SC_TYPE", "OPEN", "HIGH", "LOW", "CLOSE", "LAST", "PREVCLOSE",
+            "NO_TRADES", "NO_OF_SHRS", "NET_TURNOV", "TDCLOINDI"]
+    return lambda d: [head] + [["1", "X", "A", "Q", "0", "0", "0", str(c), "0", "0", "0", "0", "0", f]
+                               for c, f in rows_by_day.get(d, [])]
+
+
+def test_addendum_2_classifies_crash_days_flags_and_mends():
+    days = _days(12)
+    up = lambda k: 100.0 if k < 6 else 75.0  # noqa: E731
+    series = {s: [{"date": d, "raw_close": up(k), "close": up(k), "value": 1} for k, d in enumerate(days)]
+              for s in ("CRASH", "RIGHTS", "BONUS", "ODD")}
+    series["BONUS"] = [{"date": d, "raw_close": 100.0 if k < 6 else 20.0, "close": 0, "value": 1}
+                       for k, d in enumerate(days)]
+    flagged = [{"symbol": "CRASH", "date": days[6], "ratio": 0.75}, {"symbol": "RIGHTS", "date": days[6], "ratio": 0.75},
+               {"symbol": "BONUS", "date": days[6], "ratio": 0.2}, {"symbol": "ODD", "date": days[6], "ratio": 0.75}]
+    calm = {d: 100.0 for d in days}
+    crash = dict(calm, **{days[6]: 94.0})
+    bse = _bse({days[6]: [(75.2, "XR"), (20.1, "XB")]})
+    cls, mends = ri.classify_flagged(flagged[:1], days, crash, series, bse)
+    assert cls == {("CRASH", days[6]): "crash day"} and mends == []
+    cls, mends = ri.classify_flagged(flagged[1:], days, calm, series, bse)
+    assert cls[("RIGHTS", days[6])].startswith("rights or scheme")   # its close matches the XR row
+    assert cls[("BONUS", days[6])].startswith("mended") and mends == [("BONUS", days[6], 5.0)]
+    assert cls[("ODD", days[6])].startswith("rights") or cls[("ODD", days[6])] == "unexplained"
+
+
+def test_a_flag_on_another_stock_at_a_different_price_does_not_count():
+    days = _days(8)
+    series = {"S": [{"date": d, "raw_close": 100.0 if k < 4 else 50.0, "close": 0, "value": 1}
+                    for k, d in enumerate(days)]}
+    cls, mends = ri.classify_flagged([{"symbol": "S", "date": days[4], "ratio": 0.5}], days, {d: 1.0 for d in days},
+                                     series, _bse({days[4]: [(900.0, "XB")]}))
+    assert cls == {("S", days[4]): "unexplained"} and mends == []
+
+
+def test_with_mends_adds_the_split_and_records_it():
+    acts = {"splits": {"A": [("2008-01-01", 2.0)]}, "dividends": {}, "split_records": [("A", "2008-01-01")],
+            "split_rows": 1, "split_read": 1}
+    out = ri.with_mends(acts, [("B", "2009-05-06", 5.0)])
+    assert out["splits"]["B"] == [("2009-05-06", 5.0)] and ("B", "2009-05-06") in out["split_records"]
+    assert "B" not in acts["splits"]                       # the input is not changed
+
+
+def test_gate_counts_only_unexplained_moves():
+    days = _days(30)
+    series = {f"S{k}": _series(days, f"S{k}", 1.0) for k in range(3)}
+    series["S0"] = [dict(b, raw_close=10.0 if k < 10 else 7.5) for k, b in enumerate(series["S0"])]
+    members = {d[:7]: set(series) for d in days}
+    acts = {"split_rows": 100, "split_read": 100, "split_records": [("S1", days[3])]}
+    months = sorted({d[:7] for d in days})
+    plain = ri.gate(days=days, present=set(days), actions=acts, series=series, members=members, trading_months=months)
+    assert len(plain["unrecorded"]) == 1
+    crash = ri.gate(days=days, present=set(days), actions=acts, series=series, members=members,
+                    trading_months=months, classified={("S0", days[10]): "crash day"})
+    assert crash["unrecorded"] == [] and crash["flagged"][0]["class"] == "crash day"
+    assert "(crash day)" in ri.format_gate(crash)
+
+
+def test_held_through_counts_positions_held_across_a_move():
+    run = {"trades": [{"symbol": "X", "entry": "2010-01-01", "exit": "2010-03-01"},
+                      {"symbol": "Y", "entry": "2010-02-15", "exit": "2010-03-01"}]}
+    moves = [{"symbol": "X", "date": "2010-02-10"}, {"symbol": "Y", "date": "2010-02-10"}]
+    assert ri.held_through(run, moves, "2016-03-31") == 1
+
+
+def test_addendum_2_constants_match_the_document():
+    text = open("docs/research/preregistered-india-2007-2016-addendum-2.md", encoding="utf-8").read()
+    for needle in ("**5% or more**", "`XR`", "`SA`", "`XB`, `XS`, `SS` or `CS`", "stays at **15**"):
+        assert needle in text
+    assert ri.CRASH_DAY_FALL == -0.05 and ri.BSE_GENUINE_FLAGS == ("XR", "SA")
+    assert ri.BSE_SPLIT_FLAGS == ("XB", "XS", "SS", "CS") and ri.GATE_MAX_UNRECORDED == 15
