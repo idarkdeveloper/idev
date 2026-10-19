@@ -104,6 +104,8 @@ class Watcher:
         self._integration = integration  # IntegrationScheduler: the read-only live-services check at 08:35 IST
         self._app_feed = app_feed  # app_feed.AppFeed: the phone app's feed file (read-only, off unless APP_FEED)
         self._app_feed_thread: threading.Thread | None = None
+        self._unpollable: dict[str, Any] = {}   # BSE holding symbol -> the day its "no scrip code" note was logged
+        self._ann_failed: dict[str, Any] = {}   # ticker -> the day its announcement failure was last warned about
         self._close_snapshot = close_snapshot  # groww_hours.CloseSnapshot: one saved Groww read at the close (15:35-15:50)
         self._groww_paused = False  # live Groww broker outside the Groww window: no Groww call this tick
         self._heartbeat = heartbeat  # Heartbeat: pings the dead-man URL every minute, at all hours
@@ -166,9 +168,21 @@ class Watcher:
                 continue
             sym = str(r["symbol"]).strip().upper()
             if str(r.get("exchange") or "").upper() == "BSE" and not sym.endswith(".BO"):
-                sym += ".BO"
+                from .bse_announcements import cached_bse_code, scrip_code
+                code = scrip_code(sym) or cached_bse_code(self.settings.state_dir / "cache", sym)
+                if code is None:   # a BSE name (e.g. NSE itself) with no scrip code on this machine: nothing to poll
+                    self._note_unpollable(sym)
+                    continue
+                sym = f"{code}.BO"
             out.append(sym)
         return out
+
+    def _note_unpollable(self, sym: str) -> None:
+        """One info line per symbol per day (not a warning every minute)."""
+        today = datetime.now(IST).date()
+        if self._unpollable.get(sym) != today:
+            self._unpollable[sym] = today
+            log.info("%s is a BSE holding without a scrip code on this machine: its BSE filings are not polled", sym)
 
     def interesting_tickers(self) -> list[str]:
         held, recent = self._tickers_by_reason()
@@ -190,7 +204,9 @@ class Watcher:
             try:
                 rows = self._data.announcements(t, limit=20)   # 20, not 5: results days bring a burst of filings
             except Exception as e:  # noqa: BLE001
-                log.warning("announcements for %s failed: %s", t, e)
+                today = datetime.now(IST).date()
+                (log.debug if self._ann_failed.get(t) == today else log.warning)("announcements for %s failed: %s", t, e)   # once a day
+                self._ann_failed[t] = today
                 errors.append(f"{t}: {type(e).__name__}: {e}")
                 continue
             got += len(rows)
