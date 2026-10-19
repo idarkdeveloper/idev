@@ -86,6 +86,7 @@ class YahooPrices:
         self.timeout = timeout
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.cache_ttl = cache_ttl
+        self.record_currency = False     # the screener asks for Yahoo's chart currency on every bar (GBp vs GBP); the agent never does
         self.ttl_fn: Any | None = None   # (default_ttl) -> ttl; set by the dashboard only, so the agent keeps the plain TTLs
         self.fill: Any | None = None   # groww_fill.GrowwFill: a daily bar Yahoo has not posted yet, from NSE's daily file
         self.clock = time.time         # for the provisional close (tests replace it)
@@ -214,6 +215,11 @@ class YahooPrices:
                 "adj_close": float(adj[i] if adj[i] is not None else close),
                 "volume": float(quote["volume"][i] or 0),
             })
+        if self.record_currency:
+            cur = str(((res.get("meta") or {}).get("currency")) or "")
+            if cur:
+                for b in bars:
+                    b["currency"] = cur
         if range_ not in SHORT_DAILY_RANGES and len(bars) <= 1:   # Yahoo's daily series is broken here (see _hourly_days)
             days = self._hourly_days(ysym)
             if len(days) > len(bars):

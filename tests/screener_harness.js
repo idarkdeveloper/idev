@@ -185,9 +185,20 @@ check("polling continues while stocks are pending or the list is loading, and st
   assert.strictEqual(S.needsPoll(null), false);
 });
 
+check("other markets: grouped, mapped to a currency, and with the India-only columns named", () => {
+  assert.deepStrictEqual(S.UNIVERSE_GROUPS.map(g => g[0]), ["India", "United States", "United Kingdom", "Japan"]);
+  assert.deepStrictEqual(S.UNIVERSE_GROUPS.flatMap(g => g[1]).sort(), S.UNIVERSES.slice().sort());
+  assert.deepStrictEqual(["NIFTY50", "SP500_US", "FTSE100_UK", "TOPIX100_JP"].map(S.marketOf), ["IN", "US", "UK", "JP"]);
+  assert.deepStrictEqual(["IN", "US", "UK", "JP"].map(k => S.CUR[k].sym), ["₹", "$", "£", "¥"]);
+  assert.strictEqual(S.CUR.JP.dec, 0);
+  for (const k of ["band", "filter_flags", "filter_block", "held", "deal", "market_cap_cr", "avg_turnover_cr"]) { assert.ok(S.INDIA_ONLY.includes(k), k); assert.ok(S.colByKey(k), k); }
+  assert.ok(S.PRESETS.filter(p => p.india).map(p => p.id).join() === "followed,unflagged");
+});
+
 check("universe list is the six indices plus holdings and followed buys", () => {
   assert.deepStrictEqual(S.UNIVERSES.slice(0, 6), ["NIFTY50", "NIFTY100", "NIFTY200", "NIFTY500", "NIFTYMIDCAP150", "NIFTYSMALLCAP250"]);
-  assert.deepStrictEqual(S.UNIVERSES.slice(6), ["HOLDINGS", "DEALS"]);
+  assert.deepStrictEqual(S.UNIVERSES.slice(6, 8), ["HOLDINGS", "DEALS"]);
+  assert.deepStrictEqual(S.UNIVERSES.slice(8), ["SP500_US", "FTSE100_UK", "TOPIX100_JP"]);
   assert.strictEqual(S.UNIVERSE_LABEL.HOLDINGS, "My holdings");
   assert.strictEqual(S.UNIVERSE_LABEL.DEALS, "Followed investors' recent buys");
 });
