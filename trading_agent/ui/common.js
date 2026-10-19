@@ -1022,9 +1022,100 @@ window.TA = (function(){
     }};
   }
 
+
+  // ---- loaders (design "Loader": 5a page load, 5b card skeleton, 5c first-run step list, 5d button inline) ----
+  // All motion is CSS (nocturne.css .ld-*), so prefers-reduced-motion stills it in one place.
+  const loader = (() => {
+    const spinner = (cls) => `<span class="ld-ring${cls ? " " + cls : ""}" aria-hidden="true"></span>`;
+    // 5a: a sparkline that draws itself, then its end dot lands.
+    const spark = () => `<svg class="ld-spark" width="120" height="48" viewBox="0 0 120 48" aria-hidden="true">
+      <line class="base" x1="0" y1="40" x2="120" y2="40"></line>
+      <polyline class="line" points="4,36 22,30 36,33 52,20 66,24 82,12 98,16 114,6"></polyline>
+      <circle class="end" cx="114" cy="6" r="4"></circle></svg>`;
+    const bar = (w, h) => `<span class="ld-sk" style="width:${esc(w)};height:${Number(h) || 10}px"></span>`;
+    // 5b: table rows of shimmer bars, one cell per column, widths varied so it reads as content.
+    const W1 = ["46%", "38%", "54%", "42%", "50%"];
+    function skeletonRows(n, cols){
+      let out = "";
+      for(let i = 0; i < n; i++){
+        let cells = `<td><div class="ld-skcell">${bar(W1[i % W1.length], 10)}${bar("26%", 8)}</div></td>`;
+        for(let c = 1; c < cols; c++) cells += `<td class="num">${bar(c % 2 ? "56px" : "48px", c % 2 ? 14 : 10)}</td>`;
+        out += `<tr class="ld-skrow" aria-hidden="true">${cells}</tr>`;
+      }
+      return out;
+    }
+    const active = new Set();   // buttons in their busy or result state
+    const isBusy = (btn) => active.has(btn);
+    // 5d: the button keeps its width, shows a ring and says what it is doing; then a short result, then back.
+    async function busy(btn, fn, opts){
+      opts = opts || {};
+      if(!btn || active.has(btn)) return;
+      active.add(btn);
+      const was = btn.innerHTML, wasMin = btn.style.minWidth, wasDisabled = btn.disabled;
+      const iconOnly = !btn.textContent.trim();
+      btn.style.minWidth = btn.getBoundingClientRect().width + "px";   // the row doesn't jump
+      btn.setAttribute("aria-busy", "true"); btn.disabled = true; btn.classList.add("ld-busy");
+      btn.innerHTML = spinner() + (iconOnly ? "" : `<span>${esc(opts.busy || "Working…")}</span>`);
+      const restore = () => {
+        btn.innerHTML = was; btn.style.minWidth = wasMin; btn.disabled = wasDisabled;
+        btn.removeAttribute("aria-busy"); btn.classList.remove("ld-busy", "ld-done"); active.delete(btn);
+        if(opts.after) opts.after();
+      };
+      let res;
+      try { res = await fn(); }
+      catch(e){ restore(); throw e; }
+      const done = typeof opts.done === "function" ? opts.done(res) : opts.done;
+      if(done === false || done == null){ restore(); return res; }
+      btn.removeAttribute("aria-busy"); btn.classList.remove("ld-busy"); btn.classList.add("ld-done"); btn.disabled = true;   // no second click until it resets
+      btn.innerHTML = `<span class="ld-tick" aria-hidden="true">✓</span>` + (iconOnly ? `<span class="sr-only">${esc(done)}</span>` : `<span>${esc(done)}</span>`);
+      setTimeout(restore, opts.doneMs || 1500);
+      return res;
+    }
+    // 5a + 5c: the first load of a page. Nothing shows for a fast load; past 300 ms the drawn sparkline; past 1.6 s
+    // the step list with a bar, from the steps the page reports as they really finish. Never blocks: done() or fail()
+    // removes it, and it removes itself after 20 s whatever happens.
+    function page(o){
+      o = o || {};
+      const none = {step(){}, done(){}, fail(){}};   // a loader never stops a page from working
+      if(!document.body || typeof document.body.appendChild !== "function" || typeof document.createElement !== "function") return none;
+      const steps = (o.steps || []).map(name => ({name, state: "todo", meta: ""}));
+      const el = document.createElement("div");
+      el.className = "ld-page"; el.setAttribute("role", "status"); el.setAttribute("aria-live", "polite"); el.hidden = true;
+      let mode = "spark", closed = false;
+      const paint = () => {
+        if(mode === "spark"){
+          el.innerHTML = `<div class="ld-box">${spark()}<div class="ld-cap"><div class="ld-title">${esc(o.title || "Loading")}</div>${o.sub ? `<div class="ld-sub">${esc(o.sub)}</div>` : ""}</div></div>`;
+          return;
+        }
+        const n = steps.length, d = steps.filter(s => s.state === "done").length, cur = steps.findIndex(s => s.state !== "done");
+        el.innerHTML = `<div class="ld-box ld-steps"><div><div class="ld-title">${esc(o.stepsTitle || "Building today's view")}</div>
+          <div class="ld-sub">${cur < 0 ? "Ready" : `Step ${cur + 1} of ${n}`}</div></div>
+          <div class="ld-bar"><span style="width:${n ? Math.round(d / n * 100) : 100}%"></span></div>
+          <ul class="ld-list">${steps.map((s, i) => `<li class="${s.state === "done" ? "done" : i === cur ? "now" : ""}">
+            <span class="ld-dot" aria-hidden="true">${s.state === "done" ? "✓" : ""}</span><span class="nm">${esc(s.name)}</span>
+            <span class="mt">${esc(s.state === "done" ? s.meta : i === cur ? "…" : "")}</span></li>`).join("")}</ul></div>`;
+      };
+      const close = () => {
+        if(closed) return; closed = true; clearTimeout(t1); clearTimeout(t2); clearTimeout(t3);
+        if(el.hidden){ el.remove(); return; }
+        el.classList.add("ld-out"); setTimeout(() => el.remove(), 260);
+      };
+      try { paint(); document.body.appendChild(el); } catch(e){ return none; }
+      const t1 = setTimeout(() => { if(!closed) el.hidden = false; }, o.delay ?? 300);
+      const t2 = setTimeout(() => { if(!closed && steps.length){ mode = "steps"; paint(); } }, o.stepsAfter ?? 1600);
+      const t3 = setTimeout(close, o.maxMs ?? 20000);
+      return {
+        step(i, meta){ const s = steps[i]; if(!s || s.state === "done") return; s.state = "done"; s.meta = meta || ""; if(mode === "steps") paint();
+                       if(steps.every(x => x.state === "done")) setTimeout(close, mode === "steps" ? 350 : 0); },
+        done: close, fail: close,
+      };
+    }
+    return {spinner, spark, skeletonRows, busy, isBusy, page};
+  })();
+
   return {$, esc, priceMove, priceLine, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, ddHistogram, rupeesShort, inr, px, bigMoney, foreignMarket, qualifyTicker, MARKET_SUFFIX, sinr, spct, quoteHtml, rangePos, quoteAge,
-          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart};
+          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart, loader};
 })();
 window.TA.theme.init();
 // Installable app: the service worker (sw.js) only on https or this machine; it never stores API answers. Quiet when it cannot.

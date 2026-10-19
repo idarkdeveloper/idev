@@ -1178,10 +1178,12 @@
   const liveOk = () => { liveStat.ok = new Date(); liveStat.fails = 0; liveStat.why = ""; paintStamp(); };
   const liveFail = (e) => { liveStat.fails++; liveStat.why = (e && e.message) || ""; paintStamp(); };
   async function loadMyPortfolio(refresh){
-    const btn = $("mp-refresh"); btn.disabled = true;
+    const btn = $("mp-refresh"), own = !TA.loader.isBusy(btn);   // the Refresh click drives its own state
+    if(own) btn.disabled = true;
     try { renderMyPortfolio(await api("/api/my-portfolio" + (refresh ? "?refresh=1" : ""))); liveOk(); }
-    catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; MP = {linked: true, error: e.message}; if(S) renderTiles(); liveFail(e); }
-    finally { btn.disabled = false; }
+    catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; MP = {linked: true, error: e.message}; if(S) renderTiles(); liveFail(e);
+              if($("mp-rows").querySelector(".ld-skrow")) $("mp-rows").innerHTML = ""; }
+    finally { if(own) btn.disabled = false; }
   }
   const MPCOLS = MODE === "demo" ? 8 : 9;   // the Stop column is a Live-page thing: the Demo page has its own stops
   if(MODE === "demo") $("mp-prot-th").hidden = true;
@@ -1250,7 +1252,8 @@
         <td class="num"><div class="${tone(m.pl)}">${sinr(m.pl)}</div><div class="l2 ${tone(m.pl_pct)}">${spct(m.pl_pct)}</div></td>${MODE === "demo" ? "" : "<td></td>"}</tr>` : "";
     loadSparks(m.holdings);
   }
-  $("mp-refresh").addEventListener("click", () => loadMyPortfolio(true));
+  $("mp-refresh").addEventListener("click", () => TA.loader.busy($("mp-refresh"), () => loadMyPortfolio(true),
+    {busy: "Refreshing…", done: () => MP && !MP.error ? "Updated" : null}));
   // "Refresh from Groww": one read-only Groww read now, even outside market hours; off while a refused login cools down
   const istTime = (iso) => new Date(iso).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false});
   function paintGrowwRefresh(m){
@@ -1262,9 +1265,10 @@
     b.textContent = cool ? "Groww cooling down until " + istTime(m.cooldown_until) + " IST" : "Refresh from Groww";
   }
   $("mp-groww-refresh").addEventListener("click", async () => {
-    const b = $("mp-groww-refresh"); b.disabled = true; b.textContent = "Reading Groww…";
-    try { renderMyPortfolio(await api("/api/groww/refresh", {}), true); toast("Holdings read from Groww"); }
-    catch(e){ toast(e.message); b.disabled = false; b.textContent = "Refresh from Groww"; }
+    try {
+      await TA.loader.busy($("mp-groww-refresh"), async () => { renderMyPortfolio(await api("/api/groww/refresh", {}), true); toast("Holdings read from Groww"); },
+        {busy: "Reading Groww…", done: "Updated", after: () => paintGrowwRefresh(MP)});
+    } catch(e){ toast(e.message); }
   });
 
   function renderFriction(f){   // the forward test's friction gate: a banner on Live and Demo, never a setting change
@@ -1545,9 +1549,8 @@
   document.querySelectorAll(".more-toggle").forEach(t => t.addEventListener("click", () => { const el = $(t.getAttribute("aria-controls")), on = !el.classList.contains("open"); el.classList.toggle("open", on); t.setAttribute("aria-expanded", String(on)); t.textContent = on ? "Show less" : "Read more"; }));   // phones: long help text is clamped to 3 lines
   $("regime-why").addEventListener("click", () => { const on = !$("regime").closest(".regime-card").classList.contains("why-open"); $("regime").closest(".regime-card").classList.toggle("why-open", on); $("regime-why").setAttribute("aria-expanded", String(on)); $("regime-why").textContent = on ? "Hide" : "Why?"; });   // phones only: the reasoning folds behind this
   $("btn-regime").addEventListener("click", async () => {
-    $("btn-regime").disabled = true;
-    try { await api("/api/regime?refresh=1"); await refresh(); toast("Global context refreshed"); } catch(e){ toast(e.message); }
-    $("btn-regime").disabled = false;
+    try { await TA.loader.busy($("btn-regime"), async () => { await api("/api/regime?refresh=1"); await refresh(); }, {done: "Global context refreshed"});
+          toast("Global context refreshed"); } catch(e){ toast(e.message); }
   });
   $("bt-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -1929,13 +1932,12 @@
     $("dlg").showModal();
   });
   async function digestPreview(kind){
-    const b = $("btn-dg-" + kind); b.disabled = true; const was = b.textContent; b.textContent = "Building…";
     try {
-      const j = await api("/api/digest/preview", {kind, summary: $("dg-summary").checked});
+      const j = await TA.loader.busy($("btn-dg-" + kind), () => api("/api/digest/preview", {kind, summary: $("dg-summary").checked}), {busy: "Building…"});
+      if(!j) return;   // already building
       $("dg-title").textContent = j.subject; $("dg-sub").textContent = j.writer && j.writer !== "none" ? "Summary written by " + j.writer : "Rules only, no written summary";
       $("dg-frame").srcdoc = j.html; $("dg-dlg").showModal();
     } catch(e){ toast(e.message); }
-    finally { b.disabled = false; b.textContent = was; }
   }
   $("btn-dg-morning").addEventListener("click", () => digestPreview("morning"));
   $("btn-dg-evening").addEventListener("click", () => digestPreview("evening"));
@@ -2001,8 +2003,14 @@
       else palHost[want.op](want.symbol);
     } }
 
-  refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); });
-  loadMyPortfolio(false);
+  // First load: the drawn sparkline, then (if it takes a while) the real steps as they finish; the portfolio card shows a
+  // skeleton under a spinner until its first answer.
+  const pageLoad = TA.loader.page({title: "Loading today's prices",
+    sub: "NSE · " + new Date().toLocaleDateString("en-IN", {timeZone: "Asia/Kolkata", weekday: "short", day: "numeric", month: "short"}),
+    steps: ["Deals, jobs and settings", "Portfolio from Groww"]});
+  if(!MP){ $("mp-rows").innerHTML = TA.loader.skeletonRows(4, MPCOLS); $("mp-sub").innerHTML = TA.loader.spinner() + " loading your holdings…"; }
+  refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); pageLoad.step(0, S && S.deals ? `${S.deals.length} deals` : ""); });
+  loadMyPortfolio(false).then(() => pageLoad.step(1, MP && MP.holdings ? `${MP.holdings.length} holdings` : MP && MP.linked === false ? "not linked" : ""));
   if(urlStock) lookup(urlStock);   // ?stock=SYM: the stock page opens on it
   setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 62000);   // just over the server's 60 s Groww cache: every poll gets a fresh read, and never more than one a minute
   // While the NSE is open the price shown beside a stock (order form, Look up card, stock drawer) follows the market too.

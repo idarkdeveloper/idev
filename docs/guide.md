@@ -941,7 +941,8 @@ python -m mypy                  # trading_agent/ only, pragmatic mode
 ```
 
 Tests run fully offline with a scripted fake Claude runner and fake HTTP sessions. CI (`.github/workflows/ci.yml`)
-runs the tests in one job and `ruff` + `mypy` in a separate `lint` job. Every module that places or guards an order
+runs the tests in one job (`pytest -n auto`) and `ruff` + `mypy` in a separate `lint` job, once per pull-request push
+and on every push to `master`. Every module that places or guards an order
 (`groww`, `broker`, `live`, `live_alerts`, `risk`, `stops`, `runner`, `config`, `ui`, `safety`) is type-clean with no
 override; the few analytics modules that still have findings are listed, with the reason, under
 `[[tool.mypy.overrides]]` in `pyproject.toml`.

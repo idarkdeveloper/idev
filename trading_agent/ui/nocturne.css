@@ -164,6 +164,54 @@
   textarea { resize: vertical; line-height: 1.4; }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   button svg, .btn svg { display: block; flex: none; }
+
+  /* Loaders (design "Loader"): spinner ring, drawn sparkline for a page load, shimmer skeleton for a card, step list
+     for a first run, inline busy/done state on buttons. Accent-coloured, on the surface tokens, so both themes work. */
+  @keyframes ld-spin { to { transform: rotate(360deg); } }
+  @keyframes ld-draw { 0% { stroke-dashoffset: 240; } 55% { stroke-dashoffset: 0; } 80% { stroke-dashoffset: 0; opacity: 1; } 100% { stroke-dashoffset: 0; opacity: 0; } }
+  @keyframes ld-dot { 0%, 45% { opacity: 0; transform: scale(.4); } 60% { opacity: 1; transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
+  @keyframes ld-shim { 0% { background-position: -320px 0; } 100% { background-position: 320px 0; } }
+  @keyframes ld-in { from { opacity: 0; } to { opacity: 1; } }
+  .ld-ring { display: inline-block; flex: none; width: 14px; height: 14px; border-radius: 50%; box-sizing: border-box;
+    border: 2px solid var(--color-divider); border-top-color: var(--color-accent); animation: ld-spin .75s linear infinite; vertical-align: -2px; }
+  .ld-spark .base { stroke: var(--color-rule); stroke-width: 1; }
+  .ld-spark .line { fill: none; stroke: var(--color-accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round;
+    stroke-dasharray: 240; animation: ld-draw 1.6s ease-in-out infinite; }
+  .ld-spark .end { fill: var(--color-accent); transform-origin: 114px 6px; animation: ld-dot 1.6s ease-out infinite; }
+  .ld-sk { display: block; max-width: 100%; border-radius: 6px; background-size: 640px 100%; animation: ld-shim 1.4s linear infinite;
+    background-image: linear-gradient(90deg, var(--color-hover) 0%, var(--color-press) 50%, var(--color-hover) 100%); }
+  td.num .ld-sk { margin-left: auto; }
+  .ld-skcell { display: flex; flex-direction: column; gap: 6px; padding: 2px 0; }
+  .ld-skrow td { padding-top: 10px; padding-bottom: 10px; }
+  .ld-page { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+    padding: 16px; background: var(--color-bg); animation: ld-in .2s ease-out; transition: opacity .25s ease; }
+  .ld-page.ld-out { opacity: 0; pointer-events: none; }
+  .ld-box { display: flex; flex-direction: column; align-items: center; gap: 18px; width: min(420px, 100%); box-sizing: border-box;
+    padding: 28px 24px; border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-sm); }
+  .ld-cap { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+  .ld-title { font-size: 15px; font-weight: 600; color: var(--color-text); }
+  .ld-sub { font-size: 12px; color: var(--color-muted); }
+  .ld-steps { align-items: stretch; gap: 16px; }
+  .ld-bar { height: 4px; border-radius: 2px; background: var(--color-hover); overflow: hidden; }
+  .ld-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--color-accent); transition: width .5s ease; }
+  .ld-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
+  .ld-list li { display: flex; align-items: center; gap: 10px; color: var(--color-muted); }
+  .ld-list li.done, .ld-list li.now { color: var(--color-text); }
+  .ld-list .nm { flex: 1; min-width: 0; }
+  .ld-list .mt { color: var(--color-muted); font-variant-numeric: tabular-nums; }
+  .ld-dot { width: 18px; height: 18px; flex: none; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--color-divider);
+    display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
+  .ld-list li.done .ld-dot { border: none; background: var(--color-accent); color: var(--color-bg); }
+  .ld-list li.now .ld-dot { border-top-color: var(--color-accent); border-right-color: var(--color-accent); animation: ld-spin .8s linear infinite; }
+  button.ld-busy { cursor: progress; }
+  button.ld-busy:disabled { opacity: .85; }
+  button.ld-done:disabled { opacity: 1; cursor: default; }
+  button.ld-done .ld-tick { color: var(--color-profit); font-weight: 700; }
+  @media (prefers-reduced-motion: reduce) {
+    .ld-ring, .ld-list li.now .ld-dot { animation-duration: 2.4s; }
+    .ld-spark .line, .ld-spark .end, .ld-sk, .ld-page { animation: none; }
+    .ld-spark .line { stroke-dashoffset: 0; }
+  }
   .split { display: flex; }
   .split > button { border-top-right-radius: 0; border-bottom-right-radius: 0; }
   details.menu { position: relative; }
