@@ -18,7 +18,7 @@ Claude Code, and how to operate the Oracle Cloud server. Commands are copy-paste
 | Settings | `.env` in the project folder | `/opt/trading-agent/.env` (mode 600, only `agent` can read it) |
 | State (accounts, caches, logs) | `state\` in the project folder | `/opt/trading-agent/state/` |
 | Dashboard | http://127.0.0.1:8787/ | http://127.0.0.1:8788/ on the laptop, through the SSH tunnel (section 4) |
-| Repo | https://github.com/idarkdeveloper/idev (public) | same, pulled over HTTPS |
+| Repo | https://github.com/idarkdeveloper/share-trading (public; renamed from idev on 19 Oct 2026, the old address redirects) | same, pulled over HTTPS |
 
 Server: Oracle Cloud, region India West (Mumbai), Ubuntu 24.04 on Ampere A1 (2 cores, 12 GB), reserved public
 IP **130.210.18.7** (registered with Groww as the static IP). Login user `ubuntu`, SSH key `C:\Users\affaf\.ssh\oracle_agent`.
