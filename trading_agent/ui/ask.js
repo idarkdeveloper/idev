@@ -229,6 +229,7 @@
     else if(out.intent === "show_health"){ stage("read", "Opening data health"); goTab("health", host); }
     else if(out.intent === "ideas"){ stage("read", "Checking the agent's market stance and ideas"); }
     else if(out.intent === "market_status"){ stage("read", "Checking market hours"); }
+    else if(out.intent === "market_summary"){ stage("read", "Reading the market strip"); }
     else if(out.intent === "followed_deals"){ stage("read", "Reading the latest deals"); out.link = {href: "/#deals", label: "Open deals"}; }
     else if(out.intent === "portfolio_summary"){
       stage("read", "Reading your portfolio");
@@ -269,9 +270,9 @@
       stockAction(op, a.ticker, host, mode);
     } else if(r.intent === "open_tab"){ show("Assistant", `<p>${esc(r.say)}</p>`, {autoHide: 2500}); goTab(a.tab, host); }
     else if(r.intent === "portfolio_summary"){ portfolio(r, host, mode); }
-    else if(r.intent === "ideas" || r.intent === "market_status" || r.intent === "followed_deals"){   // a sentence and its figures, read aloud
+    else if(r.intent === "ideas" || r.intent === "market_status" || r.intent === "followed_deals" || r.intent === "market_summary"){   // a sentence and its figures, read aloud
       const ok = hasTTS() && r.say;
-      show(r.intent === "ideas" ? "Ideas" : r.intent === "market_status" ? "Market hours" : "Latest deals", `<p>${esc(r.say)}</p>` + factsHtml(r.facts) + `<p class="ask-state sub" role="status"></p>`, {reading: ok});
+      show(r.intent === "ideas" ? "Ideas" : r.intent === "market_status" ? "Market hours" : r.intent === "market_summary" ? "The market" : "Latest deals", `<p>${esc(r.say)}</p>` + factsHtml(r.facts) + `<p class="ask-state sub" role="status"></p>`, {reading: ok});
       if(ok && speak(sentences(r.say))) setState("Reading…");
     }
     else if(r.intent === "show_health"){ show("Assistant", `<p>${esc(r.say)}</p>`, {autoHide: 2500}); goTab("health", host); }

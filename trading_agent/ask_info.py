@@ -58,6 +58,30 @@ def _spoken_inr(x: float) -> str:
     return f"{round(a):,} rupees" if a >= 100 else f"{round(a, 2):g} rupees"
 
 
+def _skipped(today: date, nxt: date, is_day: Callable[[date], bool], holiday_name: Callable[[date], str | None] | None, weekend_known: bool) -> str:
+    """Why the days between today and the next open were skipped: " Saturday and Sunday are weekend days. Tuesday 20 October is a market
+    holiday (Diwali)." Names only the skipped weekend and holidays, at most two items. ``weekend_known``: today is a weekday, so a
+    coming weekend is news (when today is itself a weekend day it has just been said)."""
+    weekend, holidays = [], []
+    d = today + timedelta(days=1)
+    while d < nxt:
+        if d.weekday() >= 5:
+            weekend.append(d)
+        elif not is_day(d):
+            holidays.append(d)
+        d += timedelta(days=1)
+    items: list[str] = []
+    if weekend and weekend_known:
+        names = [x.strftime("%A") for x in weekend]
+        items.append(" and ".join(names) + (" are weekend days." if len(names) > 1 else " is a weekend day."))
+    if holidays:
+        days = [_day(x) for x in holidays[:2]]
+        reasons = [r for r in (holiday_name(x) if holiday_name else None for x in holidays[:2]) if r]
+        text = " and ".join(days) + (" is a market holiday" if len(days) == 1 else " are market holidays")
+        items.append(text + (f" ({', '.join(dict.fromkeys(reasons))})." if reasons else "."))
+    return (" " + " ".join(items[:2])) if items else ""
+
+
 # ---- is the market open ----
 def compose_market_status(market: str, now: datetime, trading_day: Callable[[date], bool] | None = None,
                           holiday_name: Callable[[date], str | None] | None = None) -> dict[str, Any]:
@@ -103,7 +127,7 @@ def compose_market_status(market: str, now: datetime, trading_day: Callable[[dat
         else:
             hol = holiday_name(today) if (cal and holiday_name) else None
             why = (f"It is closed today for {hol}. " if hol else "It is closed today, it is the weekend. " if today.weekday() >= 5 else "It is closed today. ")
-        say = f"{name} is closed now. {why}It opens {_when(nxt.date(), today)}, at {both(o)}."
+        say = f"{name} is closed now. {why}It opens {_when(nxt.date(), today)}, at {both(o)}." + _skipped(today, nxt.date(), is_day, holiday_name if cal else None, weekend_known=is_day(today) or today.weekday() < 5)
         status, tone = "Closed", "neg"
         facts.append({"label": "Opens", "value": f"{_short(nxt.date())}, {both(o)}", "tone": ""})
     if market != "IN":
@@ -111,6 +135,64 @@ def compose_market_status(market: str, now: datetime, trading_day: Callable[[dat
     facts.insert(0, {"label": {"IN": "NSE", "US": "US market", "UK": "London market", "JP": "Tokyo market"}[market], "value": status, "tone": tone})
     facts.insert(1, {"label": "Time now", "value": f"{n.strftime('%H:%M')} {where}" + ("" if market == "IN" else f" ({ist(n).strftime('%H:%M')} IST)"), "tone": ""})
     return {"say": say, "facts": facts}
+
+
+def compose_market_when(when: str, now: datetime, trading_day: Callable[[date], bool], holiday_name: Callable[[date], str | None] | None = None,
+                        holiday_days: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The NSE's answer to "why is the market closed tomorrow", "is it a holiday today" and "when is the next holiday", from the cached
+    holiday calendar (``holiday_days``: iso date -> name; None when there is none). Never fetches."""
+    n = now.astimezone(IST)
+    today = n.date()
+    name_of = holiday_name or (lambda d: None)
+    o, c = NSE_HOURS
+    hours = f"{_clock(o)} to {_clock(c)} IST"
+    now_fact = {"label": "Time now", "value": f"{n.strftime('%H:%M')} IST", "tone": ""}
+
+    def next_open(after: date) -> date:
+        d = after + timedelta(days=1)
+        for _ in range(14):
+            if trading_day(d):
+                return d
+            d += timedelta(days=1)
+        return d
+
+    if when == "holidays":
+        if holiday_days is None:
+            return {"say": "I do not have the NSE holiday list right now.", "facts": [{"label": "Holidays", "value": "not available", "tone": ""}, now_fact]}
+        upcoming = []
+        for iso, nm in sorted(holiday_days.items()):
+            try:
+                d = date.fromisoformat(str(iso)[:10])
+            except ValueError:
+                continue
+            if d > today and d.weekday() < 5:
+                upcoming.append((d, nm))
+        upcoming = upcoming[:3]
+        if not upcoming:
+            return {"say": "I do not see any further NSE holidays in my holiday list.", "facts": [{"label": "Holidays", "value": "none ahead", "tone": ""}, now_fact]}
+        say = "The next NSE holidays: " + "; ".join(f"{_day(d)}" + (f", {nm}" if nm else "") for d, nm in upcoming) + "."
+        facts = [{"label": "Holiday", "value": f"{d.strftime('%a')} {_short(d)}" + (f" · {nm}" if nm else ""), "tone": ""} for d, nm in upcoming]
+        return {"say": say, "facts": facts + [now_fact]}
+    d = today + timedelta(days=1) if when == "tomorrow" else today
+    word = "tomorrow" if when == "tomorrow" else "today"
+    if d.weekday() >= 5:
+        say = f"The NSE is closed {word}, {_day(d)}: it is a weekend."
+        reason = "Weekend"
+    elif not trading_day(d):
+        nm = name_of(d)
+        say = f"The NSE is closed {word}, {_day(d)}" + (f", for {nm}." if nm else f". I do not see a reason in my holiday list; {word} may be a special closure.")
+        reason = nm or "no reason in the holiday list"
+    else:
+        extra = ""
+        if word == "today":
+            extra = " It has closed for the day." if n.time() > c else f" It opens at {_clock(o)} IST." if n.time() < o else " It is open now."
+        return {"say": f"The NSE is open {word}, {_day(d)}, {hours}.{extra}",
+                "facts": [{"label": "NSE", "value": f"Open {word}", "tone": "pos"}, now_fact, {"label": "Opens", "value": f"{_short(d)}, {_clock(o)} IST", "tone": ""},
+                          {"label": "Closes", "value": f"{_clock(c)} IST", "tone": ""}]}
+    nxt = next_open(d)
+    say += f" It opens {_when(nxt, today)}, at {_clock(o)} IST."
+    return {"say": say, "facts": [{"label": "NSE", "value": f"Closed {word}", "tone": "neg"}, now_fact, {"label": "Reason", "value": reason, "tone": ""},
+                                   {"label": "Opens", "value": f"{_short(nxt)}, {_clock(o)} IST", "tone": ""}]}
 
 
 # ---- stock ideas ----
@@ -218,4 +300,72 @@ def compose_deals(deals: list[dict[str, Any]], today: date, as_of: str = "", day
         said.append(spoken)
         shown = f"{side.upper() if side in ('buy', 'sell') else 'DEAL'} {tk}" + (f" · {_indian(qty)} sh" if qty else "") + (f" @ ₹{_indian(price)}" if price else "") + f" · {_short(when)}"
         facts.append({"label": who, "value": shown, "tone": "pos" if side == "buy" else "neg" if side == "sell" else "", "long": True})
+    return {"say": " ".join(said), "facts": facts}
+
+
+# ---- how is the market ----
+STRIP = (("nifty50", "Nifty 50", "Nifty 50", True, True), ("sp500", "S&P 500", "S&P 500", True, True), ("nasdaq_fut", "Nasdaq futures", "Nasdaq fut", False, True),
+         ("nikkei", "Nikkei", "Nikkei", True, True), ("india_vix", "India VIX", "India VIX", True, False), ("usdinr", "USD/INR", "USD/INR", True, False),
+         ("brent", "Brent", "Brent", True, False))
+
+
+def _level(v: float, indian: bool) -> str:
+    if v >= 1000:
+        return _indian(v) if indian else f"{v:,.0f}"
+    return f"{v:.1f}" if v >= 100 else f"{v:.2f}".rstrip("0").rstrip(".") if v < 10 else f"{v:.1f}"
+
+
+def _move(r: float | None) -> str:
+    if r is None:
+        return ""
+    v = round(abs(r) * 100, 1)
+    return "unchanged" if v == 0 else f"{'up' if r > 0 else 'down'} {v:.1f} percent"
+
+
+def compose_market_summary(d: dict[str, Any]) -> dict[str, Any]:
+    """{"say", "facts"} for "how is the market today", from the dashboard's market regime and its Markets strip (quotes as the strip
+    has them). d = {regime: {regime, score, guidance} | None, markets: {key: {last, ret_1d, as_of}}, nse_open: bool | None,
+    as_of: '21:06 IST' | ''}. A missing quote is left out and named."""
+    said: list[str] = []
+    facts: list[dict[str, Any]] = []
+    r = d.get("regime") or {}
+    if r.get("regime") in REGIME_LABEL:
+        score = r.get("score")
+        said.append(f"The market stance is {REGIME_LABEL[r['regime']]}" + (f", score {'minus ' if score < 0 else ''}{abs(int(score))}" if isinstance(score, (int, float)) else "") +
+                    (": " + str(r["guidance"]).strip().rstrip(".").lower() + "." if r.get("guidance") else "."))
+        facts.append({"label": "Market stance", "value": REGIME_LABEL[r["regime"]] + (f" ({_signed(score)})" if isinstance(score, (int, float)) else ""),
+                      "tone": "neg" if r["regime"] == "risk_off" else "pos" if r["regime"] == "risk_on" else ""})
+    else:
+        said.append("I do not have the market stance right now.")
+        facts.append({"label": "Market stance", "value": "not available", "tone": ""})
+    m = d.get("markets") or {}
+    missing: list[str] = []
+    for key, spoken, _label, _has_level, has_move in STRIP:
+        q = m.get(key) or {}
+        last, ret = q.get("last"), q.get("ret_1d")
+        if last is None:
+            missing.append(spoken)
+            continue
+        indian = key in ("nifty50", "india_vix")
+        mv = _move(ret) if has_move else ""
+        if key == "nasdaq_fut":
+            said.append(f"Nasdaq futures are {mv}." if mv else f"Nasdaq futures are at {_level(last, False)}.")
+        elif key == "india_vix":
+            said.append(f"India VIX is {_level(last, True)}.")
+        elif key == "brent":
+            said.append(f"Brent is {_level(last, False)} dollars" + (f", {_move(ret)}." if ret is not None else "."))
+        elif key == "usdinr":
+            said.append(f"USD/INR is {_level(last, False)}" + (f", {_move(ret)}." if ret is not None else "."))
+        else:
+            said.append(f"{spoken} is {mv + ' at ' if mv else 'at '}{_level(last, indian)}.")
+        val = _level(last, indian) + (f" ({'+' if ret > 0 else '-' if ret < 0 else ''}{abs(ret) * 100:.1f}%)" if ret is not None and has_move else "")
+        facts.append({"label": spoken, "value": val, "tone": ("pos" if ret and ret > 0 else "neg" if ret and ret < 0 else "") if has_move and key != "india_vix" else ""})
+    if missing:
+        said.append("No quote for " + " and ".join([", ".join(missing[:-1]), missing[-1]] if len(missing) > 1 else missing) + ".")
+    nd = _iso_short((m.get("nifty50") or {}).get("as_of"))
+    if d.get("nse_open") is False and nd:
+        said.append(f"The NSE is closed, so Nifty prices are from the {nd} close; US and Asian indices and futures can be live.")
+    if d.get("as_of"):
+        said.append(f"As of {d['as_of']}.")
+        facts.append({"label": "As of", "value": str(d["as_of"]), "tone": ""})
     return {"say": " ".join(said), "facts": facts}

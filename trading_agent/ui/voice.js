@@ -55,6 +55,8 @@
       if(t && r.intent !== "open_chart") out.push({label: "Show chart", text: "show " + t + " chart"});
     } else if(r.intent === "ideas"){
       out.push({label: "Read the news", text: "read today's news"}, {label: "Latest deals", text: "latest deals"}, {label: "Is the market open", text: "is the market open"});
+    } else if(r.intent === "market_summary"){
+      out.push({label: "Read the news", text: "read today's news"}, {label: "Is the market open", text: "is the market open"}, {label: "Profit and loss today", text: "profit and loss today"});
     } else if(r.intent === "market_status"){
       out.push({label: "Stock ideas", text: "stock ideas"}, {label: "Read the news", text: "read today's news"}, {label: "Latest deals", text: "latest deals"});
     } else if(r.intent === "followed_deals"){

@@ -132,7 +132,7 @@ def test_nse_open_preopen_closed_weekend_and_holiday():
     after = ask_info.compose_market_status("IN", mon(16, 0), weekdays)
     assert after["say"] == "The NSE is closed now. It closed at 3:30 pm IST today. It opens tomorrow, Tuesday 20 October, at 9:15 am IST."
     fri = ask_info.compose_market_status("IN", ist(2026, 10, 16, 18, 0), weekdays)
-    assert fri["say"].endswith("It opens on Monday 19 October, at 9:15 am IST.")
+    assert fri["say"].endswith("It opens on Monday 19 October, at 9:15 am IST. Saturday and Sunday are weekend days.")
     sat = ask_info.compose_market_status("IN", ist(2026, 10, 17, 11, 0), weekdays)
     assert sat["say"] == "The NSE is closed now. It is closed today, it is the weekend. It opens on Monday 19 October, at 9:15 am IST."
     hol = ask_info.compose_market_status("IN", ist(2026, 10, 20, 11, 0), lambda d: d.weekday() < 5 and d != date(2026, 10, 20),

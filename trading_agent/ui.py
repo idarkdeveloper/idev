@@ -525,7 +525,7 @@ class App:
             from .nse import check_ticker
             hint = check_ticker(ticker)
         out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)), ticker=hint)
-        if out["intent"] in ("ideas", "market_status", "followed_deals"):   # fixed sentences over the dashboard's own data (ask_info)
+        if out["intent"] in ("ideas", "market_status", "followed_deals", "market_summary"):   # fixed sentences over the dashboard's own data (ask_info)
             out.update(self._info_answer(out["intent"], out["args"]))
         if out["intent"] == "portfolio_summary":   # real numbers from the dashboard's own holdings, fixed sentences (ask.compose_portfolio)
             out.update(ask_mod.compose_portfolio(out["args"]["topic"], self._portfolio_figures()))
@@ -537,7 +537,7 @@ class App:
         """{"say", "facts"} for stock ideas, market hours and the followed investors' latest deals. Read-only: the regime is the
         dashboard's own 60 s view, the recommendations and deals are what it already holds, the picks are the forward test's
         stored ones; the holiday list is read from its cache, never fetched here."""
-        from . import ask_info
+        from . import ask as ask_mod, ask_info
         from .timezones import IST
         root = self._parent or self
         now = self._now_dt()
@@ -559,7 +559,33 @@ class App:
                     return (days or {}).get(d.isoformat())
                 except Exception:  # noqa: BLE001
                     return None
+            if args.get("when") in ask_mod.WHEN_VALUES and str(args.get("market") or "IN") == "IN":
+                def cached_days() -> dict[str, Any] | None:
+                    try:
+                        days = getattr(hol, "_days", None)
+                        if days is None and hol is not None and getattr(hol, "cache_dir", None):
+                            path = Path(hol.cache_dir) / "nse_holidays.json"
+                            days = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+                        return days if isinstance(days, dict) else None
+                    except Exception:  # noqa: BLE001 - no list is said as such
+                        return None
+                return ask_info.compose_market_when(str(args["when"]), now, trading_day, holiday_name, cached_days())
             return ask_info.compose_market_status(str(args.get("market") or "IN"), now, trading_day, holiday_name)
+        if intent == "market_summary":
+            reg: Any = None
+            if self.context is not None:
+                try:
+                    reg = self._regime_view().fetch()   # the Markets strip's own 60 s cache: no extra request
+                except Exception:  # noqa: BLE001 - no quotes are said as such
+                    reg = None
+            hol = self._safe_holidays()
+            try:
+                nse_open: bool | None = safety.market_open(now, hol)
+            except Exception:  # noqa: BLE001
+                nse_open = None
+            at = now.astimezone(IST)
+            return ask_info.compose_market_summary({"regime": {k: (reg or {}).get(k) for k in ("regime", "score", "guidance")} if reg else None,
+                                                    "markets": (reg or {}).get("markets") or {}, "nse_open": nse_open, "as_of": at.strftime("%H:%M IST") if reg else ""})
         if intent == "ideas":
             regime: Any = None
             if self.context is not None:
