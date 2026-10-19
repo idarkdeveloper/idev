@@ -52,7 +52,7 @@ First time on a new laptop (or after `git pull` brought new packages):
 
 ```powershell
 cd "C:\projects\Share Trade"
-py -3.12 -m venv .venv                       # only if .venv does not exist yet
+py -3.15 -m venv .venv                       # only if .venv does not exist yet
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env                       # then fill it in (section 3)
