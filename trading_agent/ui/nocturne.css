@@ -497,7 +497,7 @@ dialog.pal[open] { display: flex; }
 .sc-compact .sc-table th, .sc-compact .sc-table td { padding: 5px 10px; }
 .sc-table thead th { position: sticky; top: 0; z-index: 2; background: var(--color-surface); }
 .sc-table thead th.on { color: var(--color-text); }
-.sc-table th.sc-stock, .sc-table td.sc-stock { position: sticky; left: 0; z-index: 1; background: var(--color-surface); min-width: 210px; }
+.sc-table th.sc-stock, .sc-table td.sc-stock { position: sticky; left: 0; z-index: 1; background: var(--color-surface); min-width: 150px; max-width: 260px; }
 .sc-table thead th.sc-stock { z-index: 3; }
 .sc-sort { display: inline-flex; gap: 4px; min-height: 0; padding: 0; border: none; background: none; color: inherit; font: inherit;
   letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
@@ -512,8 +512,8 @@ dialog.pal[open] { display: flex; }
 .sc-badge { display: inline-flex; align-items: center; padding: 1px 7px; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: 11px; }
 .sc-held { background: var(--color-accent-800); color: var(--color-accent-100); }
 .sc-bought { border-color: var(--color-accent); color: var(--color-accent); }
-.sc-name { max-width: 200px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--color-muted); margin-top: 2px; }
-.sc-compact .sc-name { display: none; }
+.sc-name { max-width: 240px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--color-muted); margin-top: 2px; }
+.sc-compact .sc-name { font-size: 11px; }   /* the company name stays in compact rows too */
 .sc-text { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .sc-sparkcol { width: 72px; }
 .sc-spark { display: block; fill: none; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
