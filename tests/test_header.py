@@ -26,6 +26,7 @@ def _header(html: str) -> str:
 def _normal(h: str) -> str:
     """The header without what may differ per page: the active tab and the words of the subtitle."""
     h = h.replace(' aria-current="page"', "")
+    h = re.sub(r'\s*<div class="pf-row">.*?</div></div>', "", h, flags=re.S)   # only the Portfolio page has the Live / Practice switch in the bar
     return re.sub(r'(<div class="sub brand-sub" id="subtitle">).*?(</div></div>\n    </div>)', r"\1SUBTITLE\2", h, flags=re.S)
 
 
@@ -95,7 +96,7 @@ def test_the_top_tabs_are_portfolio_replay_screener_and_the_switch_is_only_on_th
         h = _header((UI / f"{name}.html").read_text(encoding="utf-8"))
         assert ">Portfolio</a>" in h and ">Replay</a>" in h and ">Screener</a>" in h and ">Demo<" not in h and ">Live</a>" not in h, name
     assert "pf-switch" not in (UI / "replay.html").read_text(encoding="utf-8") and "pf-switch" not in (UI / "screener.html").read_text(encoding="utf-8")
-    assert index.index("</header>") < index.index('id="pf-switch"') < index.index('id="modestrip"')                 # under the tabs, above the banner
+    assert index.index('<div class="row controls">') < index.index('id="pf-switch"') < index.index("</header>") < index.index('id="modestrip"')   # in the top bar, banner below
     sw = index[index.index('<div class="pf-row">'):index.index('id="modestrip"')]
     assert 'role="radiogroup"' in sw and sw.count('role="radio"') == 2 and 'data-pf="live"' in sw and 'data-pf="practice"' in sw
     assert 'aria-checked="true"' in sw and 'aria-checked="false"' in sw and "Practice<span" in sw and "Demo" not in sw

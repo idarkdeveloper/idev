@@ -1621,3 +1621,39 @@ a.dl-deal:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--color
   .oh-c2 { font-size: 13px; color: var(--color-label); font-variant-numeric: tabular-nums; }
   .oh-c3 { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 }
+
+/* ---- One top bar (header redesign). Brand, page tabs, Live/Practice, last check and the gear in a single 56 px sticky bar on a desktop;
+   two rows on a phone. Tokens only. The Ask/mic button is untouched (fixed, bottom-right). ---- */
+.hdr .brand-sub { display: none; }
+.hdr .logo { width: 32px; height: 32px; border-radius: 9px; }
+.hdr .brand-name { font-size: 16px; font-weight: 600; white-space: nowrap; }
+.pf-row { padding: 0; margin: 0; max-width: none; }
+.pf-opt .pf-ic { flex: none; color: var(--color-accent); }
+.pf-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-profit); flex: none; }
+.pf-opt { flex-direction: row; gap: 7px; min-width: 0; }
+.pf-sub { display: none !important; }   /* the words stay in the page for a screen reader; the bar only shows Live / Practice */
+.hdr #lastcheck { font-size: 12px; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+@media (min-width: 701px) {
+  header { position: sticky; top: 0; background: var(--color-bg); border-bottom: 1px solid var(--color-divider); }
+  .hdr { height: 56px; padding: 0 24px; flex-wrap: nowrap; gap: 20px; align-items: center; }
+  .hdr .controls { margin-left: auto; flex-wrap: nowrap; gap: 10px; }
+  .hdr .tabs { align-self: stretch; padding: 0; border: 0; border-radius: 0; gap: 4px; background: transparent; }
+  .hdr .tabs { display: flex; }
+  .hdr .tabs a { display: inline-flex; align-items: center; padding: 0 14px; font-size: 15px; font-weight: 600; border-radius: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .hdr .tabs a[aria-current="page"] { background: transparent; box-shadow: none; color: var(--color-text); border-bottom-color: var(--color-accent); }
+  .pf-switch { padding: 3px; gap: 2px; }
+  .pf-opt { min-height: 40px; padding: 0 14px; font-size: 14px; }
+  .modestrip { top: 56px; min-height: 32px; font-size: 13px; }
+}
+@media (max-width: 700px) {
+  .hdr { padding-bottom: 0; }
+  .hdr .controls > .pf-row { order: 6; flex: 0 0 100%; padding: 6px 0 8px; }
+  .hdr .pf-switch { width: 100%; } .hdr .pf-opt { flex: 1 1 0; min-width: 0; justify-content: center; min-height: 44px; }
+  .hdr #lastcheck { display: inline; order: 3; flex: 0 0 auto; padding: 0; white-space: nowrap; }
+  .hdr .tabs { order: 5; }
+  .modestrip { min-height: 28px; font-size: 12px; }
+}
+/* Screener: the market picker is a compact one-line segmented row with the market status beside it */
+body[data-mode="screener"] .sc-mtab, .sc-mtab { flex-direction: row; align-items: center; min-height: 44px; min-width: 0; padding: 0 14px; }
+.sc-mex { display: none; }
+.sc-markets { border-radius: 10px; box-shadow: none; border: 1px solid var(--color-divider); }
