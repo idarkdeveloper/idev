@@ -165,14 +165,15 @@
   <!-- ===================== Deals & orders ===================== -->
   <section class="ws-panel" id="ws-deals" data-ws="deals" role="tabpanel" aria-labelledby="wst-deals">
     <div class="card" data-anchor="deals">
-      <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="sub" id="dealsrc"></span></div>
-      <div class="chips-row" role="group" aria-label="Deal filters">
+      <div class="cardhead"><h2>Disclosed deals</h2><span class="pill warn" id="newcount"></span><span class="dl-count" id="deal-count"></span><span class="sub" id="dealsrc"></span></div>
+      <div class="chips-row dl-chips" role="group" aria-label="Deal filters">
         <span class="chipset" id="deal-filter" role="group" aria-label="Show deals by investor" hidden></span>
         <span class="chip-sep" id="deal-sep" aria-hidden="true" hidden></span>
         <span class="chipset" id="deal-chips"></span>
-        <button type="button" class="chip-add" id="deal-add" aria-haspopup="dialog" aria-expanded="false">+ Add filter</button>
+        <button type="button" class="chip-add" id="deal-add" aria-haspopup="dialog" aria-expanded="false" aria-label="Add a filter">+ Add</button>
       </div>
-      <div class="scroll tscroll"><table class="dt"><thead><tr><th>Date</th><th>Deal</th><th class="num">Size</th><th>Who</th><th>Where</th></tr></thead><tbody id="deals"></tbody></table></div>
+      <div class="dl-wrap"><table class="dt dl-table"><tbody id="deals"></tbody></table>
+        <div class="dl-more" id="deals-more-wrap" hidden><button type="button" id="deals-more">Show 10 more</button></div></div>
     </div>
     <div class="card" data-anchor="insider" id="ins-card">
       <div class="cardhead"><h2>Promoter and director buying</h2><span class="sub" id="ins-sub">open-market buys from NSE insider filings, last 30 days</span></div>
@@ -820,14 +821,53 @@
   document.addEventListener("keydown", (ev) => { if(ev.key === "Escape" && pop){ closePop(); $("deal-add").focus(); } });
   document.addEventListener("mousedown", (ev) => { if(pop && ev.target && ev.target.closest && !ev.target.closest("#deal-pop") && !ev.target.closest("#deal-add")) closePop(); });
 
+  // A deal is a small card: the whole row is a link to the stock; the side is a word and an arrow as well as a colour.
+  const bigInr = (v) => v >= 1e7 ? "₹" + (v / 1e7).toFixed(1).replace(/\.0$/, "") + " cr" : v >= 1e5 ? "₹" + (v / 1e5).toFixed(2).replace(/\.?0+$/, "") + " lakh" : inr(v);
+  const dealKind = (d) => /block/i.test(String(d.source)) ? "block" : /bulk/i.test(String(d.source)) ? "bulk" : String(d.source || "").replace(/_/g, " ");
+  function heldQty(sym){   // shares you hold of a stock (the practice account on Demo, your Groww holdings on Live); null when not known yet
+    const k = String(sym || "").toUpperCase().replace(/\.(NS|BO)$/, "");
+    if(MODE === "demo"){ const p = (S && S.positions || []).find(x => String(x.symbol).toUpperCase().replace(/\.(NS|BO)$/, "") === k); return p ? Number(p.qty) : 0; }
+    if(!MP || !MP.holdings) return null;
+    const h = MP.holdings.find(x => String(x.symbol).toUpperCase().replace(/\.(NS|BO)$/, "") === k);
+    return h ? Number(h.qty) : 0;
+  }
   function dealRow(d){
-    const side = sideOf(d), z = parseSize(d.size), who = (d.who || []).length ? d.who.join(", ") : (d.investor || "");
-    return `<tr class="${d.status === "new" ? "is-new" : ""}" data-open-stock="${esc(d.ticker)}">
-        <td class="nowrap">${d.status === "new" ? '<span class="new-dot" title="New since the last check"></span><span class="sr-only">New: </span>' : ""}${esc(SAFE.day(d.transaction_date) || d.transaction_date)}</td>
-        <td class="nowrap"><span class="side-chip ${side === "SELL" ? "sell" : "buy"}">${esc(side)}</span> <a href="#" data-lookup="${esc(d.ticker)}" class="sym">${esc(d.ticker)}</a></td>
-        <td class="num nowrap">${z ? `<div>${z.qty.toLocaleString("en-IN")} sh</div><div class="sub l2">@ ${inr(z.price, 2)}</div>` : esc(d.size)}</td>
-        <td><div title="${esc(d.investor)}">${esc(who)}</div><div class="sub l2">${esc(WHO[d.client_type] || d.client_type || "")}${d.status === "new" ? "" : " · analysed"}</div></td>
-        <td class="nowrap"><span class="ck-exch">${esc(d.exchange || "NSE")}</span> <span class="sub">${esc(d.source)}</span></td></tr>`;
+    const side = sideOf(d), z = parseSize(d.size), who = (d.who || []).length ? d.who.join(", ") : (d.investor || ""), sell = side === "SELL";
+    const held = heldQty(d.ticker);
+    const chip = held ? `<span class="dl-tag held">Held · ${esc(held.toLocaleString("en-IN"))} sh</span>` : (sell && held === 0 ? '<span class="dl-tag">You hold none</span>' : "");
+    const value = z ? bigInr(z.qty * z.price) : "";
+    return `<tr class="${d.status === "new" ? "is-new" : ""}" data-open-stock="${esc(d.ticker)}"><td colspan="5" class="dl-cell"><a class="dl-deal" href="/?stock=${encodeURIComponent(d.ticker)}" data-lookup="${esc(d.ticker)}" title="${esc(d.investor)}">
+        <span class="dl-l1"><span class="dl-side ${sell ? "sell" : "buy"}"><span class="side-chip-text">${sell ? "▼ SELL" : "▲ BUY"}</span></span><span class="dl-sym">${esc(d.ticker)}</span>${d.status === "new" ? '<span class="dl-new">NEW</span>' : ""}<span class="dl-val ${sell ? "sell" : "buy"}">${esc(value)}</span></span>
+        <span class="dl-l2"><span class="dl-who">${esc(who)}</span> · ${esc(d.exchange || "NSE")} ${esc(dealKind(d))} · ${esc(SAFE.day(d.transaction_date) || d.transaction_date)}</span>
+        <span class="dl-l3"><span class="dl-num">${z ? `${esc(z.qty.toLocaleString("en-IN"))} sh @ ${esc(inr(z.price, 2))}` : esc(d.size)}</span>${chip}</span></a></td></tr>`;
+  }
+  // The deals list (also repainted when your holdings arrive, so the "Held" and "You hold none" chips are right).
+  function paintDeals(inv){
+    const byInv = dealsShown(inv), shown = byInv.filter(dealMatches);
+    const dk = JSON.stringify([dealSel, dfil, S.deals.length]);
+    if(dk !== dealsKey){ dealsKey = dk; dealsLimit = 8; }   // a new filter starts from the first 8 again
+    $("deal-count").textContent = inv.length > 1 ? `${inv.length} followed` : "";
+    $("deals").innerHTML = shown.length ? dealRows(shown)
+      : `<tr><td colspan="5" class="empty"><b>${!S.deals.length ? "No deals in the last 30 days" : byInv.length ? "No deal matches these filters" : "No deals by the selected investors"}</b>${!S.deals.length ? `The investors you follow (${esc(inv.join(", "))}) have not been seen in a bulk or block deal. New ones appear here as they are disclosed.` : "Change or remove a filter to see more."}</td></tr>`;
+    const more = $("deals-more-wrap");
+    if(more){ more.hidden = shown.length <= dealsLimit; const left = Math.min(10, shown.length - dealsLimit); $("deals-more").textContent = `Show ${left} more`; }
+  }
+  // The deals grouped by day (newest first, as the server sends them), 8 at first, 10 more a tap.
+  let dealsLimit = 8, dealsKey = "";
+  function dealRows(list){
+    const today = new Date().toLocaleDateString("en-CA", {timeZone: "Asia/Kolkata"});
+    const shown = list.slice(0, dealsLimit);
+    let html = "", last = null;
+    shown.forEach((d) => {
+      const day = String(d.transaction_date || "").slice(0, 10);
+      if(day !== last){
+        last = day;
+        const n = shown.filter(x => String(x.transaction_date || "").slice(0, 10) === day).length;
+        html += `<tr class="dl-day"><td colspan="5">${esc(TA.dayLabel(day, today))}<span>${n} deal${n === 1 ? "" : "s"}</span></td></tr>`;
+      }
+      html += dealRow(d);
+    });
+    return html;
   }
 
   function renderRecs(){
@@ -908,9 +948,7 @@
     renderDealFilter(inv);
     $("deal-sep").hidden = inv.length < 2;
     renderDealChips();
-    const byInv = dealsShown(inv), shown = byInv.filter(dealMatches);
-    $("deals").innerHTML = shown.length ? shown.map(dealRow).join("")
-      : `<tr><td colspan="5" class="empty">${!S.deals.length ? `No disclosed deals by ${esc(inv.join(", "))} in the window.` : byInv.length ? "No deal matches these filters." : "No deals by the selected investors in the window."}</td></tr>`;
+    paintDeals(inv);
 
     if(MODE === "demo"){
     $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
@@ -1109,6 +1147,7 @@
     $("orders-count").textContent = o.length > 10 ? `showing ${shown.length} of ${o.length}` : "";
   }
   $("orders-more").addEventListener("click", () => { ordersLimit += 20; renderOrders(); });
+  { const dm = $("deals-more"); if(dm && dm.addEventListener) dm.addEventListener("click", () => { dealsLimit += 10; render(); }); }
   function renderScreen(sc){
     const fx = sc.fundamentals;
     const fcols = r => fx ? `<td class="num">${pct(r.roe)}</td><td class="num">${r.financial ? '<span class="sub">bank/fin</span>' : r.debt_to_equity != null ? r.debt_to_equity.toFixed(2) + "×" : "n/a"}</td><td class="num">${r.pe ? r.pe.toFixed(1) : "n/a"}</td>` : "";
@@ -1263,6 +1302,7 @@
   }
   function renderMyPortfolio(m, force){
     MP = m; if(S) renderTiles();
+    if(S && S.settings && typeof paintDeals === "function") paintDeals(investorsOf(S.settings));
     paintGrowwRefresh(m);
     const keepRows = !force && sellEdit !== null && sellEdit.source === "groww";   // a what-if panel is open: don't rebuild under it
     const rows = $("mp-rows"), stats = $("mp-stats");
