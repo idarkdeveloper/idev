@@ -467,12 +467,23 @@ def _filters_row(settings: Any, sd: Path, now: datetime, cal: Any, nse_off: str 
     tries = _dict(_dict(data.get("tries")).get(now.date().isoformat()))
     errors = _dict(tries.get("errors"))
     last_err = "; ".join(f"{LABEL.get(k, k)}: {v}" for k, v in errors.items()) or None
+    detail = "a missing or stale list blocks nothing (buys are then held back only by the other rules)"
+    source = _dict(data.get("pledge")).get("source")
+    prog = _dict(data.get("pledge_progress"))
+    if "pledge" in on and source:
+        detail += f" · promoter pledges from {source}, as NSE's pledge list was empty"
+    if "pledge" in on and LABEL["pledge"] in missing and prog.get("day") == now.date().isoformat():
+        # the fallback is still reading filings: say so instead of an old pledge error
+        errors.pop("pledge", None)
+        last_err = "; ".join(f"{LABEL.get(k, k)}: {v}" for k, v in errors.items()) or None
+        detail += (f" · NSE's pledge list is empty; reading each company's quarterly shareholding filing instead: "
+                   f"{prog.get('done', 0)} of {prog.get('total', 0)} stocks so far (the last list stays in use meanwhile)")
     return _row("filters", "ASM/GSM, board meetings, pledges (NSE)", [AGENT, SCREEN, MORNING, DASH], configured=bool(on),
                 last_ok=min(stamps) if stamps else None, rows=rows or None, late=bool(missing),
                 due_text="not fetched for " + _day_text(due) + ": " + ", ".join(missing) if missing else "",
                 error=last_err, error_at=_parse(tries.get("last")) if last_err else None, failing=bool(nse_off), backoff=nse_off,
                 schedule="once each trading day from the open, through the NSE client; retries 5, 15 then 60 min apart",
-                detail="a missing or stale list blocks nothing (buys are then held back only by the other rules)", now=now)
+                detail=detail, now=now)
 
 
 def _groww_row(settings: Any, sd: Path, now: datetime, cal: Any, panel: dict[str, Any]) -> dict[str, Any]:
