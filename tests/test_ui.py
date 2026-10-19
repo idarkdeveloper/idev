@@ -1030,8 +1030,14 @@ def test_the_apps_checker_sells_on_practice_only_and_marks_the_order(two_pages, 
     assert demo["positions"] == []
     assert demo["stop_fills"][-1]["symbol"] == "LAURUSLABS" and demo["stop_fills"][-1]["type"] == "fixed"
     assert demo["orders"][0]["stop_hit"] is True and demo["orders"][0]["side"] == "sell"
+    # the "Sold by stop-loss" list: the stop sell with what it was bought at, the stop and the profit or loss
+    ss = demo["stop_sells"]
+    assert len(ss) == 1 and ss[0]["symbol"] == "LAURUSLABS" and ss[0]["stop_type"] == "fixed"
+    assert ss[0]["filled_avg_price"] == 94.0 and ss[0]["avg_entry_price"] is not None
+    assert ss[0]["realised_pl"] == pytest.approx(ss[0]["qty"] * (94.0 - ss[0]["avg_entry_price"]) - ss[0]["fees"], abs=0.02)
     _, live = _get(base + "/api/state")
     assert live["stop_fills"] == []   # Live does not show practice fills
+    assert live["stop_sells"] == []
     # Live's reset keeps the practice fills
     assert _post(base + "/api/reset", {})[0] == 200
     assert json.loads((settings.state_dir / "state.json").read_text())["practice_stop_fills"]
@@ -1693,3 +1699,12 @@ def test_order_forms_show_a_live_price_line_from_the_read_only_lookup():
     assert 'TA.priceLine($("ro-price")' in replay_js and "/lookup?ticker=" in replay_js and "roPx.update(" in replay_js
     assert "400" in common[common.index("function priceLine"):] and "seq++" in common and "no price for" in common
     assert "placeholder = p != null" in index and "a share" in index
+
+
+def test_practice_card_lists_stop_loss_sales():
+    ui = Path(__file__).resolve().parent.parent / "trading_agent" / "ui"
+    index = (ui / "index.html").read_text(encoding="utf-8")
+    assert 'id="stop-sold"' in index and "function renderStopSold" in index and "renderStopSold();" in index
+    body = index[index.index("function renderStopSold"):]
+    assert "Sold by stop-loss" in body[:2500] and "S.stop_sells" in body[:400] and 'MODE !== "demo"' in body[:400]
+    assert "paper · sold by stop-loss" in index
