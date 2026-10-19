@@ -663,12 +663,13 @@ def test_live_v2_workspaces_layout():
     split beside the portfolio is gone and the stock opens in a full-view modal."""
     ui = Path(__file__).resolve().parents[1] / "trading_agent" / "ui"
     html = (ui / "index.html").read_text(encoding="utf-8")
-    pos = [html.index(f'id="ws-{w}"') for w in ("overview", "deals", "research", "tools")]
+    pos = [html.index(f'id="ws-{w}"') for w in ("overview", "deals", "research", "paper", "tools")]
     assert pos == sorted(pos) and html.index('id="ws-tabs"') < pos[0]
-    ov, deals, research, tools = pos
+    ov, deals, research, paper, tools = pos
     assert ov < html.index('id="mp-card"') < html.index('data-anchor="recs"') < html.index('data-anchor="forward"') < deals
     assert deals < html.index('data-anchor="orders"') < html.index('data-anchor="runs"') < research
-    assert research < html.index('data-anchor="lookup"') < html.index('data-anchor="backtest"') < tools
+    assert research < html.index('data-anchor="lookup"') < html.index('data-anchor="backtest"') < paper
+    assert paper < html.index('data-anchor="paper"') < tools
     assert tools < html.index('data-anchor="size"') < html.index('data-anchor="costs"') < html.index("<footer>")
     assert 'class="topsplit"' not in html and 'class="split-right"' not in html
     for w in ("overview", "deals", "research", "tools"):
@@ -1654,3 +1655,29 @@ def test_demo_limit_orders_wait_fill_or_cancel(two_pages):
     status, j = _post(base + "/demo/api/order", {"symbol": "SENCO", "side": "buy", "qty": 1, "limit_price": "abc"})
     assert status == 400
     assert fake.writes == []
+
+
+def test_paper_accounts_tab_lists_all_four_and_the_forward_card_reads_its_own_file(server):
+    """The forward card read the first file in state/forward/, and model_niftymidcap150 sorts before niftymidcap150:
+    with the model account there it showed the model account. Each account now reads its own file."""
+    from datetime import datetime
+    from trading_agent.forward import IST, ForwardTest
+    base, app = server
+    _, pa = _get(base + "/api/paper-accounts")
+    assert [a["key"] for a in pa["accounts"]] == ["forward", "model", "resmom", "top10"]
+    assert not any(a["started"] for a in pa["accounts"])
+    when = lambda: datetime(2026, 10, 19, 16, 0, tzinfo=IST)  # noqa: E731
+    prices = {"MID150BEES": 200.0, "A": 100.0, "B": 50.0, "C": 80.0}
+    ForwardTest(app.settings.state_dir, top=2, capital=100_000, price_fn=lambda s: prices[s], now=when).run(
+        lambda: {"top": [{"symbol": "A"}, {"symbol": "B"}], "eligible": 9})
+    ForwardTest(app.settings.state_dir, top=2, capital=500_000, price_fn=lambda s: prices[s], now=when,
+                name="model_niftymidcap150").run(lambda: {"top": [{"symbol": "C"}, {"symbol": "B"}], "eligible": 9})
+    prices.clear()   # no live prices needed
+    _, st = _get(base + "/api/state")
+    assert {h["symbol"] for h in st["forward"]["holdings"]} == {"A", "B"} and st["forward"]["capital"] == 100_000
+    status, pa = _get(base + "/api/paper-accounts")
+    acc = {a["key"]: a for a in pa["accounts"]}
+    assert status == 200 and acc["forward"]["started"] and acc["model"]["started"]
+    assert {h["symbol"] for h in acc["model"]["holdings"]} == {"C", "B"} and acc["model"]["capital"] == 500_000
+    assert acc["model"]["history"][0]["date"] and acc["model"]["value"] is not None and acc["model"]["since"] == "2026-10-19"
+    assert not acc["resmom"]["started"] and not acc["top10"]["started"] and acc["top10"]["about"]
