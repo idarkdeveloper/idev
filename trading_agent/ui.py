@@ -178,6 +178,8 @@ class App:
             from .prices import price_ttl
             self.prices.ttl_fn = lambda d: price_ttl(datetime.now(timezone.utc), d, self._safe_holidays())
         self.momentum = MomentumScreen(self.prices)
+        self._research: Any | None = None   # SharedHistory over self.prices, for the read-only research tools only
+        self._research_warm: Any | None = None
         self.last_backtest: dict[str, Any] | None = None
         self.last_screen: dict[str, Any] | None = None
         self.last_factor_bt: dict[str, Any] | None = None
@@ -424,7 +426,7 @@ class App:
                 tv = TradingViewColumns(st.state_dir, enabled=lambda: bool(self.settings.tradingview_screener),
                                         role=lambda: self.settings.ta_role)
                 funds = YahooFundamentals(st.state_dir / "cache", cache_ttl=24 * 3600)
-                self._screener = ScreenerService(prices=self.prices, fundamentals=funds, load_universe=load_universe,
+                self._screener = ScreenerService(prices=self.research_prices, fundamentals=funds, load_universe=load_universe,
                                                  bands=lambda: book_for(self.settings), tv=tv, names=self._screener_names,
                                                  filters=lambda: filters_for(self.settings))
             return self._screener
@@ -450,6 +452,38 @@ class App:
         except (OSError, ValueError, AttributeError, TypeError):
             pass
         return out
+
+    @property
+    def research_prices(self) -> Any:
+        """The price source of the READ-ONLY research tools (factor screen, portfolio backtest, signal lab, deals backtest,
+        the screener page): ``self.prices`` behind a shared in-memory cache (history_cache.SharedHistory, 10 minutes, bounded).
+        Latest-price reads (the order-form line, Look up) and every agent / watch / paper-trading path keep ``self.prices``."""
+        if self._parent is not None:
+            return self._parent.research_prices
+        with self._lazy_lock:
+            if self._research is None:
+                import os
+                from .history_cache import DEFAULT_MAX_ENTRIES, SharedHistory
+                try:
+                    cap = int(os.environ.get("RESEARCH_CACHE_MAX") or DEFAULT_MAX_ENTRIES)
+                except ValueError:
+                    cap = DEFAULT_MAX_ENTRIES
+                self._research = SharedHistory(self.prices, ttl=600.0, max_entries=cap)
+            return self._research
+
+    def start_research_warm(self, delay: float = 30.0) -> Any | None:
+        """After ``delay`` seconds load the default universes' histories into the research cache (daemon thread, paced). Off
+        with RESEARCH_WARM=false, in the offline sample and for a child app; returns the thread's object or None."""
+        import os
+        if self._parent is not None or self.demo_trades is not None or self._research_warm is not None:
+            return self._research_warm
+        if os.environ.get("RESEARCH_WARM", "true").strip().lower() in ("false", "0", "no", "off"):
+            return None
+        from .history_cache import ResearchWarm
+        from .screen import load_universe
+        self._research_warm = ResearchWarm(self.research_prices, lambda name: [m["symbol"] for m in load_universe(name)], delay=delay)
+        self._research_warm.start()
+        return self._research_warm
 
     def foreign_screener(self, key: str) -> Any:
         """The service of one US / UK / Japan list (screener_markets): Yahoo history and fundamentals, view only."""
@@ -1165,7 +1199,7 @@ class App:
                     data = self.data
                     deals = fetch_followed(data, names, self.settings.watch_source,
                                            days=days if self.settings.data_source == "nse" else None)
-                    prices = self.prices
+                    prices = self.research_prices
                 if len(names) == 1:
                     result = run_backtest(names[0], deals, prices, horizons=horizons, cost_bps=cost_bps)
                 else:  # pooled result plus one row per investor
@@ -1201,7 +1235,8 @@ class App:
                 if quality or value:
                     from .fundamentals import YahooFundamentals
                     funds = YahooFundamentals(self.settings.state_dir / "cache")
-                result = run_screen(members, self.prices, top=top, fundamentals=funds,
+                result = run_screen(members, self.research_prices, top=top, fundamentals=funds,
+                                    progress=lambda m: setattr(job, "message", m),
                                     quality=1.0 if quality else 0.0, value=1.0 if value else 0.0,
                                     bands=book_for(self.settings), filters=filters_for(self.settings))
                 result.pop("all", None)
@@ -1821,7 +1856,7 @@ class App:
                 membership = point_in_time(universe, [m["symbol"] for m in members], self.settings.state_dir)
 
                 def run_top(n: int) -> dict[str, Any]:
-                    return run_factor_backtest(members, self.prices, top=n, years=years,
+                    return run_factor_backtest(members, self.research_prices, top=n, years=years, progress=lambda m: setattr(job, "message", m),
                                                cost_model=cost_model_for("in"),
                                                capital=self.settings.paper_starting_cash,
                                                membership=membership, index_fund=INDEX_FUNDS.get(universe.upper()))
@@ -1867,7 +1902,7 @@ class App:
         def run() -> None:
             try:
                 members = load_universe(universe)
-                r = run_signal_lab(members, self.prices, horizons=horizons, years=years,
+                r = run_signal_lab(members, self.research_prices, horizons=horizons, years=years,
                                    membership=point_in_time(universe, [m["symbol"] for m in members],
                                                             self.settings.state_dir),
                                    cost_model=cost_model_for("in"))
@@ -2712,6 +2747,7 @@ def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: in
     # --demo is the offline sample dashboard, isolated in state_dir/demo-sample. Without it the app is the
     # real one, and its /demo page is the same page with the practice account.
     app = sample_app(settings, context) if demo else App(settings, context=context)
+    app.start_research_warm()  # the research tools' price histories, a little after start (RESEARCH_WARM=false turns it off)
     app.ensure_stop_checker()  # practice stop-losses are checked while the dashboard runs, tab open or not
     server = make_server(app, host, port)
     url = f"http://{host}:{server.server_address[1]}/"
