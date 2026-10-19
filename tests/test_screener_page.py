@@ -170,3 +170,8 @@ def test_screener_css_uses_tokens_and_sticks_the_stock_column():
     assert not re.findall(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(", block)
     assert re.search(r"\.sc-table th\.sc-stock, \.sc-table td\.sc-stock \{ position: sticky; left: 0;", block)
     assert ".sc-scroll { max-height: 72vh; overflow: auto; }" in block
+
+
+def test_add_filter_popup_is_not_closed_by_a_height_only_resize():
+    # a phone's keyboard (raised when the popup focuses its field) resizes the height; only a width change may close the popup
+    assert "wider = window.innerWidth !== lastW" in JS and "if(wider && popOpen()) closePop()" in JS

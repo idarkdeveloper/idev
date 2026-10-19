@@ -611,8 +611,12 @@
       else if(drawerOpen()){ e.preventDefault(); closeDrawer(); }
     });
     document.addEventListener("visibilitychange", () => { if(!document.hidden && needsPoll(st.data)) load(false); });
-    let rz = 0;
-    window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if(!st.allCols) renderTable(); if(popOpen()) closePop(); if(sheetOpen() && !narrow()) closeSheet(); }, 150); });
+    let rz = 0, lastW = window.innerWidth;
+    // Only a change of WIDTH closes the popup: focusing its field raises the phone's keyboard, which resizes the height
+    // (and, in "Desktop site", fires resize), and that used to close the popup the moment it opened.
+    window.addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => {
+      const wider = window.innerWidth !== lastW; lastW = window.innerWidth;
+      if(!st.allCols) renderTable(); if(wider && popOpen()) closePop(); if(sheetOpen() && !narrow()) closeSheet(); }, 150); });
     load(true);
   }
   init();
