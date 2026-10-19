@@ -845,6 +845,33 @@
       : `<div class="card empty">No recommendations yet. The watch service asks Claude when your investors have new deals${c.claude?"":" (needs ANTHROPIC_API_KEY)"}.</div>`;
   }
 
+  // One run row, as it always was.
+  const runRow = (r) => `<div class="run"><span class="sub run-when">${when(r.at)}</span>
+        <span class="run-what"><b>${r.new_trades ? r.new_trades+" new deal"+(r.new_trades===1?"":"s") : "nothing new"}</b> · ${r.baseline ? "baseline: recorded as seen after lost state, Claude not called" : r.skipped ? "skipped, Claude not called" : r.dry_run ? "dry run" : `${r.recommendations??0} recommendations · ${r.orders??0} orders · ${esc(r.model||"")}${r.refusal?" · refused":""}${r.fallback_used?" · fallback model":""}${r.stop==="step_limit"?" · hit step limit":r.stop==="max_tokens"?" · reply cut short":""}`}</span>
+        <span class="sub run-cost">${r.usage && r.usage.cost_usd!=null ? `$${r.usage.cost_usd.toFixed(3)} · ${Math.round((r.usage.input_tokens+r.usage.cache_read_tokens+r.usage.cache_write_tokens+r.usage.output_tokens)/1000)}k tokens` : ""}</span></div>`;
+  // The quiet checks of a stretch are one folded line (a real button) that opens in place; what the user opened stays open across
+  // the 60 s refresh (keyed by the group's newest run time).
+  const runsOpen = new Set();
+  const hm = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false}); };
+  function renderRuns(runs){
+    return TA.groupRuns(runs).map((x, n) => {
+      if(x.type === "run") return runRow(x.run);
+      const open = runsOpen.has(x.key), id = "rg-" + n;
+      return `<div class="run-group"><button type="button" class="run-fold" aria-expanded="${open}" aria-controls="${id}" data-run-key="${esc(x.key)}">
+          <span class="sub run-when">${when(x.newest.at)}</span>
+          <span class="run-what"><b>nothing new</b>, ${x.runs.length} checks (${hm(x.oldest.at)} to ${hm(x.newest.at)})</span>
+          <svg class="run-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg></button>
+        <div class="run-sub" id="${id}"${open ? "" : " hidden"}>${x.runs.map(runRow).join("")}</div></div>`;
+    }).join("");
+  }
+  const runsBox = $("runs");
+  if(runsBox && runsBox.addEventListener) runsBox.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest(".run-fold"); if(!b) return;
+    const k = b.dataset.runKey, open = b.getAttribute("aria-expanded") !== "true";
+    if(open) runsOpen.add(k); else runsOpen.delete(k);
+    b.setAttribute("aria-expanded", String(open));
+    const sub = document.getElementById(b.getAttribute("aria-controls")); if(sub) sub.hidden = !open;
+  });
   function render(keepPositions){   // keepPositions: leave the positions table alone (a stop editor is open in it)
     const s = S.settings, a = S.account, c = S.connections;
     SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: S.live_orders === true, halt: S.halt, brake: S.day_brake}));
@@ -904,10 +931,7 @@
 
     const spent = S.runs.map(r => r.usage && r.usage.cost_usd).filter(v => v != null);
     $("runs-spend").textContent = spent.length ? `Claude API spend: about $${spent.reduce((a, b) => a + b, 0).toFixed(2)} over ${spent.length} run${spent.length === 1 ? "" : "s"}` : "";
-    $("runs").innerHTML = S.runs.length ? S.runs.map(r => `<div class="run"><span class="sub run-when">${when(r.at)}</span>
-        <span class="run-what"><b>${r.new_trades ? r.new_trades+" new deal"+(r.new_trades===1?"":"s") : "nothing new"}</b> · ${r.baseline ? "baseline: recorded as seen after lost state, Claude not called" : r.skipped ? "skipped, Claude not called" : r.dry_run ? "dry run" : `${r.recommendations??0} recommendations · ${r.orders??0} orders · ${esc(r.model||"")}${r.refusal?" · refused":""}${r.fallback_used?" · fallback model":""}${r.stop==="step_limit"?" · hit step limit":r.stop==="max_tokens"?" · reply cut short":""}`}</span>
-        <span class="sub run-cost">${r.usage && r.usage.cost_usd!=null ? `$${r.usage.cost_usd.toFixed(3)} · ${Math.round((r.usage.input_tokens+r.usage.cache_read_tokens+r.usage.cache_write_tokens+r.usage.output_tokens)/1000)}k tokens` : ""}</span></div>`).join("")
-      : '<div class="empty">No runs recorded yet.</div>';
+    $("runs").innerHTML = S.runs.length ? renderRuns(S.runs) : '<div class="empty">No runs recorded yet.</div>';
 
     renderBtInvestors(inv);
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);

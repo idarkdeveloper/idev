@@ -904,7 +904,7 @@ class App:
             "account": acct, "positions": positions, "performance": perf,
             "bands": self._bands_for([p["symbol"] for p in positions]),
             "broker_error": broker_error, "deals": deals, "deals_error": self._deals_error,
-            "recommendations": recs, "runs": list(reversed(st.data["runs"][-20:])),
+            "recommendations": recs, "runs": list(reversed(st.data["runs"][-60:])),   # the page folds the quiet checks into one line per stretch
             "seen_count": st.seen_count, "busy": busy,
             "running": ({"kind": run_now.kind, "label": self.JOB_LABELS.get(run_now.kind, run_now.kind),
                          "started_at": run_now.started_at} if busy and run_now else None),

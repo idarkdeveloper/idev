@@ -1503,3 +1503,16 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .pf-opt[aria-checked="true"] .pf-sub { color: inherit; opacity: .8; }
 .pf-opt:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 @media (max-width: 700px) { .pf-row { padding: 8px 16px 0; } .pf-switch { width: 100%; } .pf-opt { flex: 1 1 0; min-width: 0; } }
+/* Recent runs: a stretch of quiet checks folded into one line (a real button, 44 px) that opens in place. Tokens only. */
+.runs .run-group { border-bottom: 1px solid var(--color-rule); }
+.runs .run-fold { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 6px 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.runs .run-fold:hover { background: var(--color-hover); }
+.runs .run-fold:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.runs .run-fold .run-what b { font-weight: 600; color: var(--color-label); }
+.runs .run-chev { color: var(--color-muted); transition: transform .15s; }
+.runs .run-fold[aria-expanded="true"] .run-chev { transform: rotate(180deg); }
+.runs .run-sub { padding-left: 12px; border-left: 2px solid var(--color-divider); margin: 0 0 6px 4px; }
+.runs .run-sub[hidden] { display: none; }
+.runs .run-sub .run:last-child { border-bottom: none; }
+@media (max-width: 600px) { .runs .run-fold { grid-template-columns: minmax(0, 1fr) auto; } .runs .run-fold .run-when { grid-column: 1; } .runs .run-fold .run-what { grid-column: 1; } .runs .run-fold .run-chev { grid-column: 2; grid-row: 1 / span 2; } }
+@media (prefers-reduced-motion: reduce) { .runs .run-chev { transition: none; } }
