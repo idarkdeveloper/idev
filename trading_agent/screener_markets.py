@@ -139,8 +139,8 @@ def parse_topix100(text: str) -> list[dict[str, str]]:
         if not code or code in seen:
             continue
         seen.add(code)
-        name = next((r[k] for k in ("Name (English)", "Issue Name", "Name") if r.get(k)), "")
-        sector = next((r[k] for k in ("Sector(33)", "Industry", "33 Sector(name)", "Sector") if r.get(k)), "")
+        name = next((r[k] for k in ("Issue", "Name (English)", "Issue Name", "Name") if r.get(k)), "")   # the file's columns: Date, Issue, Code, Sector, ...
+        sector = next((r[k] for k in ("Sector", "Sector(33)", "Industry") if r.get(k)), "")
         out.append({"symbol": code + ".T", "name": name.strip(), "industry": sector.strip()})
     return sorted(out, key=lambda m: m["symbol"])
 
@@ -192,22 +192,36 @@ def load_members(key: str, cache_dir: Path | None = None, session: Any = None, c
 
 
 # ---- prices and fundamentals in the form the ScreenerService expects ----
-class ForeignPrices:
-    """``history(code)`` for qualified codes: the Yahoo symbol is derived (AAPL.US -> AAPL), UK pence become pounds."""
+PENCE = ("GBp", "GBX")   # Yahoo chart currencies quoted in pence
 
-    def __init__(self, inner: Any, divisor: float = 1.0):
-        self.inner, self.divisor = inner, divisor
+
+class ForeignPrices:
+    """``history(code)`` for qualified codes: the Yahoo symbol is derived (AAPL.US -> AAPL). UK (.L) prices are divided by
+    100 only when Yahoo's chart currency for that symbol is pence (GBp / GBX); a London stock quoted in pounds (GBP, e.g. a
+    Vanguard ETF) is left alone. With no currency in the answer a .L price is assumed to be pence and the bars say so
+    (``pence_assumed``)."""
+
+    def __init__(self, inner: Any, pence_market: bool = False):
+        self.inner, self.pence_market = inner, pence_market
+        if hasattr(inner, "record_currency"):
+            inner.record_currency = True
 
     def history(self, symbol: str, range_: str = "2y") -> list[dict[str, Any]]:
         bars = self.inner.history(markets.yahoo_symbol(symbol), range_)
-        if self.divisor == 1.0:
+        if not self.pence_market or not bars:
             return bars
+        cur = next((b.get("currency") for b in reversed(bars) if b.get("currency")), None)
+        assumed = cur is None
+        if not assumed and cur not in PENCE:
+            return bars                                                         # GBP (or anything else): already in pounds
         out = []
         for b in bars:
             nb = dict(b)
             for k in ("close", "adj_close", "open", "high", "low"):
                 if nb.get(k) is not None:
-                    nb[k] = float(nb[k]) / self.divisor
+                    nb[k] = float(nb[k]) / UK_PENCE
+            if assumed:
+                nb["pence_assumed"] = True
             out.append(nb)
         return out
 
@@ -234,7 +248,7 @@ def make_service(key: str, state_dir: Path, *, holidays_unused: Any = None, sess
     cache = Path(state_dir) / "cache" / f"screener_{mk.lower()}"
     yp = YahooPrices(suffix=markets.MARKETS[mk]["yahoo_suffix"], session=session, cache_dir=cache, cache_ttl=CLOSED_TTL)
     yp.ttl_fn = lambda d: min(d, FRESH_TTL) if market_open(mk) else d   # 30 min during the market's own hours, 6 h otherwise
-    prices = ForeignPrices(yp, UK_PENCE if mk == "UK" else 1.0)
+    prices = ForeignPrices(yp, pence_market=mk == "UK")
     funds = YahooFundamentals(cache, session=fund_session, cache_ttl=24 * 3600)
     return ScreenerService(prices=prices, fundamentals=funds, load_universe=lambda k: load_members(k, cache / "lists"),
                            workers=3, fund_workers=2, pace=0.15, jitter=True, fund_fn=fund_fields, turnover_floor=0.0,

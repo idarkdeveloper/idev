@@ -18,8 +18,10 @@ def table(rows):
 SP_HTML = table([["Symbol", "Security", "GICS Sector"], ["AAPL", "Apple Inc.", "Information Technology"], ["BRK.B", "Berkshire Hathaway", "Financials"],
                  ["AAPL", "dup", "x"], ["MSFT", "Microsoft", "Information Technology"]])
 FTSE_HTML = table([["Company", "Ticker", "FTSE industry classification benchmark sector"], ["Vodafone", "VOD", "Telecoms"], ["BT Group", "BT.A", "Telecoms"]])
-TOPIX_CSV = ("Name (English),Code,Sector(33),New Index Series Code\nTOYOTA MOTOR,7203,Transportation Equipment,TOPIX Core30\n"
-             "SONY GROUP,6758,Electric Appliances,TOPIX Large70\nSMALL CO,1301,Fishery,TOPIX Mid400\n")
+TOPIX_CSV = ("Date,Issue,Code,Sector,Component Weight (TOPIX),New Index Series Code\n"
+             "20260831,TOYOTA MOTOR CORPORATION,7203,Transportation Equipment,3.1%,TOPIX Core30\n"
+             "20260831,SONY GROUP CORPORATION,6758,Electric Appliances,2.0%,TOPIX Large70\n"
+             "20260831,SMALL CO,1301,Fishery,0.01%,TOPIX Small 1\n")
 
 
 def bars(n=300, start=100.0, step=0.5, vol=1000):
@@ -32,7 +34,7 @@ def test_universes_and_suffix_mapping():
     assert universe_key("sp500_us") == "SP500_US" and universe_key("nifty 50") == "NIFTY50" and universe_key("DAX") is None
     assert [m["symbol"] for m in sm.parse_sp500(SP_HTML)] == ["AAPL.US", "BRK-B.US", "MSFT.US"]        # the dot form is Yahoo's dash; no duplicates
     assert [(m["symbol"], m["name"]) for m in sm.parse_ftse100(FTSE_HTML)] == [("BT-A.L", "BT Group"), ("VOD.L", "Vodafone")]
-    assert [m["symbol"] for m in sm.parse_topix100(TOPIX_CSV)] == ["6758.T", "7203.T"]                  # Core30 + Large70 only
+    assert [(m["symbol"], m["name"], m["industry"]) for m in sm.parse_topix100(TOPIX_CSV)] == [("6758.T", "SONY GROUP CORPORATION", "Electric Appliances"), ("7203.T", "TOYOTA MOTOR CORPORATION", "Transportation Equipment")]                  # Core30 + Large70 only
     from trading_agent import markets
     assert [markets.yahoo_symbol(s) for s in ("AAPL.US", "VOD.L", "7203.T")] == ["AAPL", "VOD.L", "7203.T"]
 
@@ -69,15 +71,67 @@ def test_members_are_read_once_a_day_and_stale_copy_survives_a_failure(tmp_path)
         sm.load_members("SP500_US", tmp_path / "x", S(SP_HTML))                      # a source with too few members is refused
 
 
-def test_uk_pence_become_pounds_and_the_others_are_untouched():
-    class Inner:
+def chart(currency, close=15000.0):
+    meta = {"currency": currency} if currency else {}
+    return {"chart": {"result": [{"meta": meta, "timestamp": [1759900000, 1760000000],
+                                  "indicators": {"quote": [{"close": [close - 1, close], "volume": [3, 5]}], "adjclose": [{"adjclose": [close - 1, close]}]}}]}}
+
+
+class MetaSession:
+    def __init__(self, payload):
+        self.payload, self.n = payload, 0
+
+    def get(self, *a, **k):
+        self.n += 1
+        payload = self.payload
+
+        class R:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return payload
+        return R()
+
+
+def uk_history(currency, tmp_path, close=15000.0, symbol="VOD.L"):
+    from trading_agent.prices import YahooPrices
+    yp = YahooPrices(suffix=".L", session=MetaSession(chart(currency, close)), cache_dir=tmp_path)
+    return sm.ForeignPrices(yp, pence_market=True).history(symbol)
+
+
+def test_uk_pence_are_divided_by_100_only_when_yahoo_says_pence(tmp_path):
+    for cur in ("GBp", "GBX"):                                        # Vodafone: Yahoo's chart meta says "GBp"
+        b = uk_history(cur, tmp_path / cur)[-1]
+        assert b["close"] == 150.0 and b["adj_close"] == 150.0 and b["volume"] == 5.0 and b["currency"] == cur and "pence_assumed" not in b
+    b = uk_history("GBP", tmp_path / "gbp", 138.38, "VWRL.L")[-1]     # a London ETF quoted in pounds: left alone
+    assert b["close"] == 138.38 and b["currency"] == "GBP" and "pence_assumed" not in b
+    b = uk_history(None, tmp_path / "none", 15000.0)[-1]              # no currency in the answer: pence assumed, and flagged
+    assert b["close"] == 150.0 and b["pence_assumed"] is True and "currency" not in b
+
+
+def test_the_screener_row_carries_the_currency_and_the_pence_flag(tmp_path):
+    class P:
+        def __init__(self, cur):
+            self.cur = cur
+
         def history(self, sym, rng="2y"):
-            self.sym = sym
-            return [{"date": "2026-01-01", "close": 15000.0, "adj_close": 14900.0, "volume": 5.0}]
-    i = Inner()
-    b = sm.ForeignPrices(i, sm.UK_PENCE).history("VOD.L")[0]
-    assert b["close"] == 150.0 and b["adj_close"] == 149.0 and b["volume"] == 5.0 and i.sym == "VOD.L"
-    assert sm.ForeignPrices(i).history("AAPL.US")[0]["close"] == 15000.0 and i.sym == "AAPL"
+            return [{**b, **({"currency": self.cur} if self.cur else {}), **({} if self.cur else {"pence_assumed": True})} for b in bars()]
+    for cur, want in (("GBP", {"currency": "GBP"}), (None, {"pence_assumed": True})):
+        s = ScreenerService(prices=P(cur), fundamentals=FakeFunds(), load_universe=lambda k: [{"symbol": "X.L", "name": "X", "industry": "", "code": "X.L"}],
+                            workers=1, fund_workers=1, pace=0, fund_fn=sm.fund_fields, turnover_floor=0.0)
+        s.snapshot("FTSE100_UK")
+        assert s.wait(10)
+        r = s.snapshot("FTSE100_UK")["rows"][0]
+        assert all(r.get(k) == v for k, v in want.items()), (cur, r)
+
+
+def test_the_agents_yahoo_prices_never_record_a_currency(tmp_path):
+    from trading_agent.prices import YahooPrices
+    yp = YahooPrices(suffix=".L", session=MetaSession(chart("GBp")), cache_dir=tmp_path)
+    assert "currency" not in yp.history("VOD.L")[-1] and yp.record_currency is False
 
 
 def test_market_hours_and_info():
@@ -177,9 +231,9 @@ def test_ttl_is_30_minutes_in_market_hours_and_6_hours_otherwise_and_a_fresh_tab
 
 def test_make_service_keeps_its_own_caches_and_normalises_uk_prices(tmp_path):
     svc = sm.make_service("FTSE100_UK", tmp_path)
-    assert svc.prices.divisor == 100.0 and svc.turnover_floor == 0.0 and svc.workers == 3 and svc.fund_workers == 2 and svc.jitter
+    assert svc.prices.pence_market is True and svc.prices.inner.record_currency is True and svc.turnover_floor == 0.0 and svc.workers == 3 and svc.fund_workers == 2 and svc.jitter
     assert (tmp_path / "cache" / "screener_uk").name in str(svc.prices.inner.cache_dir)
-    assert svc.prices.inner.ttl_fn is not None and sm.make_service("SP500_US", tmp_path).prices.divisor == 1.0
+    assert svc.prices.inner.ttl_fn is not None and sm.make_service("SP500_US", tmp_path).prices.pence_market is False
 
 
 def test_the_api_routes_foreign_universes_and_never_calls_india_code(settings, tmp_path, monkeypatch):

@@ -90,6 +90,7 @@ def compute_metrics(bars: list[dict[str, Any]]) -> dict[str, Any]:
         "rsi": None if rsi_last is None else round(rsi_last, 1),
         "atr_pct": round(a / last * 100.0, 2) if a is not None and last else None,
         "spark": [round(c, 2) for c in closes[-SPARK_DAYS:]],
+        **{k: bars[-1][k] for k in ("currency", "pence_assumed") if bars[-1].get(k) is not None},
     }
 
 
@@ -249,6 +250,7 @@ class ScreenerService:
                 "mom_score": round(sc["score"], 2) if sc else None, "mom_eligible": bool(sc["eligible"]) if sc else None,
                 "band": band, "held": sym in held, "deal": sym in deals, "deal_who": deals.get(sym, []),
                 "as_of": met.get("as_of"), "ready": bool(met) and bool(fun), "spark": met.get("spark"),
+                **{k: met[k] for k in ("currency", "pence_assumed") if k in met},
                 "error": met.get("error") if "error" in met else None,
             }
             if m.get("code"):
