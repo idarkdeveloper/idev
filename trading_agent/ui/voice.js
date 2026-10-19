@@ -53,6 +53,12 @@
       const t = r.ticker || "";
       out.push({label: t ? "News on " + t : "Read the news", text: t ? "news on " + t : "read today's news"});
       if(t && r.intent !== "open_chart") out.push({label: "Show chart", text: "show " + t + " chart"});
+    } else if(r.intent === "ideas"){
+      out.push({label: "Read the news", text: "read today's news"}, {label: "Latest deals", text: "latest deals"}, {label: "Is the market open", text: "is the market open"});
+    } else if(r.intent === "market_status"){
+      out.push({label: "Stock ideas", text: "stock ideas"}, {label: "Read the news", text: "read today's news"}, {label: "Latest deals", text: "latest deals"});
+    } else if(r.intent === "followed_deals"){
+      out.push({label: "Open deals", text: "go to deals"}, {label: "Stock ideas", text: "stock ideas"}, {label: "Read the news", text: "read today's news"});
     } else {
       out.push({label: "Read the news", text: "read today's news"}, {label: "Profit and loss today", text: "profit and loss today"}, {label: "How is my portfolio", text: "how is my portfolio"});
     }
@@ -137,7 +143,7 @@
       return facts && facts.length ? box : null;
     }
     function linkEl(link){
-      if(!link || !/^\/[a-z0-9/_?=&.-]*$/i.test(String(link.href))) return null;
+      if(!link || !/^\/[a-z0-9/_?=&.#-]*$/i.test(String(link.href))) return null;
       const a = el("a", "va-link", link.label || "Open"); a.href = link.href; return a;
     }
     function bubble(q){ return el("div", "va-q", q); }
