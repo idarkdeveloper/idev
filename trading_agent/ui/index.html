@@ -2084,7 +2084,7 @@
 
   // First load: the drawn sparkline, then (if it takes a while) the real steps as they finish; the portfolio card shows a
   // skeleton under a spinner until its first answer.
-  const pageLoad = TA.loader.page({title: "Loading today's prices",
+  const pageLoad = TA.loader.page({once: "ta.pageLoaded", title: "Loading today's prices",
     sub: "NSE · " + new Date().toLocaleDateString("en-IN", {timeZone: "Asia/Kolkata", weekday: "short", day: "numeric", month: "short"}),
     steps: ["Deals, jobs and settings", "Portfolio from Groww"]});
   if(!MP){ $("mp-rows").innerHTML = TA.loader.skeletonRows(4, MPCOLS); $("mp-sub").innerHTML = TA.loader.spinner() + " loading your holdings…"; }
