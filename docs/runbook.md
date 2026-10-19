@@ -534,7 +534,9 @@ feed (up to 50 per call; BSE-only holdings stay on Yahoo), and write `state/app/
 for a holding's price only while the file is under 180 s old and shows "Groww live · as of HH:MM IST"; otherwise Yahoo's
 delayed price. Load: 1 Live Data call a minute (limit 300/min, shared with quote/ohlc). No token is created by it beyond
 the one the feed already uses. A failure (no Live Data plan, 401/403/429, cool-down) logs one warning and backs off up to
-10 minutes; nothing else changes. To turn it off set `LIVE_PRICES=false` and restart `trading-agent-watch`.
+10 minutes; nothing else changes. While it is on, the same fresh prices also feed the dashboard's sell preview, copy-to-practice,
+digest preview and the Telegram bot's display; that is display and practice orders only, never a trading decision (the agent
+keeps its own Yahoo/Groww reads). To turn it off set `LIVE_PRICES=false` and restart `trading-agent-watch`.
 
 Gate checklist before relying on it:
 

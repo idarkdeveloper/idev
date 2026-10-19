@@ -34,9 +34,19 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def feed_symbols(state_dir: Path, now: datetime, exchange: str = "NSE") -> list[str]:
+def _bse_symbols(state_dir: Path) -> set[str]:
+    """Symbols the saved Groww holdings list on BSE (the feed's rows carry no exchange): they stay on Yahoo."""
+    try:
+        snap = json.loads((Path(state_dir) / "groww_holdings.json").read_text(encoding="utf-8"))
+        return {str(h.get("symbol")).upper() for h in snap.get("holdings") or []
+                if str(h.get("exchange") or "").upper() == "BSE"}
+    except (OSError, ValueError, AttributeError):
+        return set()
+
+
+def feed_symbols(state_dir: Path, now: datetime, exchange: str = "NSE", max_age: float = FEED_MAX_AGE_S) -> list[str]:
     """NSE symbols of the feed's holdings, or [] when there is no fresh Groww snapshot (the tick is then skipped).
-    BSE-only holdings (".BO", or any dotted code) stay on Yahoo."""
+    BSE holdings (an ``exchange`` of BSE, the saved list's exchange, ".BO" or any dotted code) stay on Yahoo."""
     if exchange.upper() != "NSE":
         return []
     feed = load_feed(state_dir)
@@ -45,13 +55,17 @@ def feed_symbols(state_dir: Path, now: datetime, exchange: str = "NSE") -> list[
     try:
         at = datetime.fromisoformat(str(feed.get("as_of")))
         at = at if at.tzinfo else at.replace(tzinfo=IST)
-        if not 0 <= (now - at).total_seconds() <= FEED_MAX_AGE_S:
+        if not 0 <= (now - at).total_seconds() <= max_age:
             return []
     except ValueError:
         return []
     out: list[str] = []
+    bse = _bse_symbols(state_dir)
     for h in feed.get("holdings") or []:
-        sym = str((h or {}).get("symbol") or "").strip().upper()
+        h = h or {}
+        sym = str(h.get("symbol") or "").strip().upper()
+        if str(h.get("exchange") or h.get("source") or "").upper() == "BSE" or sym in bse:
+            continue
         if sym and "." not in sym and sym not in out:
             out.append(sym)
     return out
@@ -89,6 +103,7 @@ class LivePrices:
         if isinstance(until, datetime):
             nxt = max(nxt, until if until.tzinfo else until.replace(tzinfo=IST))
         self._next = nxt
+        delay = (nxt - now).total_seconds()   # the real wait, which the cool-down can make longer
         status = getattr(getattr(e, "response", None), "status_code", None) or getattr(e, "status", None)
         if self._fails == 1 or self._fails % 10 == 0:   # one line, not one per attempt; never the body or URL
             log.warning("Groww live prices unavailable (%s%s); retrying in %d s", type(e).__name__,
@@ -102,26 +117,35 @@ class LivePrices:
                 return None
             if not self._open(now):
                 return None
-            symbols = feed_symbols(self.settings.state_dir, now, getattr(self.settings, "groww_exchange", "NSE"))
+            from . import killswitch
+            if killswitch.reason(self.settings.state_dir, "use Groww"):   # the kill switch: no Groww call at all
+                return None
+            max_age = max(FEED_MAX_AGE_S, 2 * float(getattr(self.settings, "app_feed_every_s", 300)))
+            symbols = feed_symbols(self.settings.state_dir, now, getattr(self.settings, "groww_exchange", "NSE"), max_age)
             if not symbols:
                 return None
             self._next = now + timedelta(seconds=self.every)
             prices: dict[str, float] = {}
-            try:
-                for i in range(0, len(symbols), 50):
+            failure: BaseException | None = None
+            for i in range(0, len(symbols), 50):   # a failed batch keeps the prices of the batches before it
+                try:
                     got = self.ltp_fn(symbols[i:i + 50])
-                    for s, v in (got or {}).items():
-                        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
-                            prices[str(s).upper()] = float(v)
-            except BaseException as e:  # noqa: BLE001 - SystemExit from a missing token too; only the type is logged
-                if isinstance(e, (KeyboardInterrupt, GeneratorExit)):
-                    raise
-                self._back_off(now, e)
-                return None
-            if not prices:
+                except BaseException as e:  # noqa: BLE001 - SystemExit from a missing token too; only the type is logged
+                    if isinstance(e, (KeyboardInterrupt, GeneratorExit)):
+                        raise
+                    failure = e
+                    break
+                for s, v in (got or {}).items():
+                    if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
+                        prices[str(s).upper()] = float(v)
+            if failure is not None:
+                self._back_off(now, failure)
+            elif not prices:
                 self._back_off(now, LookupError("no prices returned"))
+            else:
+                self._fails = 0
+            if not prices:
                 return None
-            self._fails = 0
             body = {"as_of": now.astimezone(timezone.utc).isoformat(timespec="seconds"), "source": SOURCE, "prices": prices}
             _write_private(self._path(), body)
             return body

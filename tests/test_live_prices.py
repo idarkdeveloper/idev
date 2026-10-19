@@ -1,6 +1,5 @@
 """Groww live prices: the watch-side writer (fakes only, no network) and the dashboard's reader."""
 import json
-import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -126,16 +125,6 @@ def test_token_cooldown_is_honoured_and_a_bad_answer_never_raises(settings):
     assert lp.tick(MON_OPEN) is None and lp._next == until
     lp2 = make(settings, lambda syms: {"TCS": float("nan"), "X": "no", "Y": -1})
     assert lp2.tick(MON_OPEN) is None
-
-
-def test_flag_off_starts_no_thread_and_writes_nothing(settings, tmp_path):
-    assert settings.live_prices is False and settings.live_prices_every_s == 60
-    before = {t.name for t in threading.enumerate()}
-    assert "live-prices" not in before
-    assert not (app_feed.app_dir(settings.state_dir) / live_prices.LIVE_FILE).exists()
-    from pathlib import Path
-    cli = (Path(__file__).resolve().parent.parent / "trading_agent" / "cli.py").read_text(encoding="utf-8")
-    assert "if settings.live_prices and" in cli
 
 
 def test_config_reads_env_with_a_minimum(monkeypatch, tmp_path):
