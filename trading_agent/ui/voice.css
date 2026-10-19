@@ -1,0 +1,117 @@
+/* Voice assistant bar and card (voice.js). Theme tokens only (nocturne.css), so it follows light and dark. */
+@keyframes va-bar { 0%, 100% { transform: scaleY(.25); } 50% { transform: scaleY(1); } }
+@keyframes va-spin { to { transform: rotate(360deg); } }
+@keyframes va-caret { 50% { opacity: 0; } }
+@keyframes va-morph { 0%, 100% { border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%; } 33% { border-radius: 61% 39% 45% 55% / 57% 38% 62% 43%; } 66% { border-radius: 38% 62% 56% 44% / 48% 63% 37% 52%; } }
+@keyframes va-throb { 0%, 100% { transform: scale(.94); } 50% { transform: scale(1.06); } }
+
+/* The bar: fixed at the bottom, clear of the notch and the gesture bar; the page gets room below so nothing is hidden behind it. */
+.va { position: fixed; left: 0; right: 0; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); z-index: 45; display: flex; justify-content: center;
+  padding: 0 calc(12px + env(safe-area-inset-right, 0px)) 0 calc(12px + env(safe-area-inset-left, 0px)); pointer-events: none; }
+.va > * { pointer-events: auto; }
+.va-on { padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+.va-on .toast { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+.va-on .ask-card { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+.va-bar { display: flex; align-items: center; gap: 10px; width: min(440px, 100%); height: 52px; margin: 0; padding: 0 4px 0 18px; box-sizing: border-box;
+  border-radius: 26px; background: var(--color-surface); border: 1px solid var(--color-divider); box-shadow: var(--shadow-md); }
+.va-input { flex: 1 1 auto; min-width: 0; width: auto; min-height: 44px; border: 0; background: transparent; color: var(--color-text); font-size: 16px; padding: 0; }
+.va-input:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+.va-kbd { flex: none; font-size: 11px; color: var(--color-muted); border: 1px solid var(--color-divider); border-radius: var(--radius-sm); padding: 1px 5px; }
+.va-mic { flex: none; width: 44px; height: 44px; min-height: 44px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); position: relative; }
+.va-mic:hover { background: var(--color-accent-2); }
+.va-mic.on { background: var(--color-loss); border-color: var(--color-loss); }
+.va-mic.on::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--color-loss); animation: va-pulse 1.4s ease-out infinite; }
+@keyframes va-pulse { 0% { transform: scale(1); opacity: .6; } 100% { transform: scale(1.7); opacity: 0; } }
+.va-mic:disabled { background: var(--color-surface); color: var(--color-muted); border-color: var(--color-divider); cursor: progress; }
+.va-i { display: inline-flex; }
+/* a phone: the bar is a round microphone button (type from the card) */
+@media (max-width: 479px) {
+  .va:not(.va-inline) { justify-content: flex-end; }
+  .va:not(.va-inline) .va-bar { width: 56px; height: 56px; padding: 0; justify-content: center; border-radius: 50%; }
+  .va:not(.va-inline) .va-bar .va-input, .va:not(.va-inline) .va-bar .va-kbd { display: none; }
+  .va:not(.va-inline) .va-bar .va-mic { width: 56px; height: 56px; }
+  .va:not(.va-inline).open { justify-content: center; }
+}
+@media (max-width: 479px) and (hover: none) { .va-kbd { display: none; }
+}
+/* the card: the bar grows into it */
+.va:not(.va-inline).open .va-bar { display: none; }
+.va-card { display: flex; flex-direction: column; width: min(500px, 100%); max-height: min(520px, calc(100dvh - 24px - env(safe-area-inset-bottom, 0px))); box-sizing: border-box;
+  border-radius: 20px; background: var(--color-bg); border: 1px solid var(--color-divider); box-shadow: var(--shadow-lg); overflow: hidden; z-index: 58; animation: ld-in .18s ease-out; }
+.va-card[hidden] { display: none; }
+.va-card:focus { outline: none; }
+.va-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 6px 0 18px; }
+.va-title { font-size: 12px; color: var(--color-muted); }
+.va-tools { display: flex; gap: 2px; }
+.va-ic { width: 44px; height: 44px; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--color-label); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+.va-ic:hover { background: var(--color-hover); }
+.va-ic[aria-pressed="true"] { color: var(--color-loss); }
+.va-small { width: 44px; height: 44px; flex: none; }
+.va-menu { margin: 0 14px 4px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--color-surface); display: flex; flex-direction: column; gap: 8px; }
+.va-menu[hidden] { display: none; }
+.va-select { width: 100%; min-height: 44px; margin-top: 4px; }
+.va-stage { flex: 1 1 auto; min-height: 150px; overflow: auto; padding: 8px 18px 12px; display: flex; flex-direction: column; gap: 12px; }
+.va-label { font-size: 12px; font-weight: 600; letter-spacing: .6px; text-transform: uppercase; text-align: center; }
+.va-red { color: var(--color-loss); }
+.va-heard { font-size: 18px; line-height: 1.4; font-weight: 500; text-align: center; min-height: 1.4em; }
+.va-caret { display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: var(--color-loss); animation: va-caret 1s step-end infinite; }
+.va-sub, .va-hint { font-size: 12px; color: var(--color-muted); text-align: center; margin: 0; }
+.va-note { font-size: 13px; color: var(--color-replay); margin: 0; }
+.va-q { align-self: flex-end; max-width: 85%; padding: 9px 12px; border-radius: 12px 12px 4px 12px; background: var(--color-accent-900); font-size: 14px; line-height: 1.4; }
+.va-steps { list-style: none; margin: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; border-radius: 12px; background: var(--color-surface); border: 1px solid var(--color-divider); }
+.va-step { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--color-muted); }
+.va-step.done, .va-step.now { color: var(--color-text); }
+.va-dot { flex: none; width: 18px; height: 18px; box-sizing: border-box; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; border: 2px solid var(--color-divider); }
+.va-step.done .va-dot { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-bg); }
+.va-step.now .va-dot { border-color: var(--color-divider); border-top-color: var(--color-accent); border-right-color: var(--color-accent); animation: va-spin .8s linear infinite; }
+.va-who { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--color-muted); }
+.va-who b { color: var(--color-accent); }
+.va-words { font-size: 15px; line-height: 1.55; }
+.va-w { color: var(--color-muted); transition: color .15s; }
+.va-w.on { color: var(--color-text); }
+.va-wave { display: inline-flex; align-items: center; gap: 2px; height: 12px; }
+.va-wave i { width: 2px; height: 12px; border-radius: 2px; background: var(--color-accent); transform: scaleY(.25); }
+.va-wave.live i { animation: va-bar .8s ease-in-out infinite; }
+.va-wave i:nth-child(2) { animation-delay: -.2s; } .va-wave i:nth-child(3) { animation-delay: -.4s; } .va-wave i:nth-child(4) { animation-delay: -.1s; } .va-wave i:nth-child(5) { animation-delay: -.5s; }
+.va-facts { display: flex; flex-direction: column; border-radius: 10px; border: 1px solid var(--color-divider); overflow: hidden; }
+.va-fact { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 12px; font-size: 13px; border-top: 1px solid var(--color-rule); }
+.va-fact:first-child { border-top: 0; }
+.va-fk { font-weight: 600; flex: none; max-width: 45%; }
+.va-fv { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; min-width: 0; }
+.va-long { flex-direction: column; gap: 2px; }
+.va-long .va-fk { max-width: none; }
+.va-long .va-fv { text-align: left; font-weight: 400; }
+.va-link { display: inline-flex; align-items: center; min-height: 44px; font-weight: 600; }
+.va-erric { align-self: center; width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--color-redbg, var(--color-accent-900)); color: var(--color-loss); }
+.va-errt { text-align: center; font-size: 16px; font-weight: 600; }
+.va-errm { text-align: center; font-size: 13px; line-height: 1.5; color: var(--color-label); }
+.va-erra { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.va-btn { min-height: 44px; padding: 0 16px; border-radius: var(--radius-md); }
+.va-hist { display: flex; flex-direction: column; gap: 16px; }
+.va-day { font-size: 11px; letter-spacing: .8px; text-transform: uppercase; color: var(--color-muted); text-align: center; }
+.va-turn { display: flex; flex-direction: column; gap: 8px; }
+.va-qrow { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.va-at { font-size: 11px; color: var(--color-muted); }
+.va-qrow .va-q { align-self: auto; }
+.va-arow { display: flex; align-items: flex-start; gap: 4px; }
+.va-a { flex: 1; font-size: 14px; line-height: 1.5; padding-top: 10px; }
+.va-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 6px; }
+.va-chips:empty { display: none; }
+.va-chip { min-height: 44px; padding: 0 14px; border-radius: 999px; font-size: 13px; }
+.va-foot { display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 8px 10px 16px; border-top: 1px solid var(--color-divider); }
+.va-foot .va-input { padding: 0 14px; border-radius: 22px; background: var(--color-surface); }
+.va-inline { position: static; display: block; padding: 0; margin: 12px 16px 16px; pointer-events: auto; z-index: auto; }
+.va-inline .va-bar { width: 100%; box-shadow: none; }
+.va-inline .va-card { width: 100%; margin-top: 10px; box-shadow: none; max-height: 480px; }
+
+/* the orb: a few soft moving blobs; still when motion is reduced */
+.va-orb { position: relative; align-self: center; width: 92px; height: 92px; filter: blur(8px); animation: va-throb 1.1s ease-in-out infinite; }
+.va-orb i { position: absolute; inset: 6px; background: radial-gradient(circle at 40% 40%, var(--color-accent) 0%, transparent 70%); animation: va-morph 4s ease-in-out infinite, va-spin 9s linear infinite; opacity: .9; }
+.va-orb i:nth-child(2) { inset: 12px 4px 8px 14px; background: radial-gradient(circle at 40% 40%, var(--color-loss) 0%, transparent 70%); animation-duration: 5s, 12s; animation-direction: normal, reverse; }
+.va-orb i:nth-child(3) { inset: 8px 12px 4px 6px; background: radial-gradient(circle at 40% 40%, var(--color-replay) 0%, transparent 70%); animation-duration: 6s, 15s; }
+.va-orb i:nth-child(4) { inset: 16px; background: radial-gradient(circle at 40% 40%, var(--color-accent-300) 0%, transparent 70%); animation-duration: 3.5s, 8s; animation-direction: normal, reverse; }
+@media (prefers-reduced-motion: reduce) {
+  .va-orb, .va-orb i, .va-wave i, .va-caret, .va-step.now .va-dot, .va-mic.on::after, .va-card { animation: none !important; }
+  .va-w { transition: none; }
+}

@@ -212,6 +212,7 @@
   function install(host){
     host = host || {};
     const TA = window.TA, esc = TA.esc, mode = host.mode || "live";
+    TA.palette.host = host;   // the voice bar (voice.js) acts through the same page hooks the palette uses
     let dlg = null, input, list, status, titleEl, model, searcher, opener = null, built = false;
 
     function commands(){

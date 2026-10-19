@@ -56,6 +56,8 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 "/static/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
                 "/static/screener.js": ("screener.js", "text/javascript; charset=utf-8"),
                 "/static/ask.js": ("ask.js", "text/javascript; charset=utf-8"),
+                "/static/voice.js": ("voice.js", "text/javascript; charset=utf-8"),
+                "/static/voice.css": ("voice.css", "text/css; charset=utf-8"),
                 "/static/stockpage.js": ("stockpage.js", "text/javascript; charset=utf-8"),
                 # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
@@ -502,7 +504,7 @@ class App:
         return self._research_warm
 
     # -- Ask: sentences to read-only actions -------------------------------------
-    def ask(self, text: Any, client: str = "") -> dict[str, Any]:
+    def ask(self, text: Any, client: str = "", ticker: Any = None) -> dict[str, Any]:
         """POST /api/ask {"text"}: {"intent", "args", "say", "via"} (see ask.py). Read-only: opens pages, reads the news."""
         from . import ask as ask_mod
         s = self.settings
@@ -516,10 +518,72 @@ class App:
                 root._ask_limit = ask_mod.RateLimit(getattr(s, "ask_rate_per_min", 30))
         if not root._ask_limit.allow(client or "-"):
             raise ask_mod.RateLimited("Too many questions in a minute; wait a little.")
-        out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)))
+        hint = None
+        if ticker not in (None, ""):   # the stock whose page the question was asked on (optional; checked like every ticker)
+            if not isinstance(ticker, str):
+                raise ValueError("ticker must be a string")
+            from .nse import check_ticker
+            hint = check_ticker(ticker)
+        out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)), ticker=hint)
+        if out["intent"] == "portfolio_summary":   # real numbers from the dashboard's own holdings, fixed sentences (ask.compose_portfolio)
+            out.update(ask_mod.compose_portfolio(out["args"]["topic"], self._portfolio_figures()))
         log.info("ask: intent=%s via=%s", out["intent"], out["via"])
         log.debug("ask: text=%.60r", text)
         return out
+
+    PORTFOLIO_BUDGET_S = 12.0   # time spent reading daily bars for "today's change"
+
+    def _portfolio_figures(self) -> dict[str, Any]:
+        """What Ask says about your own portfolio, from data the dashboard already holds: the cached My-portfolio read (with
+        Groww live prices from their file) or the practice account. Never calls Groww; today's change is the price against the
+        close before the latest bar, as the Overview tile computes it."""
+        if self.page == "demo":
+            try:
+                b = self.practice_broker
+                acct, pos, perf = b.account(), b.positions(), b.performance()
+            except Exception:  # noqa: BLE001 - a missing account is an answer, not an error
+                return {"available": False, "message": "I could not read the practice account."}
+            return {"available": True, "practice": True, "count": len(pos), "holdings_value": acct.equity, "pl": perf.get("pnl"),
+                    "pl_pct": (perf.get("pnl_pct") or 0) / 100 if perf.get("pnl_pct") is not None else None, "cash": acct.cash,
+                    "today": None, "movers": [], "unpriced": [], "as_of": "", "as_of_date": "", "delayed": False}
+        if self.page != "live":
+            return {"available": False, "message": "Open the Live page for your portfolio."}
+        root = self._parent or self
+        m = root._my_portfolio
+        if m is None:
+            return {"available": False, "message": "Your portfolio has not loaded yet. Open the Live page and wait for the holdings."}
+        m = root._live({**m, **root._feed_cash()})
+        if not m.get("linked", True) or m.get("error"):
+            return {"available": False, "message": "I could not read your portfolio: " + str(m.get("error") or "Groww is not linked") + "."}
+        rows = m.get("holdings") or []
+        started, prev_total, moves, today_ok = time.monotonic(), 0.0, [], True
+        for h in rows:
+            if h.get("price") is None or h.get("kind") == "bond":
+                continue
+            prev = None
+            if time.monotonic() - started < self.PORTFOLIO_BUDGET_S:
+                bars, _err = self._ohlc(f"{h['symbol']}.BO" if h.get("exchange") == "BSE" else str(h["symbol"]))
+                closes = [float(b["close"]) for b in bars or [] if isinstance(b.get("close"), (int, float))]
+                prev = closes[-2] if len(closes) >= 2 else None
+            if not prev:
+                today_ok = False
+                continue
+            qty = h.get("qty") or 0
+            moves.append({"symbol": h["symbol"], "pct": h["price"] / prev - 1, "abs": qty * (h["price"] - prev)})
+            prev_total += qty * prev
+        today = {"abs": sum(x["abs"] for x in moves), "pct": (sum(x["abs"] for x in moves) / prev_total) if prev_total else None} if moves and today_ok else None
+        stamp = m.get("prices_as_of") or m.get("at") or m.get("saved_at")
+        as_of = as_date = ""
+        try:
+            from .timezones import IST as _IST
+            at = datetime.fromisoformat(str(stamp)).astimezone(_IST)
+            as_of, as_date = at.strftime("%H:%M IST"), f"{at.day} {at.strftime('%b')}"
+        except Exception:  # noqa: BLE001 - no time stamp: say nothing about the time
+            pass
+        return {"available": True, "count": len(rows), "holdings_value": m.get("value") if any(h.get("price") is not None for h in rows) else None,
+                "invested": m.get("invested"), "pl": m.get("pl"), "pl_pct": m.get("pl_pct"), "cash": m.get("cash"), "today": today,
+                "movers": moves, "unpriced": list(m.get("unpriced") or []), "as_of": as_of, "as_of_date": as_date,
+                "delayed": m.get("prices_src") != "groww"}
 
     def news_today(self, scope: str = "portfolio", ticker: str | None = None, client: str = "") -> dict[str, Any]:
         """GET /api/news/today: today's tagged headlines (IST date), newest first, at most 10, from the cached news service
@@ -2419,6 +2483,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         index_html = index_html.replace("<body>", f'<body data-mode="demo"{sample}>', 1)
     replay_html = (resources.files("trading_agent") / "ui" / "replay.html").read_text(encoding="utf-8")
     screener_html = (resources.files("trading_agent") / "ui" / "screener.html").read_text(encoding="utf-8")
+    if not (getattr(app.settings, "voice_ui", True) and getattr(app.settings, "ask_enabled", True)):   # VOICE_UI=false: the bar is not rendered
+        strip = lambda h: h.replace('<link rel="stylesheet" href="/static/voice.css">\n', "").replace('<script src="/static/voice.js"></script>\n', "")  # noqa: E731
+        index_html, demo_html, replay_html, screener_html = strip(index_html), strip(demo_html), strip(replay_html), strip(screener_html)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "trading-agent-ui/1"
@@ -2462,6 +2529,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         def _body(self) -> dict[str, Any]:
             n = int(self.headers.get("Content-Length") or 0)
             if n > MAX_POST_BYTES:
+                self.rfile.read(min(n, 1_000_000))   # drain what was sent so the client sees the 413, not a reset
                 raise BodyTooLarge(f"the request body is too large (at most {MAX_POST_BYTES // 1024} KB)")
             raw = self.rfile.read(n) if n else b""
             body = json.loads(raw.decode() or "{}")
@@ -2773,7 +2841,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if path == "/api/ask":
                     from .ask import RateLimited
                     try:
-                        self._json(app.ask(body.get("text"), self.client_address[0]))
+                        self._json(app.ask(body.get("text"), self.client_address[0], body.get("ticker", body.get("scope_ticker"))))
                     except RateLimited as e:
                         self._json({"error": str(e)}, HTTPStatus.TOO_MANY_REQUESTS)
                 elif path == "/api/kill-switch":

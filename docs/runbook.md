@@ -588,3 +588,21 @@ request to buy or sell is refused, and nothing can prepare an order.
 * Settings (env only): `ASK_ENABLED` (default true), `ASK_OLLAMA` (default true), `ASK_RATE_PER_MIN` (default 30 per client).
   The log keeps the intent and whether rules or Ollama answered, not the sentence (60 characters at debug level only).
 * Privacy and limits: a company-name lookup (for example a US, UK or Japan name) may send the name fragment to Yahoo search; the Ask and news rate limits are per client address, and behind `tailscale serve` every device shares one address, so they share one limit.
+
+### Voice assistant bar
+
+An "Ask about your market..." bar sits at the bottom of every page (a round microphone button on a phone; press Space on a
+computer to talk, Esc to close). It grows into a voice card: it listens, shows what it is doing, then reads the answer aloud with
+the words lighting up, and keeps the last six turns of the conversation in the page (nothing is stored). The Look up card has the
+same bar scoped to its stock ("Ask about RELIANCE"). It is part of Ask: it opens pages and reads the news and your own figures,
+it never places or prepares an order, and the rate limits are Ask's. The speaker icon is the mute switch (text only; it is
+remembered in the browser).
+
+* Setting (env only): `VOICE_UI` (default true). `VOICE_UI=false`, or `ASK_ENABLED=false`, and the bar is not rendered at all.
+* The voice is chosen in this order: an Indian English voice (`en-IN`), else British English (`en-GB`), else any English one,
+  else the browser's default. The voice button in the card (the sliders icon) lists the English voices on the device and has a
+  "Test voice" button; your choice is remembered in the browser. Voices load late on some phones; the page waits at most 1.5 s.
+* Android, to get an English (India) voice: Settings, System, Languages, Text-to-speech output, make "Speech Recognition and
+  Synthesis from Google" (Google Text-to-speech) the preferred engine, open its settings, Install voice data, choose English
+  (India), and download the voice. Speech recognition for the microphone needs "Google Speech Services" (the Google app) and the
+  internet. If the device has no English voice at all, the card says so and the answers stay text-only.

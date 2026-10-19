@@ -17,7 +17,7 @@
 
   // ---- the result card ----
   let card = null, body = null, ctl = null, hideT = 0, reading = false;
-  let gen = 0, queue = [], qi = 0, paused = false;   // reading aloud: one utterance per item (a long text is cut off by Chrome)
+  let gen = 0, queue = [], qi = 0, paused = false, sp = null;   // sp: the hooks of the reading in progress   // reading aloud: one utterance per item (a long text is cut off by Chrome)
   function ensureCard(){
     if(card) return;
     card = document.createElement("section");
@@ -51,39 +51,72 @@
 
   // ---- reading aloud ----
   function stop(){
-    gen++; queue = []; paused = false;
+    gen++; queue = []; paused = false; sp = null;
     if(hasTTS()){ try { window.speechSynthesis.cancel(); } catch(e){} }
     reading = false; if(ctl) ctl.hidden = true;
     const pb = ctl && ctl.querySelector('[data-ask="pause"]'); if(pb) pb.textContent = "Pause";
     const s = body && body.querySelector(".ask-state"); if(s) s.textContent = "";
   }
-  function pickVoice(){
-    try { const v = window.speechSynthesis.getVoices() || []; return v.find(x => /^en[-_]IN$/i.test(x.lang)) || v.find(x => /^en/i.test(x.lang)) || null; } catch(e){ return null; }
+  // The voice: Indian English first, then British English, then any English; a saved choice wins while that voice still exists.
+  const normLang = (l) => String(l || "").toLowerCase().replace("_", "-");
+  function pickVoice(voices, saved){
+    const list = (voices || []).filter(v => v && v.lang);
+    if(saved){ const s = list.find(v => v.voiceURI === saved || v.name === saved); if(s) return s; }
+    const score = (v) => (/neural|natural|online/i.test(v.name || "") ? 2 : 0) + (/female|neerja|heera|swara/i.test(v.name || "") ? 1 : 0);
+    const best = (arr) => arr.slice().sort((a, b) => score(b) - score(a))[0] || null;
+    return best(list.filter(v => normLang(v.lang) === "en-in")) || best(list.filter(v => normLang(v.lang) === "en-gb")) || best(list.filter(v => /^en(-|$)/.test(normLang(v.lang)))) || null;
   }
-  function finished(){ reading = false; paused = false; if(ctl) ctl.hidden = true; setState(""); }
+  const VOICE_KEY = "ta.voice";
+  const savedVoice = () => { try { return localStorage.getItem(VOICE_KEY) || ""; } catch(e){ return ""; } };
+  const allVoices = () => { try { return (window.speechSynthesis.getVoices && window.speechSynthesis.getVoices()) || []; } catch(e){ return []; } };
+  const englishVoices = () => allVoices().filter(v => v && /^en(-|$)/.test(normLang(v.lang))).sort((a, b) => (normLang(a.lang) + a.name).localeCompare(normLang(b.lang) + b.name));
+  const autoLabel = () => { const v = pickVoice(allVoices(), ""); const l = v ? normLang(v.lang) : ""; return l === "en-in" ? "Indian English (auto)" : l === "en-gb" ? "British English (auto)" : v ? "English (auto)" : "Default voice (auto)"; };
+  function setVoice(id){ try { if(id) localStorage.setItem(VOICE_KEY, String(id)); else localStorage.removeItem(VOICE_KEY); } catch(e){} }
+  // voices: [{id, name, lang}] English only; chosen: the saved id when that voice still exists; none: voices are installed but none is English
+  function voiceInfo(){
+    const en = englishVoices(), all = allVoices(), saved = savedVoice();
+    const hit = saved ? en.find(v => v.voiceURI === saved || v.name === saved) : null;
+    return {voices: en.map(v => ({id: v.voiceURI || v.name, name: v.name, lang: v.lang})), auto: autoLabel(), chosen: hit ? (hit.voiceURI || hit.name) : "", none: all.length > 0 && !en.length};
+  }
+  // Voices load late (voiceschanged); never wait more than 1.5 s for them.
+  let voicesWaited = false;
+  function withVoices(cb){
+    const sy = window.speechSynthesis;
+    if(voicesWaited || allVoices().length){ cb(); return; }
+    let done = false;
+    const go = () => { if(done) return; done = true; voicesWaited = true; try { sy.removeEventListener && sy.removeEventListener("voiceschanged", go); } catch(e){} cb(); };
+    try { sy.addEventListener && sy.addEventListener("voiceschanged", go); } catch(e){}
+    setTimeout(go, 1500);
+  }
+  function finished(){ reading = false; paused = false; if(ctl) ctl.hidden = true; setState(""); const h = sp; sp = null; if(h && h.onEnd){ try { h.onEnd(); } catch(e){} } }
   function next(g){
     if(g !== gen || paused) return;
     if(qi >= queue.length){ finished(); return; }
     const u = new window.SpeechSynthesisUtterance(String(queue[qi]));
     u.lang = "en-IN"; u.rate = 1.0;
-    const v = pickVoice(); if(v){ u.voice = v; u.lang = v.lang; }
+    const v = pickVoice(allVoices(), savedVoice()); if(v){ u.voice = v; u.lang = v.lang; }
+    const at = qi;
+    u.onstart = () => { if(sp && sp.onStart) sp.onStart(at); };
+    u.onboundary = (e) => { if(sp && sp.onBoundary && (!e || e.name === undefined || e.name === "word")) sp.onBoundary(at, (e && e.charIndex) | 0); };
     let done = false;
     const after = (failed) => { if(done || g !== gen) return; done = true; if(failed){ finished(); return; } qi++; next(g); };
     u.onend = () => after(false);
     u.onerror = (e) => after(!(e && (e.error === "canceled" || e.error === "interrupted")) ? true : false);
     window.speechSynthesis.speak(u);
   }
-  function speak(text){   // text: one string or an array of pieces, spoken one after the other
+  // text: one string or an array of pieces, spoken one after the other. hooks (optional): {onStart(i), onBoundary(i, charIndex), onEnd()}.
+  function speak(text, hooks){
     const parts = (Array.isArray(text) ? text : [text]).map(x => String(x || "").trim()).filter(Boolean);
-    if(!hasTTS() || !parts.length) return false;
+    if(!hasTTS() || !parts.length || voiceInfo().none) return false;
     try {
       stop(); const g = gen;
-      queue = parts; qi = 0; paused = false; reading = true;
+      queue = parts; qi = 0; paused = false; reading = true; sp = hooks || null;
       if(ctl) ctl.hidden = false;
-      next(g);
+      withVoices(() => { if(g === gen) next(g); });
       return true;
     } catch(e){ return false; }
   }
+  const testVoice = () => speak("This is how I will read your news.");
 
   // ---- listening (the microphone) ----
   const micSupported = () => !!SR;
@@ -97,14 +130,15 @@
     if(!SR){ if(o.onError) o.onError("Speech recognition is not available in this browser."); return null; }
     let rec, got = false, dead = false;
     try { rec = new SR(); } catch(e){ if(o.onError) o.onError("Speech recognition could not start."); return null; }
-    rec.lang = "en-IN"; rec.interimResults = false; rec.continuous = false; rec.maxAlternatives = 1;
+    rec.lang = "en-IN"; rec.interimResults = !!o.onInterim; rec.continuous = false; rec.maxAlternatives = 1;
     rec.onstart = () => { if(!dead && o.onState) o.onState(true); };
     rec.onresult = (e) => {
       if(dead) return;
       const r = e.results && e.results[e.results.length - 1];
       if(r && r.isFinal !== false && r[0] && r[0].transcript){ got = true; if(o.onText) o.onText(String(r[0].transcript).trim()); }
+      else if(r && r.isFinal === false && o.onInterim && r[0] && r[0].transcript) o.onInterim(String(r[0].transcript).trim());
     };
-    rec.onerror = (e) => { if(!dead && o.onError) o.onError(MIC_ERRORS[e && e.error] || "I could not hear you (" + ((e && e.error) || "error") + ").");  };
+    rec.onerror = (e) => { if(!dead && o.onError) o.onError(MIC_ERRORS[e && e.error] || "I could not hear you (" + ((e && e.error) || "error") + ").", e && e.error);  };
     rec.onend = () => { if(o.onState) o.onState(false); };
     try { rec.start(); } catch(e){ if(o.onError) o.onError("Speech recognition could not start."); return null; }
     return {stop(){ try { rec.stop(); } catch(e){} },
@@ -149,6 +183,68 @@
     show("News", newsHtml(d) + (hasTTS() ? "" : `<p class="sub">This browser cannot read aloud.</p>`), {reading: ok});
     if(ok && speak(d.speech_parts && d.speech_parts.length ? d.speech_parts : d.speech)) setState("Reading…");
   }
+  // Your own figures: the sentence and the facts come from the server (fixed templates over the dashboard's numbers); this only
+  // shows them and reads the sentence aloud. The Replay and Screener pages have no portfolio, so they point to the Live page.
+  const sentences = (t) => String(t || "").replace(/([.!?])\s+/g, "$1\n").split("\n").map(x => x.trim()).filter(Boolean);
+  function factsHtml(facts){
+    const rows = (facts || []).filter(f => f && f.label != null).map(f => `<div class="ask-fact" role="row"><span class="ask-fk" role="rowheader">${esc(f.label)}</span><span class="ask-fv num ${f.tone === "pos" ? "pl-profit" : f.tone === "neg" ? "pl-loss" : ""}" role="cell">${esc(f.value)}</span></div>`).join("");
+    return rows ? `<div class="ask-facts" role="table" aria-label="Figures">${rows}</div>` : "";
+  }
+  function portfolio(r, host, mode){
+    if(mode !== "live" && mode !== "demo"){
+      show("Your portfolio", `<p>Open the Live page for your portfolio.</p><p><a class="btn small ask-link" href="/">Open the Live page</a></p>`, {autoHide: 15000});
+      return;
+    }
+    const ok = hasTTS() && r.say;
+    show(mode === "demo" ? "Practice account" : "Your portfolio", `<p>${esc(r.say)}</p>` + factsHtml(r.facts) + `<p class="ask-state sub" role="status"></p>`, {reading: ok});
+    if(ok && speak(sentences(r.say))) setState("Reading…");
+    if(r.args && r.args.open){
+      if(typeof host.goWorkspace === "function"){ host.goWorkspace("overview"); setTimeout(() => { const m = document.getElementById("mp-card"); if(m && m.scrollIntoView) m.scrollIntoView({behavior: "smooth", block: "start"}); }, 150); }
+      else location.assign("/");
+    }
+  }
+  // For the voice card: ask, do the page action (open a stock or tab), fetch the news when asked, and hand back
+  // {intent, say, parts, facts, link, ticker, name, topic}. o: {host, ticker (scope), onStage(key, label)}. Read-only like run().
+  function openPortfolio(host){
+    if(typeof host.goWorkspace === "function"){ host.goWorkspace("overview"); setTimeout(() => { const m = document.getElementById("mp-card"); if(m && m.scrollIntoView) m.scrollIntoView({behavior: "smooth", block: "start"}); }, 150); }
+    else location.assign("/");
+  }
+  async function answer(text, o){
+    o = o || {};
+    const host = o.host || {}, mode = host.mode || "live";
+    const stage = (k, l) => { try { if(o.onStage) o.onStage(k, l); } catch(e){} };
+    text = String(text || "").trim().slice(0, 300);
+    if(!text) return null;
+    stage("understand", "Understanding");
+    const body = {text}; if(o.ticker) body.ticker = o.ticker;
+    const r = await timed("/api/ask", body, 20000, "That took too long. Try again.");
+    const a = r.args || {};
+    const out = {intent: String(r.intent || "unknown"), say: String(r.say || ""), parts: [], facts: [], link: null, ticker: a.ticker || null, name: a.name || "", topic: a.topic || null, scope: a.scope || null, via: r.via};
+    out.facts = (Array.isArray(r.facts) ? r.facts : []).filter(f => f && f.label != null).map(f => ({label: String(f.label), value: String(f.value), tone: f.tone === "pos" || f.tone === "neg" ? f.tone : ""}));
+    if(out.intent === "open_stock" || out.intent === "open_chart" || out.intent === "open_size"){
+      const op = out.intent === "open_chart" ? "chart" : out.intent === "open_size" ? "size" : "lookup";
+      stage("read", "Opening " + (out.name || out.ticker || "the stock"));
+      stockAction(op, a.ticker, host, mode);
+    } else if(out.intent === "open_tab"){ stage("read", "Opening " + (a.tab || "the page")); goTab(a.tab, host); }
+    else if(out.intent === "show_health"){ stage("read", "Opening data health"); goTab("health", host); }
+    else if(out.intent === "portfolio_summary"){
+      stage("read", "Reading your portfolio");
+      if(mode !== "live" && mode !== "demo"){ out.say = "Open the Live page for your portfolio."; out.facts = []; out.link = {href: "/", label: "Open the Live page"}; }
+      else if(a.open) openPortfolio(host);
+    } else if(out.intent === "news_today"){
+      stage("read", "Fetching the news");
+      const q = "/api/news/today?scope=" + encodeURIComponent(a.scope || "portfolio") + (a.ticker ? "&ticker=" + encodeURIComponent(a.ticker) : "");
+      const d = await timed(q, null, 45000, "The news is taking too long. Try again in a minute.");
+      const items = Array.isArray(d.items) ? d.items : [];
+      out.parts = (Array.isArray(d.speech_parts) && d.speech_parts.length ? d.speech_parts : [d.speech || ""]).map(String);
+      out.say = items.length ? out.parts.join(" ") : String(d.speech || "No news items found.");
+      out.facts = items.map(i => ({label: String(i.name || i.symbol || ""), value: String(i.title || ""), tone: i.tag === "positive" ? "pos" : i.tag === "negative" ? "neg" : "", long: true, sym: String(i.symbol || "")}));
+      if(!items.length) out.parts = [out.say];
+    }
+    if(!out.parts.length) out.parts = sentences(out.say);
+    stage("write", "Writing the answer");
+    return out;
+  }
   async function run(text, host){
     host = host || {};
     const mode = host.mode || "live";
@@ -169,15 +265,11 @@
       if(alts.length) body.querySelectorAll(".ask-alt").forEach(b => b.addEventListener("click", () => { hide(); stockAction(op, b.dataset.sym, host, mode); }));
       stockAction(op, a.ticker, host, mode);
     } else if(r.intent === "open_tab"){ show("Assistant", `<p>${esc(r.say)}</p>`, {autoHide: 2500}); goTab(a.tab, host); }
-    else if(r.intent === "portfolio_summary"){
-      show("Assistant", `<p>${esc(r.say)}</p>`, {autoHide: 2500});
-      if(typeof host.goWorkspace === "function"){ host.goWorkspace("overview"); setTimeout(() => { const m = document.getElementById("mp-card"); if(m && m.scrollIntoView) m.scrollIntoView({behavior: "smooth", block: "start"}); }, 150); }
-      else location.assign("/");
-    }
+    else if(r.intent === "portfolio_summary"){ portfolio(r, host, mode); }
     else if(r.intent === "show_health"){ show("Assistant", `<p>${esc(r.say)}</p>`, {autoHide: 2500}); goTab("health", host); }
     else if(r.intent === "news_today"){ await readNews(a, host, id); }
     else show("Assistant", `<p>${esc(r.say || "I did not understand that.")}</p>`, {autoHide: r.intent === "refused" ? 9000 : 12000});
   }
 
-  TA.ask = {run, listen, speak, stop, micSupported, speechSupported: hasTTS};
+  TA.ask = {run, listen, speak, stop, micSupported, speechSupported: hasTTS, answer, sentences, pickVoice, voiceInfo, setVoice, testVoice};
 })();
