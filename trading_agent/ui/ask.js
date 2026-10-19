@@ -13,7 +13,7 @@
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const hasTTS = () => !!(window.speechSynthesis && window.SpeechSynthesisUtterance);
   const WS = {research: "research", health: "health", tools: "tools", deals: "deals", "paper accounts": "paper"};
-  const PAGES = {live: "/", replay: "/replay", demo: "/demo", screener: "/screener"};
+  const PAGES = {live: "/", portfolio: "/", replay: "/replay", demo: "/demo", practice: "/demo", screener: "/screener"};
 
   // ---- the result card ----
   let card = null, body = null, ctl = null, hideT = 0, reading = false;

@@ -24,7 +24,8 @@ log = logging.getLogger(__name__)
 MAX_TEXT = 300
 OLLAMA_TIMEOUT = 8.0
 INTENTS = ("open_stock", "open_chart", "open_size", "news_today", "portfolio_summary", "open_tab", "show_health")
-TABS = ("live", "replay", "demo", "screener", "research", "health", "paper accounts", "tools", "deals")
+TABS = ("live", "replay", "demo", "screener", "research", "health", "paper accounts", "tools", "deals", "portfolio", "practice")
+TAB_ALIAS = {"portfolio": "live", "practice": "demo"}   # the Portfolio page has a Live and a Practice (demo) account
 PORTFOLIO_TOPICS = ("pnl_today", "pnl_total", "value", "cash", "holdings_count", "movers", "summary")
 REFUSAL = "I only open pages and read the news; I do not place orders."
 HINT = ('I did not understand that. Try: "tell me Tata Motors detail", "show Infosys chart", "read today\'s news", '
@@ -247,6 +248,7 @@ def _finish(intent: str, args: dict[str, Any], search: Callable[..., list[dict[s
         return {"intent": "news_today", "args": {"scope": scope}, "say": "Reading today's news." if scope == "portfolio" else "Reading the market news.", "via": via}
     if intent == "open_tab":
         tab = str(args.get("tab") or "").lower()
+        tab = TAB_ALIAS.get(tab, tab)
         if tab not in TABS:
             return {"intent": "unknown", "args": {}, "say": f"{HINT} {CAN}", "via": via}
         return {"intent": "open_tab", "args": {"tab": tab}, "say": f"Opening {tab}.", "via": via}

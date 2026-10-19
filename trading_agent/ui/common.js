@@ -1171,3 +1171,10 @@ try {
   if("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1"))
     window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js", {scope: "/"}).catch(() => {}); });
 } catch(e){}
+// The gear on the Replay and Screener pages: they have no Settings dialog, so it opens the Live page's (Appearance section: theme).
+try {
+  document.addEventListener("click", (e) => {
+    const b = e.target && e.target.closest && e.target.closest("#btn-settings"), m = document.body && document.body.dataset.mode;
+    if(b && (m === "replay" || m === "screener")) location.assign("/?settings=appearance");
+  });
+} catch(e){}   // a test harness without a real document
