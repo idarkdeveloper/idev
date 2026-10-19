@@ -621,7 +621,7 @@ HALT_ALLOWED = {"kill-switch", "app-device", "app-api", "ui", "watch", "history"
                 "research-capacity", "research-leakage",
                 "research-momentum", "research-holdout",
                 "research-macro", "research-sectors", "research-backward", "research-replication",
-                "research-batch3", "research-circuits"}
+                "research-batch3", "research-circuits", "research-india-2007"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -1359,6 +1359,87 @@ def cmd_research_backward(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps({**r, "results": {k: {kk: vv for kk, vv in v.items() if kk != "skill"}
                                            for k, v in r["results"].items()}}, default=str))
+    return 0
+
+
+def cmd_research_india_2007(args: argparse.Namespace) -> int:
+    """The pre-registered India test (Oct 2007 to Mar 2016), ONCE: data gate first, then A0, B and E. Refused
+    without --confirm and after the first run (the trial log records it)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    import requests
+
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .index_history import current_symbol, load_symbol_changes
+    from .nse import NSEClient
+    from .research_backward import fetch_tri, with_fee
+    from .research_india import (DATA_FROM, PREREGISTRATION, STUDY, TRADING_FROM, TRI_NAME, WINDOW_END, build_series,
+                                 fetch_actions, fetch_bhav, format_gate, format_india, gate, make_market,
+                                 parse_actions, run_india, universe_by_month)
+    from .research_studies import prior_trials
+    settings = _settings(args)
+    if _once_used(settings, STUDY):
+        return 2
+    if not args.confirm:
+        print(f"This runs the pre-registered India test ({PREREGISTRATION}) on Oct 2007 to Mar 2016, ONCE. The data "
+              "gate is checked first; if it passes the result is final. Run again with --confirm to run it.")
+        return 2
+    cache = settings.state_dir / "india2007"
+    print(f"Loading the {TRI_NAME} total return index…")
+    tri = fetch_tri(cache, start=DATA_FROM, end=WINDOW_END, name=TRI_NAME)
+    bench = [b for b in with_fee(tri) if DATA_FROM <= b["date"] < WINDOW_END]
+    days = [b["date"] for b in bench]
+    print(f"Downloading {len(days)} NSE daily files (cached; first time takes a while)…")
+
+    def one(day: str) -> tuple[str, Any]:
+        s = requests.Session()
+        for _ in range(3):
+            try:
+                return day, fetch_bhav(day, cache / "bhav", s)
+            except requests.RequestException:
+                continue
+        return day, None
+
+    files: dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        for k, (day, rows) in enumerate(ex.map(one, days), 1):
+            if rows:
+                files[day] = rows
+            if k % 250 == 0:
+                print(f"  {k}/{len(days)}")
+    renames = load_symbol_changes()
+    print("Loading NSE's corporate actions…")
+    actions = parse_actions(fetch_actions(cache, NSEClient()))
+    series, info = build_series(days, files, lambda s, d: current_symbol(s, d, renames), actions)
+    members = universe_by_month(days, series, info["funds"])
+    trading_months = sorted({d[:7] for d in days if d >= TRADING_FROM})
+    g = gate(days=days, present=set(files), actions=actions, series=series, members=members,
+             trading_months=trading_months)
+    print(format_gate(g))
+    if not g["passes"]:
+        print("The data gate failed, so nothing was simulated and nothing is spent. Mend the data under a committed "
+              "addendum, then run again.")
+        return 1
+    m = make_market(days, series, bench, members)
+    _leakage_guard(m, holdout_start=WINDOW_END)
+    if not _claim_once(settings, STUDY):
+        return 2
+    r = run_india(m, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+                  extra_trials=prior_trials(settings.state_dir))
+    for vid, x in r["primary"].items():   # logged before printing: once run, the window is spent
+        log_trial(settings.state_dir, STUDY, {"variant": vid, "name": x["name"], "from": r["start"], "to": r["end"]},
+                  {"return": x["total_return"], "excess": x["excess"], "cagr": x["cagr"],
+                   "max_drawdown": x["max_drawdown"], "turnover": x["turnover"], "passes": x["passes"],
+                   "skill": x["skill"].get("probability")})
+    notes = [f"{len(files)} of {len(days)} daily files; {len(series)} stocks traded; "
+             f"{sum(len(v) for v in members.values()) // max(1, len(members))} members a month on average.",
+             f"{info['dividends_skipped']} dividend record(s) not applied (amount over 30% of the price).",
+             f"{len(m.excluded)} stock(s) left out for a one-day move over 50x: {', '.join(m.excluded[:12]) or 'none'}.",
+             "price bands and ASM/GSM lists not applied (not available for these years)."]
+    print(format_india(r, notes))
+    if args.json:
+        print(json.dumps({k: v for k, v in r.items() if k != "pbo"}, default=str))
     return 0
 
 
@@ -2261,6 +2342,11 @@ def build_parser() -> argparse.ArgumentParser:
                                                     "(instead of fetching it)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_research_backward)
+    sp = sub.add_parser("research-india-2007", help="the pre-registered India test on Oct 2007 to Mar 2016, ONCE "
+                                                   "(needs --confirm; a data gate runs first)")
+    sp.add_argument("--confirm", action="store_true", help="really run it: the result is final and the window is spent")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_research_india_2007)
     sp = sub.add_parser("research-holdout", help="open the sealed holdout ONCE for the adopted rules (needs --confirm)")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--confirm", action="store_true", help="really open it: the result is final and the holdout is spent")
