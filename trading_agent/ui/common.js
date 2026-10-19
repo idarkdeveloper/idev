@@ -1095,6 +1095,8 @@ window.TA = (function(){
     function page(o){
       o = o || {};
       const none = {step(){}, done(){}, fail(){}};   // a loader never stops a page from working
+      // o.once = a sessionStorage key: the full-screen loader shows on the first load of a tab session only, not on every Live/Practice switch or page change.
+      try { if(o.once){ if(sessionStorage.getItem(o.once)) return none; sessionStorage.setItem(o.once, "1"); } } catch(e){}
       if(!document.body || typeof document.body.appendChild !== "function" || typeof document.createElement !== "function") return none;
       const steps = (o.steps || []).map(name => ({name, state: "todo", meta: ""}));
       const el = document.createElement("div");
