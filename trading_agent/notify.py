@@ -178,15 +178,18 @@ class Notifier:
     def send(self, subject: str, body: str, html: str | None = None,
              images: list[dict[str, Any]] | None = None, idempotency_key: str | None = None,
              telegram_text: str | None = None, telegram_html: str | None = None,
-             telegram_plain: str | None = None, telegram_button: dict[str, Any] | None = None) -> list[str]:
+             telegram_plain: str | None = None, telegram_button: dict[str, Any] | None = None,
+             only: tuple[str, ...] | None = None) -> list[str]:
         """``images``: [{"cid", "filename", "content" (bytes)}] shown inline in the HTML part through Resend's
         attachments. If Resend refuses them, the email goes again without the pictures (their <img> tags removed);
         webhooks get the text only. Telegram (when configured) gets ``telegram_text`` (default: the body) as plain text
         that is escaped here, and the images as one album; a Telegram error never affects the other channels. ``idempotency_key`` names the logical send (for example "evening:2026-10-12"); the
-        Resend key is sha256 of it plus "img" or "plain", so a retried send reuses it. Without one no key is sent."""
+        Resend key is sha256 of it plus "img" or "plain", so a retried send reuses it. Without one no key is sent.
+        ``only`` limits the send to those channels (e.g. ("telegram", "webhook") for a push without an email)."""
         delivered = ["console"]
         print(f"\n=== {subject} ===\n{body}\n")
-        if "email" in self.channels:
+        active = self.channels if only is None else [c for c in self.channels if c in only]
+        if "email" in active:
             try:
                 try:
                     self._post_email(subject, body, html, images, _key(idempotency_key, "img" if images else "plain"))
@@ -204,7 +207,7 @@ class Notifier:
                 delivered.append("email")
             except requests.RequestException as e:
                 log.warning("email delivery failed: %s", e)
-        if "webhook" in self.channels:
+        if "webhook" in active:
             try:
                 r = self.session.post(self.webhook_url or "", json={"text": _mentions(f"*{subject}*\n{body}")},
                                       timeout=30)
@@ -212,7 +215,7 @@ class Notifier:
                 delivered.append("webhook")
             except requests.RequestException as e:
                 log.warning("webhook delivery failed: %s", e)
-        if "telegram" in self.channels and not self._tg_done(idempotency_key):
+        if "telegram" in active and not self._tg_done(idempotency_key):
             if self._telegram(subject, body if telegram_text is None else telegram_text, images,
                               html=telegram_html, plain=telegram_plain, button=telegram_button):
                 delivered.append("telegram")
