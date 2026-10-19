@@ -144,7 +144,8 @@ def test_the_ticker_hint_is_validated_and_never_weakens_a_refusal(server):  # no
         out = _post(base + "/api/ask", {"text": t, "ticker": "TCS"})[1]
         assert out["intent"] in ("refused", "unknown"), t
     out = _post(base + "/api/ask", {"text": "buy it", "ticker": "TCS"})[1]
-    assert out["say"] == "I only open pages and read the news; I do not place orders."
+    from trading_agent import ask
+    assert out["say"] == ask.REFUSAL == "I can suggest ideas and open pages, but I do not place orders."
 
 
 # ---- VOICE_UI ----
