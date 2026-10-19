@@ -1293,10 +1293,10 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 @media (min-width: 900px) {
   .regime-card .mkts { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); grid-template-columns: none; }
 }
-@media (min-width: 701px) and (max-width: 1180px) {
+@media (min-width: 701px) and (max-width: 899px) {   /* below this the header needs two rows; above it brand, tabs, search, checked and the gear fit in one */
   .hdr .controls { flex: 1 1 100%; margin-left: 0; flex-wrap: nowrap; justify-content: flex-start; }
 }
-@media (min-width: 1181px) {
+@media (min-width: 900px) {
   .hdr .controls { flex-wrap: nowrap; }
 }
 /* Holding names and a centred sparkline (phones). The company name is hidden above 700 px, where the table is unchanged. */
@@ -1312,4 +1312,8 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #mp-card #mp-rows td.num:nth-child(6) { grid-row: 4; }
   #mp-card #mp-rows td.prot-cell { grid-row: 5; }
   #mp-card #mp-rows .stock-cell > div:not(.sym-line):not(.l2):not(.hname) { grid-row: 6; }
+}
+@media (min-width: 900px) and (max-width: 1099px) {   /* keeps the one-row header from wrapping: Search is an icon until there is room for its label */
+  .hdr #btn-palette { width: 40px; padding: 0; justify-content: center; }
+  .hdr #btn-palette > span, .hdr #btn-palette > kbd { display: none; }
 }
