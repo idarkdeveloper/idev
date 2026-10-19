@@ -560,6 +560,7 @@ class App:
             "regime": regime,
             "orders": self.orders(),
             "limit_orders": self.limit_orders(),
+            "stop_sells": self.stop_sells(),
             "forward": self.forward_summary(),
             "backtest": self.last_backtest,
             "screen": self.last_screen,
@@ -1960,6 +1961,22 @@ class App:
                     row["error"] = f"{type(e).__name__}: {e}"[:200]
             out.append(row)
         return {"universe": uni, "accounts": out}
+
+    def stop_sells(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Demo page: the practice account's sells made by a stop-loss (the minute checker or the watcher), newest
+        first, with what they were bought at and the profit or loss. Kept apart from the order list, whose 50 latest
+        orders can push an older stop sell out. Other pages: none."""
+        if self.page != "demo":
+            return []
+        try:
+            b = self.broker
+        except GrowwTokenUnavailable:
+            return []
+        if not isinstance(b, LocalPaperBroker):
+            return []
+        keys = ("symbol", "qty", "filled_avg_price", "filled_at", "avg_entry_price", "realised_pl", "fees",
+                "stop_level", "stop_type", "long_term")
+        return [{k: o.get(k) for k in keys} for o in reversed(b.orders()) if o.get("stop_hit")][:limit]
 
     def orders(self, limit: int = 50) -> list[dict[str, Any]]:
         """Live page: real Groww orders (state.json). Demo page: practice fills. Offline sample: both. Newest first."""

@@ -207,7 +207,9 @@ GTT smart orders) refuses with `LiveOrdersDisabled` before touching the network 
   09:15 and 15:30 IST on NSE trading days and sells the whole practice position at the
   latest price, with the usual charges, once the price is at or below the stop; the fill is
   kept in `state.json` (`practice_stop_fills`), shown as a notice on the Demo page and marked
-  "stop hit" in the order history. Watch mode's auto-exit uses the same rule, and the two
+  "sold by stop-loss" in the order history. A *Sold by stop-loss* list under the practice
+  holdings keeps the last 20 such sales: stock, date, quantity, sell and buy price, the stop
+  (type and level) and the profit or loss after charges, with the total. Watch mode's auto-exit uses the same rule, and the two
   do not sell the same position twice: each re-checks the position under a lock on the
   practice account file (`paper_broker.json.lock`) after re-reading it, so this also holds
   against a separate `watch` process using the same file. Unlike the GTT above this is not an order at any
