@@ -22,13 +22,14 @@ from __future__ import annotations
 import math
 import logging
 import statistics
+import threading
 from bisect import bisect_right
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Iterable
 
 from .membership import DELISTED, Membership
-from .momentum import momentum_stats
-from .screen import _vol, score_universe
+from .momentum import SeriesArrays, momentum_stats_at
+from .screen import score_universe, vol_from_closes
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
                         workers: int = 8, min_turnover: float = 1e7, require_above_200dma: bool = True,
                         membership: Membership | None = None, index_fund: str | None = None,
                         fundamentals: Any | None = None, quality: float = 0.0, value: float = 0.0,
-                        until: str | None = None) -> dict[str, Any]:
+                        until: str | None = None, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Monthly-rebalanced factor portfolio. With ``fundamentals`` (a ResultsHistory) and a
     quality and/or value weight, each rebalance also ranks on NSE results filings that had
     been broadcast by that day (point-in-time).
@@ -105,15 +106,28 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
     # all stocks that were members at any time in the window (including the lookback year)
     members = sorted(membership.ever_members(bench_dates[0])) if membership and bench_dates else current
 
+    loaded = [0]
+    load_lock = threading.Lock()
+
     def load(sym: str) -> tuple[str, list[dict[str, Any]] | None]:
         try:
             return sym, prices.history(sym, rng)
         except Exception:  # noqa: BLE001
             return sym, None
+        finally:
+            if progress is not None:
+                with load_lock:
+                    loaded[0] += 1
+                    n = loaded[0]
+                if n == len(members) or n % 5 == 0:
+                    progress(f"Reading history {n} of {len(members)} stocks")
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         hist = {s: b for s, b in ex.map(load, members) if b}
+    if progress is not None:
+        progress("Simulating the monthly rebalances…")
     dates_of = {s: [b["date"] for b in bars] for s, bars in hist.items()}
+    arrays = {s: SeriesArrays(bars) for s, bars in hist.items()}   # the columns the monthly stats are read from
 
     # rebalance on month starts that have a full lookback and fall within the test window
     first_ok = bench_dates[min(MIN_BARS, len(bench_dates) - 1)] if bench_dates else ""
@@ -191,15 +205,15 @@ def run_factor_backtest(universe: Iterable[dict[str, str]], prices: Any, *, top:
         # 2. rank on data up to this day only
         stats: dict[str, dict[str, Any]] = {}
         eligible_now = in_index(day)
-        for sym, bars in hist.items():
+        for sym in hist:
             if sym not in eligible_now:
                 continue
             i = bisect_right(dates_of[sym], day)
             if i < MIN_BARS:
                 continue
-            window = bars[:i]
-            st = momentum_stats(window)
-            st["vol_60d"] = _vol(window)
+            arr = arrays[sym]
+            st = momentum_stats_at(arr, i)
+            st["vol_60d"] = vol_from_closes(arr.adj[max(0, i - 61):i])
             stats[sym] = st
         ranked = score_universe(stats, min_turnover=min_turnover, require_above_200dma=require_above_200dma)
         if use_funds:

@@ -13,8 +13,9 @@ import io
 import logging
 import math
 import statistics
+import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import requests
 
@@ -50,12 +51,30 @@ def load_universe(name: str = "NIFTY200", session: requests.Session | None = Non
     return out
 
 
-def _vol(bars: list[dict[str, Any]], n: int = 60) -> float | None:
-    closes = [b["adj_close"] for b in bars[-(n + 1):]]
+def _pstdev(xs: list[float]) -> float:
+    """Population standard deviation by the two-pass formula with exact (fsum) sums: within an ulp or two of
+    ``statistics.pstdev`` (which sums in exact fractions, 30x slower, and matters in a backtest that asks for it for every
+    stock at every month)."""
+    if max(xs) == min(xs):
+        return 0.0   # a constant group has no spread (the mean of identical floats can differ from them in the last bit)
+    n = len(xs)
+    mu = math.fsum(xs) / n
+    sd = math.sqrt(math.fsum((x - mu) * (x - mu) for x in xs) / n)
+    return 0.0 if sd <= 1e-12 * max(1.0, abs(mu)) else sd   # rounding noise, not spread
+
+
+def vol_from_closes(closes: list[float], n: int = 60) -> float | None:
+    """Annualised volatility of the last ``n`` daily log returns of ``closes`` (None without n + 1 closes)."""
     if len(closes) < n + 1:
         return None
     rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes)) if closes[i - 1]]
-    return statistics.pstdev(rets) * math.sqrt(252) if len(rets) > 1 else None
+    return _pstdev(rets) * math.sqrt(252) if len(rets) > 1 else None
+
+
+def _vol(bars: list[dict[str, Any]], n: int = 60) -> float | None:
+    return vol_from_closes([b["adj_close"] for b in bars[-(n + 1):]], n)
+
+
 
 
 def _z(values: list[float | None]) -> list[float | None]:
@@ -95,7 +114,7 @@ def score_universe(stats_by_symbol: dict[str, dict[str, Any]], *, min_turnover: 
 def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20, workers: int = 8,
                min_turnover: float = 1e7, require_above_200dma: bool = True,
                fundamentals: Any | None = None, quality: float = 0.0, value: float = 0.0,
-               bands: Any | None = None, filters: Any | None = None) -> dict[str, Any]:
+               bands: Any | None = None, filters: Any | None = None, progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """``prices.history(symbol, '2y')`` per constituent, in parallel; returns ranked rows.
 
     With a ``fundamentals`` provider and a ``quality`` and/or ``value`` weight, the
@@ -104,6 +123,8 @@ def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20
     """
     members = list(universe)
     names = {m["symbol"]: m for m in members}
+    done = [0]
+    lock = threading.Lock()
 
     def one(sym: str) -> tuple[str, dict[str, Any]]:
         try:
@@ -113,9 +134,18 @@ def run_screen(universe: Iterable[dict[str, str]], prices: Any, *, top: int = 20
             return sym, s
         except Exception as e:  # noqa: BLE001
             return sym, {"error": f"{type(e).__name__}: {e}"}
+        finally:
+            if progress is not None:
+                with lock:
+                    done[0] += 1
+                    n = done[0]
+                if n == len(members) or n % 5 == 0:
+                    progress(f"Reading history {n} of {len(members)} stocks")
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         stats = dict(ex.map(one, [m["symbol"] for m in members]))
+    if progress is not None:
+        progress("Scoring the universe…")
     rows = score_universe(stats, min_turnover=min_turnover, require_above_200dma=require_above_200dma)
     for r in rows:
         r["name"] = names.get(r["symbol"], {}).get("name", "")

@@ -561,3 +561,13 @@ The dashboard is an installable web app (manifest, icons and a small service wor
   site data in Chrome (Site settings) once.
 * **Host check:** the manifest, `/sw.js` and the icons are plain files served under the same `TA_ALLOWED_HOSTS` rule as every page; the
   `/api` protections are unchanged.
+
+## Research tools: price cache and warm-up
+
+The factor screen, portfolio backtest, signal lab, deals backtest and the screener page read price histories through an
+in-memory cache (10 minutes per series, 30 minutes for series loaded by the start-up warm-up outside market hours).
+`RESEARCH_CACHE_MAX` (default 600) is the most series kept: about 150 KB for a 2-year series and 900 KB for a 10-year one,
+so the worst case is about 540 MB (NIFTY200's 10-year series alone are about 180 MB). `RESEARCH_WARM=false` turns the warm-up
+off. The warm-up starts 30 s after the dashboard, fetches from Yahoo (0.5 s between symbols), so it is skipped, with one INFO
+line, while the NSE is open, and it stops if the market opens; it mainly prepares the price archive and the disk cache.
+The order-form price line, Look up and the agent never use this cache.
