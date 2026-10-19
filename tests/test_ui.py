@@ -1565,7 +1565,7 @@ def test_holding_rows_carry_the_company_name_only_when_known():
     ui = Path(__file__).resolve().parents[1] / "trading_agent" / "ui"
     html = (ui / "index.html").read_text(encoding="utf-8")
     assert 'h.name ? `<div class="sub hname"' in html            # nothing is shown for a holding without a name
-    assert ".hname { display: none; }" in (ui / "nocturne.css").read_text(encoding="utf-8")   # phones only
+    assert ".hname { display: block;" in (ui / "nocturne.css").read_text(encoding="utf-8")   # shown on phones and in the desktop table
 
 
 def test_the_dashboard_has_no_start_watch_button():
