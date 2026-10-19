@@ -180,6 +180,7 @@ LITERAL_ALLOWLIST: dict[str, set[str]] = {"common.js": {"rgb(", "rgba("}}
 @pytest.mark.parametrize("name", ["index.html", "replay.html", "common.js", "replay.js", "palette.js", "screener.html", "screener.js"])
 def test_no_colour_literals_in_page_code(name):
     text = (UI / name).read_text(encoding="utf-8")
+    text = re.sub(r'<meta name="theme-color" content="#[0-9a-fA-F]{6}">', "", text)   # the browser bar colour (installable app) must be a literal
     found = [m.group(0) for m in LITERAL.finditer(text) if m.group(0) not in LITERAL_ALLOWLIST.get(name, set())]
     assert not found, found
 

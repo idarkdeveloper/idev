@@ -1367,3 +1367,8 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #mp-card #mp-rows td.prot-cell { grid-column: 1 / -1; grid-row: 5; }
   #mp-card #mp-rows .stock-cell > div:not(.sym-line):not(.l2):not(.hname):not(.hold-line) { grid-column: 1 / -1; grid-row: 6; }
 }
+
+/* Installed as an app (home-screen icon): keep content clear of a notch or the gesture bar */
+@media (display-mode: standalone) {
+  body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); padding-bottom: env(safe-area-inset-bottom); }
+}
