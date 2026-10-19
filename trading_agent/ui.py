@@ -55,6 +55,7 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 "/static/replay.js": ("replay.js", "text/javascript; charset=utf-8"),
                 "/static/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
                 "/static/screener.js": ("screener.js", "text/javascript; charset=utf-8"),
+                "/static/ask.js": ("ask.js", "text/javascript; charset=utf-8"),
                 "/static/stockpage.js": ("stockpage.js", "text/javascript; charset=utf-8"),
                 # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
@@ -130,6 +131,13 @@ def _inr(v: float, d: int = 0) -> str:
     return ("−" if neg else "") + "₹" + out + ("." + frac if d else "")
 
 
+MAX_POST_BYTES = 64 * 1024   # a dashboard POST body is a few hundred bytes; anything bigger is refused (413)
+
+
+class BodyTooLarge(ValueError):
+    pass
+
+
 class Busy(Exception):
     """Another request is already doing this (answered 409)."""
 
@@ -178,6 +186,11 @@ class App:
             from .prices import price_ttl
             self.prices.ttl_fn = lambda d: price_ttl(datetime.now(timezone.utc), d, self._safe_holidays())
         self.momentum = MomentumScreen(self.prices)
+        self._ask_limit: Any | None = None   # ask.RateLimit, built on first use
+        self._news_limit: Any | None = None   # its own RateLimit(10) for /api/news/today
+        self._news_cache: dict[Any, Any] = {}   # (scope, ticker) -> (monotonic time, result), 60 s
+        self._research: Any | None = None   # SharedHistory over self.prices, for the read-only research tools only
+        self._research_warm: Any | None = None
         self.last_backtest: dict[str, Any] | None = None
         self.last_screen: dict[str, Any] | None = None
         self.last_factor_bt: dict[str, Any] | None = None
@@ -424,7 +437,7 @@ class App:
                 tv = TradingViewColumns(st.state_dir, enabled=lambda: bool(self.settings.tradingview_screener),
                                         role=lambda: self.settings.ta_role)
                 funds = YahooFundamentals(st.state_dir / "cache", cache_ttl=24 * 3600)
-                self._screener = ScreenerService(prices=self.prices, fundamentals=funds, load_universe=load_universe,
+                self._screener = ScreenerService(prices=self.research_prices, fundamentals=funds, load_universe=load_universe,
                                                  bands=lambda: book_for(self.settings), tv=tv, names=self._screener_names,
                                                  filters=lambda: filters_for(self.settings))
             return self._screener
@@ -450,6 +463,149 @@ class App:
         except (OSError, ValueError, AttributeError, TypeError):
             pass
         return out
+
+    @property
+    def research_prices(self) -> Any:
+        """The price source of the READ-ONLY research tools (factor screen, portfolio backtest, signal lab, deals backtest,
+        the screener page): ``self.prices`` behind a shared in-memory cache (history_cache.SharedHistory, 10 minutes, bounded).
+        Latest-price reads (the order-form line, Look up) and every agent / watch / paper-trading path keep ``self.prices``."""
+        if self._parent is not None:
+            return self._parent.research_prices
+        with self._lazy_lock:
+            if self._research is None:
+                import os
+                from .history_cache import DEFAULT_MAX_ENTRIES, SharedHistory
+                try:
+                    cap = int(os.environ.get("RESEARCH_CACHE_MAX") or DEFAULT_MAX_ENTRIES)
+                except ValueError:
+                    cap = DEFAULT_MAX_ENTRIES
+                self._research = SharedHistory(self.prices, ttl=600.0, max_entries=cap, market_open=self._nse_open)
+            return self._research
+
+    def _nse_open(self) -> bool:
+        """True while the NSE is open (the helper the price TTL uses): research caches then keep the normal 10 minutes."""
+        return safety.market_open(datetime.now(timezone.utc), self._safe_holidays())
+
+    def start_research_warm(self, delay: float = 30.0) -> Any | None:
+        """After ``delay`` seconds load the default universes' histories into the research cache (daemon thread, paced). Off
+        with RESEARCH_WARM=false, in the offline sample and for a child app; returns the thread's object or None."""
+        import os
+        if self._parent is not None or self.demo_trades is not None or self._research_warm is not None:
+            return self._research_warm
+        if os.environ.get("RESEARCH_WARM", "true").strip().lower() in ("false", "0", "no", "off"):
+            return None
+        from .history_cache import ResearchWarm
+        from .screen import load_universe
+        self._research_warm = ResearchWarm(self.research_prices, lambda name: [m["symbol"] for m in load_universe(name)], delay=delay,
+                                           pause=0.5, is_open=self._nse_open)
+        self._research_warm.start()
+        return self._research_warm
+
+    # -- Ask: sentences to read-only actions -------------------------------------
+    def ask(self, text: Any, client: str = "") -> dict[str, Any]:
+        """POST /api/ask {"text"}: {"intent", "args", "say", "via"} (see ask.py). Read-only: opens pages, reads the news."""
+        from . import ask as ask_mod
+        s = self.settings
+        if not getattr(s, "ask_enabled", True):
+            raise PermissionError("Ask is switched off (ASK_ENABLED=false)")
+        if not isinstance(text, str):
+            raise ValueError("text must be a string")
+        root = self._parent or self
+        with self._lazy_lock:
+            if root._ask_limit is None:
+                root._ask_limit = ask_mod.RateLimit(getattr(s, "ask_rate_per_min", 30))
+        if not root._ask_limit.allow(client or "-"):
+            raise ask_mod.RateLimited("Too many questions in a minute; wait a little.")
+        out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)))
+        log.info("ask: intent=%s via=%s", out["intent"], out["via"])
+        log.debug("ask: text=%.60r", text)
+        return out
+
+    def news_today(self, scope: str = "portfolio", ticker: str | None = None, client: str = "") -> dict[str, Any]:
+        """GET /api/news/today: today's tagged headlines (IST date), newest first, at most 10, from the cached news service
+        for your holdings or one stock; when today has none, the last 24 hours (and ``note`` says so). ``speech`` is the text
+        the page reads aloud."""
+        from . import ask as ask_mod
+        scope = scope if scope in ("portfolio", "market", "stock") else "portfolio"
+        root = self._parent or self
+        with self._lazy_lock:
+            if root._news_limit is None:
+                root._news_limit = ask_mod.RateLimit(10)   # its own bucket: 10 a minute per client
+                root._news_cache = {}
+        if not root._news_limit.allow(client or "-"):
+            raise ask_mod.RateLimited("Too many news requests in a minute; wait a little.")
+        key = (scope, (ticker or "").upper())
+        hit = root._news_cache.get(key)
+        if hit and time.monotonic() - hit[0] < 60.0:   # "read the news" twice in a row does not fetch twice
+            return hit[1]
+        out = self._news_today(scope, ticker)
+        if len(root._news_cache) > 50:
+            root._news_cache.clear()
+        root._news_cache[key] = (time.monotonic(), out)
+        return out
+
+    NEWS_BUDGET_S = 25.0   # time spent fetching the per-holding feeds; the rest are skipped
+
+    def _news_today(self, scope: str, ticker: str | None) -> dict[str, Any]:
+        from . import ask as ask_mod
+        from .nse import check_ticker
+        from .timezones import IST
+        svc = self.news
+        note: str | None = None
+        if svc is None:
+            return {"scope": scope, "items": [], "note": "News is not available.", "speech": ask_mod.compose_speech([]), "as_of": _now()}
+        names: dict[str, str] = {}
+        if scope == "stock":
+            sym = check_ticker(ticker or "")
+            symbols = [sym]
+            try:
+                names[sym] = self.resolve(sym)[1] or ""
+            except Exception:  # noqa: BLE001
+                names[sym] = ""
+        else:
+            symbols = sorted(self._held_symbols())[:30]
+            if scope == "market":
+                note = "Market headlines are not available here; these are the news on your holdings."
+            try:
+                names = {k: v for k, v in (self._screener_names(symbols) or {}).items() if v}
+            except Exception:  # noqa: BLE001
+                names = {}
+        now = self._now_dt().astimezone(IST)
+        rows: list[tuple[Any, dict[str, Any]]] = []
+        started, skipped = time.monotonic(), False
+        for sym in symbols:
+            if time.monotonic() - started > self.NEWS_BUDGET_S:
+                skipped = True
+                break
+            try:
+                res = svc.for_symbol(sym, names.get(sym) or None, background=True)
+            except Exception as e:  # noqa: BLE001 - one stock's feed failing must not hide the rest
+                log.debug("news today: %s unavailable: %s", sym, e)
+                continue
+            for it in res.get("items") or []:
+                try:
+                    at = datetime.fromisoformat(str(it.get("published")))
+                except ValueError:
+                    continue
+                at = (at if at.tzinfo else at.replace(tzinfo=IST)).astimezone(IST)
+                rows.append((at, {"symbol": sym, "name": names.get(sym, ""), "title": str(it.get("title") or "")[:200],
+                                  "tag": it.get("sentiment") if it.get("sentiment") in ("positive", "negative", "neutral") else "neutral",
+                                  "source": str(it.get("source") or "")[:60], "time_ist": at.strftime("%H:%M"),
+                                  "published": at.isoformat(timespec="seconds")}))
+        today = [r for r in rows if r[0].date() == now.date()]
+        if not today:
+            recent = [r for r in rows if 0 <= (now - r[0]).total_seconds() <= 86400]
+            if recent:
+                today, note = recent, "Nothing is dated today yet; these are from the last 24 hours."
+            else:
+                note = note or "No news items found."
+        if skipped:
+            note = ((note + " ") if note else "") + "Some feeds were skipped."
+        today.sort(key=lambda r: r[0], reverse=True)
+        items = [r[1] for r in today[:10]]
+        label = "today's" if note is None or "Market headlines" in (note or "") else "recent"
+        return {"scope": scope, "items": items, "note": note, "as_of": _now(),
+                "speech": ask_mod.compose_speech(items, label, note), "speech_parts": ask_mod.speech_parts(items, label, note)}
 
     def foreign_screener(self, key: str) -> Any:
         """The service of one US / UK / Japan list (screener_markets): Yahoo history and fundamentals, view only."""
@@ -1165,7 +1321,7 @@ class App:
                     data = self.data
                     deals = fetch_followed(data, names, self.settings.watch_source,
                                            days=days if self.settings.data_source == "nse" else None)
-                    prices = self.prices
+                    prices = self.research_prices
                 if len(names) == 1:
                     result = run_backtest(names[0], deals, prices, horizons=horizons, cost_bps=cost_bps)
                 else:  # pooled result plus one row per investor
@@ -1201,7 +1357,8 @@ class App:
                 if quality or value:
                     from .fundamentals import YahooFundamentals
                     funds = YahooFundamentals(self.settings.state_dir / "cache")
-                result = run_screen(members, self.prices, top=top, fundamentals=funds,
+                result = run_screen(members, self.research_prices, top=top, fundamentals=funds,
+                                    progress=lambda m: setattr(job, "message", m),
                                     quality=1.0 if quality else 0.0, value=1.0 if value else 0.0,
                                     bands=book_for(self.settings), filters=filters_for(self.settings))
                 result.pop("all", None)
@@ -1821,7 +1978,7 @@ class App:
                 membership = point_in_time(universe, [m["symbol"] for m in members], self.settings.state_dir)
 
                 def run_top(n: int) -> dict[str, Any]:
-                    return run_factor_backtest(members, self.prices, top=n, years=years,
+                    return run_factor_backtest(members, self.research_prices, top=n, years=years, progress=lambda m: setattr(job, "message", m),
                                                cost_model=cost_model_for("in"),
                                                capital=self.settings.paper_starting_cash,
                                                membership=membership, index_fund=INDEX_FUNDS.get(universe.upper()))
@@ -1867,7 +2024,7 @@ class App:
         def run() -> None:
             try:
                 members = load_universe(universe)
-                r = run_signal_lab(members, self.prices, horizons=horizons, years=years,
+                r = run_signal_lab(members, self.research_prices, horizons=horizons, years=years,
                                    membership=point_in_time(universe, [m["symbol"] for m in members],
                                                             self.settings.state_dir),
                                    cost_model=cost_model_for("in"))
@@ -2304,8 +2461,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 
         def _body(self) -> dict[str, Any]:
             n = int(self.headers.get("Content-Length") or 0)
+            if n > MAX_POST_BYTES:
+                raise BodyTooLarge(f"the request body is too large (at most {MAX_POST_BYTES // 1024} KB)")
             raw = self.rfile.read(n) if n else b""
-            return json.loads(raw.decode() or "{}")
+            body = json.loads(raw.decode() or "{}")
+            if not isinstance(body, dict):
+                raise ValueError("bad request")
+            return body
 
         def do_GET(self) -> None:  # noqa: N802
             refused = self._request_refusal("GET")
@@ -2387,6 +2549,14 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.my_portfolio(refresh=(q.get("refresh") or ["0"])[0] in ("1", "true")))
             elif path == "/api/jobs":
                 self._json([j.to_dict() for j in app.jobs])
+            elif path == "/api/news/today":
+                from urllib.parse import parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                from .ask import RateLimited
+                try:
+                    self._json(app.news_today((q.get("scope") or ["portfolio"])[0], (q.get("ticker") or [""])[0] or None, self.client_address[0]))
+                except RateLimited as e:
+                    self._json({"error": str(e)}, HTTPStatus.TOO_MANY_REQUESTS)
             elif path == "/api/regime":
                 from urllib.parse import parse_qs
                 force = (parse_qs(urlparse(self.path).query).get("refresh") or ["0"])[0] in ("1", "true")
@@ -2600,7 +2770,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 body = self._body()
                 if path in HALT_REFUSED_POSTS:
                     app.halted(f"use {path}")
-                if path == "/api/kill-switch":
+                if path == "/api/ask":
+                    from .ask import RateLimited
+                    try:
+                        self._json(app.ask(body.get("text"), self.client_address[0]))
+                    except RateLimited as e:
+                        self._json({"error": str(e)}, HTTPStatus.TOO_MANY_REQUESTS)
+                elif path == "/api/kill-switch":
                     self._json(app.kill_switch(body.get("confirm"), body.get("cancel_gtt") is True))
                 elif path == "/api/integration/run":
                     self._json(app.run_integration(), HTTPStatus.ACCEPTED)
@@ -2670,6 +2846,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             except PermissionError as e:
                 self._json({"error": str(e)}, HTTPStatus.FORBIDDEN)
+            except BodyTooLarge as e:
+                self._json({"error": str(e)}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             except Busy as e:
                 self._json({"error": str(e)}, HTTPStatus.CONFLICT)
             except FilterWarning as e:
@@ -2728,6 +2906,7 @@ def serve(settings: Settings | None = None, *, host: str = "127.0.0.1", port: in
     # --demo is the offline sample dashboard, isolated in state_dir/demo-sample. Without it the app is the
     # real one, and its /demo page is the same page with the practice account.
     app = sample_app(settings, context) if demo else App(settings, context=context)
+    app.start_research_warm()  # the research tools' price histories, a little after start (RESEARCH_WARM=false turns it off)
     app.ensure_stop_checker()  # practice stop-losses are checked while the dashboard runs, tab open or not
     server = make_server(app, host, port)
     url = f"http://{host}:{server.server_address[1]}/"

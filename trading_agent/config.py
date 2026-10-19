@@ -274,6 +274,10 @@ class Settings:
     news_tagger: str = "auto"  # auto | ollama | claude | none
     # Where each news alert goes: "" (the default) = Telegram only when Telegram is set up, else email; or both | telegram | email
     news_alert_channels: str = ""
+    # Ask (the palette's typed or spoken commands; read-only): on/off, whether a local Ollama may help when no rule fits, per-minute limit
+    ask_enabled: bool = True
+    ask_ollama: bool = True
+    ask_rate_per_min: int = 30
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:3b"
     news_claude_model: str = "claude-haiku-4-5"
@@ -516,6 +520,9 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         anthropic_workspace_id=env("ANTHROPIC_WORKSPACE_ID") or None,
         news_tagger=news_tagger,
         news_alert_channels=news_alert_channels,
+        ask_enabled=_bool(env("ASK_ENABLED"), True),
+        ask_ollama=_bool(env("ASK_OLLAMA"), True),
+        ask_rate_per_min=int(_number("ASK_RATE_PER_MIN", env("ASK_RATE_PER_MIN"), 30, 1, 600)),
         ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),
         ollama_model=env("OLLAMA_MODEL") or "qwen2.5:3b",
         news_claude_model=env("NEWS_CLAUDE_MODEL") or "claude-haiku-4-5",

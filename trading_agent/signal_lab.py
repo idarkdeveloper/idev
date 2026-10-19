@@ -36,6 +36,7 @@ from datetime import date, timedelta
 from typing import Any, Callable, Iterable
 
 from .membership import Membership
+from .screen import _pstdev
 from .validation import expected_max_sharpe, moments, probabilistic_sharpe, sharpe
 
 Series = list[float | None]
@@ -171,7 +172,7 @@ def signal_series(bars: list[dict[str, Any]]) -> dict[str, Series]:
 # ----------------------------------------------------------------------------- statistics
 
 def _ranks(x: list[float]) -> list[float]:
-    order = sorted(range(len(x)), key=lambda i: x[i])
+    order = sorted(range(len(x)), key=x.__getitem__)   # the same order as key=lambda i: x[i] (stable), without a call per item
     r = [0.0] * len(x)
     i = 0
     while i < len(order):  # average ranks for ties
@@ -198,7 +199,7 @@ def _zscore(vals: list[float | None]) -> list[float]:
     xs = [v for v in vals if v is not None]
     if len(xs) < 2:
         return [0.0] * len(vals)
-    mu, sd = statistics.fmean(xs), statistics.pstdev(xs)
+    mu, sd = statistics.fmean(xs), _pstdev(xs)   # the exact-fraction statistics.pstdev was most of this function's time
     return [max(-3.0, min(3.0, (v - mu) / sd)) if v is not None and sd > 0 else 0.0 for v in vals]
 
 
