@@ -76,18 +76,16 @@ def test_paper_order_and_dismiss(server):
     assert status == 200 and j["ok"] is False  # no recommendations yet
 
 
-def test_dry_run_check_job(server):
+def test_checks_run_only_in_the_watch_service_not_from_the_dashboard(server):
+    """Run check now and its Force / Dry run menu are gone: the server's watch service runs the check (and
+    `python -m trading_agent check` on the server), so the dashboard can never start a second one beside it."""
+    from pathlib import Path
     base, app = server
-    status, job = _post(base + "/api/check", {"dry_run": True})
-    assert status == 202 and job["kind"] == "dry_run"
-    for _ in range(50):
-        _, st = _get(base + "/api/state")
-        if not st["busy"]:
-            break
-        time.sleep(0.05)
-    assert not st["busy"]
-    assert st["jobs"][-1]["ok"] is True and "3 new deal" in st["jobs"][-1]["message"]
-    assert st["runs"][0]["dry_run"] is True
+    status, _ = _post(base + "/api/check", {"dry_run": True})
+    assert status == 404 and not hasattr(app, "start_check")
+    html = (Path(__file__).parent.parent / "trading_agent" / "ui" / "index.html").read_text()
+    for gone in ("btn-check", "check-split", "check-menu", "data-check=", "/api/check", "Run check now"):
+        assert gone not in html, gone
 
 
 def test_settings_persist_to_env(server):
@@ -590,7 +588,7 @@ def test_live_reset_forgets_deals_but_never_the_practice_account(two_pages):
 def test_demo_refuses_what_controls_the_real_agent(two_pages):
     base, app, fake, settings = two_pages
     before = dict(vars(settings))
-    for path, body in (("/demo/api/check", {"dry_run": True}), ("/demo/api/settings", {"auto_trade": True}),
+    for path, body in (("/demo/api/settings", {"auto_trade": True}),
                        ("/demo/api/groww-test", {})):
         status, j = _post(base + path, body)
         assert status == 403 and "Live page" in j["error"], path
@@ -716,13 +714,13 @@ def test_tiles_and_recommendation_buttons_depend_on_mode():
             assert first["symbol"] == "LAURUSLABS" and first["source"] == "practice" and first["held_over_year"] is None   # untouched tick: nothing sent
         else:
             assert "sp-qty" not in out["groww_panel"] and "sell-panel" not in out["practice_panel"]
-        assert out["check_hidden"] is out["set_live_hidden"] is (mode == "demo"), mode
+        assert out["set_live_hidden"] is (mode == "demo"), mode
         assert not out["settings_hidden"], mode   # Settings opens on both pages; Demo shows only its Appearance part
     # the offline sample dashboard is a Demo page that owns everything: banner says so, controls stay
     r = subprocess.run([node, str(harness), "demo", "sample"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
-    assert "bundled sample data (offline)" in out["banner"] and out["check_hidden"] is False and out["pp_card_hidden"] is False
+    assert "bundled sample data (offline)" in out["banner"] and out["set_live_hidden"] is False and out["pp_card_hidden"] is False
 
 
 def test_run_background_busy_check_is_atomic(settings):

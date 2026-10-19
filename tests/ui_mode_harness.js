@@ -188,7 +188,7 @@ setTimeout(async () => {
     strip_text: el("modestrip-text").textContent, strip_class: el("modestrip").className, strip_icon: el("modestrip-icon").innerHTML,
     strip_theme: document.documentElement.dataset.strip, fresh_text: el("fresh-text").textContent, fresh_class: el("freshness").className,
     prot_th_hidden: el("mp-prot-th").hidden,
-    check_hidden: el("check-split").hidden, settings_hidden: el("btn-settings").hidden, set_live_hidden: el("set-live").hidden,
+    settings_hidden: el("btn-settings").hidden, set_live_hidden: el("set-live").hidden,
   }));
   process.exit(0);
 }, 300);

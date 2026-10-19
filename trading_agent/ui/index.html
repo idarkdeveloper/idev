@@ -20,16 +20,6 @@
     <div class="row controls">
       <button type="button" id="btn-palette" class="pal-btn" aria-label="Search stocks and commands" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title="Search stocks and commands (Ctrl+K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Search</span><kbd class="pal-kbd" aria-hidden="true">Ctrl K</kbd></button>
       <span class="sub" id="lastcheck"></span>
-      <div class="split" id="check-split">
-      <button type="button" class="primary" id="btn-check" aria-label="Run check now"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg><span>Run check now</span></button>
-      <details class="menu" id="check-menu">
-        <summary class="btn" aria-label="More check options"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg></summary>
-        <div class="menu-pop">
-          <button type="button" data-check="force">Force: ask Claude even if nothing is new</button>
-          <button type="button" data-check="dry">Dry run: fetch and compare only, no Claude</button>
-        </div>
-      </details>
-      </div>
       <button type="button" class="set-btn" id="btn-settings" aria-label="Settings" aria-haspopup="dialog" title="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
     </div>
   </div>
@@ -416,7 +406,7 @@
     $("btn-demo-reset").textContent = SAMPLE ? "Reset demo" : "Reset to practice cash only";
     if(!SAMPLE){ $("btn-demo-reset-groww").hidden = false; $("mp-copy").hidden = false; }
     if(!SAMPLE){   // these run the real agent: Demo keeps only the Appearance part of Settings
-      $("check-split").hidden = true; $("set-live").hidden = true; $("set-demo-note").hidden = false;
+      $("set-live").hidden = true; $("set-demo-note").hidden = false;
       document.querySelectorAll("[data-set-jump]").forEach(b => { b.hidden = b.dataset.setJump !== "set-appearance"; });
     }
     let resetKind = "cash";
@@ -763,7 +753,7 @@
           ${(r.action==="buy"||r.action==="sell") && r.suggested_notional_usd>0 && !r.dismissed && MODE === "demo" && s.broker.startsWith("local-paper") ? `<button type="button" class="small primary" data-order="${r.index}">Paper ${esc(r.action)} ${money(r.suggested_notional_usd)}</button>` : ""}
           ${r.dismissed ? '<span class="sub">dismissed</span>' : `<button type="button" class="small" data-dismiss="${r.index}">Dismiss</button>`}
         </div></article>`).join("")
-      : `<div class="card empty">No recommendations yet. Run a check when there are new deals${c.claude?"":" (needs ANTHROPIC_API_KEY)"}.</div>`;
+      : `<div class="card empty">No recommendations yet. The watch service asks Claude when your investors have new deals${c.claude?"":" (needs ANTHROPIC_API_KEY)"}.</div>`;
   }
 
   function render(keepPositions){   // keepPositions: leave the positions table alone (a stop editor is open in it)
@@ -841,7 +831,6 @@
     if(!btCostSet && S.costs && S.costs.examples){ $("bt-cost").value = S.costs.examples["25000"]; btCostSet = true; }
     if(S.screen && S.screen.top) renderScreen(S.screen);
     $("sc-run").disabled = S.busy;
-    $("btn-check").disabled = S.busy; $("btn-check").querySelector("span").textContent = S.busy ? "Running…" : "Run check now"; $("btn-check").setAttribute("aria-label", S.busy ? "Running check" : "Run check now");
     $("bt-run").disabled = S.busy;
   }
 
@@ -1383,12 +1372,6 @@
     }, 2500);
   }
 
-  async function runCheck(force, dry){
-    try { const j = await api("/api/check", {force, dry_run: dry || !S.connections.claude}); if(j.ok !== false) waitingFor = j.id; toast(j.ok===false ? j.message : (dry ? "Dry run started" : force ? "Forced check started" : "Check started")); await refresh(); pollWhileBusy(); }
-    catch(e){ toast(e.message); }
-  }
-  $("btn-check").addEventListener("click", () => runCheck(false, false));
-  document.querySelectorAll("[data-check]").forEach(b => b.addEventListener("click", () => { $("check-menu").open = false; runCheck(b.dataset.check === "force", b.dataset.check === "dry"); }));
   document.querySelectorAll(".more-toggle").forEach(t => t.addEventListener("click", () => { const el = $(t.getAttribute("aria-controls")), on = !el.classList.contains("open"); el.classList.toggle("open", on); t.setAttribute("aria-expanded", String(on)); t.textContent = on ? "Show less" : "Read more"; }));   // phones: long help text is clamped to 3 lines
   $("regime-why").addEventListener("click", () => { const on = !$("regime").closest(".regime-card").classList.contains("why-open"); $("regime").closest(".regime-card").classList.toggle("why-open", on); $("regime-why").setAttribute("aria-expanded", String(on)); $("regime-why").textContent = on ? "Hide" : "Why?"; });   // phones only: the reasoning folds behind this
   $("btn-regime").addEventListener("click", async () => {

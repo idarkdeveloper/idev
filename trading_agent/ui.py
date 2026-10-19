@@ -35,7 +35,7 @@ from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
 from .groww import GrowwTokenUnavailable
-from .runner import (check, free_prices, make_broker, equity_key, make_data_source, make_notifier,
+from .runner import (free_prices, make_broker, equity_key, make_data_source, make_notifier,
                      make_practice_broker, read_groww_portfolio)
 from . import safety
 from .state import STATE_LOCK, State
@@ -60,7 +60,7 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
                                                   "text/javascript; charset=utf-8")}
 # Dashboard POST routes that trade, reach Groww or start jobs: refused (403) while the kill switch is set.
-HALT_REFUSED_POSTS = {"/api/integration/run", "/api/check", "/api/order", "/api/practice/copy-groww",
+HALT_REFUSED_POSTS = {"/api/integration/run", "/api/order", "/api/practice/copy-groww",
                       "/api/practice/sell", "/api/practice/reset-to-groww", "/api/close", "/api/groww-test",
                       "/api/groww/refresh", "/api/reset"}
 
@@ -659,42 +659,6 @@ class App:
         return report(self.settings, self._now_dt())   # the cached holiday list: never a network call
 
     # -- actions --------------------------------------------------------------
-    def start_check(self, *, force: bool, dry_run: bool) -> Job:
-        self._on_live_page("Checks run the real agent")
-        with self._slot_lock:
-            job = Job(id=len(self.jobs) + 1, kind="dry_run" if dry_run else "check")
-            if self.busy:
-                return self._refused(job)
-            self.jobs.append(job)
-            self.busy, self.running = True, job
-
-        def run() -> None:
-            try:
-                with self.lock:
-                    trades = self.deals(refresh=True)
-                    result = check(self.settings, force=force, dry_run=dry_run, trades=trades,
-                                   broker=self.broker, data=self.data,
-                                   notifier=make_notifier(self.settings))
-                job.result = result.to_dict()
-                job.ok = not result.refusal
-                if result.skipped and not result.new_trades:
-                    job.message = "nothing new since the last check"
-                elif result.skipped:
-                    job.message = f"{len(result.new_trades)} new deal(s); Claude not called (dry run)"
-                else:
-                    job.message = (f"{len(result.new_trades)} new deal(s), "
-                                   f"{len(result.recommendations)} recommendation(s), "
-                                   f"{len(result.orders)} order(s)")
-            except Exception as e:  # noqa: BLE001
-                log.exception("check failed")
-                job.ok, job.message = False, f"{type(e).__name__}: {e}"
-            finally:
-                job.finished_at = _now()
-                self.busy = False
-
-        threading.Thread(target=run, daemon=True).start()
-        return job
-
     @property
     def names(self) -> Any | None:
         """Company-name list for search; none in demo mode (no network needed there)."""
@@ -2279,9 +2243,6 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json(app.kill_switch(body.get("confirm"), body.get("cancel_gtt") is True))
                 elif path == "/api/integration/run":
                     self._json(app.run_integration(), HTTPStatus.ACCEPTED)
-                elif path == "/api/check":
-                    job = app.start_check(force=bool(body.get("force")), dry_run=bool(body.get("dry_run")))
-                    self._json(job.to_dict(), HTTPStatus.ACCEPTED)
                 elif path == "/api/order":
                     order = app.paper_order(body.get("symbol", ""), body.get("side", "buy"),
                                             body.get("notional"), body.get("qty"),
