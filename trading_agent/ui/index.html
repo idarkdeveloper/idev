@@ -110,6 +110,7 @@
           <span class="sub">or</span>
           <input id="tk-qty" name="qty" type="number" min="0" step="any" placeholder="Shares" style="flex:1 1 100px">
         </div>
+        <div class="sub pxline" id="tk-price" aria-live="polite" hidden></div>
         <div class="row" id="tk-price-row">
           <span class="sub">Price</span>
           <div class="seg" role="group" aria-label="Price type"><button type="button" class="on" data-ptype="market" aria-pressed="true">Market</button><button type="button" data-ptype="limit" aria-pressed="false">Limit</button></div>
@@ -1473,7 +1474,7 @@
   });
   $("tk-size").addEventListener("click", async () => {
     const t = $("tk-symbol").value.trim().toUpperCase(); if(!t){ toast("Enter a ticker first"); return; }
-    try { const r = await api(`/api/size?ticker=${encodeURIComponent(t)}`); $("tk-qty").value = r.qty; $("tk-amount").value = ""; $("tk-note").textContent = `${r.qty} shares ≈ ${money(r.notional)} · stop ${money(r.stop,2)} · ${r.basis}`; }
+    try { const r = await api(`/api/size?ticker=${encodeURIComponent(t)}`); $("tk-qty").value = r.qty; $("tk-amount").value = ""; $("tk-note").textContent = `${tkPrice != null ? money(tkPrice, 2) + " a share · " : ""}${r.qty} shares ≈ ${money(r.notional)} · stop ${money(r.stop,2)} · ${r.basis}`; }
     catch(e){ toast(e.message); }
   });
   $("sz-form").addEventListener("submit", async (ev) => {
@@ -1489,7 +1490,7 @@
         <div class="sub">${esc(r.basis)}</div>
         ${sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct)) ? `<div class="callout"><b style="color:var(--color-accent)">What this means.</b> ${sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct))}</div>` : ""}
         ${MODE === "demo" ? '<div class="row"><button type="button" class="small" id="sz-use">Use in paper order</button></div>' : ""}`;
-      if($("sz-use")) $("sz-use").addEventListener("click", () => { $("tk-symbol").value = r.ticker; $("tk-qty").value = r.qty; $("tk-amount").value = ""; goWorkspace("practice"); $("tk-form").scrollIntoView({behavior:"smooth", block:"center"}); });
+      if($("sz-use")) $("sz-use").addEventListener("click", () => { $("tk-symbol").value = r.ticker; tkPx.update(r.ticker, true); $("tk-qty").value = r.qty; $("tk-amount").value = ""; goWorkspace("practice"); $("tk-form").scrollIntoView({behavior:"smooth", block:"center"}); });
     } catch(e){ $("sz-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   });
   let csSeq = 0;
@@ -1517,7 +1518,13 @@
     try { const r = await api("/api/groww-test", {}); $("groww-test-result").textContent = r.message; } catch(e){ $("groww-test-result").textContent = e.message; }
   });
 
-  attachSuggest(["lk-ticker", "sz-ticker", "tk-symbol"], (input, s) => { if(input.id === "lk-ticker") checkStock(s); else input.focus(); });
+  // the live price under the order form's ticker (read-only /api/lookup, Yahoo); also the Limit box's placeholder
+  let tkPrice = null;
+  const tkPx = TA.priceLine($("tk-price"), (s) => api("/api/lookup?ticker=" + encodeURIComponent(s)), {
+    source: "Yahoo, delayed", today: () => new Date().toLocaleDateString("en-CA", {timeZone: "Asia/Kolkata"}),
+    onPrice: (p) => { tkPrice = p; $("tk-limit").placeholder = p != null ? "Limit price, now " + p.toFixed(2) : "Limit price"; } });
+  $("tk-symbol").addEventListener("input", () => tkPx.update($("tk-symbol").value));
+  attachSuggest(["lk-ticker", "sz-ticker", "tk-symbol"], (input, s) => { if(input.id === "lk-ticker") checkStock(s); else { if(input.id === "tk-symbol") tkPx.update(s, true); input.focus(); } });
 
   // ---- Look up card (a summary with the agent's checklist) and the stock's full view: stockpage.js in a modal ----
   // Opening a stock anywhere (a ticker, a table row, the palette, ?stock=SYM) shows the full view; on a phone it is full screen.
@@ -1787,14 +1794,14 @@
   };
   if(MODE === "demo"){
     palHost.buy = (s) => {   // fills the existing practice order form; nothing is placed until the user submits it
-      $("tk-symbol").value = s; $("tk-qty").value = ""; $("tk-amount").value = "";
+      $("tk-symbol").value = s; tkPx.update(s, true); $("tk-qty").value = ""; $("tk-amount").value = "";
       goWorkspace("practice"); const b = document.querySelector('#tk-form [data-side="buy"]'); if(b) b.click();
       palCentre($("tk-form")); $("tk-amount").focus();
       toast(`Practice buy form filled for ${s}. Enter an amount or shares, then press Place paper order.`);
     };
   }
   palHost.sell = MODE === "demo" ? (s) => {   // fills the same practice order form on the sell side; nothing is placed until you submit it
-    $("tk-symbol").value = s; $("tk-qty").value = ""; $("tk-amount").value = "";
+    $("tk-symbol").value = s; tkPx.update(s, true); $("tk-qty").value = ""; $("tk-amount").value = "";
     goWorkspace("practice"); const b = document.querySelector('#tk-form [data-side="sell"]'); if(b) b.click();
     palCentre($("tk-form")); $("tk-qty").focus();
     toast(`Practice sell form filled for ${s}. Enter shares, then press Place paper order.`);

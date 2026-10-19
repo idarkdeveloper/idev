@@ -81,6 +81,7 @@
               <input id="ro-qty" aria-label="Number of shares" type="number" min="0" step="1" placeholder="Shares" style="flex:1 1 90px">
               <button type="submit" class="primary small">Place</button>
             </div>
+            <div class="sub pxline" id="ro-price" aria-live="polite" hidden></div>
             <label class="row sub" style="gap:6px"><input type="checkbox" id="ro-autostop"> Auto-sell at my trailing stops (checked every trading day of a step)</label>
             <div class="sub">Fills at the replay day's closing price, whole shares, Indian delivery charges deducted.</div>
           </form>

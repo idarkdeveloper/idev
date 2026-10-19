@@ -327,7 +327,7 @@
         <div class="sub" style="margin-top:6px">${esc(r.basis || r.reason || "")} · as of ${esc(fmtDay(r.today))}</div>
         ${note ? `<div class="callout" style="margin-top:6px"><b style="color:var(--color-accent)">What this means.</b> ${esc(note)}</div>` : ""}
         ${T.trial.ended || !r.qty || r.warning ? "" : '<div class="row" style="margin-top:8px"><button type="button" class="small" id="rz-use">Use on order</button></div>'}`;
-      if($("rz-use")) $("rz-use").addEventListener("click", () => { $("ro-symbol").value = r.ticker; $("ro-qty").value = r.qty; $("ro-amount").value = ""; document.querySelector('#ro-form [data-side="buy"]').click(); $("ro-form").scrollIntoView({behavior: "smooth", block: "center"}); });
+      if($("rz-use")) $("rz-use").addEventListener("click", () => { $("ro-symbol").value = r.ticker; roPx.update(r.ticker, true); $("ro-qty").value = r.qty; $("ro-amount").value = ""; document.querySelector('#ro-form [data-side="buy"]').click(); $("ro-form").scrollIntoView({behavior: "smooth", block: "center"}); });
     } catch(e){ $("rz-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   });
   $("rc-form").addEventListener("submit", async (ev) => {
@@ -345,7 +345,11 @@
     } catch(e){ $("rc-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   });
   $("rl-form").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("rl-ticker").value.trim().toUpperCase(); if(t) lookup(t); });
-  attachSuggest(["rl-ticker", "ro-symbol", "rz-ticker"], (input, s) => { if(input.id === "rl-ticker") lookup(s); else if(input.id === "rz-ticker") input.focus(); else $("ro-amount").focus(); });
+  // the price on the replay day under the order form's ticker (the trial's own look-up, never today's price)
+  const roPx = TA.priceLine($("ro-price"), (s) => api(`/replay/api/trial/${slug}/lookup?ticker=${encodeURIComponent(s)}&news=0`), {
+    source: "replay close", chgLabel: " that day", today: () => (T && T.trial && T.trial.clock ? String(T.trial.clock).slice(0, 10) : "") });
+  $("ro-symbol").addEventListener("input", () => roPx.update($("ro-symbol").value));
+  attachSuggest(["rl-ticker", "ro-symbol", "rz-ticker"], (input, s) => { if(input.id === "rl-ticker") lookup(s); else if(input.id === "rz-ticker") input.focus(); else { roPx.update(s, true); $("ro-amount").focus(); } });
   document.querySelectorAll("[data-tool]").forEach(b => b.addEventListener("click", async () => {
     try {
       const j = await api(`/replay/api/trial/${slug}/tool`, {kind: b.dataset.tool, years: Number($("tl-years").value) || 3});
@@ -384,10 +388,10 @@
     if(ds){   // look the stock up and fill the practice order form; the person still presses Place
       ev.preventDefault(); const sym = ds.dataset.dealStock;
       lookup(sym);
-      if(!T.trial.ended){ $("ro-symbol").value = sym; $("ro-amount").value = $("ro-qty").value = ""; if(ds.dataset.dealSide === "buy") document.querySelector('#ro-form [data-side="buy"]').click(); }
+      if(!T.trial.ended){ $("ro-symbol").value = sym; roPx.update(sym, true); $("ro-amount").value = $("ro-qty").value = ""; if(ds.dataset.dealSide === "buy") document.querySelector('#ro-form [data-side="buy"]').click(); }
       $("rl-form").scrollIntoView({behavior: "smooth", block: "center"}); return;
     }
-    const c = ev.target.closest("[data-copy]"); if(c){ $("ro-symbol").value = c.dataset.copy; document.querySelector('#ro-form [data-side="buy"]').click(); $("ro-amount").focus(); return; }
+    const c = ev.target.closest("[data-copy]"); if(c){ $("ro-symbol").value = c.dataset.copy; roPx.update(c.dataset.copy, true); document.querySelector('#ro-form [data-side="buy"]').click(); $("ro-amount").focus(); return; }
     const s = ev.target.closest("[data-sell]");
     if(s){
       if(!confirm(`Sell all ${s.dataset.qty} ${s.dataset.sell} at the replay day's close?`)) return;
