@@ -373,7 +373,9 @@
     if(d && d.filters_note) bits.push(String(d.filters_note).charAt(0).toUpperCase() + String(d.filters_note).slice(1) + ".");
     if(d && d.tv && d.tv.state === "refused_server") bits.push("TradingView columns are never used on the server.");
     if(d && d.tv && d.tv.state === "backoff") bits.push("TradingView columns paused until " + new Date(d.tv.until).toLocaleString("en-IN", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false}) + " (TradingView said no or did not answer).");
-    $("sc-status").textContent = bits.join(" ");
+    // while stocks are still being fetched: the loader's progress block with the message and "loading 0:42"; else plain notes
+    if(d && (d.pending > 0 || d.loading)) TA.loader.progress($("sc-status"), bits.join(" "), st.since, "loading");
+    else TA.loader.clearProgress($("sc-status"), bits.join(" "));
   }
 
   // ---- presets ----
@@ -498,7 +500,7 @@
   async function load(reset){
     const my = ++st.seq;
     clearTimeout(st.timer);
-    if(reset){ st.data = null; if(drawerOpen()) closeDrawer(); renderTable(); }
+    if(reset){ st.since = Date.now(); st.data = null; if(drawerOpen()) closeDrawer(); renderTable(); }
     let data = null;
     try { data = await api("/api/screener?universe=" + encodeURIComponent(st.universe)); }
     catch(e){

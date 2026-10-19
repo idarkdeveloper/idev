@@ -879,19 +879,18 @@
     // each research tool is disabled only while ITS job runs (or an exclusive job runs, or three tools already run)
     const RESEARCH = ["backtest", "screen", "factor_backtest", "signal_lab", "replay_tool"], jobs = S.running_jobs || [];
     const toolOff = (kind) => jobs.some(j => j.kind === kind) || jobs.some(j => RESEARCH.indexOf(j.kind) < 0) || jobs.length >= 3;
-    $("fb-run").disabled = toolOff("factor_backtest");
+    const setOff = (id, off) => { if(!TA.loader.tool($(id)).locked) $(id).disabled = off; };   // not while its loader shows
+    setOff("fb-run", toolOff("factor_backtest"));
     if(S.signal_lab && S.signal_lab.results && $("sl-result").dataset.at !== S.signal_lab.at){ renderSignalLab(S.signal_lab); $("sl-result").dataset.at = S.signal_lab.at; }
-    $("sl-run").disabled = toolOff("signal_lab");
+    setOff("sl-run", toolOff("signal_lab"));
     if(!btCostSet && S.costs && S.costs.examples){ $("bt-cost").value = S.costs.examples["25000"]; btCostSet = true; }
     if(S.screen && S.screen.top) renderScreen(S.screen);
-    $("sc-run").disabled = toolOff("screen");
-    $("bt-run").disabled = toolOff("backtest");
-    const TOOL_STATUS = {backtest: ["bt-status", "Replaying deals and fetching price history…"], screen: ["sc-status", "Scoring the universe…"],
-      factor_backtest: ["fb-status", "Fetching history for the universe and simulating monthly rebalances…"], signal_lab: ["sl-status", "Loading price history and testing every signal…"]};
-    for(const j of jobs){   // a tool that is running (also after a page reload) shows its own progress, and is watched until it ends
-      const t = TOOL_STATUS[j.kind]; if(!t) continue;
-      $(t[0]).textContent = j.message || t[1];
-      if(!waitingJobs.has(j.id)){ waitingJobs.set(j.id, t[0]); if(!pollTimer || !S.busy) pollWhileBusy(); }
+    setOff("sc-run", toolOff("screen"));
+    setOff("bt-run", toolOff("backtest"));
+    for(const j of jobs){   // a tool that is running (also after a page reload) shows its own loader, and is watched until it ends
+      const t = TOOLS[j.kind]; if(!t) continue;
+      toolCtl(j.kind).progress(j.message || t.msg, Date.parse(j.started_at) || undefined);
+      if(!waitingJobs.has(j.id)){ waitingJobs.set(j.id, t.st); if(!pollTimer || !S.busy) pollWhileBusy(); }
     }
   }
 
@@ -1533,14 +1532,21 @@
   // Wait for the running job, then report that job (by id), not whatever came last.
   // Several research tools can run at once: each started job is watched by id and reports to its own status line.
   const waitingJobs = new Map();   // job id -> the id of the status element of its tool
+  // The long-running research tools: Run button, status line and what to say before the server has a message of its own.
+  const TOOLS = {backtest: {btn: "bt-run", st: "bt-status", msg: "Replaying deals and fetching price history…"}, screen: {btn: "sc-run", st: "sc-status", msg: "Scoring the universe…"},
+    factor_backtest: {btn: "fb-run", st: "fb-status", msg: "Fetching history for the universe and simulating monthly rebalances…"},
+    signal_lab: {btn: "sl-run", st: "sl-status", msg: "Loading price history and testing every signal…"}};
+  const toolCtl = (kind) => TA.loader.tool($(TOOLS[kind].btn), $(TOOLS[kind].st));
+  const toolRan = (kind, j) => toolCtl(kind).finish(!(j && j.ok === false), j && j.message);
   function pollWhileBusy(){
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
       await refresh();
       for(const [id, el] of Array.from(waitingJobs)){
         const j = S.jobs.find(x => x.id === id);
-        if(j && j.finished_at){ waitingJobs.delete(id); $(el).textContent = ""; toast((j.ok === false ? "Failed: " : "Done: ") + j.message); }
-        else if(!j && !(S.running_jobs || []).some(x => x.id === id)){ waitingJobs.delete(id); $(el).textContent = ""; }
+        const kind = Object.keys(TOOLS).find(k => TOOLS[k].st === el);
+        if(j && j.finished_at){ waitingJobs.delete(id); if(kind) toolRan(kind, j); else $(el).textContent = ""; toast((j.ok === false ? "Failed: " : "Done: ") + j.message); }
+        else if(!j && !(S.running_jobs || []).some(x => x.id === id)){ waitingJobs.delete(id); if(kind) toolRan(kind, {ok: true}); else $(el).textContent = ""; }
       }
       if(!S.busy){ clearInterval(pollTimer); pollTimer = null; }
     }, 2500);
@@ -1557,13 +1563,13 @@
     const f = Object.fromEntries(new FormData(ev.target).entries());
     if(String(f.investor_other || "").trim()) f.investor = String(f.investor_other).trim();   // a name that is not followed
     delete f.investor_other;
-    try { const j = await api("/api/backtest", f); if(j.ok===false){ toast(j.message); return; } waitingJobs.set(j.id, "bt-status"); $("bt-status").textContent = "Replaying deals and fetching price history…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/backtest", f); if(j.ok===false){ toolCtl("backtest").refuse(j.message); toast(j.message); return; } waitingJobs.set(j.id, "bt-status"); toolCtl("backtest").start(TOOLS.backtest.msg); await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   $("sc-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target).entries());
-    try { const j = await api("/api/screen", f); if(j.ok===false){ toast(j.message); return; } waitingJobs.set(j.id, "sc-status"); $("sc-status").textContent = "Scoring the universe…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/screen", f); if(j.ok===false){ toolCtl("screen").refuse(j.message); toast(j.message); return; } waitingJobs.set(j.id, "sc-status"); toolCtl("screen").start(TOOLS.screen.msg); await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   let side = "buy";
@@ -1817,13 +1823,13 @@
   $("sl-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const body = {universe: $("sl-universe").value, years: Number($("sl-years").value), horizons: "5,20,60"};
-    try { const j = await api("/api/signal-lab", body); if(j.ok===false){ toast(j.message); return; } waitingJobs.set(j.id, "sl-status"); $("sl-status").textContent = "Loading price history and testing every signal…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/signal-lab", body); if(j.ok===false){ toolCtl("signal_lab").refuse(j.message); toast(j.message); return; } waitingJobs.set(j.id, "sl-status"); toolCtl("signal_lab").start(TOOLS.signal_lab.msg); await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   $("fb-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const body = {universe: $("sc-universe").value, years: Number($("fb-years").value), top: Number($("fb-top").value)};
-    try { const j = await api("/api/factor-backtest", body); if(j.ok===false){ toast(j.message); return; } waitingJobs.set(j.id, "fb-status"); $("fb-status").textContent = "Fetching history for the universe and simulating monthly rebalances…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/factor-backtest", body); if(j.ok===false){ toolCtl("factor_backtest").refuse(j.message); toast(j.message); return; } waitingJobs.set(j.id, "fb-status"); toolCtl("factor_backtest").start(TOOLS.factor_backtest.msg); await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   function redrawCharts(){   // after a resize, or when a tab that was hidden (no width) is shown
