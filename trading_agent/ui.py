@@ -525,10 +525,124 @@ class App:
             from .nse import check_ticker
             hint = check_ticker(ticker)
         out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)), ticker=hint)
+        if out["intent"] in ("ideas", "market_status", "followed_deals", "market_summary", "market_top"):   # fixed sentences over the dashboard's own data (ask_info)
+            out.update(self._info_answer(out["intent"], out["args"]))
         if out["intent"] == "portfolio_summary":   # real numbers from the dashboard's own holdings, fixed sentences (ask.compose_portfolio)
             out.update(ask_mod.compose_portfolio(out["args"]["topic"], self._portfolio_figures()))
         log.info("ask: intent=%s via=%s", out["intent"], out["via"])
         log.debug("ask: text=%.60r", text)
+        return out
+
+    def _info_answer(self, intent: str, args: dict[str, Any]) -> dict[str, Any]:
+        """{"say", "facts"} for stock ideas, market hours and the followed investors' latest deals. Read-only: the regime is the
+        dashboard's own 60 s view, the recommendations and deals are what it already holds, the picks are the forward test's
+        stored ones; the holiday list is read from its cache, never fetched here."""
+        from . import ask as ask_mod, ask_info
+        from .timezones import IST
+        root = self._parent or self
+        now = self._now_dt()
+        if intent == "market_status":
+            hol = self._safe_holidays()
+            def trading_day(d: Any) -> bool:
+                if d.weekday() >= 5:
+                    return False
+                try:
+                    return bool(hol.peek_trading_day(d)) if hol is not None and hasattr(hol, "peek_trading_day") else True
+                except Exception:  # noqa: BLE001 - weekdays count as open when the list cannot be read
+                    return True
+            def holiday_name(d: Any) -> str | None:
+                try:
+                    days = getattr(hol, "_days", None)
+                    if days is None and hol is not None and getattr(hol, "cache_dir", None):
+                        path = Path(hol.cache_dir) / "nse_holidays.json"
+                        days = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+                    return (days or {}).get(d.isoformat())
+                except Exception:  # noqa: BLE001
+                    return None
+            if args.get("when") in ask_mod.WHEN_VALUES and str(args.get("market") or "IN") == "IN":
+                def cached_days() -> dict[str, Any] | None:
+                    try:
+                        days = getattr(hol, "_days", None)
+                        if days is None and hol is not None and getattr(hol, "cache_dir", None):
+                            path = Path(hol.cache_dir) / "nse_holidays.json"
+                            days = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+                        return days if isinstance(days, dict) else None
+                    except Exception:  # noqa: BLE001 - no list is said as such
+                        return None
+                return ask_info.compose_market_when(str(args["when"]), now, trading_day, holiday_name, cached_days())
+            return ask_info.compose_market_status(str(args.get("market") or "IN"), now, trading_day, holiday_name)
+        if intent == "market_top":
+            return self._market_top_answer(args, now)
+        if intent == "market_summary":
+            reg: Any = None
+            if self.context is not None:
+                try:
+                    reg = self._regime_view().fetch()   # the Markets strip's own 60 s cache: no extra request
+                except Exception:  # noqa: BLE001 - no quotes are said as such
+                    reg = None
+            hol = self._safe_holidays()
+            try:
+                nse_open: bool | None = safety.market_open(now, hol)
+            except Exception:  # noqa: BLE001
+                nse_open = None
+            at = now.astimezone(IST)
+            return ask_info.compose_market_summary({"regime": {k: (reg or {}).get(k) for k in ("regime", "score", "guidance")} if reg else None,
+                                                    "markets": (reg or {}).get("markets") or {}, "nse_open": nse_open, "as_of": at.strftime("%H:%M IST") if reg else ""})
+        if intent == "ideas":
+            regime: Any = None
+            if self.context is not None:
+                try:
+                    r = self._regime_view().fetch()
+                    regime = {k: r.get(k) for k in ("regime", "score", "guidance")}
+                except Exception:  # noqa: BLE001 - no stance is said as such
+                    regime = None
+            try:
+                recs = list(reversed(State(self.settings.state_dir / "state.json").data["recommendations"]))
+            except Exception:  # noqa: BLE001
+                recs = []
+            fwd = root.forward_summary() or {}
+            return ask_info.compose_ideas({"regime": regime, "recs": recs, "picks": fwd.get("last_picks") or [], "picks_as_of": fwd.get("last_rebalance")})
+        rows = self.demo_trades if self.demo_trades is not None else (root._deals or [])
+        deals = [{"investor": t.investor, "side": "buy" if t.transaction == "Purchase" else "sell" if t.transaction in ("Sale", "Sale (Full)", "Sale (Partial)") else str(t.transaction).lower(),
+                  "ticker": t.ticker, "size": t.size, "date": t.transaction_date or t.report_date} for t in rows]
+        today = now.astimezone(IST).date()
+        return ask_info.compose_deals(deals, today, f"{today.day} {today.strftime('%b')}")
+
+    def _market_top_answer(self, args: dict[str, Any], now: Any) -> dict[str, Any]:
+        """The Screener's top / gainers / losers of a market, from the table it already holds. A table with rows is answered as it is (its
+        age is said), never refreshed because someone asked; only with no rows is that list's own background fill started (one list at
+        a time) and the answer says it is loading. Never waits for the fill."""
+        from . import ask_info
+        mk = str(args.get("market") or "IN").upper()
+        if self.demo_trades is not None:
+            return {"say": "The Screener needs live market data, which the offline sample does not use.", "facts": []}
+        root = self._parent or self
+        if mk == "IN":
+            svc, keys = root.screener, ["NIFTY200", "NIFTY100", "NIFTY50"]
+        else:
+            key = {"US": "SP500_US", "UK": "FTSE100_UK", "JP": "TOPIX100_JP"}.get(mk, "SP500_US")
+            svc, keys = root.foreign_screener(key), [key]
+        table = None
+        for k in keys:
+            t = svc.peek(k)
+            if any(r.get("price") is not None for r in t["rows"]):
+                table = t
+                break
+        if table is None:
+            table = svc.peek(keys[0])
+            busy = svc.is_running() or root.screener.is_running() or any(s.is_running() for s in list(root._screener_foreign.values()))
+            if not busy:
+                try:
+                    svc.start(keys[0])
+                except Exception:  # noqa: BLE001 - no list is said as loading
+                    log.warning("ask: could not start the %s list", keys[0])
+        regime = None
+        if mk == "IN" and self.context is not None:
+            try:
+                regime = self._regime_view().fetch()
+            except Exception:  # noqa: BLE001
+                regime = None
+        out = ask_info.compose_market_top(args, table, now, regime)
         return out
 
     PORTFOLIO_BUDGET_S = 12.0   # time spent reading daily bars for "today's change"
@@ -855,7 +969,7 @@ class App:
             "account": acct, "positions": positions, "performance": perf,
             "bands": self._bands_for([p["symbol"] for p in positions]),
             "broker_error": broker_error, "deals": deals, "deals_error": self._deals_error,
-            "recommendations": recs, "runs": list(reversed(st.data["runs"][-20:])),
+            "recommendations": recs, "runs": list(reversed(st.data["runs"][-60:])),   # the page folds the quiet checks into one line per stretch
             "seen_count": st.seen_count, "busy": busy,
             "running": ({"kind": run_now.kind, "label": self.JOB_LABELS.get(run_now.kind, run_now.kind),
                          "started_at": run_now.started_at} if busy and run_now else None),

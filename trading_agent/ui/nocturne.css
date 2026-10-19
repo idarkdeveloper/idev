@@ -1053,7 +1053,7 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .sc-sheet, .sc-sheet-body { display: contents; }
 .sc-sheet-backdrop[hidden] { display: none; }
 @media (max-width: 700px) {
-  body[data-mode="screener"] header .brand .sub, body[data-mode="screener"] .theme-label { display: none; }
+  body[data-mode="screener"] .theme-label { display: none; }
   body[data-mode="screener"] .sc-wrap { gap: 8px; }
   .sc-card { gap: 8px; padding: 12px 8px 8px; }
   .sc-sparkcol, .sc-spark { width: 44px; }
@@ -1490,3 +1490,29 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .ask-link{display:inline-flex;align-items:center;min-height:44px;padding:0 16px}
 /* The header search button is hidden: the voice and type bar at the bottom does stock look-ups now (Ctrl+K still opens the palette on a keyboard). */
 .hdr #btn-palette { display: none; }
+
+/* Portfolio: the Live / Practice switch under the page tabs. A segmented control in the strip colours (live violet, practice green),
+   so it is not mistaken for the page tabs above it. Tokens only. */
+.pf-row { max-width: 1600px; margin: 0 auto; padding: 10px 24px 0; }
+.pf-switch { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--color-divider); border-radius: 999px; background: var(--color-surface); }
+.pf-opt { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; min-height: 44px; min-width: 112px; padding: 0 18px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--color-label); font-weight: 600; font-size: 14px; line-height: 1.15; }
+.pf-opt .pf-sub { font-size: 10.5px; font-weight: 400; color: var(--color-muted); }
+.pf-opt:hover { background: var(--color-hover); }
+.pf-opt[aria-checked="true"].live { background: var(--strip-live-bg); color: var(--strip-live-fg); border-color: var(--strip-live-bd); }
+.pf-opt[aria-checked="true"].practice { background: var(--strip-practice-bg); color: var(--strip-practice-fg); border-color: var(--strip-practice-bd); }
+.pf-opt[aria-checked="true"] .pf-sub { color: inherit; opacity: .8; }
+.pf-opt:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@media (max-width: 700px) { .pf-row { padding: 8px 16px 0; } .pf-switch { width: 100%; } .pf-opt { flex: 1 1 0; min-width: 0; } }
+/* Recent runs: a stretch of quiet checks folded into one line (a real button, 44 px) that opens in place. Tokens only. */
+.runs .run-group { border-bottom: 1px solid var(--color-rule); }
+.runs .run-fold { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 6px 0; border: 0; border-radius: 0; background: transparent; color: inherit; font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.runs .run-fold:hover { background: var(--color-hover); }
+.runs .run-fold:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.runs .run-fold .run-what b { font-weight: 600; color: var(--color-label); }
+.runs .run-chev { color: var(--color-muted); transition: transform .15s; }
+.runs .run-fold[aria-expanded="true"] .run-chev { transform: rotate(180deg); }
+.runs .run-sub { padding-left: 12px; border-left: 2px solid var(--color-divider); margin: 0 0 6px 4px; }
+.runs .run-sub[hidden] { display: none; }
+.runs .run-sub .run:last-child { border-bottom: none; }
+@media (max-width: 600px) { .runs .run-fold { grid-template-columns: minmax(0, 1fr) auto; } .runs .run-fold .run-when { grid-column: 1; } .runs .run-fold .run-what { grid-column: 1; } .runs .run-fold .run-chev { grid-column: 2; grid-row: 1 / span 2; } }
+@media (prefers-reduced-motion: reduce) { .runs .run-chev { transition: none; } }

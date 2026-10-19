@@ -19,6 +19,24 @@ window.TA = (function(){
     if(!r.ok){ const err = new Error(j.error || r.statusText); err.data = j; err.status = r.status; throw err; }
     return j;
   };
+  // Recent runs: the quiet ones (the watch service looked, found nothing new and did not call Claude) are folded into one line per
+  // stretch. A run that did anything (a deal, a recommendation, an order, a call to Claude, a refusal, a stop, a baseline or a dry run)
+  // stays a full entry, in order. runs: newest first. Returns [{type: "run", run} | {type: "group", key, runs, newest, oldest}];
+  // the key is the newest run's time, so it stays the same while older runs are added behind it.
+  const isQuietRun = (r) => !!r && r.skipped === true && !r.baseline && !r.dry_run && !r.new_trades && !r.recommendations && !r.orders
+    && !r.refusal && !r.fallback_used && !r.stop && !r.error && !r.usage;
+  function groupRuns(runs){
+    const out = [];
+    let cur = null;
+    (Array.isArray(runs) ? runs : []).forEach((r) => {
+      if(!r) return;
+      if(isQuietRun(r)){
+        if(!cur){ cur = {type: "group", key: String(r.at || ""), runs: [], newest: r, oldest: r}; out.push(cur); }
+        cur.runs.push(r); cur.oldest = r;
+      } else { cur = null; out.push({type: "run", run: r}); }
+    });
+    return out.map(x => x.type === "group" && x.runs.length === 1 ? {type: "run", run: x.runs[0]} : x);
+  }
   const tile = (l, v, s, cls) => `<div class="tile"><div class="label">${l}</div><div class="big${cls ? " " + cls : ""}">${v}</div><div class="sub">${s}</div></div>`;
 
   // ---- charts: plain SVG, one y-axis, hairline grid, crosshair tooltip ----
@@ -1077,6 +1095,8 @@ window.TA = (function(){
     function page(o){
       o = o || {};
       const none = {step(){}, done(){}, fail(){}};   // a loader never stops a page from working
+      // o.once = a sessionStorage key: the full-screen loader shows on the first load of a tab session only, not on every Live/Practice switch or page change.
+      try { if(o.once){ if(sessionStorage.getItem(o.once)) return none; sessionStorage.setItem(o.once, "1"); } } catch(e){}
       if(!document.body || typeof document.body.appendChild !== "function" || typeof document.createElement !== "function") return none;
       const steps = (o.steps || []).map(name => ({name, state: "todo", meta: ""}));
       const el = document.createElement("div");
@@ -1163,7 +1183,7 @@ window.TA = (function(){
 
   return {$, esc, priceMove, priceLine, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, ddHistogram, rupeesShort, inr, px, bigMoney, foreignMarket, qualifyTicker, MARKET_SUFFIX, sinr, spct, quoteHtml, rangePos, quoteAge,
-          daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart, loader};
+          groupRuns, isQuietRun, daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart, loader};
 })();
 window.TA.theme.init();
 // Installable app: the service worker (sw.js) only on https or this machine; it never stores API answers. Quiet when it cannot.
@@ -1171,3 +1191,10 @@ try {
   if("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1"))
     window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js", {scope: "/"}).catch(() => {}); });
 } catch(e){}
+// The gear on the Replay and Screener pages: they have no Settings dialog, so it opens the Live page's (Appearance section: theme).
+try {
+  document.addEventListener("click", (e) => {
+    const b = e.target && e.target.closest && e.target.closest("#btn-settings"), m = document.body && document.body.dataset.mode;
+    if(b && (m === "replay" || m === "screener")) location.assign("/?settings=appearance");
+  });
+} catch(e){}   // a test harness without a real document

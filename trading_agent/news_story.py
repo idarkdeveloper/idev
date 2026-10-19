@@ -599,8 +599,16 @@ def render_html(card: dict[str, Any]) -> str:
         '</td></tr></table>')
 
 
-def render_telegram(card: dict[str, Any]) -> tuple[str, str, dict[str, Any] | None]:
-    """(HTML, plain, URL button): the headline, the chips and the takeaways; the story stays in the email."""
+def render_telegram(card: dict[str, Any], base_url: str | None = None) -> tuple[str, str, dict[str, Any] | None]:
+    """(HTML, plain, link buttons): the Telegram look of a news alert (telegram_cards.news_card): marker, symbol and impact in words,
+    the headline, source and time in IST, two lines of summary, the rest collapsed; Open <stock> and Read-article buttons."""
+    from .telegram_cards import news_card
+    out = news_card(card, base_url)
+    return out["html"], out["plain"], out["button"]
+
+
+def render_telegram_classic(card: dict[str, Any]) -> tuple[str, str, dict[str, Any] | None]:
+    """The previous Telegram text (kept for reference and its tests)."""
     e = lambda v: _html.escape(str(v), quote=False)   # noqa: E731
     icon = _TONE.get(str(card.get("impact") or ""), _TONE["NEUTRAL"])[1]
     when = _when(card.get("published"))

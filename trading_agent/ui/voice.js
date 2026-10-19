@@ -53,6 +53,18 @@
       const t = r.ticker || "";
       out.push({label: t ? "News on " + t : "Read the news", text: t ? "news on " + t : "read today's news"});
       if(t && r.intent !== "open_chart") out.push({label: "Show chart", text: "show " + t + " chart"});
+    } else if(r.intent === "ideas"){
+      out.push({label: "Read the news", text: "read today's news"}, {label: "Latest deals", text: "latest deals"}, {label: "Is the market open", text: "is the market open"});
+    } else if(r.intent === "market_top"){
+      const w = {US: "US", UK: "UK", JP: "Japan", IN: "India"}[r.market] || "India";
+      if(r.loading) out.push({label: "Open Screener", text: "go to screener"}, {label: "Read the news", text: "read today's news"});
+      else out.push({label: "Open " + w + " screener", text: "go to screener"}, {label: r.kind === "gainers" ? w + " losers today" : "Gainers today", text: (r.kind === "gainers" ? w + " losers today" : w + " gainers today")}, {label: "Read the news", text: "read today's news"});
+    } else if(r.intent === "market_summary"){
+      out.push({label: "Read the news", text: "read today's news"}, {label: "Is the market open", text: "is the market open"}, {label: "Profit and loss today", text: "profit and loss today"});
+    } else if(r.intent === "market_status"){
+      out.push({label: "Stock ideas", text: "stock ideas"}, {label: "Read the news", text: "read today's news"}, {label: "Latest deals", text: "latest deals"});
+    } else if(r.intent === "followed_deals"){
+      out.push({label: "Open deals", text: "go to deals"}, {label: "Stock ideas", text: "stock ideas"}, {label: "Read the news", text: "read today's news"});
     } else {
       out.push({label: "Read the news", text: "read today's news"}, {label: "Profit and loss today", text: "profit and loss today"}, {label: "How is my portfolio", text: "how is my portfolio"});
     }
@@ -90,7 +102,7 @@
     const inline = !!o.inline;
     let ticker = o.ticker || null;
     let state = "idle", muted = loadMuted(), err = null, heard = "", micCtl = null, seq = 0, opener = null;
-    let turns = [], cur = null, chain = Promise.resolve(), wordEls = [], lay = null, spoken = 0, fb = 0, gotBoundary = {};
+    let lastQ = "", turns = [], cur = null, chain = Promise.resolve(), wordEls = [], lay = null, spoken = 0, fb = 0, gotBoundary = {};
     const canMic = TA.ask.micSupported();
 
     // -- markup --
@@ -137,7 +149,7 @@
       return facts && facts.length ? box : null;
     }
     function linkEl(link){
-      if(!link || !/^\/[a-z0-9/_?=&.-]*$/i.test(String(link.href))) return null;
+      if(!link || !/^\/[a-z0-9/_?=&.#-]*$/i.test(String(link.href))) return null;
       const a = el("a", "va-link", link.label || "Open"); a.href = link.href; return a;
     }
     function bubble(q){ return el("div", "va-q", q); }
@@ -219,7 +231,8 @@
         const ic = el("div", "va-erric"); ic.innerHTML = err.kind === "mic" ? SVG.micOff : SVG.close;
         stage.append(ic, el("div", "va-errt", err.kind === "mic" ? "Microphone is blocked" : "That did not work"), el("div", "va-errm", err.message));
         const row = el("div", "va-erra");
-        if(canMic && err.kind !== "net"){ const again = el("button", "va-btn primary", "Try again"); again.type = "button"; again.addEventListener("click", startListen); row.appendChild(again); }
+        if(err.kind === "net" || err.kind === "ask"){ const retry = el("button", "va-btn primary", "Try again"); retry.type = "button"; retry.addEventListener("click", () => submit(lastQ)); row.appendChild(retry); }
+        else if(canMic){ const again = el("button", "va-btn primary", "Try again"); again.type = "button"; again.addEventListener("click", startListen); row.appendChild(again); }
         const typeIt = el("button", "va-btn", "Type instead"); typeIt.type = "button"; typeIt.addEventListener("click", typeInstead); row.appendChild(typeIt);
         stage.appendChild(row);
       } else {
@@ -299,6 +312,7 @@
       if(!text) return;
       open(); haltAll(); const my = seq;
       input.value = ""; input2.value = ""; err = null;
+      lastQ = text;
       cur = {q: text, at: nowHm(), steps: [], parts: [], facts: [], say: "", link: null, chips: []};
       state = "thinking"; render();
       try {

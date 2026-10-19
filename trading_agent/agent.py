@@ -184,15 +184,51 @@ class AgentContext:
             getattr(self.broker, "live_orders", False)
 
 
-def send_with_html(notifier: Any, subject: str, body: str, html: str | None) -> Any:
-    """``notifier.send`` with an HTML part when there is one and the notifier takes it (test fakes may not)."""
+def send_with_html(notifier: Any, subject: str, body: str, html: str | None, telegram: dict[str, Any] | None = None) -> Any:
+    """``notifier.send`` with an HTML part when there is one and the notifier takes it (test fakes may not). ``telegram``:
+    {"html", "plain", "button"} (telegram_cards), the alert's own Telegram look; email and webhook are not affected."""
     import inspect
     try:
         params = inspect.signature(notifier.send).parameters
     except (TypeError, ValueError):
         params = {}  # type: ignore[assignment]
-    takes = "html" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
-    return notifier.send(subject, body, html=html) if html and takes else notifier.send(subject, body)
+    var = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    takes = "html" in params or var
+    kw: dict[str, Any] = {}
+    if html and takes:
+        kw["html"] = html
+    if telegram and telegram.get("html") and ("telegram_html" in params or var):
+        kw.update(telegram_html=telegram["html"], telegram_plain=telegram.get("plain"), telegram_button=telegram.get("button"))
+    return notifier.send(subject, body, **kw) if kw else notifier.send(subject, body)
+
+
+def _recommendation_telegram(ctx: AgentContext, rec: dict[str, Any]) -> dict[str, Any] | None:
+    """The [DEAL] alert's Telegram card (telegram_cards.deal_card): who did what, the figures, the agent's call, one Why line, the
+    full reasoning collapsed. A failure leaves Telegram with the plain text it got before."""
+    from .alert_cards import deal_facts, market_facts
+    from .telegram_cards import dashboard_base, deal_card
+    try:
+        ticker = str(rec["ticker"])
+        deal = deal_facts(ctx.result.new_trades, ticker, rec.get("investor") or None) if ticker != "PORTFOLIO" else None
+        market: dict[str, Any] = {}
+        if ctx.context is not None:
+            try:
+                market = market_facts(ctx.context.fetch())
+            except Exception:  # noqa: BLE001
+                market = {}
+        held_qty: float | None = None
+        known = False
+        if ticker != "PORTFOLIO":
+            try:
+                held = next((p for p in ctx.broker.positions() if p.symbol.upper() == ticker.upper()), None)
+                held_qty, known = (float(held.qty) if held else None), True
+            except Exception:  # noqa: BLE001
+                known = False
+        return deal_card(rec, deal=deal, holding_qty=held_qty, holding_known=known, market_wait=bool(market.get("wait")), regime=market.get("regime"),
+                         base_url=dashboard_base(ctx.settings) if ticker != "PORTFOLIO" else None)
+    except Exception:  # noqa: BLE001 - Telegram keeps the plain text
+        log.exception("telegram deal card failed")
+        return None
 
 
 def _recommendation_html(ctx: AgentContext, rec: dict[str, Any]) -> str | None:
@@ -329,7 +365,7 @@ def build_tools(ctx: AgentContext) -> list[Any]:
                 + (f"Suggested size: {_money(cast(float, rec['suggested_notional_usd']), ctx.settings.currency)}\n"
                    if rec['suggested_notional_usd'] else "")
                 + f"\n{rationale}\n")
-        delivered = send_with_html(ctx.notifier, subject, body, _recommendation_html(ctx, rec))
+        delivered = send_with_html(ctx.notifier, subject, body, _recommendation_html(ctx, rec), _recommendation_telegram(ctx, rec))
         return json.dumps({"ok": True, "delivered_via": delivered})
 
     @beta_tool

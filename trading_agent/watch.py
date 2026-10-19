@@ -235,13 +235,19 @@ class Watcher:
             if self._notifier is not None:
                 from .agent import send_with_html
                 from .alert_cards import announcements_card, announcements_subject
+                from .telegram_cards import dashboard_base, filings_card
                 body = "\n".join(f"{a['at']} {a['symbol']} [{a['category']}] {a['text']}" for a in fresh)
                 try:
                     card: str | None = announcements_card(fresh)
                 except Exception:  # noqa: BLE001 - the text email still goes
                     log.exception("announcements card failed")
                     card = None
-                send_with_html(self._notifier, _plain(announcements_subject(fresh)), _plain(body), card)
+                try:
+                    tg: dict[str, Any] | None = filings_card(fresh, dashboard_base(self.settings))
+                except Exception:  # noqa: BLE001 - Telegram keeps the plain list
+                    log.exception("telegram filings card failed")
+                    tg = None
+                send_with_html(self._notifier, _plain(announcements_subject(fresh)), _plain(body), card, tg)
         return fresh
 
     def poll_news(self) -> list[dict[str, Any]]:
@@ -349,7 +355,8 @@ class Watcher:
         does not arrive sends that one alert by email, so it is never lost; by email a stock gets one a window (the rest are
         in the digests' "News today")."""
         from .news_story import render_html, render_telegram, render_text, subject
-        tg_html, tg_plain, tg_button = render_telegram(card)
+        from .telegram_cards import dashboard_base
+        tg_html, tg_plain, tg_button = render_telegram(card, dashboard_base(self.settings))
         assert self._notifier is not None
         mode = getattr(self.settings, "news_alert_mode", "both")
         subj, text, html = _plain(subject(card)), _plain(render_text(card)), render_html(card)

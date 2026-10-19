@@ -60,7 +60,7 @@ RULES = [
     ("news about tata steel", "news_today", {"scope": "stock", "query": "tata steel"}),
     ("news for reliance today", "news_today", {"scope": "stock", "query": "reliance"}),
     ("tcs ki news", "news_today", {"scope": "portfolio"}),
-    ("how is the market", "news_today", {"scope": "market"}),
+    ("how is the market", "market_summary", {}),   # the stance and the Markets strip, not the headlines
     ("market news", "news_today", {"scope": "market"}),
     ("go to screener", "open_tab", {"tab": "screener"}),
     ("screener", "open_tab", {"tab": "screener"}),
@@ -182,14 +182,14 @@ def test_ollama_is_asked_only_when_no_rule_fits_and_its_answer_is_validated():
     assert out["intent"] == "open_stock" and out["via"] == "ollama" and out["args"]["ticker"] == "TATAMOTORS"
     assert sess.posts[0]["stream"] is False and sess.posts[0]["model"] == "qwen2.5:3b" and "buy" not in json.dumps(sess.posts[0]["format"]).lower()
     assert sess.posts[0]["messages"][1]["content"].startswith("that thing")                                   # the user text is a separate message
-    assert with_model({"intent": "news_today", "args": {"scope": "market"}})[0]["args"] == {"scope": "market"}
+    assert with_model({"intent": "news_today", "args": {"scope": "market"}})[0]["intent"] == "unknown"   # the sentence has no news word: nothing is read on a model's say-so
     assert with_model({"intent": "open_tab", "args": {"tab": "tools"}})[0]["args"] == {"tab": "tools"}
     # the model cannot pick anything outside the allowlist
     for bad in ({"intent": "place_order", "args": {"ticker": "TCS"}}, {"intent": "buy", "args": {}}, "not json at all", "x" * 5000, {"args": {}},
                 {"intent": ["open_stock"]}, {"intent": "open_tab", "args": {"tab": "../../etc"}}):
         out, _ = with_model(bad)
         assert out["intent"] == "unknown" and out["args"] == {}, bad                                            # garbage never becomes an action
-    out, _ = with_model({"intent": "news_today", "args": {"scope": "all accounts"}})
+    out, _ = with_model({"intent": "news_today", "args": {"scope": "all accounts"}}, text="that thing about the shares of the company that makes cars and its latest updates")
     assert out["intent"] == "news_today" and out["args"] == {"scope": "portfolio"}                              # an invalid scope falls back
     assert with_model({"intent": "open_tab", "args": {"tab": "../../etc"}})[0]["intent"] == "unknown"
     out, _ = with_model({"intent": "open_stock", "args": {"query": "x; rm -rf /"}})

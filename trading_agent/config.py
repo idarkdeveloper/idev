@@ -103,6 +103,12 @@ TELEGRAM_CHAT_RE = re.compile(r"-?\d+|@[A-Za-z][A-Za-z0-9_]{3,}")
 _HOST = re.compile(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\d{1,5})?")
 
 
+def _dashboard_url(value: object) -> str:
+    """DASHBOARD_URL: an http(s) address without a path, or "" (nothing is guessed from anything else)."""
+    v = str(value or "").strip().rstrip("/")
+    return v if re.fullmatch(r"https?://[A-Za-z0-9.-]+(?::\d{1,5})?", v) else ""
+
+
 def parse_allowed_hosts(value: object) -> list[str]:
     """TA_ALLOWED_HOSTS: extra Host names the dashboard answers to (for example your tailnet name,
     box.tail1234.ts.net), as a comma list. Exact names only, with an optional :port; no wildcards."""
@@ -292,6 +298,7 @@ class Settings:
     ask_enabled: bool = True
     ask_ollama: bool = True
     ask_rate_per_min: int = 30
+    dashboard_url: str = ""   # DASHBOARD_URL: the dashboard's public address; Telegram alerts get Open / All deals buttons only when it (or TA_ALLOWED_HOSTS) gives one
     voice_ui: bool = True   # the voice assistant bar at the bottom of every page (VOICE_UI)
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:3b"
@@ -540,6 +547,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         ask_enabled=_bool(env("ASK_ENABLED"), True),
         ask_ollama=_bool(env("ASK_OLLAMA"), True),
         voice_ui=_bool(env("VOICE_UI"), True),
+        dashboard_url=_dashboard_url(env("DASHBOARD_URL")),
         ask_rate_per_min=int(_number("ASK_RATE_PER_MIN", env("ASK_RATE_PER_MIN"), 30, 1, 600)),
         ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),
         ollama_model=env("OLLAMA_MODEL") or "qwen2.5:3b",

@@ -342,10 +342,105 @@ def _assemble(head: str, mid: list[str], summary: str | None, watch: list[str], 
 
 
 def html_to_plain(text: str) -> str:
-    return _html.unescape(re.sub(r"</?(?:b|i|code|pre)>", "", text))
+    return _html.unescape(re.sub(r"</?(?:b|i|u|s|code|pre|blockquote)(?: [^>]*)?>", "", text))
+
+
+def _nr(v: Any) -> TypeGuard[float]:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _visible(data: dict[str, Any], kind: str) -> list[str]:
+    """The part of a brief that shows before anything is opened: a heading, then Market, Your portfolio and News and deals, each of
+    at most three lines, a tone marker always beside a word (never colour alone)."""
+    from .telegram_cards import DOWN, FLAT, UP, code
+    try:
+        d = date.fromisoformat(str(data.get("date")))
+        when = f" · {d.strftime('%a')} {d.day} {d.strftime('%b')}"
+    except ValueError:
+        when = ""
+    out = [f"<b>{'Morning brief' if kind == 'morning' else 'Evening close'}{_e(when)} IST</b>"]
+    mood = data.get("mood")
+    market: list[str] = []
+    if _ok(mood) and mood.get("regime"):
+        regime = str(mood["regime"])
+        mk = {"risk_on": UP, "risk_off": DOWN}.get(regime, FLAT)
+        why = _short_why(mood.get("why"))
+        market.append(f"{mk} {_e(regime.replace('_', '-').upper())}" + (f" ({mood['score']:+d})" if isinstance(mood.get("score"), int) else "") + (f" · {_e(why)}" if why else ""))
+        found = (data["buy_ideas"].get("ideas") or []) if _ok(data.get("buy_ideas")) else []
+        if mood.get("no_new_buys"):
+            market.append("No new buys" + (f" · {len(found)} pass the screen, held back" if found else ""))
+        elif found:
+            market.append(f"{len(found)} buy idea{'s' if len(found) != 1 else ''}: " + _e(", ".join(label(i) for i in found[:3])))
+    bulletin: dict[str, Any] = data["bulletin"] if isinstance(data.get("bulletin"), dict) else {}
+    nf = bulletin.get("nifty")
+    if _ok(nf) and _nr(nf.get("close")):
+        ch = nf.get("change_pct")
+        market.append(f"{UP if _nr(ch) and ch > 0 else DOWN if _nr(ch) and ch < 0 else FLAT} Nifty {code(num(nf['close'], 2))}" + (f" ({_e(pct_text(ch, 2))})" if _nr(ch) else ""))
+    if market:
+        out += ["", "<b>Market</b>", *market[:3]]
+    port: list[str] = []
+    g, w = data.get("groww"), data.get("watch")
+    pf = (w.get("portfolio") if _ok(w) else None) if kind == "morning" else None
+    if kind == "evening" and _ok(g):
+        port.append(f"Value {code('₹' + num(g['value']))}")
+        stale = data.get("stale_close")
+        if stale:
+            port.append("Today: no trading" if stale.get("reason") == "no trading today" else "Today: not closed yet")
+        elif _nr(g.get("day_pl")):
+            port.append(f"Today {code(srupee(g['day_pl']) + ' (' + pct_text(g.get('day_pct')) + ')')}")
+        if _nr(g.get("pl")):
+            port.append(f"Total {code(srupee(g['pl']) + ' (' + pct_text(g.get('pl_pct')) + ')')}")
+    elif isinstance(pf, dict) and _nr(pf.get("value")):
+        port.append(f"Value {code('₹' + num(pf['value'], 0))}")
+        if _nr(pf.get("pl")):
+            port.append(f"Total {code(srupee(pf['pl']) + (' ' + pct_text(pf.get('pl_pct')) if _nr(pf.get('pl_pct')) else ''))}")
+    if _ok(w) and int(w.get("total") or 0):
+        port.append(f"{DOWN} {int(w['total'])} flagged for review")
+    if port:
+        out += ["", "<b>Your portfolio</b>", " · ".join(port[:3])]
+    nd: list[str] = []
+    deals = data.get("deals")
+    if _ok(deals):
+        total = deals.get("total", len(deals.get("deals") or []))
+        d0 = (deals.get("deals") or [None])[0]
+        who = ((d0 or {}).get("who") or [(d0 or {}).get("investor")])[0] if d0 else None
+        nd.append(f"Deals: {total} new" + (f" · {_e(who)}" if who and total else ""))
+    ev = _events_line(w) if kind == "morning" else None
+    if ev:
+        nd.append(re.sub(r"^📅 ", "", ev)[:140])
+    news = data.get("news")
+    if _ok(news):
+        neg = [i for i in news.get("items") or [] if i.get("sentiment") == "negative"]
+        if neg:
+            nd.append(f"{DOWN} {len(neg)} negative news for your stocks")
+    if nd:
+        out += ["", "<b>News and deals</b>", *nd[:3]]
+    return out
 
 
 def telegram_brief(email: dict[str, Any], allowed_hosts: Any = None, commands: bool = False) -> dict[str, Any]:
+    """{"html", "plain", "button"} for a built email: the visible sections (Market, Your portfolio, News and deals), then the whole
+    detailed brief collapsed in an expandable quote. ``html`` is at most 4,096 characters, the visible part at most 900; the
+    plain text keeps everything."""
+    from .telegram_cards import TOTAL_LIMIT, VISIBLE_LIMIT
+    old = _classic_brief(email, allowed_hosts, commands)
+    data = email.get("data") or {}
+    kind = "evening" if data.get("kind") == "evening" else "morning"
+    vis = _visible(data, kind)
+    nl = chr(10)
+    while len(nl.join(vis)) > VISIBLE_LIMIT and len(vis) > 3:
+        vis.pop()
+    head_text = nl.join(vis)
+    detail_lines = old["html"].split(nl)[1:]   # the old heading is the heading above now
+    room = TOTAL_LIMIT - len(head_text) - len("<blockquote expandable></blockquote>") - 4
+    while detail_lines and len(nl.join(detail_lines)) > room:
+        detail_lines.pop()   # whole lines only: every line is balanced HTML
+    detail = nl.join(detail_lines).strip()
+    html = head_text + (f"{nl}<blockquote expandable>{detail}</blockquote>" if detail else "")
+    return {"html": html, "plain": html_to_plain(head_text + (nl + nl + detail if detail else "")), "button": old["button"]}
+
+
+def _classic_brief(email: dict[str, Any], allowed_hosts: Any = None, commands: bool = False) -> dict[str, Any]:
     """{"html", "plain", "button"} for a built email (morning or evening); ``html`` is at most 4,000 characters.
     ``commands``: the bot answers commands (TELEGRAM_COMMANDS), so the brief gets Portfolio / Stops / Status buttons
     that run those read commands; without the bot they would do nothing, so they are left out."""

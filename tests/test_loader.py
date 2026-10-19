@@ -60,7 +60,7 @@ def test_skeleton_busy_button_and_page_loader(tmp_path):
 
 
 def test_the_page_uses_the_loaders():
-    assert "TA.loader.page({title: \"Loading today's prices\"" in INDEX
+    assert "TA.loader.page({once: \"ta.pageLoaded\", title: \"Loading today's prices\"" in INDEX   # first load of a tab session only
     assert 'steps: ["Deals, jobs and settings", "Portfolio from Groww"]' in INDEX
     assert "pageLoad.step(0," in INDEX and "pageLoad.step(1," in INDEX
     assert '$("mp-rows").innerHTML = TA.loader.skeletonRows(4, MPCOLS)' in INDEX
