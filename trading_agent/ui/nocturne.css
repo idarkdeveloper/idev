@@ -12,7 +12,7 @@
   :root {
     color-scheme: dark;
     --color-bg: #161826; --color-surface: #232532; --color-text: #e9e9ed;
-    --color-accent: var(--blue-source); --color-accent-2: var(--blue-200);
+    --color-accent: color-mix(in srgb, var(--blue-source) 62%, var(--color-neutral-500)); --color-accent-2: color-mix(in srgb, var(--blue-200) 60%, var(--color-neutral-400));
     --color-divider: color-mix(in srgb, #e9e9ed 16%, transparent);
     --color-rule: color-mix(in srgb, #e9e9ed 8%, transparent);
     --color-muted: color-mix(in srgb, #e9e9ed 55%, transparent);
@@ -33,8 +33,8 @@
     --strip-replay-bg: #35290e; --strip-replay-fg: #f7e3b0; --strip-replay-bd: var(--amber-source);
     --color-neutral-100: #f3f5fe; --color-neutral-300: #cfd3e5; --color-neutral-400: #b2b6ca; --color-neutral-500: #9397ab;
     --color-neutral-600: #75798c; --color-neutral-700: #595d6c; --color-neutral-800: #3f424d; --color-neutral-900: #292b31;
-    --color-accent-100: var(--blue-100); --color-accent-200: var(--blue-200); --color-accent-300: var(--blue-300); --color-accent-400: var(--blue-400);
-    --color-accent-600: var(--blue-600); --color-accent-800: var(--blue-800); --color-accent-900: var(--blue-900);
+    --color-accent-100: color-mix(in srgb, var(--blue-200) 45%, #e9e9ed); --color-accent-200: color-mix(in srgb, var(--blue-200) 60%, #e9e9ed); --color-accent-300: color-mix(in srgb, var(--blue-300) 65%, var(--color-neutral-300)); --color-accent-400: color-mix(in srgb, var(--blue-400) 65%, var(--color-neutral-400));
+    --color-accent-600: color-mix(in srgb, var(--blue-600) 60%, var(--color-neutral-600)); --color-accent-800: color-mix(in srgb, var(--blue-source) 24%, #232532); --color-accent-900: color-mix(in srgb, var(--blue-source) 12%, #232532);
     --font-heading: "Inter", "Inter Fallback", system-ui, -apple-system, "Segoe UI", sans-serif; --font-heading-weight: 500;
     --font-body: "Inter", "Inter Fallback", system-ui, -apple-system, "Segoe UI", sans-serif;
     --space-1: 2.8px; --space-2: 5.6px; --space-3: 8.4px; --space-4: 11.2px;
