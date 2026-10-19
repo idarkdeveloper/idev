@@ -23,7 +23,7 @@
       <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 17 9 11 13 15 21 7"></polyline><polyline points="15 7 21 7 21 13"></polyline></svg></div>
       <div><div class="brand-name">Trading Agent</div><div class="sub brand-sub" id="subtitle">Following <span id="investor">…</span><span class="ph-check" id="subtitle-check"></span></div></div>
     </div>
-    <nav class="tabs" aria-label="Pages"><a href="/" data-tab="live">Live</a><a href="/replay" data-tab="replay">Replay</a><a href="/demo" data-tab="demo">Demo</a><a href="/screener" data-tab="screener">Screener</a></nav>
+    <nav class="tabs" aria-label="Pages"><a href="/" data-tab="portfolio">Portfolio</a><a href="/replay" data-tab="replay">Replay</a><a href="/screener" data-tab="screener">Screener</a></nav>
     <div class="row controls">
       <button type="button" id="btn-palette" class="pal-btn" aria-label="Search stocks and commands" aria-haspopup="dialog" aria-keyshortcuts="Control+K Meta+K" title="Search stocks and commands (Ctrl+K)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><span>Search</span><kbd class="pal-kbd" aria-hidden="true">Ctrl K</kbd></button>
       <span class="sub" id="lastcheck"></span>
@@ -31,6 +31,10 @@
     </div>
   </div>
 </header>
+<div class="pf-row"><div class="pf-switch" role="radiogroup" aria-label="Portfolio account" id="pf-switch">
+  <button type="button" role="radio" class="pf-opt live" id="pf-live" data-pf="live" aria-checked="true" tabindex="0">Live<span class="pf-sub">your Groww account</span></button>
+  <button type="button" role="radio" class="pf-opt practice" id="pf-practice" data-pf="practice" aria-checked="false" tabindex="-1">Practice<span class="pf-sub">practice money</span></button>
+</div></div>
 <div class="modestrip live" id="modestrip" role="status" aria-live="polite"><span id="modestrip-icon"></span><span id="modestrip-text">LIVE · your real Groww account · read-only on this page · checking the live-orders setting</span></div>
 <div class="ws-tabbar"><div class="ws-tabs" role="tablist" aria-label="Workspaces" id="ws-tabs">
   <button type="button" role="tab" id="wst-overview" data-ws-tab="overview" aria-controls="ws-overview" aria-selected="true">Overview</button>
@@ -428,7 +432,29 @@
   let S = null, pollTimer = null;
   TA.setCurrency(() => (S && S.settings && S.settings.currency) || "INR");
   const MODE = document.body.dataset.mode || "live";
-  document.querySelectorAll(".tabs a").forEach(a => { if(a.dataset.tab === MODE) a.setAttribute("aria-current", "page"); });
+  document.querySelectorAll(".tabs a").forEach(a => { if(a.dataset.tab === "portfolio"){ a.setAttribute("aria-current", "page"); if(MODE === "demo") a.setAttribute("href", "/demo"); } });
+  { // Portfolio has two accounts in one screen: Live (your Groww account) and Practice (the /demo page). The choice is remembered (only when you make it);
+    // opening the app at exactly "/" goes to the remembered one, a deep link never does.
+    const sw = $("pf-switch"), P = TA.palette, KEY = "ta.portfolioMode", cur = MODE === "demo" ? "practice" : "live";
+    const get = () => { try { return localStorage.getItem(KEY); } catch(e){ return null; } };
+    const set = (v) => { try { localStorage.setItem(KEY, v); } catch(e){} };
+    const hash = () => (typeof location !== "undefined" ? location.hash : "");
+    if(MODE === "live" && typeof location !== "undefined"){ const to = P.portfolioStart(location, get()); if(to) location.replace(to); }
+    if(sw){
+      const opts = [...sw.querySelectorAll("[data-pf]")];
+      opts.forEach((b) => { const on = b.dataset.pf === cur; b.setAttribute("aria-checked", on ? "true" : "false"); b.tabIndex = on ? 0 : -1; });
+      const choose = (b) => { if(b.dataset.pf === cur) return; set(b.dataset.pf); location.assign(P.switchTarget(b.dataset.pf, hash())); };
+      sw.addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-pf]"); if(b) choose(b); });
+      sw.addEventListener("keydown", (e) => {
+        const k = e.key, i = opts.indexOf(document.activeElement);
+        if(i < 0 || !/^Arrow(Left|Right|Up|Down)$|^[ ]$|^Enter$/.test(k)) return;
+        e.preventDefault();
+        if(k === " " || k === "Enter"){ choose(opts[i]); return; }
+        const n = opts[(i + (k === "ArrowLeft" || k === "ArrowUp" ? opts.length - 1 : 1)) % opts.length];
+        n.focus(); choose(n);
+      });
+    }
+  }
   const SAFE = TA.safety;
   SAFE.paintStrip(SAFE.modeStrip(MODE, {}));   // refined in render() once the live-orders setting is known
   // Live shows only real things. Demo is the same page on the same real data plus the practice account

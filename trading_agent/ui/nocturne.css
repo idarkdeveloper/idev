@@ -1457,3 +1457,16 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .ask-link{display:inline-flex;align-items:center;min-height:44px;padding:0 16px}
 /* The header search button is hidden: the voice and type bar at the bottom does stock look-ups now (Ctrl+K still opens the palette on a keyboard). */
 .hdr #btn-palette { display: none; }
+
+/* Portfolio: the Live / Practice switch under the page tabs. A segmented control in the strip colours (live violet, practice green),
+   so it is not mistaken for the page tabs above it. Tokens only. */
+.pf-row { max-width: 1600px; margin: 0 auto; padding: 10px 24px 0; }
+.pf-switch { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid var(--color-divider); border-radius: 999px; background: var(--color-surface); }
+.pf-opt { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; min-height: 44px; min-width: 112px; padding: 0 18px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--color-label); font-weight: 600; font-size: 14px; line-height: 1.15; }
+.pf-opt .pf-sub { font-size: 10.5px; font-weight: 400; color: var(--color-muted); }
+.pf-opt:hover { background: var(--color-hover); }
+.pf-opt[aria-checked="true"].live { background: var(--strip-live-bg); color: var(--strip-live-fg); border-color: var(--strip-live-bd); }
+.pf-opt[aria-checked="true"].practice { background: var(--strip-practice-bg); color: var(--strip-practice-fg); border-color: var(--strip-practice-bd); }
+.pf-opt[aria-checked="true"] .pf-sub { color: inherit; opacity: .8; }
+.pf-opt:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+@media (max-width: 700px) { .pf-row { padding: 8px 16px 0; } .pf-switch { width: 100%; } .pf-opt { flex: 1 1 0; min-width: 0; } }

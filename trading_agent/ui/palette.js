@@ -17,7 +17,11 @@
   const OP_LABEL = {lookup: "Look up", size: "Size", chart: "Chart", buy: "Practice buy"};
   const OP_HINT = {lookup: "momentum, price and announcements", size: "how many shares to buy",
                    chart: "Look up, scrolled to the price chart", buy: "practice account only; opens the order form, you confirm there"};
-  const PAGES = {live: ["Live", "/"], replay: ["Replay", "/replay"], demo: ["Demo", "/demo"], screener: ["Screener", "/screener"]};
+  const PAGES = {live: ["Live", "/"], replay: ["Replay", "/replay"], demo: ["Practice", "/demo"], screener: ["Screener", "/screener"]};
+  // Portfolio has two accounts: Live ("/") and Practice ("/demo"). Opening the app at exactly "/" goes to the one chosen last, if it was
+  // Practice; a deep link (any path, query or hash) is never redirected. loc: {pathname, search, hash}.
+  const portfolioStart = (loc, remembered) => (loc && loc.pathname === "/" && !loc.search && !loc.hash && remembered === "practice" ? "/demo" : null);
+  const switchTarget = (mode, hash) => (mode === "practice" ? "/demo" : "/") + (typeof hash === "string" && /^#[A-Za-z0-9_-]{1,40}$/.test(hash) ? hash : "");
 
   // Where the destination page expects each stock action to arrive: /?lookup=SYM, /?size=SYM, /?chart=SYM, /demo?buy=SYM.
   const landingUrl = (op, sym) => (op === "buy" || op === "sell" ? "/demo" : "/") + "?" + op + "=" + encodeURIComponent(sym);
@@ -379,7 +383,7 @@
     return {open, close, isOpen: () => !!(dlg && dlg.open)};
   }
 
-  const palette = {install, createModel, createSearcher, buildCommands, filterCommands, scoreCommand, cleanSymbol,
+  const palette = {portfolioStart, switchTarget, PAGES, install, createModel, createSearcher, buildCommands, filterCommands, scoreCommand, cleanSymbol,
                    landing, landingUrl, routeStockOp, practiceBuyTarget, practiceOrderTarget, STOCK_OPS, OP_LABEL};
   if(typeof window !== "undefined" && window.TA) window.TA.palette = palette;
   if(typeof module !== "undefined" && module.exports) module.exports = palette;
