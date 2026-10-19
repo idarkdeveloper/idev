@@ -517,9 +517,65 @@ class App:
         if not root._ask_limit.allow(client or "-"):
             raise ask_mod.RateLimited("Too many questions in a minute; wait a little.")
         out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)))
+        if out["intent"] == "portfolio_summary":   # real numbers from the dashboard's own holdings, fixed sentences (ask.compose_portfolio)
+            out.update(ask_mod.compose_portfolio(out["args"]["topic"], self._portfolio_figures()))
         log.info("ask: intent=%s via=%s", out["intent"], out["via"])
         log.debug("ask: text=%.60r", text)
         return out
+
+    PORTFOLIO_BUDGET_S = 12.0   # time spent reading daily bars for "today's change"
+
+    def _portfolio_figures(self) -> dict[str, Any]:
+        """What Ask says about your own portfolio, from data the dashboard already holds: the cached My-portfolio read (with
+        Groww live prices from their file) or the practice account. Never calls Groww; today's change is the price against the
+        close before the latest bar, as the Overview tile computes it."""
+        if self.page == "demo":
+            try:
+                b = self.practice_broker
+                acct, pos, perf = b.account(), b.positions(), b.performance()
+            except Exception:  # noqa: BLE001 - a missing account is an answer, not an error
+                return {"available": False, "message": "I could not read the practice account."}
+            return {"available": True, "practice": True, "count": len(pos), "holdings_value": acct.equity, "pl": perf.get("pnl"),
+                    "pl_pct": (perf.get("pnl_pct") or 0) / 100 if perf.get("pnl_pct") is not None else None, "cash": acct.cash,
+                    "today": None, "movers": [], "unpriced": [], "as_of": "", "as_of_date": "", "delayed": False}
+        if self.page != "live":
+            return {"available": False, "message": "Open the Live page for your portfolio."}
+        root = self._parent or self
+        m = root._my_portfolio
+        if m is None:
+            return {"available": False, "message": "Your portfolio has not loaded yet. Open the Live page and wait for the holdings."}
+        m = root._live({**m, **root._feed_cash()})
+        if not m.get("linked", True) or m.get("error"):
+            return {"available": False, "message": "I could not read your portfolio: " + str(m.get("error") or "Groww is not linked") + "."}
+        rows = m.get("holdings") or []
+        started, prev_total, moves, today_ok = time.monotonic(), 0.0, [], True
+        for h in rows:
+            if h.get("price") is None or h.get("kind") == "bond":
+                continue
+            prev = None
+            if time.monotonic() - started < self.PORTFOLIO_BUDGET_S:
+                bars, _err = self._ohlc(f"{h['symbol']}.BO" if h.get("exchange") == "BSE" else str(h["symbol"]))
+                closes = [float(b["close"]) for b in bars or [] if isinstance(b.get("close"), (int, float))]
+                prev = closes[-2] if len(closes) >= 2 else None
+            if not prev:
+                today_ok = False
+                continue
+            qty = h.get("qty") or 0
+            moves.append({"symbol": h["symbol"], "pct": h["price"] / prev - 1, "abs": qty * (h["price"] - prev)})
+            prev_total += qty * prev
+        today = {"abs": sum(x["abs"] for x in moves), "pct": (sum(x["abs"] for x in moves) / prev_total) if prev_total else None} if moves and today_ok else None
+        stamp = m.get("prices_as_of") or m.get("at") or m.get("saved_at")
+        as_of = as_date = ""
+        try:
+            from .timezones import IST as _IST
+            at = datetime.fromisoformat(str(stamp)).astimezone(_IST)
+            as_of, as_date = at.strftime("%H:%M IST"), f"{at.day} {at.strftime('%b')}"
+        except Exception:  # noqa: BLE001 - no time stamp: say nothing about the time
+            pass
+        return {"available": True, "count": len(rows), "holdings_value": m.get("value") if any(h.get("price") is not None for h in rows) else None,
+                "invested": m.get("invested"), "pl": m.get("pl"), "pl_pct": m.get("pl_pct"), "cash": m.get("cash"), "today": today,
+                "movers": moves, "unpriced": list(m.get("unpriced") or []), "as_of": as_of, "as_of_date": as_date,
+                "delayed": m.get("prices_src") != "groww"}
 
     def news_today(self, scope: str = "portfolio", ticker: str | None = None, client: str = "") -> dict[str, Any]:
         """GET /api/news/today: today's tagged headlines (IST date), newest first, at most 10, from the cached news service
@@ -2462,6 +2518,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         def _body(self) -> dict[str, Any]:
             n = int(self.headers.get("Content-Length") or 0)
             if n > MAX_POST_BYTES:
+                self.rfile.read(min(n, 1_000_000))   # drain what was sent so the client sees the 413, not a reset
                 raise BodyTooLarge(f"the request body is too large (at most {MAX_POST_BYTES // 1024} KB)")
             raw = self.rfile.read(n) if n else b""
             body = json.loads(raw.decode() or "{}")

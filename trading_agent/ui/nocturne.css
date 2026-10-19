@@ -1449,3 +1449,9 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .ask-alt { min-height: 44px; }
 
 .ask-loading{display:flex;align-items:center;gap:10px;padding:6px 0}
+
+.ask-facts{margin:8px 0}
+.ask-fact{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:14px}
+.ask-fk{color:var(--color-muted)}
+.ask-fv{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.ask-link{display:inline-flex;align-items:center;min-height:44px;padding:0 16px}
