@@ -192,9 +192,8 @@ class App:
         self._bar_seen: str | None = None  # newest price-bar date a lookup used (shown in the freshness chip)
         self.jobs: list[Job] = []
         self.lock = threading.Lock()
-        self._slot_lock = threading.Lock()  # guards busy/running only; never held across a job
-        self.busy = False
-        self.running: Job | None = None  # the job holding the one slot
+        self._slot_lock = threading.Lock()  # guards _active only; never held across a job
+        self._active: dict[str, Job] = {}  # kind -> the running job (one per kind)
         self._replay: Any | None = None  # ReplayApp, built on first use
         self._screener: Any | None = None  # ScreenerService, built on first use
         self._holidays: Any | None = None
@@ -299,24 +298,70 @@ class App:
                   "signal_lab": "The signal lab", "replay_create": "Starting a replay",
                   "replay_step": "A replay step", "replay_tool": "A replay tool"}
 
-    def _refused(self, job: Job) -> Job:
-        """One long job at a time. A refused attempt is answered but not recorded, so it
-        can't later be reported as the result of the job that was actually running."""
-        r = self.running
-        what = self.JOB_LABELS.get(r.kind, "Another job") if r else "Another job"
-        since = f" (started {r.started_at[11:16]} UTC)" if r and r.started_at else ""
-        job.ok, job.finished_at = False, _now()
-        job.message = f"{what} is still running{since}; try again when it finishes."
-        return job
+    # Read-only research tools may run side by side (up to MAX_RESEARCH_JOBS, one per kind: a 2-core server). Everything
+    # else (replay create/step, which change a replay's saved state) is exclusive: it runs alone, and refuses while any
+    # job runs; research jobs are refused while an exclusive one runs.
+    RESEARCH_KINDS = frozenset({"backtest", "screen", "factor_backtest", "signal_lab", "replay_tool"})
+    MAX_RESEARCH_JOBS = 3
+
+    @property
+    def busy(self) -> bool:
+        return bool(self._active)
+
+    @property
+    def running(self) -> Job | None:
+        """The most recently started running job (the page's one-line "X running" pill)."""
+        jobs = list(self._active.values())
+        return max(jobs, key=lambda j: j.id) if jobs else None
+
+    def running_jobs(self) -> list[dict[str, Any]]:
+        return [{"id": j.id, "kind": j.kind, "label": self.JOB_LABELS.get(j.kind, j.kind), "started_at": j.started_at,
+                 "message": j.message} for j in sorted(list(self._active.values()), key=lambda j: j.id)]
+
+    def _refusal(self, kind: str) -> str | None:
+        """Why a job of this kind cannot start right now (caller holds _slot_lock), or None."""
+        def what(j: Job) -> str:
+            return f"{self.JOB_LABELS.get(j.kind, 'Another job')} is still running (started {j.started_at[11:16]} UTC)"
+        if kind in self.RESEARCH_KINDS:
+            same = self._active.get(kind)
+            if same is not None:
+                return f"{what(same)}; its result appears here when it finishes."
+            other = next((j for j in self._active.values() if j.kind not in self.RESEARCH_KINDS), None)
+            if other is not None:
+                return f"{what(other)}; try again when it finishes."
+            if len(self._active) >= self.MAX_RESEARCH_JOBS:
+                return f"{len(self._active)} research tools are already running (at most {self.MAX_RESEARCH_JOBS} at once); try again when one finishes."
+            return None
+        if self._active:
+            return f"{what(self.running)}; try again when it finishes."   # type: ignore[arg-type]
+        return None
+
+    def _claim(self, kind: str) -> Job:
+        """A new Job holding its slot, or a refused one (ok False, with the reason). A refused attempt is answered but
+        not recorded, so it can't later be reported as the result of a job that was actually running."""
+        with self._slot_lock:  # the check and the claim of the slot are one step
+            job = Job(id=len(self.jobs) + 1, kind=kind)
+            why = self._refusal(kind)
+            if why:
+                job.ok, job.finished_at, job.message = False, _now(), why
+                return job
+            self.jobs.append(job)
+            self._active[kind] = job
+            return job
+
+    def _claimed(self, job: Job) -> bool:
+        return job in self.jobs
+
+    def _release(self, job: Job) -> None:
+        with self._slot_lock:
+            if self._active.get(job.kind) is job:
+                del self._active[job.kind]
 
     def run_background(self, kind: str, fn: Callable[[Job], str]) -> Job:
         """Run ``fn(job)`` in the one job slot; it returns the success message."""
-        with self._slot_lock:  # the check and the claim of the slot are one step
-            job = Job(id=len(self.jobs) + 1, kind=kind)
-            if self.busy:
-                return self._refused(job)
-            self.jobs.append(job)
-            self.busy, self.running = True, job
+        job = self._claim(kind)
+        if not self._claimed(job):
+            return job
 
         def run() -> None:
             try:
@@ -327,7 +372,7 @@ class App:
                 job.ok, job.message = False, f"{type(e).__name__}: {e}" if not isinstance(e, (ValueError, LookupError)) else str(e)
             finally:
                 job.finished_at = _now()
-                self.busy = False
+                self._release(job)
 
         threading.Thread(target=run, daemon=True).start()
         return job
@@ -446,6 +491,7 @@ class App:
     def snapshot(self) -> dict[str, Any]:
         # Read "busy" before the state file: a reply saying a job has finished then always carries that job's results.
         busy = self.busy
+        run_now = self.running
         st = State(self.settings.state_dir / "state.json")
         s = self.settings
         deals = []
@@ -566,8 +612,9 @@ class App:
             "broker_error": broker_error, "deals": deals, "deals_error": self._deals_error,
             "recommendations": recs, "runs": list(reversed(st.data["runs"][-20:])),
             "seen_count": st.seen_count, "busy": busy,
-            "running": ({"kind": self.running.kind, "label": self.JOB_LABELS.get(self.running.kind, self.running.kind),
-                         "started_at": self.running.started_at} if self.busy and self.running else None),
+            "running": ({"kind": run_now.kind, "label": self.JOB_LABELS.get(run_now.kind, run_now.kind),
+                         "started_at": run_now.started_at} if busy and run_now else None),
+            "running_jobs": self.running_jobs(),
             "jobs": [j.to_dict() for j in self.jobs[-5:]],
             "protection": self.protection(positions, gtt),
             "live_orders": self._live_orders_on(),   # the one effective flag: the strip and the protection column both use it
@@ -943,12 +990,9 @@ class App:
         names = self.backtest_names(investor)
         label = names[0] if len(names) == 1 else ", ".join(names)
         bt_label = "All followed" if names == self.settings.investors else ", ".join(names)
-        job = Job(id=len(self.jobs) + 1, kind="backtest")
-        with self._slot_lock:  # the check and the claim of the slot are one step
-            if self.busy:
-                return self._refused(job)
-            self.jobs.append(job)
-            self.busy, self.running = True, job
+        job = self._claim("backtest")
+        if not self._claimed(job):
+            return job
 
         def run() -> None:
             try:
@@ -979,7 +1023,7 @@ class App:
                 job.ok, job.message = False, f"{type(e).__name__}: {e}"
             finally:
                 job.finished_at = _now()
-                self.busy = False
+                self._release(job)
 
         threading.Thread(target=run, daemon=True).start()
         return job
@@ -988,12 +1032,9 @@ class App:
         from .bands import book_for
         from .screen import load_universe, run_screen
 
-        job = Job(id=len(self.jobs) + 1, kind="screen")
-        with self._slot_lock:  # the check and the claim of the slot are one step
-            if self.busy:
-                return self._refused(job)
-            self.jobs.append(job)
-            self.busy, self.running = True, job
+        job = self._claim("screen")
+        if not self._claimed(job):
+            return job
 
         def run() -> None:
             from .indian_filters import filters_for
@@ -1014,7 +1055,7 @@ class App:
                 job.ok, job.message = False, f"{type(e).__name__}: {e}"
             finally:
                 job.finished_at = _now()
-                self.busy = False
+                self._release(job)
 
         threading.Thread(target=run, daemon=True).start()
         return job
@@ -1606,15 +1647,13 @@ class App:
         from .index_history import point_in_time
         from .screen import load_universe
 
-        job = Job(id=len(self.jobs) + 1, kind="factor_backtest")
-        with self._slot_lock:  # the check and the claim of the slot are one step
-            if self.busy:
-                return self._refused(job)
-            self.jobs.append(job)
-            if self.settings.market != "in":
-                job.ok, job.message, job.finished_at = False, "the factor backtest uses NSE indices; switch market to India", _now()
-                return job
-            self.busy, self.running = True, job
+        job = self._claim("factor_backtest")
+        if not self._claimed(job):
+            return job
+        if self.settings.market != "in":
+            job.ok, job.message, job.finished_at = False, "the factor backtest uses NSE indices; switch market to India", _now()
+            self._release(job)
+            return job
 
         def run() -> None:
             try:
@@ -1646,7 +1685,7 @@ class App:
                 job.ok, job.message = False, f"{type(e).__name__}: {e}"
             finally:
                 job.finished_at = _now()
-                self.busy = False
+                self._release(job)
 
         threading.Thread(target=run, daemon=True).start()
         return job
@@ -1657,15 +1696,13 @@ class App:
         from .screen import load_universe
         from .signal_lab import run_signal_lab
 
-        job = Job(id=len(self.jobs) + 1, kind="signal_lab")
-        with self._slot_lock:  # the check and the claim of the slot are one step
-            if self.busy:
-                return self._refused(job)
-            self.jobs.append(job)
-            if self.settings.market != "in":
-                job.ok, job.message, job.finished_at = False, "the signal lab uses NSE indices; switch market to India", _now()
-                return job
-            self.busy, self.running = True, job
+        job = self._claim("signal_lab")
+        if not self._claimed(job):
+            return job
+        if self.settings.market != "in":
+            job.ok, job.message, job.finished_at = False, "the signal lab uses NSE indices; switch market to India", _now()
+            self._release(job)
+            return job
 
         def run() -> None:
             try:
@@ -1681,7 +1718,7 @@ class App:
                 job.ok, job.message = False, f"{type(e).__name__}: {e}"
             finally:
                 job.finished_at = _now()
-                self.busy = False
+                self._release(job)
 
         threading.Thread(target=run, daemon=True).start()
         return job

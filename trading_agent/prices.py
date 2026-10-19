@@ -8,6 +8,8 @@ minutes, which is fine for comparing a disclosed deal against a portfolio.
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -55,6 +57,20 @@ def price_ttl(now: datetime, default: float, holidays: Any | None = None) -> flo
     day, ``default`` otherwise. Only the dashboard App installs this (YahooPrices.ttl_fn); the agent never does."""
     from .safety import market_open
     return min(default, FRESH_TTL) if market_open(now, holidays) else default
+
+
+_REPLACE_LOCK = threading.Lock()
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write then swap in, so a research job on another thread never reads a half-written cache file."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(text)
+        with _REPLACE_LOCK:   # Windows refuses two simultaneous swaps onto one file
+            os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 class YahooPrices:
@@ -207,7 +223,7 @@ class YahooPrices:
                     bars[-1]["provisional"] = True
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(bars))
+            atomic_write_text(cache, json.dumps(bars))
         return bars
 
     def _ohlc(self, symbol: str, range_: str, interval: str, ttl: float) -> list[dict[str, Any]]:
@@ -262,7 +278,7 @@ class YahooPrices:
                     bars = days
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(bars))
+            atomic_write_text(cache, json.dumps(bars))
         return self._filled(ysym, bars, ohlc=True) if interval == "1d" else bars
 
     def _hourly_days(self, ysym: str) -> list[dict[str, Any]]:
@@ -301,7 +317,7 @@ class YahooPrices:
                        "amount": float(v["amount"])} for v in events.values()), key=lambda d: str(d["date"]))
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(out))
+            atomic_write_text(cache, json.dumps(out))
         return out
 
 
