@@ -37,6 +37,18 @@ window.TA = (function(){
     });
     return out.map(x => x.type === "group" && x.runs.length === 1 ? {type: "run", run: x.runs[0]} : x);
   }
+  // "Today · 19 Oct", "Yesterday · 18 Oct", "Fri · 16 Oct": the heading of a day of deals; iso and todayIso are YYYY-MM-DD.
+  function dayLabel(iso, todayIso){
+    const ok = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ""));
+    if(!ok(iso)) return String(iso || "Earlier");
+    const d = new Date(iso + "T00:00:00Z"), mon = d.toLocaleString("en-GB", {month: "short", timeZone: "UTC"}), base = d.getUTCDate() + " " + mon;
+    if(ok(todayIso)){
+      const t = Date.parse(todayIso + "T00:00:00Z"), diff = Math.round((t - d.getTime()) / 86400000);
+      if(diff === 0) return "Today · " + base;
+      if(diff === 1) return "Yesterday · " + base;
+    }
+    return d.toLocaleString("en-GB", {weekday: "short", timeZone: "UTC"}) + " · " + base;
+  }
   const tile = (l, v, s, cls) => `<div class="tile"><div class="label">${l}</div><div class="big${cls ? " " + cls : ""}">${v}</div><div class="sub">${s}</div></div>`;
 
   // ---- charts: plain SVG, one y-axis, hairline grid, crosshair tooltip ----
@@ -1183,7 +1195,7 @@ window.TA = (function(){
 
   return {$, esc, priceMove, priceLine, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, ddHistogram, rupeesShort, inr, px, bigMoney, foreignMarket, qualifyTicker, MARKET_SUFFIX, sinr, spct, quoteHtml, rangePos, quoteAge,
-          groupRuns, isQuietRun, daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart, loader};
+          dayLabel, groupRuns, isQuietRun, daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart, loader};
 })();
 window.TA.theme.init();
 // Installable app: the service worker (sw.js) only on https or this machine; it never stores API answers. Quiet when it cannot.
