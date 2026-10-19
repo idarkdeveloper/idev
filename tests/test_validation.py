@@ -408,3 +408,12 @@ def test_the_backtest_page_draws_the_stress_test():
     assert "drawMonteCarlo((r.validation || {}).monte_carlo)" in html
     assert "mc.fan && mc.drawdown_hist" in html          # an older saved result without them shows the text only
     assert "function ddHistogram" in js and "bands" in js
+
+
+def test_backtest_cards_say_what_they_test():
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1] / "trading_agent" / "ui" / "index.html").read_text()
+    assert "<h2>Investor deals backtest</h2>" in html and "<h2>Backtest</h2>" not in html
+    assert '<a href="#backtest">Investor deals backtest</a>' in html
+    hint = html[html.index('id="fb-paper-hint"'):]
+    assert "NIFTYMIDCAP150" in hint[:400] and "hold top 20" in hint[:400]
