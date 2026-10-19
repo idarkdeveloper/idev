@@ -150,7 +150,6 @@ def test_the_remembered_account_is_opened_only_at_exactly_slash():
 
 
 def test_ask_open_tab_accepts_portfolio_and_practice_as_aliases_and_nothing_else():
-    s = type("S", (), {})()
     for tab, want in (("portfolio", "live"), ("practice", "demo"), ("live", "live"), ("demo", "demo"), ("screener", "screener"), ("replay", "replay")):
         out = ask._finish("open_tab", {"tab": tab}, lambda *a, **k: [], "ollama")
         assert out["intent"] == "open_tab" and out["args"] == {"tab": want}, tab
