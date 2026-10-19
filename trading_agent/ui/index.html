@@ -30,18 +30,7 @@
         </div>
       </details>
       </div>
-      <details class="menu more" id="more-menu">
-        <summary class="btn" aria-label="More: watch, settings, theme, table rows, layout"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg></summary>
-        <div class="menu-pop">
-          <div class="menu-status" id="pills"></div>
-          <button type="button" id="btn-watch" title="Poll deals and announcements every minute during market hours"><span>Start watch</span></button>
-          <button type="button" id="btn-settings"><span>Settings</span></button>
-          <div class="menu-sep" role="separator"></div>
-          <div class="menu-row theme-switch" role="group" aria-labelledby="theme-label"><span class="theme-label" id="theme-label">Theme</span><div class="seg"><button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button></div></div>
-          <div class="menu-row" role="group" aria-labelledby="density-label"><span class="theme-label" id="density-label">Table rows</span><div class="seg"><button type="button" data-density="comfortable" aria-pressed="true">Comfortable</button><button type="button" data-density="compact" aria-pressed="false">Compact</button></div></div>
-          <div class="menu-row" role="group" aria-labelledby="layout-label"><span class="theme-label" id="layout-label">Layout</span><div class="seg"><button type="button" data-layout="tabs" aria-pressed="true">Tabs</button><button type="button" data-layout="sections" aria-pressed="false">One page</button></div></div>
-        </div>
-      </details>
+      <button type="button" class="set-btn" id="btn-settings" aria-label="Settings" aria-haspopup="dialog" title="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg></button>
     </div>
   </div>
 </header>
@@ -300,45 +289,60 @@
   </div>
 </main>
 
-<dialog id="dlg">
+<dialog id="dlg" aria-labelledby="dlg-title">
   <form method="dialog" class="form" id="settings-form">
-    <div class="row"><div class="dialog-title">Settings</div><button type="button" class="small" style="margin-left:auto" id="btn-close">Close</button></div>
-    <div class="grid2">
-      <div class="field"><label for="f-investors">Investors to follow</label><textarea id="f-investors" name="watch_investors" rows="4" spellcheck="false" aria-describedby="f-investors-hint"></textarea><div class="sub" id="f-investors-hint">One name per line, up to 10. Word order doesn't matter: NSE prints "KACHOLIA ASHISH"</div></div>
-      <div class="field"><label for="f-source">Disclosures</label><select id="f-source" name="watch_source"></select></div>
-      <div class="field"><label for="f-email">Email recommendations to</label><input id="f-email" name="notify_email_to" type="email" placeholder="you@example.com"><div class="sub">Needs RESEND_API_KEY in .env</div></div>
-      <div class="field"><label for="f-webhook">Webhook (Slack, Discord, n8n)</label><input id="f-webhook" name="notify_webhook_url" type="url" placeholder="https://hooks.slack.com/…"></div>
-      <div class="field"><label for="f-tg-token">Telegram bot token</label><input id="f-tg-token" type="password" autocomplete="off" placeholder="saved: leave blank to keep, type clear to remove"><div class="sub">From @BotFather. Never shown again once saved.</div></div>
-      <div class="field"><label for="f-tg-chat">Telegram chat id</label><input id="f-tg-chat" type="password" autocomplete="off" placeholder="123456789 or @channel"><div class="sub">Never shown again once saved.</div></div>
-      <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-tg-on" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-tg-on" style="color:var(--ink)">Telegram alerts</label></div><div class="sub">Every alert and daily email also goes to Telegram when the token and chat id are set</div></div>
-      <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-tg-cmd" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-tg-cmd" style="color:var(--ink)">Telegram commands (practice only)</label></div><div class="sub">Type /lookup, /size, /portfolio, /brief, /stops, and practice /buy and /sell in your own bot chat; company names work. Only your private chat is obeyed and no command can place a real order. Takes effect when the watch service restarts; the Health tab shows whether it is listening.</div></div>
-      <div class="field"><label for="f-hb">Heartbeat URL</label><input id="f-hb" type="password" autocomplete="off" placeholder="saved: leave blank to keep, type clear to remove"><div class="sub">healthchecks.io style ping URL, called every minute while the watch runs (set the check's period to 1 minute, grace 2 minutes). Telegram and heartbeat changes need a restart of the watch service (sudo systemctl restart trading-agent-watch).</div></div>
-      <div class="field"><label for="f-market">Market</label><select id="f-market" name="market"><option value="in">India · NSE · Groww</option><option value="us">United States · paper</option></select><div class="sub">Switching rebuilds data, prices and broker</div></div>
-      <div class="field"><label for="f-cash">Practice starting cash</label><input id="f-cash" name="paper_starting_cash" type="number" min="1000" step="any"><div class="sub">Applies after Reset practice account on the Demo page</div></div>
-    </div>
-    <div class="group"><span class="group-title">Watch mode</span>
+    <div class="row"><div class="dialog-title" id="dlg-title">Settings</div><button type="button" class="small" style="margin-left:auto" id="btn-close">Close</button></div>
+    <div class="menu-status" id="pills"></div>
+    <nav class="set-nav" aria-label="Settings sections"><button type="button" data-set-jump="set-appearance">Appearance</button><button type="button" data-set-jump="set-profile">Profile</button><button type="button" data-set-jump="set-investors">Investors</button><button type="button" data-set-jump="set-filters">Buy filters</button><button type="button" data-set-jump="set-alerts">Email &amp; alerts</button><button type="button" data-set-jump="set-telegram">Telegram</button><button type="button" data-set-jump="set-emails">Daily emails</button><button type="button" data-set-jump="set-stops">Stop-losses</button><button type="button" data-set-jump="set-screener">Screener</button><button type="button" data-set-jump="set-checks">Live checks</button></nav>
+    <section class="set-sec" id="set-appearance" aria-labelledby="set-appearance-t"><h3 id="set-appearance-t">Appearance</h3><p class="sub">Saved in this browser only.</p>
+      <div class="menu-row theme-switch" role="group" aria-labelledby="theme-label"><span class="theme-label" id="theme-label">Theme</span><div class="seg"><button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="auto" aria-pressed="true">Auto</button></div></div>
+      <div class="menu-row" role="group" aria-labelledby="density-label"><span class="theme-label" id="density-label">Table rows</span><div class="seg"><button type="button" data-density="comfortable" aria-pressed="true">Comfortable</button><button type="button" data-density="compact" aria-pressed="false">Compact</button></div></div>
+      <div class="menu-row" role="group" aria-labelledby="layout-label"><span class="theme-label" id="layout-label">Layout</span><div class="seg"><button type="button" data-layout="tabs" aria-pressed="true">Tabs</button><button type="button" data-layout="sections" aria-pressed="false">One page</button></div></div>
+    </section>
+    <div id="set-live">
+    <section class="set-sec" id="set-profile" aria-labelledby="set-profile-t"><h3 id="set-profile-t">Profile</h3><p class="sub">Market, practice money, what the agent may do, and what it is connected to.</p>
       <div class="grid2">
-        <div class="field"><label for="f-every">Poll every (seconds)</label><input id="f-every" type="number" min="15" max="3600" step="15" value="60"></div>
-        <div class="radio" style="align-items:center;border:none;padding:0"><input type="checkbox" id="f-autoexit" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-autoexit" style="color:var(--ink)">Sell paper positions that hit their trailing stop</label></div>
+        <div class="field"><label for="f-market">Market</label><select id="f-market" name="market"><option value="in">India · NSE · Groww</option><option value="us">United States · paper</option></select><div class="sub">Switching rebuilds data, prices and broker</div></div>
+        <div class="field"><label for="f-cash">Practice starting cash</label><input id="f-cash" name="paper_starting_cash" type="number" min="1000" step="any"><div class="sub">Applies after Reset practice account on the Demo page</div></div>
       </div>
-    </div>
-    <div class="group"><span class="group-title">Deal sources</span>
+      <div class="set-group" role="radiogroup" aria-label="Order mode"><span class="field-label">Order mode</span>
+      <div class="radio"><input type="radio" name="auto_trade" value="false" id="m-reco"><div><label for="m-reco" style="font-size:15px;color:var(--ink)">Recommendations only</label><div class="sub">Claude explains what changed. Nothing is bought or sold.</div></div></div>
+      <div class="radio"><input type="radio" name="auto_trade" value="true" id="m-paper"><div><label for="m-paper" style="font-size:15px;color:var(--ink)">Paper trading</label><div class="sub">Claude places simulated orders, max 10% of equity each, whole shares.</div></div></div>
+      <div class="radio" style="opacity:.6"><input type="radio" disabled id="m-live"><div><label for="m-live" style="font-size:15px;color:var(--ink)">Live orders on Groww <span class="pill bad" style="margin-left:6px">REAL MONEY</span></label><div class="sub">Only via GROWW_LIVE_ORDERS=true in .env, never from here.</div></div></div>
+      </div>
+      <div class="field"><span class="field-label">Connections</span><div id="conns" style="display:flex;flex-direction:column"></div></div>
+      <div class="row"><button type="button" class="small" id="btn-groww-test">Test Groww connection</button><span class="sub" id="groww-test-result"></span></div>
+    </section>
+    <section class="set-sec" id="set-investors" aria-labelledby="set-investors-t"><h3 id="set-investors-t">Investors</h3><p class="sub">Whose disclosed deals the agent follows, and where it reads them.</p>
+      <div class="grid2">
+        <div class="field"><label for="f-investors">Investors to follow</label><textarea id="f-investors" name="watch_investors" rows="4" spellcheck="false" aria-describedby="f-investors-hint"></textarea><div class="sub" id="f-investors-hint">One name per line, up to 10. Word order doesn't matter: NSE prints "KACHOLIA ASHISH"</div></div>
+        <div class="field"><label for="f-source">Disclosures</label><select id="f-source" name="watch_source"></select></div>
+      </div>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-bse" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-bse" style="color:var(--ink)">Also read BSE bulk and block deals</label><div class="sub">Many mid and small-cap deals happen only on BSE. Public data, no login; NSE is always read.</div></div></div>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-flows" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-flows" style="color:var(--ink)">Show FII/DII flows and market breadth in the morning email</label><div class="sub">Public NSE files, fetched after 19:00 IST. Information only; nothing trades on it.</div></div></div>
+    </section>
+    <section class="set-sec" id="set-filters" aria-labelledby="set-filters-t"><h3 id="set-filters-t">Buy filters</h3><p class="sub">Checked before any buy, practice or live.</p>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-bands" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-bands" style="color:var(--ink)">Skip stocks with a 2% or 5% price band when buying</label><div class="sub">Liquidity can vanish in a fall. Sells and stop-losses are never blocked.</div></div></div>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-asm" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-asm" style="color:var(--ink)">Never buy stocks on NSE's ASM or GSM surveillance lists</label><div class="sub">Holdings that enter a list are flagged for review, never sold.</div></div></div>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-results" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-results" style="color:var(--ink)">No new buy when results are due within 5 trading days</label><div class="sub">From NSE's board-meeting calendar. Holdings show "Results due".</div></div></div>
       <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-pledge" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-pledge" style="color:var(--ink)">No buy when promoter pledges are above 20% or rose more than 5 points</label><div class="sub">From NSE's pledge filings, counted from the next trading day when filed after 15:00. When a list cannot be read, that filter blocks nothing and says so.</div></div></div>
-    </div>
-    <div class="group"><span class="group-title">Screener page</span>
-      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-tv" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-tv" style="color:var(--ink)">Add TradingView columns to the screener (unofficial)</label><div class="sub" id="f-tv-note">Off by default. Turning it on lets the screener ask TradingView's public scanner for a few extra columns (its summary, sector, industry, EPS growth). TradingView has no official API for this and its terms restrict automated access, so you are choosing to use an unofficial endpoint. One request per list, at most every 15 minutes; if it ever refuses or fails it is left alone for 24 hours. No login, no cookies. Display only: it never feeds the agent, the emails or Claude, and it is never called from the server.</div></div></div>
-    </div>
-    <div class="group"><span class="group-title">Stop-losses at Groww</span>
-      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-gtt" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-gtt" style="color:var(--ink)">Keep a GTT stop-loss at Groww for each live holding</label><div class="sub" id="f-gtt-note">A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Only acts when GROWW_LIVE_ORDERS=true.</div></div></div>
-      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-ddpi" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-ddpi" style="color:var(--ink)">I confirmed DDPI is active on my Groww demat account</label><div class="sub">Confirm in the Groww app that DDPI is active; without it automated sells are rejected. Groww's API cannot report this, so this is your own confirmation.</div></div></div>
-      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-t1" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-t1" style="color:var(--ink)">Let live sells include T1 shares</label><div class="sub">Off (default): live sells use only free demat shares. T1 shares (bought yesterday) are a BTST sale with short-delivery and auction risk.</div></div></div>
-    </div>
-    <div class="group"><span class="group-title">Daily emails</span>
+    </section>
+    <section class="set-sec" id="set-alerts" aria-labelledby="set-alerts-t"><h3 id="set-alerts-t">Email &amp; alerts</h3>
+      <div class="grid2">
+        <div class="field"><label for="f-email">Email recommendations to</label><input id="f-email" name="notify_email_to" type="email" placeholder="you@example.com"><div class="sub">Needs RESEND_API_KEY in .env</div></div>
+        <div class="field"><label for="f-webhook">Webhook (Slack, Discord, n8n)</label><input id="f-webhook" name="notify_webhook_url" type="url" placeholder="https://hooks.slack.com/…"></div>
+        <div class="field"><label for="f-hb">Heartbeat URL</label><input id="f-hb" type="password" autocomplete="off" placeholder="saved: leave blank to keep, type clear to remove"><div class="sub">healthchecks.io style ping URL, called every minute while the watch runs (set the check's period to 1 minute, grace 2 minutes). Telegram and heartbeat changes need a restart of the watch service (sudo systemctl restart trading-agent-watch).</div></div>
+      </div>
+    </section>
+    <section class="set-sec" id="set-telegram" aria-labelledby="set-telegram-t"><h3 id="set-telegram-t">Telegram</h3>
+      <div class="grid2">
+        <div class="field"><label for="f-tg-token">Telegram bot token</label><input id="f-tg-token" type="password" autocomplete="off" placeholder="saved: leave blank to keep, type clear to remove"><div class="sub">From @BotFather. Never shown again once saved.</div></div>
+        <div class="field"><label for="f-tg-chat">Telegram chat id</label><input id="f-tg-chat" type="password" autocomplete="off" placeholder="123456789 or @channel"><div class="sub">Never shown again once saved.</div></div>
+        <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-tg-on" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-tg-on" style="color:var(--ink)">Telegram alerts</label></div><div class="sub">Every alert and daily email also goes to Telegram when the token and chat id are set</div></div>
+        <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-tg-cmd" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-tg-cmd" style="color:var(--ink)">Telegram commands (practice only)</label></div><div class="sub">Type /lookup, /size, /portfolio, /brief, /stops, and practice /buy and /sell in your own bot chat; company names work. Only your private chat is obeyed and no command can place a real order. Takes effect when the watch service restarts; the Health tab shows whether it is listening.</div></div>
+      </div>
+    </section>
+    <section class="set-sec" id="set-emails" aria-labelledby="set-emails-t"><h3 id="set-emails-t">Daily emails</h3>
       <div class="sub" id="f-dg-note">Sent by the watch service on NSE trading days to your email or webhook. They never place an order.</div>
       <div class="grid2">
         <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-am" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-am" style="color:var(--ink)">Morning: what to buy and watch</label></div>
@@ -350,21 +354,24 @@
       <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-bul" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-bul" style="color:var(--ink)">Market bulletin in the evening email</label></div><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-dg-chart" style="width:20px;height:20px;min-height:20px;margin:0"><label for="f-dg-chart" style="color:var(--ink)">With chart pictures</label></div><div class="sub">Nifty levels, ADX and RSI, global markets, commodities and a concept of the day. Readings of past prices, never a forecast.</div></div>
       <div class="row"><button type="button" class="small" id="btn-dg-morning">Preview morning</button><button type="button" class="small" id="btn-dg-evening">Preview evening</button>
         <input type="checkbox" id="dg-summary" style="width:20px;height:20px;min-height:20px;margin:0"><label for="dg-summary" class="sub">with the AI summary (uses your Claude credit)</label></div>
-    </div>
-    <div class="group"><span class="group-title">Live checks</span>
+    </section>
+    <section class="set-sec" id="set-stops" aria-labelledby="set-stops-t"><h3 id="set-stops-t">Stop-losses at Groww</h3>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-gtt" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-gtt" style="color:var(--ink)">Keep a GTT stop-loss at Groww for each live holding</label><div class="sub" id="f-gtt-note">A GTT SELL at the trailing stop, raised as the stop rises, never lowered, cancelled when sold. Only acts when GROWW_LIVE_ORDERS=true.</div></div></div>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-ddpi" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-ddpi" style="color:var(--ink)">I confirmed DDPI is active on my Groww demat account</label><div class="sub">Confirm in the Groww app that DDPI is active; without it automated sells are rejected. Groww's API cannot report this, so this is your own confirmation.</div></div></div>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-t1" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-t1" style="color:var(--ink)">Let live sells include T1 shares</label><div class="sub">Off (default): live sells use only free demat shares. T1 shares (bought yesterday) are a BTST sale with short-delivery and auction risk.</div></div></div>
+    </section>
+    <section class="set-sec" id="set-screener" aria-labelledby="set-screener-t"><h3 id="set-screener-t">Screener</h3>
+      <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-tv" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-tv" style="color:var(--ink)">Add TradingView columns to the screener (unofficial)</label><div class="sub" id="f-tv-note">Off by default. Turning it on lets the screener ask TradingView's public scanner for a few extra columns (its summary, sector, industry, EPS growth). TradingView has no official API for this and its terms restrict automated access, so you are choosing to use an unofficial endpoint. One request per list, at most every 15 minutes; if it ever refuses or fails it is left alone for 24 hours. No login, no cookies. Display only: it never feeds the agent, the emails or Claude, and it is never called from the server.</div></div></div>
+    </section>
+    <section class="set-sec" id="set-checks" aria-labelledby="set-checks-t"><h3 id="set-checks-t">Live checks</h3>
       <div class="field"><div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-integ" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-integ" style="color:var(--ink)">Check the live services every trading morning (08:30 IST)</label><div class="sub">Reads NSE, BSE, Yahoo, NSE's archive files and, with a login token Groww already gave out, your holdings and order list. It never places an order and never asks Groww for a new token. A failure sends one alert a day. Takes effect when the watch service restarts.</div></div></div>
         <div class="radio" style="border:none;padding:0"><input type="checkbox" id="f-integ-claude" style="width:20px;height:20px;min-height:20px;margin:0"><div><label for="f-integ-claude" style="color:var(--ink)">Include one tiny Claude call</label><div class="sub">A five-token "Reply OK" to Claude Haiku: costs a fraction of a paisa, off by default.</div></div></div></div>
       <div class="row"><button type="button" class="small" id="btn-integ">Run integration check</button><span class="sub" id="integ-note"></span></div>
       <div id="integ-steps" class="sub" style="display:flex;flex-direction:column;gap:2px;margin-top:6px"></div>
+    </section>
+    <div class="row set-foot"><button type="button" class="danger small" id="btn-reset">Forget seen deals</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
     </div>
-    <div class="group"><span class="group-title">Order mode</span>
-      <div class="radio"><input type="radio" name="auto_trade" value="false" id="m-reco"><div><label for="m-reco" style="font-size:15px;color:var(--ink)">Recommendations only</label><div class="sub">Claude explains what changed. Nothing is bought or sold.</div></div></div>
-      <div class="radio"><input type="radio" name="auto_trade" value="true" id="m-paper"><div><label for="m-paper" style="font-size:15px;color:var(--ink)">Paper trading</label><div class="sub">Claude places simulated orders, max 10% of equity each, whole shares.</div></div></div>
-      <div class="radio" style="opacity:.6"><input type="radio" disabled id="m-live"><div><label for="m-live" style="font-size:15px;color:var(--ink)">Live orders on Groww <span class="pill bad" style="margin-left:6px">REAL MONEY</span></label><div class="sub">Only via GROWW_LIVE_ORDERS=true in .env, never from here.</div></div></div>
-    </div>
-    <div class="group"><span class="group-title">Connections</span><div id="conns" style="display:flex;flex-direction:column"></div>
-      <div class="row"><button type="button" class="small" id="btn-groww-test">Test Groww connection</button><span class="sub" id="groww-test-result"></span></div></div>
-    <div class="row group" style="flex-direction:row"><button type="button" class="danger small" id="btn-reset">Forget seen deals</button><button type="submit" class="primary" style="margin-left:auto">Save changes</button></div>
+    <p class="sub" id="set-demo-note" hidden>The agent's own settings are on the Live page.</p>
   </form>
 </dialog>
 <dialog id="dg-dlg">
@@ -408,7 +415,10 @@
                                        : "Real deals, prices and recommendations. Practice orders only: never Groww, never your .env.";
     $("btn-demo-reset").textContent = SAMPLE ? "Reset demo" : "Reset to practice cash only";
     if(!SAMPLE){ $("btn-demo-reset-groww").hidden = false; $("mp-copy").hidden = false; }
-    if(!SAMPLE) [$("check-split"), $("btn-settings"), $("btn-watch")].forEach(el => { el.hidden = true; });  // these run the real agent
+    if(!SAMPLE){   // these run the real agent: Demo keeps only the Appearance part of Settings
+      $("check-split").hidden = true; $("set-live").hidden = true; $("set-demo-note").hidden = false;
+      document.querySelectorAll("[data-set-jump]").forEach(b => { b.hidden = b.dataset.setJump !== "set-appearance"; });
+    }
     let resetKind = "cash";
     const ask = (on) => { $("demo-confirm").hidden = !on; $("btn-demo-reset").hidden = on; $("btn-demo-reset-groww").hidden = on || SAMPLE; };
     const cashTxt = () => money(S && S.settings ? S.settings.paper_starting_cash : null);
@@ -757,7 +767,7 @@
   }
 
   function render(keepPositions){   // keepPositions: leave the positions table alone (a stop editor is open in it)
-    const s = S.settings, a = S.account, c = S.connections, w = S.watch || {};
+    const s = S.settings, a = S.account, c = S.connections;
     SAFE.paintStrip(SAFE.modeStrip(MODE, {liveOrders: S.live_orders === true, halt: S.halt, brake: S.day_brake}));
     $("subtitle").title = s.market === "in" ? "Groww · NSE bulk & block deals" : "Alpaca · QuiverQuant disclosures";
     const inv = investorsOf(s);
@@ -769,14 +779,12 @@
                    : '<span class="pill ok"><span class="dot"></span>Recommendations only</span>';
     $("pills").innerHTML = modePill + `<span class="pill">${esc(s.broker)}</span>`
       + (c.claude ? `<span class="pill" title="${esc(s.claude_model)}">Claude ready</span>` : '<span class="pill warn">No ANTHROPIC_API_KEY</span>')
-      + (w.on ? `<span class="pill ok">Watching every ${w.every}s${w.in_window?"":" (outside market window)"}</span>` : "")
       + (s.demo ? '<span class="pill warn">Demo data</span>' : '')
       + (S.market_day && !S.market_day.open ? `<span class="pill">NSE closed today${S.market_day.holiday ? ": " + esc(S.market_day.holiday) : " (weekend)"}</span>` : '')
       + (S.running ? `<span class="pill warn"><span class="dot"></span>${esc(S.running.label)} running…</span>` : "");
     const lastRun = S.runs[0];
     $("lastcheck").textContent = lastRun ? "Checked " + when(lastRun.at) : "No checks yet";
     $("subtitle-check").textContent = " · " + (lastRun ? "checked " + when(lastRun.at) : "no checks yet");   // phones show this in the one-row header
-    const wb = $("btn-watch"); wb.className = w.on ? "on" : ""; wb.querySelector("span").textContent = w.on ? `Stop watch (${w.ticks||0} ticks)` : "Start watch";
     renderRegime();
     if(MP && MODE !== "demo") renderMyPortfolio(MP);   // the Stop column follows the state answer
 
@@ -1388,10 +1396,6 @@
     try { await api("/api/regime?refresh=1"); await refresh(); toast("Global context refreshed"); } catch(e){ toast(e.message); }
     $("btn-regime").disabled = false;
   });
-  $("btn-watch").addEventListener("click", async () => {
-    try { const on = !(S.watch && S.watch.on); const every = Number($("f-every").value) || 60; const w = await api("/api/watch", {on, every, auto_exit: $("f-autoexit").checked}); toast(w.on ? `Watching deals, announcements and stops every ${w.every}s in market hours${w.auto_exit?" · auto-exit on":""}` : "Watch stopped"); await refresh(); }
-    catch(e){ toast(e.message); }
-  });
   $("bt-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target).entries());
@@ -1677,14 +1681,18 @@
 
   // settings dialog
   const conn = (ok, name, sub) => `<div class="conn"><span class="dot ${ok?"":"off"}"></span><div><div style="font-weight:600">${name}</div><div class="sub">${esc(sub)}</div></div></div>`;
+  $("dlg").addEventListener("click", (ev) => {   // the section chips scroll the dialog to that section
+    const b = ev.target.closest && ev.target.closest("[data-set-jump]"); if(!b) return;
+    const t = $(b.dataset.setJump); if(t && t.scrollIntoView) t.scrollIntoView({behavior: "smooth", block: "start"});
+  });
   $("btn-settings").addEventListener("click", () => {
+    if($("set-live").hidden || !S || !S.settings){ $("dlg").showModal(); return; }   // Demo: Appearance only
     const s = S.settings, c = S.connections;
     $("f-investors").value = investorsOf(s).join("\n");
     $("f-source").innerHTML = SOURCES[s.market].map(([v,l]) => `<option value="${v}" ${v===s.watch_source?"selected":""}>${l}</option>`).join("");
     $("f-email").value = s.notify_email_to; $("f-webhook").value = s.notify_webhook_url; $("f-tg-chat").value = ""; $("f-tg-chat").placeholder = s.telegram_chat_set ? "saved: leave blank to keep, type clear to remove" : "123456789 or @channel"; $("f-tg-on").checked = s.telegram_alerts !== false; $("f-tg-cmd").checked = !!s.telegram_commands; $("f-tg-token").value = ""; $("f-hb").value = ""; $("f-tg-token").placeholder = s.telegram_token_set ? "saved: leave blank to keep, type clear to remove" : "123456:ABC… from @BotFather"; $("f-hb").placeholder = s.heartbeat_set ? "saved: leave blank to keep, type clear to remove" : "https://hc-ping.com/…";
     (s.auto_trade ? $("m-paper") : $("m-reco")).checked = true;
     $("f-market").value = s.market; $("f-cash").value = s.paper_starting_cash;
-    $("f-every").value = (S.watch && S.watch.every) || 60; $("f-autoexit").checked = !!(S.watch && S.watch.auto_exit);
     $("f-gtt").checked = !!s.groww_gtt_stops; $("f-ddpi").checked = !!s.groww_ddpi_confirmed; $("f-t1").checked = !!s.groww_sell_t1; $("f-bse").checked = s.bse_deals !== false; $("f-flows").checked = s.flows_breadth !== false; $("f-bands").checked = s.price_band_filter !== false; $("f-asm").checked = s.asm_gsm_filter !== false; $("f-results").checked = s.results_blackout_filter !== false; $("f-pledge").checked = s.pledge_filter !== false; $("f-tv").checked = !!s.tradingview_screener; $("f-tv").disabled = s.tradingview_allowed === false; if(s.tradingview_allowed === false) $("f-tv-note").textContent = "Not available here: this copy is set as the server (TA_ROLE=server), which never calls TradingView.";
     $("f-dg-writer").value = s.digest_writer || "claude";
     $("f-dg-am").checked = !!s.digest_morning_on; $("f-dg-pm").checked = !!s.digest_evening_on; $("f-dg-bul").checked = s.digest_bulletin !== false; $("f-dg-chart").checked = s.digest_charts !== false; $("f-integ").checked = s.integration_check !== false; $("f-integ-claude").checked = !!s.integration_claude;
@@ -1720,7 +1728,6 @@
     try {
       const marketChanged = body.market !== S.settings.market;
       await api("/api/settings", body);
-      if(S.watch && S.watch.on && !marketChanged) await api("/api/watch", {on:true, every:Number($("f-every").value)||60, auto_exit:$("f-autoexit").checked});
       $("dlg").close(); toast(marketChanged ? "Saved; market switched" : "Saved to .env"); btKey = ""; await refresh(); } catch(e){ toast(e.message); }
   });
   $("btn-reset").addEventListener("click", async () => {

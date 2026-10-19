@@ -34,14 +34,13 @@ from .config import (DIGEST_WRITERS, Settings, load_settings, parse_digest_time,
 from .investors import classify_client
 from .quiver import DisclosedTrade, fetch_followed, filter_by_investors, followed_names
 from .momentum import MomentumScreen, momentum_summary
-from .groww import GrowwTokenUnavailable, warn_token_block_once
+from .groww import GrowwTokenUnavailable
 from .runner import (check, free_prices, make_broker, equity_key, make_data_source, make_notifier,
-                     make_practice_broker, read_groww_portfolio, cached_notifier)
+                     make_practice_broker, read_groww_portfolio)
 from . import safety
 from .state import STATE_LOCK, State
 from .stops import FILLS_KEY, PracticeStopChecker
-from .digest_schedule import build_digest, make_scheduler
-from .watch import Watcher
+from .digest_schedule import build_digest
 
 log = logging.getLogger(__name__)
 
@@ -169,7 +168,6 @@ class App:
         self.context = context  # GlobalContext or None
         self.prices = prices or free_prices(settings)
         self.momentum = MomentumScreen(self.prices)
-        self.watcher: Watcher | None = None
         self.last_backtest: dict[str, Any] | None = None
         self.last_screen: dict[str, Any] | None = None
         self.last_factor_bt: dict[str, Any] | None = None
@@ -510,8 +508,6 @@ class App:
             "now": _now(),
             "page": self.page,
             "regime": regime,
-            "watch": ({**self.watcher.status(), "auto_exit": self.watcher.auto_exit} if self.watcher
-                      else {"on": False, "every": 60, "auto_exit": False}),
             "orders": self.orders(),
             "forward": self.forward_summary(),
             "backtest": self.last_backtest,
@@ -1042,7 +1038,6 @@ class App:
             raise ValueError("Type HALT (in capitals) to stop all trading.")
         report = killswitch.engage(self.settings, by=by, cancel_gtt=bool(cancel_gtt),
                                    broker_fn=lambda: make_groww(self.settings, halt_ok=True),
-                                   stop_watch=lambda: self.watcher.stop() if self.watcher else None,
                                    notifier=make_notifier(self.settings))
         return {"ok": True, "report": report, "summary": killswitch.summary(report),
                 "halt": killswitch.status(self.settings.state_dir)}
@@ -1051,45 +1046,6 @@ class App:
         """Raise killswitch.Halted (403) while the kill switch is set."""
         from . import killswitch
         killswitch.refuse(self.settings.state_dir, what)
-
-    def set_watch(self, on: bool, every: int | None = None, auto_exit: bool | None = None) -> dict[str, Any]:
-        self._on_live_page("The watch controls the real agent")
-        if on:
-            self.halted("start the watch")
-            want_exit = self.settings.auto_trade if auto_exit is None else bool(auto_exit)
-            if (self.watcher is None or (every and every != self.watcher.every)
-                    or want_exit != self.watcher.auto_exit):
-                if self.watcher:
-                    self.watcher.stop()
-                try:
-                    wbroker = self.broker
-                except GrowwTokenUnavailable as e:  # live mode, Groww refusing a token: watch alerts-only for now
-                    warn_token_block_once(e, log)
-                    wbroker = None
-                notifier = make_notifier(self.settings)
-                self.watcher = Watcher(
-                    self.settings, every=every or 60, data=self.data, broker=wbroker,
-                    broker_factory=lambda: self.broker,
-                    notifier=notifier, prices=self.prices,
-                    auto_exit=want_exit, holidays=self.holidays,
-                    digest=make_scheduler(self.settings, cached_notifier(self.settings), data=self.data, prices=self.prices,
-                                          news=self.news, holidays=self.holidays,
-                                          practice=wbroker if isinstance(wbroker, LocalPaperBroker) else None,
-                                          groww=lambda: self.my_portfolio(), context=self.context),
-                    # No Claude key: compare deals only, instead of failing every tick.
-                    check_fn=lambda: check(self.settings, trades=self.deals(refresh=True), broker=self.broker,
-                                           data=self.data, notifier=make_notifier(self.settings),
-                                           momentum=self.momentum, context=self.context,
-                                           dry_run=not self.settings.anthropic_api_key),
-                )
-            self.watcher.start()
-        elif self.watcher:
-            self.watcher.stop()
-        if self.watcher:
-            st = self.watcher.status()
-            st["auto_exit"] = self.watcher.auto_exit
-            return st
-        return {"on": False, "every": every or 60, "auto_exit": bool(auto_exit)}
 
     def paper_order(self, symbol: str, side: str, notional: float | None = None,
                     qty: float | None = None, stop_type: str | None = None,
@@ -1560,9 +1516,6 @@ class App:
     def _switch_market(self, market: str) -> None:
         """Rebuild everything that depends on the market: data source, broker, prices."""
         s = self.settings
-        if self.watcher:
-            self.watcher.stop()
-            self.watcher = None
         self._settings_version += 1
         s.market = market
         s.data_source = "nse" if market == "in" else "quiver"
@@ -2357,9 +2310,6 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                                            quality=body.get("quality") in (True, "on", "true", 1),
                                            value=body.get("value") in (True, "on", "true", 1))
                     self._json(job.to_dict(), HTTPStatus.ACCEPTED)
-                elif path == "/api/watch":
-                    self._json(app.set_watch(bool(body.get("on")), int(body["every"]) if body.get("every") else None,
-                                             body.get("auto_exit")))
                 else:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             except PermissionError as e:

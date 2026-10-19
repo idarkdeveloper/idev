@@ -301,6 +301,24 @@
   .dialog-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 20px; }
   .group { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--color-divider); padding-top: 16px; }
   .group-title { font-weight: 700; color: var(--color-text); font-size: 14px; }
+  /* Settings: titled sections and a chip bar that stays at the top of the dialog while it scrolls */
+  #dlg .menu-status { padding: 0; }
+  .set-nav { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; position: sticky; top: 0; z-index: 2;
+             margin: -8px -24px 0; padding: 10px 24px; background: var(--color-surface); border-bottom: 1px solid var(--color-divider); }
+  .set-nav::-webkit-scrollbar { display: none; }
+  @media (min-width: 700px) { .set-nav { flex-wrap: wrap; overflow-x: visible; } }
+  .set-nav button { flex: 0 0 auto; min-height: 34px; padding: 0 12px; border-radius: 999px; font-size: 13px; font-weight: 500; }
+  .set-sec { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 64px; }
+  .set-sec + .set-sec, #set-live > .set-sec:first-child { border-top: 1px solid var(--color-divider); padding-top: 18px; }
+  .set-sec > h3 { margin: 0; font-family: var(--font-heading); font-size: 17px; font-weight: var(--font-heading-weight); }
+  .set-sec > .sub { margin: -6px 0 0; }
+  .set-sec .menu-row { padding: 4px 0; }
+  .field-label { font-size: 13px; color: var(--color-label); }
+  .set-group { display: flex; flex-direction: column; gap: 4px; }
+  #set-live { display: flex; flex-direction: column; gap: 20px; }
+  #set-live[hidden] { display: none; }
+  .set-foot { border-top: 1px solid var(--color-divider); padding-top: 16px; }
+  .set-foot button[type="submit"] { margin-left: auto; }
   .radio { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--color-divider); }
   .radio:last-child { border-bottom: none; }
   .radio label { color: var(--color-text); font-size: 14px; font-weight: 600; cursor: pointer; }
@@ -668,9 +686,8 @@ dialog.sp-drawer[open] { display: flex; flex-direction: column; animation: sp-po
 .hdr { max-width: 1600px; padding: 14px 24px; }
 .brand-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46ch; }
 #lastcheck { padding: 0 4px; }
-details.menu.more > summary { color: var(--color-text); border: 1px solid var(--color-divider); border-radius: var(--radius-md); width: 40px; padding: 0; justify-content: center; }
-details.menu.more > summary:hover { background: var(--color-hover); }
-details.menu.more .menu-pop { min-width: 320px; max-width: calc(100vw - 24px); z-index: 31; }
+button.set-btn { color: var(--color-text); border: 1px solid var(--color-divider); border-radius: var(--radius-md); width: 40px; padding: 0; justify-content: center; }
+button.set-btn:hover { background: var(--color-hover); }
 .menu-status { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px 8px; }
 .menu-status:empty { display: none; }
 .menu-sep { height: 1px; background: var(--color-divider); margin: 6px 4px; }
@@ -921,7 +938,7 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   /* the panel spans the screen (12 px margins) whichever side its button is on: the menu itself stops being the
      positioning box, so left/right are measured from the header/page, and top:auto keeps it just below the button */
   details.menu { position: static; }
-  details.menu .menu-pop, details.menu.more .menu-pop { left: 12px; right: 12px; top: auto; width: auto; min-width: 0; max-width: none; margin-top: 6px; }
+  details.menu .menu-pop { left: 12px; right: 12px; top: auto; width: auto; min-width: 0; max-width: none; margin-top: 6px; }
   .menu-row { flex-wrap: wrap; row-gap: 6px; }
   .ws-tabs { gap: 8px; }
   .ws-tabs button { padding: 0 14px; }
