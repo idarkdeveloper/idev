@@ -1158,8 +1158,8 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   .mp-table td[colspan] { grid-column: 1 / -1; }
   .mp-table td.num { white-space: nowrap; }
   .mp-table td.num::before, .mp-table td.prot-cell::before { display: block; font-size: 11px; font-weight: 400; color: var(--color-muted); letter-spacing: .04em; text-transform: uppercase; }
-  .mp-table td.num:nth-child(3)::before { content: "Price"; } .mp-table td.num:nth-child(4)::before { content: "Today"; }
-  .mp-table td.num:nth-child(5)::before { content: "Value"; } .mp-table td.num:nth-child(6)::before { content: "Profit / loss"; }
+  .mp-table td.num:nth-child(5)::before { content: "Price"; } .mp-table td.num:nth-child(6)::before { content: "Today"; }
+  .mp-table td.num:nth-child(7)::before { content: "Value"; } .mp-table td.num:nth-child(8)::before { content: "Profit / loss"; }
   .mp-table td.prot-cell { grid-column: 2 / -1; white-space: normal; } .mp-table td.prot-cell::before { content: "Stop"; }
   .mp-table td:empty:not(.spark-col) { display: none; }
   .mp-table tfoot td:first-child { grid-column: 1 / -1; }
@@ -1242,11 +1242,12 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #mp-card .mp-table tfoot td:first-child { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font-weight: 700; }
   #mp-card .mp-table tfoot td:first-child .sub { margin: 0; font-weight: 400; }
   #mp-card .mp-table tfoot td.num { display: block; grid-row: 2; white-space: nowrap; font-size: 15px; }
-  #mp-card .mp-table tfoot td:nth-child(4) { grid-column: 1; } #mp-card .mp-table tfoot td:nth-child(5) { grid-column: 2; } #mp-card .mp-table tfoot td:nth-child(6) { grid-column: 3; }
+  #mp-card .mp-table tfoot td:nth-child(6) { grid-column: 1; } #mp-card .mp-table tfoot td:nth-child(7) { grid-column: 2; } #mp-card .mp-table tfoot td:nth-child(8) { grid-column: 3; }
   #mp-card .mp-table tfoot td.num:empty::after { content: "\2013"; color: var(--color-muted); font-weight: 400; }
   #mp-card .mp-table tfoot td.num .l2 { font-size: 12.5px; font-weight: 500; }
   #mp-card .mp-table tfoot td:not(:first-child):empty { display: block; }
-  #mp-card .mp-table tfoot td:nth-child(2):empty, #mp-card .mp-table tfoot td:nth-child(3):empty, #mp-card .mp-table tfoot td:nth-child(7):empty { display: none; }
+  #mp-card .mp-table tfoot td:nth-child(2):empty, #mp-card .mp-table tfoot td:nth-child(5):empty, #mp-card .mp-table tfoot td:nth-child(9):empty, #mp-card .mp-table tfoot td.hold-col { display: none; }
+  .mp-table td.hold-col, #mp-card #mp-rows td.hold-col { display: none !important; }   /* the card shows "qty x avg" under the name instead */
 }
 /* Holdings rows on a phone, compact: symbol + tags and price on top, qty x avg and today under it, value and profit / loss, then the stop as a small chip.
    The micro-labels are visually hidden (screen readers still hear Price / Today / Value / Profit / loss / Stop). */
@@ -1261,19 +1262,19 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #mp-card #mp-rows td.spark-col { grid-column: 2; grid-row: 1; justify-self: end; width: 64px; height: 24px; }
   #mp-card #mp-rows td.spark-col svg { width: 64px; height: 24px; display: block; }
   #mp-card #mp-rows td.num { font-size: 13px; white-space: nowrap; }
-  #mp-card #mp-rows td.num:nth-child(3) { grid-column: 3; grid-row: 1; justify-self: end; font-family: var(--mono); font-size: 15px; font-weight: 600; }
-  #mp-card #mp-rows td.num:nth-child(4) { grid-column: 3; grid-row: 2; justify-self: end; font-size: 12px; }
-  #mp-card #mp-rows td.num:nth-child(5) { grid-column: 1; grid-row: 3; font-size: 13px; }
-  #mp-card #mp-rows td.num:nth-child(6) { grid-column: 2 / 4; grid-row: 3; justify-self: end; display: flex; gap: 6px; align-items: baseline; font-weight: 600; }
-  #mp-card #mp-rows td.num:nth-child(6) .l2 { font-size: 12px; font-weight: 500; }
+  #mp-card #mp-rows td.num:nth-child(5) { grid-column: 3; grid-row: 1; justify-self: end; font-family: var(--mono); font-size: 15px; font-weight: 600; }
+  #mp-card #mp-rows td.num:nth-child(6) { grid-column: 3; grid-row: 2; justify-self: end; font-size: 12px; }
+  #mp-card #mp-rows td.num:nth-child(7) { grid-column: 1; grid-row: 3; font-size: 13px; }
+  #mp-card #mp-rows td.num:nth-child(8) { grid-column: 2 / 4; grid-row: 3; justify-self: end; display: flex; gap: 6px; align-items: baseline; font-weight: 600; }
+  #mp-card #mp-rows td.num:nth-child(8) .l2 { font-size: 12px; font-weight: 500; }
   #mp-card #mp-rows td.prot-cell { grid-column: 1 / -1; grid-row: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 12px; }
   #mp-card #mp-rows td.prot-cell .stop-state { display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border: 1px solid var(--color-divider); border-radius: 999px; font-size: 11.5px; line-height: 18px; color: var(--color-muted); }
   #mp-card #mp-rows td.prot-cell .sub.l2 { font-size: 11.5px; }
   #mp-card #mp-rows td.prot-cell .stop-warn { flex: 1 1 100%; }
   /* labels: Today and Value stay as small lowercase words, the rest are for screen readers only */
   #mp-card #mp-rows td.num::before, #mp-card #mp-rows td.prot-cell::before { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); text-transform: none; }
-  #mp-card #mp-rows td.num:nth-child(4)::before, #mp-card #mp-rows td.num:nth-child(5)::before { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; display: inline; font-size: 12px; color: var(--color-muted); letter-spacing: 0; text-transform: none; margin-right: 4px; }
-  #mp-card #mp-rows td.num:nth-child(4)::before { content: "Today"; } #mp-card #mp-rows td.num:nth-child(5)::before { content: "Value"; }
+  #mp-card #mp-rows td.num:nth-child(6)::before, #mp-card #mp-rows td.num:nth-child(7)::before { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; display: inline; font-size: 12px; color: var(--color-muted); letter-spacing: 0; text-transform: none; margin-right: 4px; }
+  #mp-card #mp-rows td.num:nth-child(6)::before { content: "Today"; } #mp-card #mp-rows td.num:nth-child(7)::before { content: "Value"; }
 }
 /* Monte Carlo stress test: the loss-limit box stays narrow at every width */
 .mc-limit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
@@ -1316,9 +1317,9 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #mp-card #mp-rows .stock-cell > .l2 { grid-column: 1; grid-row: 3; }
   #mp-card #mp-rows td.spark-col { grid-column: 2; grid-row: 3; justify-self: center; width: 88px; height: 28px; }
   #mp-card #mp-rows td.spark-col svg { width: 88px; height: 28px; max-width: 100%; }
-  #mp-card #mp-rows td.num:nth-child(4) { grid-row: 3; }
-  #mp-card #mp-rows td.num:nth-child(5) { grid-row: 4; }
-  #mp-card #mp-rows td.num:nth-child(6) { grid-row: 4; }
+  #mp-card #mp-rows td.num:nth-child(6) { grid-row: 3; }
+  #mp-card #mp-rows td.num:nth-child(7) { grid-row: 4; }
+  #mp-card #mp-rows td.num:nth-child(8) { grid-row: 4; }
   #mp-card #mp-rows td.prot-cell { grid-row: 5; }
   #mp-card #mp-rows .stock-cell > div:not(.sym-line):not(.l2):not(.hname) { grid-row: 6; }
 }
@@ -1327,3 +1328,9 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   .hdr #btn-palette > span, .hdr #btn-palette > kbd { display: none; }
 }
 @media (max-width: 700px) { #mp-card #mp-rows .stock-cell > .hname { max-width: none; } }
+/* Holdings table: quantity and the average buy price get their own columns above phone width; the phone card keeps "N x Rs avg" under the name. */
+.mp-table td.hold-col, .mp-table th.hold-col { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.mp-table .hold-l2 { display: none; }
+@media (max-width: 700px) { .mp-table .hold-l2 { display: inline; } }
+.sp-hold + .sp-hold { margin-top: 10px; }
+.sp-own { margin: 0 0 8px; font-size: 14px; }
