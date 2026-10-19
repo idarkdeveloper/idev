@@ -1676,7 +1676,9 @@
     source: "Yahoo, delayed", today: () => new Date().toLocaleDateString("en-CA", {timeZone: "Asia/Kolkata"}),
     onPrice: (p) => { tkPrice = p; $("tk-limit").placeholder = p != null ? "Limit price, now " + p.toFixed(2) : "Limit price"; } });
   $("tk-symbol").addEventListener("input", () => tkPx.update($("tk-symbol").value));
-  attachSuggest(["lk-ticker", "sz-ticker", "tk-symbol"], (input, s) => { if(input.id === "lk-ticker") checkStock(s); else { if(input.id === "tk-symbol") tkPx.update(s, true); input.focus(); } });
+  attachSuggest(["lk-ticker", "sz-ticker", "tk-symbol"], (input, s) => { if(input.id === "lk-ticker") checkStock(s); else { if(input.id === "tk-symbol") tkPx.update(s, true); input.focus(); } },
+    {market: (input) => input.id === "lk-ticker" ? $("lk-market").value : ""});   // US/UK/Japan suggestions in the look-up box only
+  $("lk-market").addEventListener("change", () => { const i = $("lk-ticker"); if(i.value.trim().length > 1){ i.focus(); i.dispatchEvent(new Event("input")); } });   // fresh suggestions for the new market
 
   // ---- Look up card (a summary with the agent's checklist) and the stock's full view: stockpage.js in a modal ----
   // Opening a stock anywhere (a ticker, a table row, the palette, ?stock=SYM) shows the full view; on a phone it is full screen.

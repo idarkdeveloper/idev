@@ -259,3 +259,23 @@ def test_the_look_up_card_says_what_it_matched_and_how_to_find_a_missing_stock(s
     assert r["ticker"] == "ZZZQ.US" and "No United States stock found for ZZZQ.US" in r["momentum_summary"]
     index = (UI / "index.html").read_text(encoding="utf-8")
     assert index.count('Matched "${esc(r.matched_from)}" to ${esc(sym)}') == 2
+
+
+def test_the_look_up_box_suggests_the_chosen_markets_stocks(server):  # noqa: F811
+    base, app = server
+    _, nse = _get(base + "/api/search?q=tes")
+    assert isinstance(nse, list)                                 # India: NSE names, as before (no Yahoo call)
+    y = FakeYahoo()
+    _live(app, y)
+    _, hits = _get(base + "/api/search?q=tesla&market=US")
+    assert hits == [{"symbol": "TSLA.US", "name": "Tesla, Inc. · NASDAQ"},
+                    {"symbol": "TSLT.US", "name": "T-REX 2X Long Tesla Daily Target ETF · BATS"}]
+    _get(base + "/api/search?q=TESLA.US&market=us")              # the suffix is dropped; the same search is reused
+    assert y.searched == ["TESLA"]
+    y.quotes = ConnectionError("down")
+    _, hits = _get(base + "/api/search?q=sony&market=JP")
+    assert hits == []
+    common = (UI / "common.js").read_text(encoding="utf-8")
+    index = (UI / "index.html").read_text(encoding="utf-8")
+    assert '"&market=" + mkt' in common and "No matching ${MKT_NAME[marketOf(sugFor)]" in common
+    assert '{market: (input) => input.id === "lk-ticker" ? $("lk-market").value : ""}' in index

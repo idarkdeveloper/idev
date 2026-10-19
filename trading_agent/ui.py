@@ -772,9 +772,38 @@ class App:
         except Exception as e:  # noqa: BLE001 - headlines are a nicety
             return {"items": [], "errors": [f"{type(e).__name__}: {e}"], "tagger": "none", "ticker": ticker.upper()}
 
-    def search(self, query: str, limit: int = 8) -> list[dict[str, Any]]:
+    def search(self, query: str, limit: int = 8, market: str | None = None) -> list[dict[str, Any]]:
+        """Suggestions under a ticker box: NSE company names, or (``market`` US/UK/JP) Yahoo's stocks and ETFs listed
+        there, as [{"symbol", "name"}]. Foreign results are kept for ten minutes; the offline demo has none."""
+        from .markets import MARKETS
+        mk = str(market or "").upper()
+        if mk in MARKETS:
+            return self._foreign_search(query, mk, limit)
         n = self.names
         return n.search(query, limit) if n is not None else []
+
+    def _foreign_search(self, query: str, market: str, limit: int) -> list[dict[str, Any]]:
+        from .markets import MARKETS, search_matches
+        text = query.strip().upper()
+        suffix = MARKETS[market]["suffix"]
+        text = text[: -len(suffix)] if text.endswith(suffix) else text
+        if len(text) < 1 or (self.demo_trades is not None and self._parent is None):
+            return []
+        cache = self.__dict__.setdefault("_foreign_searches", {})
+        key = (market, text)
+        hit = cache.get(key)
+        if hit and time.time() - hit[0] < 600:
+            return hit[1]
+        try:
+            found = search_matches(self.quote_service.provider.search(text), market)
+        except Exception:  # noqa: BLE001 - suggestions are a nicety
+            return []
+        out = [{"symbol": f["ticker"], "name": " · ".join(x for x in (f["name"], f["exchange"]) if x)}
+               for f in found[:limit]]
+        if len(cache) > 500:
+            cache.clear()
+        cache[key] = (time.time(), out)
+        return out
 
     def resolve(self, text: str) -> tuple[str, str | None]:
         """A ticker, or a company name a person typed, to (ticker, company name). A foreign ticker (AAPL.US, VOD.L,
@@ -2346,8 +2375,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.context.fetch(force=force) if app.context else {"error": "not configured"})
             elif path == "/api/search":
                 from urllib.parse import parse_qs
-                text = (parse_qs(urlparse(self.path).query).get("q") or [""])[0]
-                self._json(app.search(text))
+                qs = parse_qs(urlparse(self.path).query)
+                text = (qs.get("q") or [""])[0][:MAX_LOOKUP_CHARS]
+                self._json(app.search(text, market=(qs.get("market") or [""])[0]))
             elif path == "/api/lookup":
                 from urllib.parse import parse_qs
                 ticker = (parse_qs(urlparse(self.path).query).get("ticker") or [""])[0].strip()

@@ -273,7 +273,10 @@ window.TA = (function(){
   }
 
   // ---- company suggestions under ticker boxes: Up/Down move, Enter picks, Esc closes ----
-  function attachSuggest(ids, onPick){
+  // opts.market(input): "US", "UK" or "JP" to suggest that market's stocks (Yahoo) instead of NSE companies.
+  function attachSuggest(ids, onPick, opts){
+    const marketOf = (input) => { const m = opts && opts.market ? String(opts.market(input) || "") : ""; return m === "IN" ? "" : m; };
+    const MKT_NAME = {US: "US", UK: "UK", JP: "Japanese"};
     const sug = $("suggest"), sugCache = new Map();
     let sugFor = null, sugItems = [], sugActive = -1, sugTimer = null, sugSeq = 0;
     const hl = (text, q) => {
@@ -296,9 +299,9 @@ window.TA = (function(){
     function renderSuggest(q){
       if(!sugFor) return;
       sug.innerHTML = sugItems.length
-        ? sugItems.map((h, i) => `<div class="opt" role="option" id="sug-${i}" data-i="${i}" aria-selected="${i === sugActive}"><span class="sym">${hl(h.symbol, q)}</span><span class="nm">${hl(h.name, q)}</span></div>`).join("")
+        ? sugItems.map((h, i) => `<div class="opt" role="option" id="sug-${i}" data-i="${i}" aria-selected="${i === sugActive}"><span class="sym">${hl(h.symbol, q)}</span><span class="nm">${hl(h.name || "", q)}</span></div>`).join("")
           + `<div class="hint">↑ ↓ to move · Enter to choose · Esc to close</div>`
-        : `<div class="none">No matching companies on NSE</div>`;
+        : `<div class="none">${marketOf(sugFor) ? `No matching ${MKT_NAME[marketOf(sugFor)] || esc(marketOf(sugFor))} stocks` : "No matching companies on NSE"}</div>`;
       sug.classList.add("open"); placeSuggest();
       sugFor.setAttribute("aria-expanded", "true");
       if(sugActive >= 0){ sugFor.setAttribute("aria-activedescendant", "sug-" + sugActive); $("sug-" + sugActive).scrollIntoView({block: "nearest"}); }
@@ -317,9 +320,10 @@ window.TA = (function(){
     }
     async function fetchSuggest(q){
       const seq = ++sugSeq;
-      let hits = sugCache.get(q.toLowerCase());
+      const mkt = marketOf(sugFor), key = mkt + "|" + q.toLowerCase();
+      let hits = sugCache.get(key);
       if(!hits){
-        try { hits = await api("/api/search?q=" + encodeURIComponent(q)); sugCache.set(q.toLowerCase(), hits); }
+        try { hits = await api("/api/search?q=" + encodeURIComponent(q) + (mkt ? "&market=" + mkt : "")); if(!Array.isArray(hits)) hits = []; sugCache.set(key, hits); }
         catch(e){ hits = []; }
       }
       if(seq !== sugSeq || !sugFor || sugFor.value.trim() !== q) return;  // a newer keystroke won
@@ -333,7 +337,7 @@ window.TA = (function(){
         sugFor = input; const q = input.value.trim();
         clearTimeout(sugTimer);
         if(q.length < 2){ closeSuggest(); return; }
-        sugTimer = setTimeout(() => fetchSuggest(q), 150);
+        sugTimer = setTimeout(() => fetchSuggest(q), marketOf(input) ? 300 : 150);   // Yahoo: wait for a pause
       });
       input.addEventListener("keydown", (ev) => {
         if(sugFor !== input || !sug.classList.contains("open")) return;
