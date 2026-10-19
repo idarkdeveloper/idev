@@ -205,6 +205,7 @@ class App:
         self._stops: PracticeStopChecker | None = None  # the practice stop checker (see ensure_stop_checker)
         self._preview_lock = threading.Lock()  # one email preview at a time
         self._lazy_lock = threading.RLock()  # one lock builds both the broker and the practice account
+        self._limit_book: Any = None         # practice limit orders (see limit_book)
         self.clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)  # tests replace it (financial year)
 
     @property
@@ -509,6 +510,7 @@ class App:
             "page": self.page,
             "regime": regime,
             "orders": self.orders(),
+            "limit_orders": self.limit_orders(),
             "forward": self.forward_summary(),
             "backtest": self.last_backtest,
             "screen": self.last_screen,
@@ -1033,9 +1035,31 @@ class App:
         from . import killswitch
         killswitch.refuse(self.settings.state_dir, what)
 
+    @property
+    def limit_book(self) -> Any:
+        """The practice account's waiting limit orders (practice_limits.LimitBook), one per dashboard."""
+        from .practice_limits import LimitBook
+        root = self._parent or self
+        with root._lazy_lock:
+            if root._limit_book is None:
+                root._limit_book = LimitBook(root.settings.state_dir, now_fn=root._now_dt)
+            return root._limit_book
+
+    def limit_orders(self) -> list[dict[str, Any]]:
+        """Open practice limit orders and the latest closed ones, for the Demo page (none on Live)."""
+        if self.demo_trades is None and self._parent is None:
+            return []
+        return cast(list[dict[str, Any]], self.limit_book.orders())
+
+    def cancel_limit_order(self, order_id: str) -> dict[str, Any]:
+        if self.demo_trades is None and self._parent is None:
+            raise PermissionError("practice orders are on the Demo page")
+        return cast(dict[str, Any], self.limit_book.cancel(order_id))
+
     def paper_order(self, symbol: str, side: str, notional: float | None = None,
                     qty: float | None = None, stop_type: str | None = None,
-                    stop_value: float | None = None, override_filters: bool = False) -> dict[str, Any]:
+                    stop_value: float | None = None, override_filters: bool = False,
+                    limit_price: Any = None, validity: str = "day") -> dict[str, Any]:
         if self.demo_trades is None and self._parent is None:
             raise PermissionError("practice orders are placed on the Demo page")
         if not self.paper_only:
@@ -1061,6 +1085,22 @@ class App:
                     raise FilterWarning(held + ". The agent would not buy it; place the practice buy anyway?")
             self._check_topup_percent_stop(symbol, stop, qty, notional)
         broker = cast(LocalPaperBroker, self.broker)  # paper_only (checked above): the simulator, which takes a stop
+        if limit_price not in (None, ""):
+            from .practice_limits import marketable
+            try:
+                lim = float(limit_price)
+            except (TypeError, ValueError):
+                raise ValueError("enter a limit price") from None
+            q = float(qty) if qty not in (None, "", 0, "0") else None
+            n = float(notional) if q is None and notional not in (None, "", 0, "0") else None
+            price = broker.latest_price(symbol)
+            if side == "sell" and not any(p.symbol == symbol for p in broker.positions()):
+                raise ValueError(f"the practice account holds no {symbol} to sell")
+            if not (price and price > 0 and marketable(side, price, lim)):
+                # not there yet: it waits, and the practice checker fills it when the price reaches the limit
+                waiting = self.limit_book.add(symbol, side, lim, qty=q, notional=n, validity=validity, stop=stop)
+                return {**waiting, "pending": True, "last_price": price}
+            # already at or better than the limit: fills now at the latest price, like a real limit order
         if qty not in (None, "", 0, "0"):
             order = broker.submit_order(symbol, side, qty=float(qty), stop=stop)
         elif notional in (None, "", 0, "0"):
@@ -1126,7 +1166,7 @@ class App:
                     lambda: root.practice_broker, root.settings.state_dir / "state.json",
                     bars_fn=lambda sym: root.prices.history(sym, "1y") if not root.demo_trades else [],
                     holidays=root.holidays, after_fill=lambda: root.demo._record_equity(),
-                    enabled_fn=lambda: root.settings.market == "in")
+                    enabled_fn=lambda: root.settings.market == "in", limits=root.limit_book)
             if root._stops is not None:
                 root._stops.start()
             return root._stops
@@ -2247,8 +2287,12 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     order = app.paper_order(body.get("symbol", ""), body.get("side", "buy"),
                                             body.get("notional"), body.get("qty"),
                                             body.get("stop_type"), body.get("stop_value"),
-                                            override_filters=body.get("override_filters") is True)
+                                            override_filters=body.get("override_filters") is True,
+                                            limit_price=body.get("limit_price"),
+                                            validity=str(body.get("validity") or "day"))
                     self._json({"ok": True, "order": order})
+                elif path == "/api/order/cancel":
+                    self._json({"ok": True, "order": app.cancel_limit_order(str(body.get("id", "")))})
                 elif path == "/api/stop":
                     self._json({"ok": True, "stop": app.set_stop(str(body.get("symbol", "")), body.get("type") or "",
                                                                   body.get("value"))})

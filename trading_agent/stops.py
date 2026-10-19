@@ -44,7 +44,7 @@ class PracticeStopChecker:
     def __init__(self, broker_fn: Callable[[], Any], state_path: Path, *, bars_fn: Callable[[str], Any] | None = None,
                  holidays: Any | None = None, every: int = 60, tz: tzinfo = IST,
                  now_fn: Callable[[], datetime] | None = None, after_fill: Callable[[], Any] | None = None,
-                 enabled_fn: Callable[[], bool] | None = None):
+                 enabled_fn: Callable[[], bool] | None = None, limits: Any | None = None):
         self._broker_fn = broker_fn  # called each tick, so the practice account is opened lazily
         self.state_path = Path(state_path)
         self._bars_fn = bars_fn
@@ -54,6 +54,8 @@ class PracticeStopChecker:
         self._now_fn = now_fn
         self._after_fill = after_fill
         self._enabled_fn = enabled_fn  # read every tick: e.g. the dashboard's market is still India
+        self._limits = limits          # practice_limits.LimitBook: waiting limit orders, filled here each minute
+        self.limit_fills: list[dict[str, Any]] = []   # the last tick's limit fills (for tests and the log)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.last_error: str | None = None
@@ -88,6 +90,12 @@ class PracticeStopChecker:
         except Exception as e:  # noqa: BLE001
             log.warning("corporate-action normaliser unavailable: %s", e)
         n = (now or datetime.now(self.tz))
+        self.limit_fills = []
+        if self._limits is not None:   # waiting practice limit orders first, so a filled buy gets its stop below
+            try:
+                self.limit_fills = self._limits.sweep(broker, n)
+            except Exception as e:  # noqa: BLE001 - the stops below must still be checked
+                log.warning("practice limit orders unavailable: %s", e)
         fills: list[dict[str, Any]] = []
         for p in broker.positions():
             if p.current_price is None:
@@ -113,7 +121,7 @@ class PracticeStopChecker:
             if order is None:
                 continue
             fills.append(record_stop_fill(self.state_path, order, stop))
-        if fills and self._after_fill is not None:
+        if (fills or self.limit_fills) and self._after_fill is not None:
             try:
                 self._after_fill()
             except Exception as e:  # noqa: BLE001

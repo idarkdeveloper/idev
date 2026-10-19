@@ -186,6 +186,13 @@ GTT smart orders) refuses with `LiveOrdersDisabled` before touching the network 
   on every watch tick, after a live sell, and with `python -m trading_agent gtt --sync`.
   The dashboard has the toggle in Settings and shows each holding's GTT status. The
   toggle does nothing unless `GROWW_LIVE_ORDERS=true`, which the dashboard cannot set.
+- **Practice limit orders (Demo page, practice money).** The order box has *Price: Market* (fills now at
+  the latest price) or *Limit*: a buy fills only at your limit or lower, a sell only at your limit or higher, at
+  the latest price. If the price is not there yet the order waits in `state/practice_limits.json`, *today only*
+  (expires at 15:30 IST) or *until cancelled*, and the same practice checker below fills it during market hours
+  (never while the kill switch is on). *Waiting orders* under the order box lists them with a Cancel button; an
+  order that cannot fill (not enough cash, nothing to sell) keeps waiting and shows why. The buy filters run when
+  you place it. Practice only: nothing goes to Groww.
 - **Practice stop-loss (Demo page, practice money).** Each practice position has its own
   stop: *trailing* (the default: the tighter of 3× ATR or 15% below the highest price since
   you bought), *fixed* (a price), *% below buy* (0.5 to 50% under your average buy price) or

@@ -110,6 +110,13 @@
           <span class="sub">or</span>
           <input id="tk-qty" name="qty" type="number" min="0" step="any" placeholder="Shares" style="flex:1 1 100px">
         </div>
+        <div class="row" id="tk-price-row">
+          <span class="sub">Price</span>
+          <div class="seg" role="group" aria-label="Price type"><button type="button" class="on" data-ptype="market" aria-pressed="true">Market</button><button type="button" data-ptype="limit" aria-pressed="false">Limit</button></div>
+          <label for="tk-limit" class="sub" hidden id="tk-limit-label">Limit price</label>
+          <input id="tk-limit" type="number" min="0" step="0.05" placeholder="Limit price" style="flex:0 1 140px" hidden>
+          <select id="tk-validity" aria-label="Order valid" hidden><option value="day">Today only</option><option value="gtc">Until cancelled</option></select>
+        </div>
         <div class="row" id="tk-stop-row">
           <label for="tk-stop" class="sub">Stop-loss</label>
           <select id="tk-stop" name="stop_type">
@@ -126,6 +133,10 @@
           <span class="sub" id="tk-note">Fills at the latest price, charges deducted. Never touches your real Groww account.</span>
         </div>
       </form>
+      <div class="cardbody" id="lo-box" style="border-top:1px solid var(--line)" hidden>
+        <div class="row" style="justify-content:space-between"><h3>Waiting orders</h3><span class="sub">Checked every minute in market hours while the dashboard runs</span></div>
+        <div class="scroll"><table><thead><tr><th>Stock</th><th>Side</th><th class="num">Limit</th><th class="num">Size</th><th>Valid</th><th>Status</th><th></th></tr></thead><tbody id="lo-rows"></tbody></table></div>
+      </div>
     </div>
 
     <section class="card" id="fw-card" data-anchor="forward">
@@ -797,7 +808,7 @@
 
     if(MODE === "demo"){
     $("pricesrc").textContent = c.prices === "groww" ? "practice money, separate from Groww · live prices from Groww" : "practice money · prices via Yahoo Finance, delayed";
-    renderPaperStats(a, perf);
+    renderPaperStats(a, perf); renderLimitOrders();
     renderPracticeTax();
     noticeStopFills();
     const plTone = v => v == null ? "" : v > 0 ? "pl-profit" : v < 0 ? "pl-loss" : "";
@@ -1395,6 +1406,30 @@
   });
   let side = "buy";
   document.querySelectorAll("[data-side]").forEach(b => b.addEventListener("click", () => { side = b.dataset.side; document.querySelectorAll("[data-side]").forEach(x => x.classList.toggle("on", x === b)); $("tk-submit").textContent = `Place paper ${side}`; }));
+  let ptype = "market";   // Market fills now at the latest price; Limit waits until the price reaches your limit
+  const TK_NOTE_MARKET = "Fills at the latest price, charges deducted. Never touches your real Groww account.";
+  function paintPtype(){
+    document.querySelectorAll("[data-ptype]").forEach(b => { const on = b.dataset.ptype === ptype; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); });
+    const lim = ptype === "limit";
+    $("tk-limit").hidden = $("tk-limit-label").hidden = $("tk-validity").hidden = !lim;
+    $("tk-note").textContent = lim ? (side === "buy" ? "Buys only at your limit or lower. If the price is higher now, the order waits and is checked every minute in market hours." : "Sells only at your limit or higher. If the price is lower now, the order waits and is checked every minute in market hours.") : TK_NOTE_MARKET;
+  }
+  document.querySelectorAll("[data-ptype]").forEach(b => b.addEventListener("click", () => { ptype = b.dataset.ptype; paintPtype(); if(ptype === "limit") $("tk-limit").focus(); }));
+  document.querySelectorAll("[data-side]").forEach(b => b.addEventListener("click", () => paintPtype()));
+  function renderLimitOrders(){
+    const rows = (S && S.limit_orders) || [], box = $("lo-box"); if(!box) return;
+    box.hidden = !rows.length;
+    const size = (o) => o.qty != null ? `${o.qty} sh` : money(o.notional);
+    const status = (o) => o.status === "open" ? (o.note ? `<span class="pill warn" title="${esc(o.note)}">waiting · ${esc(o.note)}</span>` : '<span class="pill">waiting</span>')
+      : o.status === "filled" ? `<span class="pill ok">filled ${o.fill_qty != null ? esc(String(o.fill_qty)) + " @ " + money(o.fill_price, 2) : ""}</span>` : `<span class="pill">${esc(o.status)}</span>`;
+    $("lo-rows").innerHTML = rows.map(o => `<tr><td><a href="#" data-lookup="${esc(o.symbol)}">${esc(o.symbol)}</a></td><td>${esc(o.side)}</td><td class="num">${money(o.limit, 2)}</td><td class="num">${size(o)}</td><td>${o.validity === "gtc" ? "until cancelled" : "today"}</td><td>${status(o)}</td><td>${o.status === "open" ? `<button type="button" class="small" data-lo-cancel="${esc(o.id)}">Cancel</button>` : ""}</td></tr>`).join("");
+  }
+  $("lo-rows").addEventListener("click", async (ev) => {
+    const b = ev.target.closest && ev.target.closest("[data-lo-cancel]"); if(!b) return;
+    b.disabled = true;
+    try { await api("/api/order/cancel", {id: b.dataset.loCancel}); toast("Practice order cancelled"); await refresh(); }
+    catch(e){ toast(e.message); b.disabled = false; }
+  });
   let tkStopTouched = false;   // a held stock keeps its stop unless the select was changed
   function showStopValue(){
     const t = $("tk-stop").value, needs = t === "fixed" || t === "percent";
@@ -1417,6 +1452,11 @@
     if(!sym){ toast("Enter a ticker"); return; }
     if(!qty && !amt){ toast("Enter an amount or a number of shares"); return; }
     const body = {symbol:sym, side, notional: amt ? Number(amt) : null, qty: qty ? Number(qty) : null};
+    if(ptype === "limit"){
+      const lim = Number($("tk-limit").value);
+      if(!(lim > 0)){ toast("Enter your limit price"); return; }
+      body.limit_price = lim; body.validity = $("tk-validity").value;
+    }
     if(side === "buy" && tkStopTouched){
       body.stop_type = $("tk-stop").value;
       if(body.stop_type === "fixed" || body.stop_type === "percent"){
@@ -1424,8 +1464,11 @@
         body.stop_value = Number($("tk-stop-value").value);
       }
     }
-    if(!confirm(`Paper ${side} ${sym} ${qty ? qty + " shares" : "for " + money(Number(amt))}?`)) return;
-    try { const j = await placePracticeOrder(body); toast(`Filled ${j.order.qty} ${sym} @ ${money(j.order.filled_avg_price,2)}, charges ${money(j.order.fees||0,2)}`); $("tk-qty").value=""; $("tk-amount").value=""; tkStopTouched = false; $("tk-stop").value = "trailing"; $("tk-stop-value").value = ""; showStopValue(); await refresh(); }
+    const at = body.limit_price ? ` at ${money(body.limit_price, 2)} or ${side === "buy" ? "lower" : "higher"} (${body.validity === "gtc" ? "until cancelled" : "today only"})` : " at the market price";
+    if(!confirm(`Paper ${side} ${sym} ${qty ? qty + " shares" : "for " + money(Number(amt))}${at}?`)) return;
+    try { const j = await placePracticeOrder(body);
+      if(j.order && j.order.pending){ toast(`Order waiting: ${side} ${sym} at ${money(j.order.limit,2)} or ${side === "buy" ? "lower" : "higher"}${j.order.last_price ? " (now " + money(j.order.last_price,2) + ")" : ""}`); $("tk-qty").value=""; $("tk-amount").value=""; $("tk-limit").value=""; await refresh(); return; }
+      toast(`Filled ${j.order.qty} ${sym} @ ${money(j.order.filled_avg_price,2)}, charges ${money(j.order.fees||0,2)}`); $("tk-qty").value=""; $("tk-amount").value=""; tkStopTouched = false; $("tk-stop").value = "trailing"; $("tk-stop-value").value = ""; showStopValue(); await refresh(); }
     catch(e){ toast(e.message); }
   });
   $("tk-size").addEventListener("click", async () => {
