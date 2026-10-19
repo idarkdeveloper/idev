@@ -1568,3 +1568,10 @@ def test_vendored_chart_library_is_served_with_a_pinned_hash(settings):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_holding_rows_carry_the_company_name_only_when_known():
+    ui = Path(__file__).resolve().parents[1] / "trading_agent" / "ui"
+    html = (ui / "index.html").read_text(encoding="utf-8")
+    assert 'h.name ? `<div class="sub hname"' in html            # nothing is shown for a holding without a name
+    assert ".hname { display: none; }" in (ui / "nocturne.css").read_text(encoding="utf-8")   # phones only
