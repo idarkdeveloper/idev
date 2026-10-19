@@ -230,6 +230,11 @@ def trading_days_ahead(start: date, n: int, cal: Any) -> date:
     return d
 
 
+def age_in_trading_days(listed: date, today: date, cal: Any) -> int:
+    """Trading days after ``listed`` up to ``today`` (the age the freshness limits are counted in)."""
+    return sum(1 for i in range(1, (today - listed).days + 1) if _trading(listed + timedelta(days=i), cal))
+
+
 class FilterBook:
     """The stored lists and the rules over them. ``now_fn`` and ``calendar`` are for tests."""
 
@@ -449,7 +454,7 @@ class FilterBook:
         except ValueError:
             return None
         today = self._today()
-        age = sum(1 for i in range(1, (today - listed).days + 1) if _trading(listed + timedelta(days=i), self.calendar))
+        age = age_in_trading_days(listed, today, self.calendar)
         return None if age > MAX_AGE_BY_PART.get(part, MAX_AGE_TRADING_DAYS) else block["symbols"]
 
     def unavailable(self) -> list[str]:
