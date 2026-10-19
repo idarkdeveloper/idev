@@ -149,6 +149,26 @@
     show("News", newsHtml(d) + (hasTTS() ? "" : `<p class="sub">This browser cannot read aloud.</p>`), {reading: ok});
     if(ok && speak(d.speech_parts && d.speech_parts.length ? d.speech_parts : d.speech)) setState("Reading…");
   }
+  // Your own figures: the sentence and the facts come from the server (fixed templates over the dashboard's numbers); this only
+  // shows them and reads the sentence aloud. The Replay and Screener pages have no portfolio, so they point to the Live page.
+  const sentences = (t) => String(t || "").replace(/([.!?])\s+/g, "$1\n").split("\n").map(x => x.trim()).filter(Boolean);
+  function factsHtml(facts){
+    const rows = (facts || []).filter(f => f && f.label != null).map(f => `<div class="ask-fact" role="row"><span class="ask-fk" role="rowheader">${esc(f.label)}</span><span class="ask-fv num ${f.tone === "pos" ? "pl-profit" : f.tone === "neg" ? "pl-loss" : ""}" role="cell">${esc(f.value)}</span></div>`).join("");
+    return rows ? `<div class="ask-facts" role="table" aria-label="Figures">${rows}</div>` : "";
+  }
+  function portfolio(r, host, mode){
+    if(mode !== "live" && mode !== "demo"){
+      show("Your portfolio", `<p>Open the Live page for your portfolio.</p><p><a class="btn small ask-link" href="/">Open the Live page</a></p>`, {autoHide: 15000});
+      return;
+    }
+    const ok = hasTTS() && r.say;
+    show(mode === "demo" ? "Practice account" : "Your portfolio", `<p>${esc(r.say)}</p>` + factsHtml(r.facts) + `<p class="ask-state sub" role="status"></p>`, {reading: ok});
+    if(ok && speak(sentences(r.say))) setState("Reading…");
+    if(r.args && r.args.open){
+      if(typeof host.goWorkspace === "function"){ host.goWorkspace("overview"); setTimeout(() => { const m = document.getElementById("mp-card"); if(m && m.scrollIntoView) m.scrollIntoView({behavior: "smooth", block: "start"}); }, 150); }
+      else location.assign("/");
+    }
+  }
   async function run(text, host){
     host = host || {};
     const mode = host.mode || "live";
@@ -169,11 +189,7 @@
       if(alts.length) body.querySelectorAll(".ask-alt").forEach(b => b.addEventListener("click", () => { hide(); stockAction(op, b.dataset.sym, host, mode); }));
       stockAction(op, a.ticker, host, mode);
     } else if(r.intent === "open_tab"){ show("Assistant", `<p>${esc(r.say)}</p>`, {autoHide: 2500}); goTab(a.tab, host); }
-    else if(r.intent === "portfolio_summary"){
-      show("Assistant", `<p>${esc(r.say)}</p>`, {autoHide: 2500});
-      if(typeof host.goWorkspace === "function"){ host.goWorkspace("overview"); setTimeout(() => { const m = document.getElementById("mp-card"); if(m && m.scrollIntoView) m.scrollIntoView({behavior: "smooth", block: "start"}); }, 150); }
-      else location.assign("/");
-    }
+    else if(r.intent === "portfolio_summary"){ portfolio(r, host, mode); }
     else if(r.intent === "show_health"){ show("Assistant", `<p>${esc(r.say)}</p>`, {autoHide: 2500}); goTab("health", host); }
     else if(r.intent === "news_today"){ await readNews(a, host, id); }
     else show("Assistant", `<p>${esc(r.say || "I did not understand that.")}</p>`, {autoHide: r.intent === "refused" ? 9000 : 12000});
