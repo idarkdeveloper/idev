@@ -263,6 +263,33 @@ SNAPSHOT_FILE = "groww_holdings.json"
 _SNAPSHOT_KEYS = ("symbol", "name", "exchange", "kind", "maturity", "qty", "sellable_qty", "avg_price")
 
 
+def make_bond_prices(settings: Settings) -> Any:
+    """BSE's daily debt bhavcopy (bse_bonds.BondPrices): the price of a bond no other free source quotes."""
+    from .bse_bonds import BondPrices
+    return BondPrices(settings.state_dir / "cache")
+
+
+def _price_bonds(settings: Settings, entries: list[dict[str, Any]]) -> None:
+    """Bonds without a price get their last BSE close (and its date) from the debt bhavcopy. Only bonds, only when
+    no other source priced them; a failure leaves them unpriced, as before."""
+    todo = [e for e in entries if (e.get("kind") == "bond") and e.get("price") is None]
+    if not todo:
+        return
+    try:
+        bonds = make_bond_prices(settings)
+    except Exception as err:  # noqa: BLE001
+        log.warning("bond prices unavailable: %s", err)
+        return
+    for row in todo:
+        try:
+            q = bonds.lookup(row["symbol"])
+        except Exception as err:  # noqa: BLE001 - one bond's failure leaves it unpriced
+            log.warning("bond price for %s unavailable: %s", row["symbol"], err)
+            continue
+        if q is not None:
+            row["price"], row["price_date"], row["price_source"] = q["price"], q["date"], q["source"]
+
+
 def _assemble(entries: list[dict[str, Any]], stamp: str) -> dict[str, Any]:
     """Holdings rows (each with a ``price`` or None) and the totals, the way the dashboard shows them."""
     rows = []
@@ -276,7 +303,9 @@ def _assemble(entries: list[dict[str, Any]], stamp: str) -> dict[str, Any]:
                      "avg_price": avg, "price": price,
                      "invested": round(invested, 2), "value": round(value, 2) if value is not None else None,
                      "pl": round(value - invested, 2) if value is not None else None,
-                     "pl_pct": (price / avg - 1) if price is not None and avg else None})
+                     "pl_pct": (price / avg - 1) if price is not None and avg else None,
+                     **({"price_date": e["price_date"], "price_source": e.get("price_source")}
+                        if e.get("price_date") else {})})
     rows.sort(key=lambda r: -(r["value"] if r["value"] is not None else r["invested"]))
     priced = [r for r in rows if r["value"] is not None]
     inv_priced = sum(r["invested"] for r in priced)
@@ -367,6 +396,7 @@ def _from_snapshot(settings: Settings, prices: Any, bse: Any, reason: str, error
         except Exception:  # noqa: BLE001 - stays "no price"
             price = None
         entries.append({**{k: r.get(k) for k in _SNAPSHOT_KEYS}, "price": price})
+    _price_bonds(settings, entries)
     out = _assemble(entries, snap["saved_at"])
     out.update({"source": "saved", "saved_at": snap["saved_at"], "reason": reason,
                 "prices": "yahoo (delayed)", "age_trading_days": trading_days_old(snap["saved_at"]),
@@ -446,6 +476,7 @@ def read_groww_portfolio(settings: Settings, prices: Any, stamp: str = "", *, fo
                         "kind": info.get("kind") or "equity", "maturity": info.get("maturity"),
                         "qty": p.qty, "sellable_qty": p.free_qty, "avg_price": p.avg_entry_price,
                         "price": p.current_price})
+    _price_bonds(settings, entries)
     out = _assemble(entries, stamp)
     if close_session is not None:
         save_groww_snapshot(settings, out["holdings"], kind="close", session=close_session.isoformat())
