@@ -1731,3 +1731,68 @@ def test_live_holdings_show_quantity_and_buy_price_and_the_stock_page_separates_
     assert "Your ${broker} holding (read-only)" in sp and 'brokerName: "Groww"' in index
     assert "Practice account" in sp and "You own <b>" in sp
     assert sp.index("Your ${broker} holding (read-only)") < sp.index('block("Practice account"')   # the real position comes first
+
+
+# ---- installable app: manifest, service worker, icons ----
+def _raw(url, headers=None):
+    req = urllib.request.Request(url, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, dict(r.headers), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+def test_manifest_is_valid_and_its_icons_are_real_pngs(server):
+    import struct
+    base, app = server
+    status, h, body = _raw(base + "/manifest.webmanifest")
+    assert status == 200 and h["Content-Type"] == "application/manifest+json" and "no-cache" in h["Cache-Control"]
+    m = json.loads(body)
+    assert m["name"] == "Trading Agent" and m["short_name"] == "Trading" and m["display"] == "standalone"
+    assert m["start_url"] == "/" and m["scope"] == "/" and m["orientation"] == "any"
+    assert m["background_color"] == m["theme_color"] == "#161826"
+    sizes = {(i["sizes"], i["purpose"]) for i in m["icons"]}
+    assert {("192x192", "any"), ("512x512", "any"), ("512x512", "maskable")} <= sizes
+    for icon in m["icons"]:
+        st, ih, png = _raw(base + icon["src"])
+        w, ht = struct.unpack(">II", png[16:24])
+        assert st == 200 and ih["Content-Type"] == "image/png" and png[:8] == b"\x89PNG\r\n\x1a\n" and f"{w}x{ht}" == icon["sizes"]
+        assert "max-age" in ih["Cache-Control"]
+    st, ih, png = _raw(base + "/icons/apple-touch-icon.png")
+    assert st == 200 and struct.unpack(">II", png[16:24]) == (180, 180)
+
+
+def test_service_worker_headers_and_it_never_touches_the_api(server):
+    base, app = server
+    status, h, body = _raw(base + "/sw.js")
+    assert status == 200 and h["Content-Type"].startswith("text/javascript") and h["Service-Worker-Allowed"] == "/" and "no-cache" in h["Cache-Control"]
+    js = body.decode()
+    assert 'const API = /^\/(demo\/|replay\/)?api\//;' in js
+    assert "if (API.test(url.pathname)) return;" in js                  # the API branch returns before any respondWith
+    assert js.index("API.test(url.pathname)") < js.index("event.respondWith(")
+    assert 'req.method !== "GET"' in js and "Trading Agent is offline" in js and "Check that Tailscale is connected" in js
+    assert js.count("api") == 2 and "cache.put" in js            # "api" only in the pass-through regex, its test and a comment; stored files are static only
+
+
+def test_every_page_links_the_manifest_and_theme_colour(server):
+    base, app = server
+    for page in ("/", "/demo", "/replay", "/screener"):
+        _, _, body = _raw(base + page)
+        html = body.decode()
+        for needle in ('<link rel="manifest" href="/manifest.webmanifest">', '<meta name="theme-color" content="#161826">', 'rel="apple-touch-icon"',
+                       'name="apple-mobile-web-app-capable"', "viewport-fit=cover"):
+            assert needle in html, (page, needle)
+
+
+def test_install_files_follow_the_host_check_and_the_api_guards_are_unchanged(server):
+    base, app = server
+    for path in ("/manifest.webmanifest", "/sw.js", "/icons/icon-192.png"):
+        status, _, _ = _raw(base + path, {"Host": "evil.example"})
+        assert status == 421, path                                       # a foreign Host is refused for these too
+        status, _, _ = _raw(base + path, {"Sec-Fetch-Site": "same-origin"})
+        assert status == 200, path
+    app.settings.allowed_hosts = ["trading-agent.tail2f4b4a.ts.net:8443"]
+    assert _raw(base + "/manifest.webmanifest", {"Host": "trading-agent.tail2f4b4a.ts.net:8443"})[0] == 200
+    assert _raw(base + "/api/state", {"Sec-Fetch-Site": "cross-site"})[0] == 403          # the API guard is as before
+    assert _raw(base + "/api/state", {"Host": "evil.example"})[0] == 421

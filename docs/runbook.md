@@ -544,3 +544,20 @@ Gate checklist before relying on it:
 - Alert when the feed's `window_end` date is not today on a trading day: a dead watch reads "closed, not stale" the next morning.
 - The 150-login cap is unaffected: the feed reuses the cached token, it does not log in.
 - Revoking a phone works (step 8) and the revoked secret gets 401.
+
+## Install on your phone
+
+The dashboard is an installable web app (manifest, icons and a small service worker; nothing is stored that holds money data).
+
+* **Android (Chrome):** open the HTTPS Tailscale address (for example `https://trading-agent.tail2f4b4a.ts.net:8443/`) with Tailscale
+  connected, then the menu (three dots) > **Install app** (or **Add to Home screen**). Open it from the home-screen icon: it runs
+  without the address bar. Chrome offers the install only over HTTPS (the `tailscale serve` certificate is fine) or on `localhost`.
+* **iPhone (Safari):** Share > **Add to Home Screen**.
+* **Offline:** the pages and every number come from the server, so with no connection (for example Tailscale switched off) the app
+  shows "Trading Agent is offline: check that Tailscale is connected, then reload" with a Reload button. Nothing from the
+  API (`/api/`, `/demo/api/`, `/replay/api/`) or any page is ever kept by the app; only scripts, styles, fonts and icons.
+* **Updates:** after a deploy the page opens the new version by itself (scripts and styles are fetched fresh when online). If the
+  home-screen app looks stale, pull down to reload or close and reopen it once; to force the service worker to refresh, clear the
+  site data in Chrome (Site settings) once.
+* **Host check:** the manifest, `/sw.js` and the icons are plain files served under the same `TA_ALLOWED_HOSTS` rule as every page; the
+  `/api` protections are unchanged.

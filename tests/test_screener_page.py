@@ -48,7 +48,7 @@ def test_page_has_the_pickers_filters_table_and_export():
     for needle in ('id="sc-universe"', 'id="sc-presets"', 'id="sc-q"', 'id="sc-chips"', 'id="sc-addbtn"', 'id="sc-pop"', 'id="sc-density"',
                    'id="sc-allcols"', 'id="sc-export"', 'id="sc-save"', 'id="sc-head"', 'id="sc-rows"', 'id="sc-count"', 'id="sc-fresh"',
                    'id="sc-status"', 'id="sc-drawer"', 'aria-controls="sc-pop"',
-                   'name="viewport" content="width=device-width, initial-scale=1"', "<title>Screener"):
+                   'name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"', "<title>Screener"):
         assert needle in HTML, needle
     assert HTML.index("/static/common.js") < HTML.index("/static/palette.js") < HTML.index("/static/screener.js")
 
@@ -109,6 +109,7 @@ def test_script_only_reads_the_screener_endpoint_and_cannot_send_an_order():
 def test_no_colour_literals_in_the_screener_page_code():
     literal = re.compile(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(")
     for name, text in (("screener.html", HTML), ("screener.js", JS)):
+        text = re.sub(r'<meta name="theme-color" content="#[0-9a-fA-F]{6}">', "", text)   # the browser bar colour must be a literal
         assert not literal.findall(text), (name, literal.findall(text))
 
 
