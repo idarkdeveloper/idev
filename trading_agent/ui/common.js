@@ -13,8 +13,8 @@ window.TA = (function(){
   const toast = (m) => { const t=$("toast"); t.textContent=m; t.style.display="block"; clearTimeout(t._t); t._t=setTimeout(()=>t.style.display="none",4500); };
   // The Demo page sets <body data-api="/demo">, so the same page talks to the practice-account app.
   const BASE = () => (document.body && document.body.dataset.api) || "";
-  const api = async (path, body) => {
-    const r = await fetch((path.startsWith("/api/") ? BASE() : "") + path, body ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)} : {});
+  const api = async (path, body, signal) => {
+    const r = await fetch((path.startsWith("/api/") ? BASE() : "") + path, body ? {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal} : {signal});
     const j = await r.json().catch(()=>({}));
     if(!r.ok){ const err = new Error(j.error || r.statusText); err.data = j; err.status = r.status; throw err; }
     return j;

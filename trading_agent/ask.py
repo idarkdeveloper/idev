@@ -14,6 +14,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from typing import Any, Callable
 
 from .nse import check_ticker
@@ -28,8 +29,20 @@ REFUSAL = "I only open pages and read the news; I do not place orders."
 HINT = ('I did not understand that. Try: "tell me Tata Motors detail", "show Infosys chart", "read today\'s news", '
         '"news about Tata Steel", "go to screener", "show my portfolio" or "health".')
 
+# Any word of the order vocabulary; used only to recognise an order word, the refusal decision is order_request() below.
 _ORDER = re.compile(r"\b(buy|buying|bought|sell|selling|sold|purchase|purchasing|short(?!\s*(?:term|list|interest|name))|shorting|order|orders|trade|trading|invest|"
-                    r"kharid\w*|bech\w*|bikri|sauda|exit|square ?off|liquidate)\b", re.I)
+                    r"kharid\w*|bech\w*|bikri|sauda|exit|square ?off|liquidate|accumulate|le ?lo|lelo|daal ?do|daldo|lena hai|dena hai)\b", re.I)
+# A wish or command to transact: always refused, whatever else the sentence says.
+_DESIRE = re.compile(
+    r"(?:^|\b(?:please|pls|now|then|and|can you|could you|will you|just|let'?s|do|go)\s+)(?:buy|sell|purchase|short(?!\s*(?:term|list|interest|name))|trade(?! (?:deficit|war|data|balance|volume|news|surplus|talks|gap))|accumulate|invest in)\b|"
+    r"\b(?:want|wanna|need|like|going|gonna|ready|ought|should|have) to (?:buy|sell|purchase|short|trade|accumulate)\b|"
+    r"\b(?:place|put|create|make|submit|execute|send|enter|fire) (?:an? |the |my |this )?(?:\w+ )?orders?\b|"
+    r"\bgo (?:long|short)\b|\baverage down\b|\baccumulate\b|\bsquare ?off\b|\bliquidate\b|\bexit (?:my |the |all )?(?:position|positions|holding|holdings)\b|"
+    r"\b(?:sell|buy|purchase) (?:all|everything|my|it|some|more|\d[\d,.]*|half)\b|"
+    r"\bkharid\w*|\bbech\w*|\bbikri\b|\bsauda\b|\ble ?lo\b|\blelo\b|\bdaal ?do\b|\bdaldo\b|\blena hai\b|\bdena hai\b", re.I)
+# A request for information: an order word in it is a noun in a headline ("order win", "order book", "sell-off", "exit polls").
+_INFO = re.compile(r"\b(?:news|headlines?|read|price of|details?|chart|graph|what(?:'s| is) new|updates?|volume|polls?|deficit|book|wins?|results?|"
+                   r"tell me about|about|how is|how are)\b", re.I)
 _INJECTION = re.compile(r"(ignore|disregard|forget|override|bypass)\b.{0,40}\b(instruction|rule|prompt|polic|restriction|above|previous|earlier|system)|"
                         r"\b(system prompt|developer message|you are now|act as|pretend)\b|\bjailbreak\b", re.I)
 _FILLER = {"this", "that", "these", "those", "tell", "me", "about", "show", "open", "the", "details", "detail", "of", "for", "price", "share", "shares", "stock", "stocks",
@@ -42,8 +55,35 @@ _TAB_WORDS = {"live": "live", "replay": "replay", "demo": "demo", "screener": "s
               "deals": "deals", "deals & orders": "deals", "deals and orders": "deals"}
 
 
+_HOMOGLYPH = str.maketrans({
+    "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0443": "y", "\u0445": "x", "\u0456": "i", "\u0455": "s",
+    "\u044c": "b", "\u0432": "b", "\u0442": "t", "\u0438": "u", "\u043d": "h", "\u043a": "k", "\u043c": "m",
+    "\u03bf": "o", "\u03b1": "a", "\u03b5": "e", "\u03c1": "p", "\u03c5": "u", "\u03b9": "i", "\u03ba": "k", "\u03bd": "v", "\u03c4": "t", "\u03c7": "x",
+    "\u0391": "a", "\u0392": "b", "\u0395": "e", "\u039f": "o", "\u03a1": "p", "\u03a4": "t",
+    "\u0410": "a", "\u0412": "b", "\u0415": "e", "\u041e": "o", "\u0420": "p", "\u0421": "c", "\u0422": "t", "\u0425": "x"})
+_SPACED = re.compile(r"(?<![a-z0-9])(?:[a-z][\s.\-_]+){2,}[a-z](?![a-z0-9])")
+
+
+def fold(text: str) -> str:
+    """The sentence as the rules should read it: NFKC, no zero-width or other format characters, look-alike Cyrillic and Greek
+    letters as Latin, lower case, and letters spread out one by one ("b u y", "b.u.y", "b-u-y") put back together."""
+    t = unicodedata.normalize("NFKC", str(text or ""))
+    t = "".join(ch for ch in t if unicodedata.category(ch) != "Cf")
+    t = t.translate(_HOMOGLYPH).lower()
+    return _SPACED.sub(lambda m: re.sub(r"[\s.\-_]+", "", m.group(0)), t)
+
+
+def order_request(text: str) -> bool:
+    """True when the sentence asks to transact: refused. An order word in a news or information request ("order win",
+    "trade deficit", "exit polls", "market sell-off") is not."""
+    t = re.sub(r"\bdeals (?:&|and) orders\b", "deals", _norm(text))
+    if _DESIRE.search(t):
+        return True
+    return bool(_ORDER.search(t)) and not _INFO.search(t)
+
+
 def _norm(text: str) -> str:
-    t = str(text or "").lower().replace("’", "'")
+    t = fold(text).replace("\u2019", "'")
     t = re.sub(r"[^a-z0-9&'.\- ]+", " ", t)
     return re.sub(r"\s+", " ", t).strip()
 
@@ -64,9 +104,9 @@ def parse_rules(text: str) -> dict[str, Any] | None:
     t = _norm(text)
     if not t:
         return {"intent": "unknown", "args": {}}
-    if _ORDER.search(re.sub(r"\bdeals (?:&|and) orders\b", "deals", t)):   # the tab's own name is not an order
+    if order_request(text):   # a wish to transact; the tab's own name "deals & orders" and news about orders are not
         return {"intent": "refused", "args": {}}
-    if _INJECTION.search(str(text or "")):
+    if _INJECTION.search(fold(text)):
         return {"intent": "unknown", "args": {}}
     # news
     m = re.search(r"\b(?:news|headlines?)\b", t)
@@ -215,7 +255,7 @@ def interpret(text: str, search: Callable[..., list[dict[str, Any]]], settings: 
     parsed = parse_rules(text)
     via = "rules"
     if parsed is None:
-        if _ORDER.search(_norm(text)):
+        if order_request(text):
             parsed = {"intent": "refused", "args": {}}
         elif use_ollama:
             parsed, via = ask_ollama(settings, text, session), "ollama"
@@ -274,11 +314,10 @@ def speak_text(title: str) -> str:
     return t
 
 
-def compose_speech(items: list[dict[str, Any]], scope_label: str = "", note: str | None = None, max_words: int = 120) -> str:
-    """"Here are today's news items. One: HDFC Bank. <title>. It looks positive. Two: ..." in short sentences, at most
-    ``max_words`` words (whole items only), no URLs."""
+def speech_parts(items: list[dict[str, Any]], scope_label: str = "", note: str | None = None, max_words: int = 120) -> list[str]:
+    """The reading as one short piece per item (the page speaks them one after the other, so a long text is never cut off)."""
     if not items:
-        return "There is no news to read right now."
+        return ["There is no news to read right now."]
     head = f"Here are {scope_label or 'the'} news items." if scope_label else "Here are today's news items."
     if note:
         head += " " + speak_text(note) + "."
@@ -291,4 +330,10 @@ def compose_speech(items: list[dict[str, Any]], scope_label: str = "", note: str
             break
         parts.append(sentence)
         words += n
-    return " ".join(parts)
+    return parts
+
+
+def compose_speech(items: list[dict[str, Any]], scope_label: str = "", note: str | None = None, max_words: int = 120) -> str:
+    """"Here are today's news items. One: HDFC Bank. <title>. It looks positive. Two: ..." in short sentences, at most
+    ``max_words`` words (whole items only), no URLs."""
+    return " ".join(speech_parts(items, scope_label, note, max_words))

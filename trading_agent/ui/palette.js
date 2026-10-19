@@ -276,7 +276,7 @@
         micCtl = TA.ask.listen({
           onState: (on) => { mic.classList.toggle("on", on); mic.setAttribute("aria-pressed", String(on)); mic.innerHTML = on ? TA.loader.spinner() : icon;
                              if(on){ micNote.textContent = "Listening…"; micNote.hidden = false; } else { micCtl = null; if(micNote.textContent === "Listening…") micNote.hidden = true; } },
-          onText: (t) => { input.value = t; model.setQuery(t); paint(); close(); setTimeout(() => TA.ask.run(t, host), 0); },
+          onText: (t) => { if(!dlg.open) return; input.value = t; model.setQuery(t); paint(); close(); setTimeout(() => TA.ask.run(t, host), 0); },
           onError: (m) => { micNote.textContent = m; micNote.hidden = false; },
         });
       });
@@ -357,6 +357,7 @@
       if(typeof dlg.close === "function") dlg.close(); else { dlg.removeAttribute("open"); onClosed(); }
     }
     function onClosed(){
+      if(micCtl){ micCtl.abort(); micCtl = null; }   // closing the palette turns the microphone off
       const o = opener; opener = null;
       if(o && o.isConnected !== false && typeof o.focus === "function"){ try { o.focus(); } catch(e){} }
     }

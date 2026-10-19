@@ -587,3 +587,4 @@ request to buy or sell is refused, and nothing can prepare an order.
   blocked, allow it in the site settings. Reading aloud uses the phone's own voices (`en-IN` when it has one).
 * Settings (env only): `ASK_ENABLED` (default true), `ASK_OLLAMA` (default true), `ASK_RATE_PER_MIN` (default 30 per client).
   The log keeps the intent and whether rules or Ollama answered, not the sentence (60 characters at debug level only).
+* Privacy and limits: a company-name lookup (for example a US, UK or Japan name) may send the name fragment to Yahoo search; the Ask and news rate limits are per client address, and behind `tailscale serve` every device shares one address, so they share one limit.

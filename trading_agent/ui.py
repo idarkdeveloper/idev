@@ -131,6 +131,13 @@ def _inr(v: float, d: int = 0) -> str:
     return ("−" if neg else "") + "₹" + out + ("." + frac if d else "")
 
 
+MAX_POST_BYTES = 64 * 1024   # a dashboard POST body is a few hundred bytes; anything bigger is refused (413)
+
+
+class BodyTooLarge(ValueError):
+    pass
+
+
 class Busy(Exception):
     """Another request is already doing this (answered 409)."""
 
@@ -180,6 +187,8 @@ class App:
             self.prices.ttl_fn = lambda d: price_ttl(datetime.now(timezone.utc), d, self._safe_holidays())
         self.momentum = MomentumScreen(self.prices)
         self._ask_limit: Any | None = None   # ask.RateLimit, built on first use
+        self._news_limit: Any | None = None   # its own RateLimit(10) for /api/news/today
+        self._news_cache: dict[Any, Any] = {}   # (scope, ticker) -> (monotonic time, result), 60 s
         self._research: Any | None = None   # SharedHistory over self.prices, for the read-only research tools only
         self._research_warm: Any | None = None
         self.last_backtest: dict[str, Any] | None = None
@@ -512,14 +521,35 @@ class App:
         log.debug("ask: text=%.60r", text)
         return out
 
-    def news_today(self, scope: str = "portfolio", ticker: str | None = None) -> dict[str, Any]:
+    def news_today(self, scope: str = "portfolio", ticker: str | None = None, client: str = "") -> dict[str, Any]:
         """GET /api/news/today: today's tagged headlines (IST date), newest first, at most 10, from the cached news service
         for your holdings or one stock; when today has none, the last 24 hours (and ``note`` says so). ``speech`` is the text
         the page reads aloud."""
         from . import ask as ask_mod
+        scope = scope if scope in ("portfolio", "market", "stock") else "portfolio"
+        root = self._parent or self
+        with self._lazy_lock:
+            if root._news_limit is None:
+                root._news_limit = ask_mod.RateLimit(10)   # its own bucket: 10 a minute per client
+                root._news_cache = {}
+        if not root._news_limit.allow(client or "-"):
+            raise ask_mod.RateLimited("Too many news requests in a minute; wait a little.")
+        key = (scope, (ticker or "").upper())
+        hit = root._news_cache.get(key)
+        if hit and time.monotonic() - hit[0] < 60.0:   # "read the news" twice in a row does not fetch twice
+            return hit[1]
+        out = self._news_today(scope, ticker)
+        if len(root._news_cache) > 50:
+            root._news_cache.clear()
+        root._news_cache[key] = (time.monotonic(), out)
+        return out
+
+    NEWS_BUDGET_S = 25.0   # time spent fetching the per-holding feeds; the rest are skipped
+
+    def _news_today(self, scope: str, ticker: str | None) -> dict[str, Any]:
+        from . import ask as ask_mod
         from .nse import check_ticker
         from .timezones import IST
-        scope = scope if scope in ("portfolio", "market", "stock") else "portfolio"
         svc = self.news
         note: str | None = None
         if svc is None:
@@ -542,7 +572,11 @@ class App:
                 names = {}
         now = self._now_dt().astimezone(IST)
         rows: list[tuple[Any, dict[str, Any]]] = []
+        started, skipped = time.monotonic(), False
         for sym in symbols:
+            if time.monotonic() - started > self.NEWS_BUDGET_S:
+                skipped = True
+                break
             try:
                 res = svc.for_symbol(sym, names.get(sym) or None, background=True)
             except Exception as e:  # noqa: BLE001 - one stock's feed failing must not hide the rest
@@ -565,11 +599,13 @@ class App:
                 today, note = recent, "Nothing is dated today yet; these are from the last 24 hours."
             else:
                 note = note or "No news items found."
+        if skipped:
+            note = ((note + " ") if note else "") + "Some feeds were skipped."
         today.sort(key=lambda r: r[0], reverse=True)
         items = [r[1] for r in today[:10]]
         label = "today's" if note is None or "Market headlines" in (note or "") else "recent"
         return {"scope": scope, "items": items, "note": note, "as_of": _now(),
-                "speech": ask_mod.compose_speech(items, label, note)}
+                "speech": ask_mod.compose_speech(items, label, note), "speech_parts": ask_mod.speech_parts(items, label, note)}
 
     def foreign_screener(self, key: str) -> Any:
         """The service of one US / UK / Japan list (screener_markets): Yahoo history and fundamentals, view only."""
@@ -2425,8 +2461,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 
         def _body(self) -> dict[str, Any]:
             n = int(self.headers.get("Content-Length") or 0)
+            if n > MAX_POST_BYTES:
+                raise BodyTooLarge(f"the request body is too large (at most {MAX_POST_BYTES // 1024} KB)")
             raw = self.rfile.read(n) if n else b""
-            return json.loads(raw.decode() or "{}")
+            body = json.loads(raw.decode() or "{}")
+            if not isinstance(body, dict):
+                raise ValueError("bad request")
+            return body
 
         def do_GET(self) -> None:  # noqa: N802
             refused = self._request_refusal("GET")
@@ -2511,7 +2552,11 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             elif path == "/api/news/today":
                 from urllib.parse import parse_qs
                 q = parse_qs(urlparse(self.path).query)
-                self._json(app.news_today((q.get("scope") or ["portfolio"])[0], (q.get("ticker") or [""])[0] or None))
+                from .ask import RateLimited
+                try:
+                    self._json(app.news_today((q.get("scope") or ["portfolio"])[0], (q.get("ticker") or [""])[0] or None, self.client_address[0]))
+                except RateLimited as e:
+                    self._json({"error": str(e)}, HTTPStatus.TOO_MANY_REQUESTS)
             elif path == "/api/regime":
                 from urllib.parse import parse_qs
                 force = (parse_qs(urlparse(self.path).query).get("refresh") or ["0"])[0] in ("1", "true")
@@ -2785,6 +2830,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             except PermissionError as e:
                 self._json({"error": str(e)}, HTTPStatus.FORBIDDEN)
+            except BodyTooLarge as e:
+                self._json({"error": str(e)}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             except Busy as e:
                 self._json({"error": str(e)}, HTTPStatus.CONFLICT)
             except FilterWarning as e:

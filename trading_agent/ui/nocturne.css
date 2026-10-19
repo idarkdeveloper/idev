@@ -1447,3 +1447,5 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .ask-tag.positive { color: var(--color-profit); border-color: var(--color-profit); } .ask-tag.negative { color: var(--color-loss); border-color: var(--color-loss); }
 .ask-ctl { display: flex; gap: 8px; margin-top: 8px; } .ask-ctl .small { min-height: 44px; min-width: 88px; }
 .ask-alt { min-height: 44px; }
+
+.ask-loading{display:flex;align-items:center;gap:10px;padding:6px 0}

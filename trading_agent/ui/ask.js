@@ -17,6 +17,7 @@
 
   // ---- the result card ----
   let card = null, body = null, ctl = null, hideT = 0, reading = false;
+  let gen = 0, queue = [], qi = 0, paused = false;   // reading aloud: one utterance per item (a long text is cut off by Chrome)
   function ensureCard(){
     if(card) return;
     card = document.createElement("section");
@@ -31,8 +32,9 @@
       const b = e.target.closest && e.target.closest("[data-ask]"); if(!b) return;
       if(b.dataset.ask === "stop"){ stop(); }
       else if(b.dataset.ask === "pause"){
-        const s = window.speechSynthesis;
-        if(s.paused){ s.resume(); b.textContent = "Pause"; setState("Reading…"); } else { s.pause(); b.textContent = "Resume"; setState("Paused"); }
+        // speechSynthesis.pause() is unreliable on Android, so Pause stops after the item being read and Resume goes on with the next one
+        if(paused){ paused = false; b.textContent = "Pause"; setState("Reading…"); if(!window.speechSynthesis.speaking) next(gen); }
+        else { paused = true; b.textContent = "Resume"; setState("Paused after this item"); }
       }
     });
     card.addEventListener("keydown", (e) => { if(e.key === "Escape"){ stop(); hide(); } });
@@ -49,23 +51,36 @@
 
   // ---- reading aloud ----
   function stop(){
+    gen++; queue = []; paused = false;
     if(hasTTS()){ try { window.speechSynthesis.cancel(); } catch(e){} }
     reading = false; if(ctl) ctl.hidden = true;
+    const pb = ctl && ctl.querySelector('[data-ask="pause"]'); if(pb) pb.textContent = "Pause";
     const s = body && body.querySelector(".ask-state"); if(s) s.textContent = "";
   }
   function pickVoice(){
     try { const v = window.speechSynthesis.getVoices() || []; return v.find(x => /^en[-_]IN$/i.test(x.lang)) || v.find(x => /^en/i.test(x.lang)) || null; } catch(e){ return null; }
   }
-  function speak(text){
-    if(!hasTTS() || !text) return false;
+  function finished(){ reading = false; paused = false; if(ctl) ctl.hidden = true; setState(""); }
+  function next(g){
+    if(g !== gen || paused) return;
+    if(qi >= queue.length){ finished(); return; }
+    const u = new window.SpeechSynthesisUtterance(String(queue[qi]));
+    u.lang = "en-IN"; u.rate = 1.0;
+    const v = pickVoice(); if(v){ u.voice = v; u.lang = v.lang; }
+    let done = false;
+    const after = (failed) => { if(done || g !== gen) return; done = true; if(failed){ finished(); return; } qi++; next(g); };
+    u.onend = () => after(false);
+    u.onerror = (e) => after(!(e && (e.error === "canceled" || e.error === "interrupted")) ? true : false);
+    window.speechSynthesis.speak(u);
+  }
+  function speak(text){   // text: one string or an array of pieces, spoken one after the other
+    const parts = (Array.isArray(text) ? text : [text]).map(x => String(x || "").trim()).filter(Boolean);
+    if(!hasTTS() || !parts.length) return false;
     try {
-      window.speechSynthesis.cancel();
-      const u = new window.SpeechSynthesisUtterance(String(text));
-      u.lang = "en-IN"; u.rate = 1.0;
-      const v = pickVoice(); if(v){ u.voice = v; u.lang = v.lang; }
-      u.onend = u.onerror = () => { reading = false; if(ctl) ctl.hidden = true; setState(""); };
-      reading = true;
-      window.speechSynthesis.speak(u);
+      stop(); const g = gen;
+      queue = parts; qi = 0; paused = false; reading = true;
+      if(ctl) ctl.hidden = false;
+      next(g);
       return true;
     } catch(e){ return false; }
   }
@@ -80,18 +95,21 @@
   function listen(o){
     o = o || {};
     if(!SR){ if(o.onError) o.onError("Speech recognition is not available in this browser."); return null; }
-    let rec, got = false;
+    let rec, got = false, dead = false;
     try { rec = new SR(); } catch(e){ if(o.onError) o.onError("Speech recognition could not start."); return null; }
     rec.lang = "en-IN"; rec.interimResults = false; rec.continuous = false; rec.maxAlternatives = 1;
-    rec.onstart = () => { if(o.onState) o.onState(true); };
+    rec.onstart = () => { if(!dead && o.onState) o.onState(true); };
     rec.onresult = (e) => {
+      if(dead) return;
       const r = e.results && e.results[e.results.length - 1];
       if(r && r.isFinal !== false && r[0] && r[0].transcript){ got = true; if(o.onText) o.onText(String(r[0].transcript).trim()); }
     };
-    rec.onerror = (e) => { if(o.onError) o.onError(MIC_ERRORS[e && e.error] || "I could not hear you (" + ((e && e.error) || "error") + ").");  };
+    rec.onerror = (e) => { if(!dead && o.onError) o.onError(MIC_ERRORS[e && e.error] || "I could not hear you (" + ((e && e.error) || "error") + ").");  };
     rec.onend = () => { if(o.onState) o.onState(false); };
     try { rec.start(); } catch(e){ if(o.onError) o.onError("Speech recognition could not start."); return null; }
-    return {stop(){ try { rec.stop(); } catch(e){} }, get heard(){ return got; }};
+    return {stop(){ try { rec.stop(); } catch(e){} },
+            abort(){ dead = true; try { rec.abort(); } catch(e){ try { rec.stop(); } catch(e2){} } if(o.onState) o.onState(false); },   // late results are ignored
+            get heard(){ return got; }};
   }
 
   // ---- acting on an answer (every action is a page open or a read) ----
@@ -111,14 +129,25 @@
     const rows = (d.items || []).map(i => `<li><span class="ask-tag ${esc(i.tag)}">${esc(i.tag)}</span> <b>${esc(i.name || i.symbol)}</b> ${esc(i.title)} <span class="sub">${esc(i.source)}${i.time_ist ? " · " + esc(i.time_ist) + " IST" : ""}</span></li>`).join("");
     return (d.note ? `<p class="sub">${esc(d.note)}</p>` : "") + (rows ? `<ol class="ask-news">${rows}</ol>` : `<p>No news items found.</p>`) + `<p class="ask-state sub" role="status"></p>`;
   }
-  async function readNews(args, host){
+  // A request that gives up after ms with a plain message; runId lets a newer question drop an older answer.
+  let runId = 0;
+  async function timed(url, body, ms, msg){
+    const ac = new AbortController(), t = setTimeout(() => ac.abort(), ms);
+    try { return await TA.api(url, body, ac.signal); }
+    catch(e){ if(e && e.name === "AbortError") throw new Error(msg); throw e; }
+    finally { clearTimeout(t); }
+  }
+  async function readNews(args, host, id){
     const q = "/api/news/today?scope=" + encodeURIComponent(args.scope || "portfolio") + (args.ticker ? "&ticker=" + encodeURIComponent(args.ticker) : "");
-    show("News " + (SCOPE_LABEL[args.scope] ? "on " + SCOPE_LABEL[args.scope] : args.name ? "on " + args.name : ""), `<p class="sub">${TA.loader ? TA.loader.spinner() : ""} Loading the news…</p>`);
+    show("News " + (SCOPE_LABEL[args.scope] ? "on " + SCOPE_LABEL[args.scope] : args.name ? "on " + args.name : ""),
+         `<div class="ask-loading" role="status">${TA.loader ? TA.loader.spinner() : ""} <span>Reading the news… fetching headlines</span></div>`);
     let d;
-    try { d = await TA.api(q); } catch(e){ show("News", `<p>${esc(e.message || "The news could not be loaded.")}</p>`); return; }
+    try { d = await timed(q, null, 45000, "The news is taking too long. Try again in a minute."); }
+    catch(e){ if(id !== runId) return; show("News", `<p>${esc(e.message || "The news could not be loaded.")}</p>`); return; }
+    if(id !== runId) return;
     const ok = hasTTS() && (d.items || []).length;
     show("News", newsHtml(d) + (hasTTS() ? "" : `<p class="sub">This browser cannot read aloud.</p>`), {reading: ok});
-    if(ok && speak(d.speech)) setState("Reading…");
+    if(ok && speak(d.speech_parts && d.speech_parts.length ? d.speech_parts : d.speech)) setState("Reading…");
   }
   async function run(text, host){
     host = host || {};
@@ -126,9 +155,12 @@
     text = String(text || "").trim().slice(0, 300);
     if(!text) return;
     stop();
+    const id = ++runId;
     show("Assistant", `<p class="sub">${TA.loader ? TA.loader.spinner() : ""} Thinking…</p>`);
     let r;
-    try { r = await TA.api("/api/ask", {text}); } catch(e){ show("Assistant", `<p>${esc(e.message || "That did not work.")}</p>`, {autoHide: 8000}); return; }
+    try { r = await timed("/api/ask", {text}, 20000, "That took too long. Try again."); }
+    catch(e){ if(id === runId) show("Assistant", `<p>${esc(e.message || "That did not work.")}</p>`, {autoHide: 8000}); return; }
+    if(id !== runId) return;
     const a = r.args || {};
     if(r.intent === "open_stock" || r.intent === "open_chart" || r.intent === "open_size"){
       const op = r.intent === "open_chart" ? "chart" : r.intent === "open_size" ? "size" : "lookup";
@@ -143,7 +175,7 @@
       else location.assign("/");
     }
     else if(r.intent === "show_health"){ show("Assistant", `<p>${esc(r.say)}</p>`, {autoHide: 2500}); goTab("health", host); }
-    else if(r.intent === "news_today"){ await readNews(a, host); }
+    else if(r.intent === "news_today"){ await readNews(a, host, id); }
     else show("Assistant", `<p>${esc(r.say || "I did not understand that.")}</p>`, {autoHide: r.intent === "refused" ? 9000 : 12000});
   }
 
