@@ -1708,3 +1708,18 @@ def test_practice_card_lists_stop_loss_sales():
     body = index[index.index("function renderStopSold"):]
     assert "Sold by stop-loss" in body[:2500] and "S.stop_sells" in body[:400] and 'MODE !== "demo"' in body[:400]
     assert "paper · sold by stop-loss" in index
+
+
+def test_live_holdings_show_quantity_and_buy_price_and_the_stock_page_separates_groww_from_practice():
+    ui = Path(__file__).resolve().parent.parent / "trading_agent" / "ui"
+    index, sp, css = (ui / "index.html").read_text(encoding="utf-8"), (ui / "stockpage.js").read_text(encoding="utf-8"), (ui / "nocturne.css").read_text(encoding="utf-8")
+    assert '<th class="num hold-col">Shares</th><th class="num hold-col">Buy price</th>' in index
+    assert 'class="num nowrap hold-col">${h.qty != null ? esc(h.qty) : "n/a"}' in index and "h.avg_price != null ? inr(h.avg_price, 2) : \"n/a\"" in index
+    # the phone card's second line is its own element (not .l2, which the compact-rows setting hides): shares x buy price, share %, invested
+    assert 'class="hold-line"' in index and "invested <span class=\"n\">" in index and 'h.kind === "bond" ? "units"' in index
+    assert ".stock-cell > .hold-line { display: block; grid-column: 1; grid-row: 2;" in css and ".stock-cell > .l2 { display: none; }" in css
+    assert ".mp-table .hold-line { display: none; }" in css and "td.hold-col" in css and "hold-l2" not in index + css
+    assert "MPCOLS = MODE === \"demo\" ? 8 : 9" in index
+    assert "const bareCode" in index and "if(MODE === \"demo\") return null" in index
+    assert "Your Groww holding (read-only)" in sp and "Practice account" in sp and "You own <b>" in sp
+    assert sp.index("Your Groww holding (read-only)") < sp.index('block("Practice account"')   # the real position comes first

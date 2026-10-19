@@ -87,7 +87,7 @@
             <button type="button" class="small" id="copy-no">Cancel</button></div></div>
         <div class="cardbody sub" id="copy-result" aria-live="polite" hidden></div>
         <div class="cardbody" id="mp-body" hidden><div class="stats" id="mp-stats"></div></div>
-        <div class="scroll tscroll"><table class="dt mp-table"><thead><tr><th>Stock</th><th class="spark-col">30 days</th><th class="num">Price</th><th class="num">Today</th><th class="num">Value</th><th class="num">Profit / loss</th><th class="prot-cell" id="mp-prot-th">Stop</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
+        <div class="scroll tscroll"><table class="dt mp-table"><thead><tr><th>Stock</th><th class="spark-col">30 days</th><th class="num hold-col">Shares</th><th class="num hold-col">Buy price</th><th class="num">Price</th><th class="num">Today</th><th class="num">Value</th><th class="num">Profit / loss</th><th class="prot-cell" id="mp-prot-th">Stop</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
       </section>
       <section class="recs-col" data-anchor="recs">
         <div class="recs-head"><h2>Recommendations</h2><span class="sub">from Claude, newest first</span></div>
@@ -1177,7 +1177,7 @@
     catch(e){ $("mp-sub").textContent = "Couldn't load holdings: " + e.message; MP = {linked: true, error: e.message}; if(S) renderTiles(); liveFail(e); }
     finally { btn.disabled = false; }
   }
-  const MPCOLS = MODE === "demo" ? 6 : 7;   // the Stop column is a Live-page thing: the Demo page has its own stops
+  const MPCOLS = MODE === "demo" ? 8 : 9;   // the Stop column is a Live-page thing: the Demo page has its own stops
   if(MODE === "demo") $("mp-prot-th").hidden = true;
   // The Stop column: a short state with a coloured dot (and words), the level under it, the full text on hover and for
   // screen readers.
@@ -1226,8 +1226,13 @@
     const sorted = m.holdings.slice().sort((x, y) => (y.value || 0) - (x.value || 0));   // biggest first, as on Groww
     if(!keepRows) rows.innerHTML = sorted.length ? sorted.map(h => { const dm = dayMove(h); return `<tr data-open-stock="${esc(h.symbol)}">
         <td class="stock-cell"><div class="sym-line"><a href="#" data-lookup="${esc(h.symbol)}" class="sym" title="${esc(h.name || h.symbol)}">${esc(h.symbol)}</a>${h.kind === "bond" ? ` <span class="pill warn mini" title="bond${h.maturity ? " maturing " + esc(h.maturity) : ""}">Bond</span>` : ""}${h.exchange === "BSE" ? ' <span class="pill mini">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill mini" title="NSE daily price band">Band ${esc(MP.bands[h.symbol])}</span>` : ""}${((MP.filter_flags || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Review flag from the Indian-market filters; the agent never sells on it">${esc(f)}</span>`).join("")}${((MP.corp_actions || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Corporate action within 7 days: the GTT stop-loss is paused over the ex-date and re-set at the adjusted level">${esc(f)}</span>`).join("")}</div>${h.name ? `<div class="sub hname" title="${esc(h.name)}">${esc(h.name)}</div>` : ""}
-          <div class="sub l2">${esc(h.qty)} × ${inr(h.avg_price, 2)}${total && h.value != null ? ` · ${(h.value / total * 100).toFixed(1)}%` : ""}${h.sellable_qty < h.qty ? ` · ${h.sellable_qty} free to sell` : ""}</div>${h.price != null && MODE === "demo" ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
+          <div class="sub l2">${(() => { const rest = [total && h.value != null ? `${(h.value / total * 100).toFixed(1)}%` : "", h.sellable_qty < h.qty ? `${h.sellable_qty} free to sell` : ""].filter(Boolean).join(" · ");
+          return rest; })()}</div>
+          <div class="hold-line" title="shares (or units) owned × average buy price">${(() => { const rest = [total && h.value != null ? `${(h.value / total * 100).toFixed(1)}%` : "", h.sellable_qty < h.qty ? `${h.sellable_qty} free to sell` : ""].filter(Boolean);
+          const unit = h.kind === "bond" ? "units" : Number(h.qty) === 1 ? "share" : "shares";
+          return [`<span class="n">${h.qty != null ? esc(h.qty) : "n/a"}</span> ${unit} × <span class="n">${h.avg_price != null ? inr(h.avg_price, 2) : "n/a"}</span>`].concat(rest, h.invested != null ? [`invested <span class="n">${inr(h.invested)}</span>`] : []).join(" · "); })()}</div>${h.price != null && MODE === "demo" ? `<div>${sellBtn("groww", h.symbol)}</div>` : ""}</td>
         <td class="spark-col">${sparkSvg(h.symbol)}</td>
+        <td class="num nowrap hold-col">${h.qty != null ? esc(h.qty) : "n/a"}</td><td class="num nowrap hold-col">${h.avg_price != null ? inr(h.avg_price, 2) : "n/a"}</td>
         <td class="num nowrap">${h.price != null ? inr(h.price, 2) + (h.price_date ? `<div class="sub" style="font-size:11px" title="${esc(h.price_source || "BSE close")}: the bond's last traded price">last traded ${esc(new Date(h.price_date + "T00:00:00").toLocaleDateString("en-IN", {day: "numeric", month: "short"}))}</div>` : "") : '<span class="sub">no price</span>'}</td>
         <td class="num nowrap ${dm ? tone(dm.pct) : ""}">${dm ? spct(dm.pct) : '<span class="sub">…</span>'}</td>
         <td class="num nowrap">${inr(h.value)}</td>
@@ -1235,7 +1240,7 @@
       : `<tr><td colspan="${MPCOLS}" class="empty">No holdings in your Groww account.</td></tr>`;
     const today = todayTotal();
     $("mp-foot").innerHTML = m.holdings.length ? `<tr><td>Total<div class="sub l2" style="font-weight:400">${m.holdings.length} holdings${m.unpriced.length ? `, ${m.unpriced.length} without a price` : ""}</div></td>
-        <td></td><td></td><td class="num ${tone(today)}">${today == null ? "" : sinr(today)}</td><td class="num">${inr(m.value)}</td>
+        <td></td><td class="num hold-col"></td><td class="num hold-col">${m.invested != null ? inr(m.invested) : ""}</td><td></td><td class="num ${tone(today)}">${today == null ? "" : sinr(today)}</td><td class="num">${inr(m.value)}</td>
         <td class="num"><div class="${tone(m.pl)}">${sinr(m.pl)}</div><div class="l2 ${tone(m.pl_pct)}">${spct(m.pl_pct)}</div></td>${MODE === "demo" ? "" : "<td></td>"}</tr>` : "";
     loadSparks(m.holdings);
   }
@@ -1676,7 +1681,9 @@
   // ---- Look up card (a summary with the agent's checklist) and the stock's full view: stockpage.js in a modal ----
   // Opening a stock anywhere (a ticker, a table row, the palette, ?stock=SYM) shows the full view; on a phone it is full screen.
   let spDrawer = null, drawerPushed = false, lkSeq = 0;
-  const growwHolding = (s) => { const h = MP && MP.holdings && MP.holdings.find(x => x.symbol === s); return h ? {qty: h.qty, avg_price: h.avg_price} : null; };
+  // The real Groww position in a stock (the live page only), matched on the bare code: TCS, tcs, TCS.NS and 543287.BO all find their row.
+  const bareCode = (s) => String(s || "").trim().toUpperCase().replace(/\.(NS|BO)$/, "");
+  const growwHolding = (s) => { if(MODE === "demo") return null; const k = bareCode(s), h = MP && MP.holdings && MP.holdings.find(x => bareCode(x.symbol) === k); return h ? {qty: h.qty, avg_price: h.avg_price} : null; };
   // The Practice buy / Practice sell buttons never place anything: they open the practice order form pre-filled (here on the
   // Demo page, or on the Demo page by address from this one) and the order is only sent when you confirm it there.
   function practiceOrder(op, symbol){

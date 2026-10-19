@@ -269,3 +269,63 @@ def test_the_late_bar_row_reads_the_nse_fill(s):
     health.note_run(s.state_dir, "nse_fill", ok=True, rows=2)
     r = by_id(health.report(s, MON_11 + timedelta(hours=1), Cal()))["nse_fill"]
     assert r["status"] == "ok"                                                    # a later fill clears it
+
+# ---------- the filters row: NSE publishing no pledge data is a known gap, not a failure ----------
+NOW_19 = datetime(2026, 10, 19, 11, 0, tzinfo=IST)
+EMPTY_NEW = "EmptyPledgeList: promoter pledges: NSE is publishing no pledge data right now (its own page counts 0 companies)"
+EMPTY_OLD = "ValueError: promoter pledges: NSE answered with no usable rows"
+
+
+def _filters_file(s, pledge_day, errors):
+    s.market = "in"
+    block = lambda d: {"date": d, "fetched_at": iso(NOW_19.replace(hour=10, minute=30)), "symbols": {"A": 1}}  # noqa: E731
+    data = {"asm": block("2026-10-19"), "gsm": block("2026-10-19"), "results": block("2026-10-19"),
+            "pledge": {"date": pledge_day, "fetched_at": iso(datetime.fromisoformat(pledge_day + "T10:30:00").replace(tzinfo=IST)), "symbols": {"A": 1}},
+            "tries": {"2026-10-19": {"last": iso(NOW_19.replace(hour=10, minute=45)), "errors": errors}}}
+    write(s.state_dir / "indian_filters.json", data)
+
+
+def _row_for(s):
+    rep = health.report(s, NOW_19, Cal())
+    return by_id(rep)["filters"], rep
+
+
+@pytest.mark.parametrize("msg", [EMPTY_NEW, EMPTY_OLD])
+def test_an_empty_pledge_list_with_a_usable_old_list_is_late_not_failing(s, msg):
+    _filters_file(s, "2026-10-16", {"pledge": msg})
+    row, rep = _row_for(s)
+    assert row["status"] == "late" and row["error"] is None
+    assert "NSE is publishing no pledge data right now; using the list from" in row["delay"]
+    assert "usable up to 10 trading days" in row["delay"] and "1 trading day old" in row["delay"]
+    assert "NSE is publishing no pledge data right now" in row["detail"]
+    assert rep["counts"]["late"] >= 1 and "filters" not in [r["id"] for r in rep["sources"] if r["status"] == "failing"]
+
+
+def test_the_same_error_with_a_list_past_the_limit_is_failing(s):
+    _filters_file(s, "2026-10-02", {"pledge": EMPTY_OLD})        # 11 trading days before 19 Oct
+    row, rep = _row_for(s)
+    assert row["status"] == "failing" and "no usable rows" in row["error"]
+    assert rep["counts"]["failing"] >= 1
+    _filters_file(s, "2026-10-05", {"pledge": EMPTY_OLD})        # exactly 10 trading days: still within the limit
+    assert _row_for(s)[0]["status"] == "late"
+
+
+def test_other_errors_keep_the_row_failing(s):
+    _filters_file(s, "2026-10-16", {"pledge": "ConnectionError: reset by peer"})
+    assert _row_for(s)[0]["status"] == "failing"
+    _filters_file(s, "2026-10-16", {"asm": "ValueError: ASM: NSE answered with no usable rows"})
+    assert _row_for(s)[0]["status"] == "failing"                  # the same wording on another list is still a fault
+    _filters_file(s, "2026-10-16", {"pledge": EMPTY_NEW, "gsm": "HTTPError: 503"})
+    row, _ = _row_for(s)
+    assert row["status"] == "failing" and "pledge" not in (row["error"] or "").lower() and "503" in row["error"]
+
+
+def test_counts_and_order_follow_the_new_status(s):
+    health.note_run(s.state_dir, "news", ok=False, error="boom", now=NOW_19)
+    _filters_file(s, "2026-10-16", {"pledge": EMPTY_NEW})
+    rep = health.report(s, NOW_19, Cal())
+    order = [r["status"] for r in rep["sources"]]
+    rank = {"failing": 0, "late": 1, "ok": 2, "off": 3}
+    assert order == sorted(order, key=rank.get)
+    assert rep["counts"]["failing"] == order.count("failing") and rep["counts"]["late"] == order.count("late")
+    assert by_id(rep)["filters"]["status"] == "late"
