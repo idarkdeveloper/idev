@@ -525,7 +525,7 @@ class App:
             from .nse import check_ticker
             hint = check_ticker(ticker)
         out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)), ticker=hint)
-        if out["intent"] in ("ideas", "market_status", "followed_deals", "market_summary"):   # fixed sentences over the dashboard's own data (ask_info)
+        if out["intent"] in ("ideas", "market_status", "followed_deals", "market_summary", "market_top"):   # fixed sentences over the dashboard's own data (ask_info)
             out.update(self._info_answer(out["intent"], out["args"]))
         if out["intent"] == "portfolio_summary":   # real numbers from the dashboard's own holdings, fixed sentences (ask.compose_portfolio)
             out.update(ask_mod.compose_portfolio(out["args"]["topic"], self._portfolio_figures()))
@@ -571,6 +571,8 @@ class App:
                         return None
                 return ask_info.compose_market_when(str(args["when"]), now, trading_day, holiday_name, cached_days())
             return ask_info.compose_market_status(str(args.get("market") or "IN"), now, trading_day, holiday_name)
+        if intent == "market_top":
+            return self._market_top_answer(args, now)
         if intent == "market_summary":
             reg: Any = None
             if self.context is not None:
@@ -605,6 +607,43 @@ class App:
                   "ticker": t.ticker, "size": t.size, "date": t.transaction_date or t.report_date} for t in rows]
         today = now.astimezone(IST).date()
         return ask_info.compose_deals(deals, today, f"{today.day} {today.strftime('%b')}")
+
+    def _market_top_answer(self, args: dict[str, Any], now: Any) -> dict[str, Any]:
+        """The Screener's top / gainers / losers of a market, from the table it already holds. A table with rows is answered as it is (its
+        age is said), never refreshed because someone asked; only with no rows is that list's own background fill started (one list at
+        a time) and the answer says it is loading. Never waits for the fill."""
+        from . import ask_info
+        mk = str(args.get("market") or "IN").upper()
+        if self.demo_trades is not None:
+            return {"say": "The Screener needs live market data, which the offline sample does not use.", "facts": []}
+        root = self._parent or self
+        if mk == "IN":
+            svc, keys = root.screener, ["NIFTY200", "NIFTY100", "NIFTY50"]
+        else:
+            key = {"US": "SP500_US", "UK": "FTSE100_UK", "JP": "TOPIX100_JP"}.get(mk, "SP500_US")
+            svc, keys = root.foreign_screener(key), [key]
+        table = None
+        for k in keys:
+            t = svc.peek(k)
+            if any(r.get("price") is not None for r in t["rows"]):
+                table = t
+                break
+        if table is None:
+            table = svc.peek(keys[0])
+            busy = svc.is_running() or root.screener.is_running() or any(s.is_running() for s in list(root._screener_foreign.values()))
+            if not busy:
+                try:
+                    svc.start(keys[0])
+                except Exception:  # noqa: BLE001 - no list is said as loading
+                    log.warning("ask: could not start the %s list", keys[0])
+        regime = None
+        if mk == "IN" and self.context is not None:
+            try:
+                regime = self._regime_view().fetch()
+            except Exception:  # noqa: BLE001
+                regime = None
+        out = ask_info.compose_market_top(args, table, now, regime)
+        return out
 
     PORTFOLIO_BUDGET_S = 12.0   # time spent reading daily bars for "today's change"
 

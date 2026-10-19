@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 MAX_TEXT = 300
 OLLAMA_TIMEOUT = 8.0
-INTENTS = ("open_stock", "open_chart", "open_size", "news_today", "portfolio_summary", "open_tab", "show_health", "ideas", "market_status", "followed_deals", "market_summary")
+INTENTS = ("open_stock", "open_chart", "open_size", "news_today", "portfolio_summary", "open_tab", "show_health", "ideas", "market_status", "followed_deals", "market_summary", "market_top")
 MARKET_CODES = ("IN", "US", "UK", "JP")
 TABS = ("live", "replay", "demo", "screener", "research", "health", "paper accounts", "tools", "deals", "portfolio", "practice")
 TAB_ALIAS = {"portfolio": "live", "practice": "demo"}   # the Portfolio page has a Live and a Practice (demo) account
@@ -205,11 +205,45 @@ def market_of_text(t: str) -> str:
     return "IN"
 
 
+_TOP_MARKET_WORDS = {
+    "US": r"(?:us|usa|u\.s\.a?\.?|america|american|wall street|nasdaq|nyse|s&p|sp500|s&p 500)",
+    "UK": r"(?:uk|u\.k\.|britain|british|london|ftse|lse)",
+    "JP": r"(?:japan|japanese|tokyo|nikkei|topix)",
+    "IN": r"(?:india|indian|nse|bse|nifty|sensex)"}
+_TOP_WORDS = r"(?:top|best|leading|strongest|biggest|worst|best performing|top performing|highest)"
+_TOP_THINGS = r"(?:stocks?|shares?|companies|gainers?|losers?|performers?|movers?|winners?|equities)"
+_NUMBER_WORDS = {"three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+
+
+def market_top(t: str) -> dict[str, Any] | None:
+    """"top 10 usa stocks", "us gainers today", "biggest losers in japan", "best japanese stocks", "top stocks": the Screener's top, gainers or
+    losers of one market ({"market", "kind", "n"}); None when t is not such a question. A market word is needed, except for "top stocks"
+    (India); "top gainer today" alone is the user's own portfolio."""
+    t = re.sub(r"\b(?:tell|show|give|let|help|ask) us\b", " ", t)   # "us" the pronoun
+    market = next((code for code, words in _TOP_MARKET_WORDS.items() if re.search(rf"\b{words}(?:\b|(?=\s)|$)", t)), None)
+    if market and not re.search(rf"\b(?:{_TOP_WORDS}\b.*\b{_TOP_THINGS}|{_TOP_THINGS}\b.*\b(?:today|now|right now))\b|\b(?:gainers?|losers?|movers?)\b", t):
+        market = None
+    if market is None:
+        if not re.search(rf"\b(?:top|best|leading) (?:\d+ |{'|'.join(_NUMBER_WORDS)} )?(?:stocks|shares|companies)\b(?! to (?:buy|invest))", t) or re.search(r"\b(?:my|portfolio|holdings?)\b", t):
+            return None
+        market = "IN"
+    kind = "losers" if re.search(r"\blosers?\b|\bworst\b|\bbiggest (?:fall|drop)", t) else "gainers" if re.search(r"\bgainers?\b|\bbest today\b|\btop movers?\b|\bwinners?\b|\bmovers?\b", t) else "leaders"
+    n = 5
+    m = re.search(r"\b(?:top|best|leading|biggest|worst)\s+(\d{1,2}|" + "|".join(_NUMBER_WORDS) + r")\b", t) or re.search(r"\b(\d{1,2})\s+(?:best|top|leading)\b", t)
+    if m:
+        v = m.group(1)
+        n = int(v) if v.isdigit() else _NUMBER_WORDS[v]
+    return {"market": market, "kind": kind, "n": max(3, min(10, n))}
+
+
 def info_question(t: str) -> dict[str, Any] | None:
     """A question that is about information, not a trade: stock ideas ("which stock to buy"), whether a market is open, what the
     followed investors are doing, "should I buy TCS" (opens its checklist). None when t is not one."""
     if _NEWSW.search(t):
         return None
+    top = market_top(t)
+    if top:   # decided before the ideas rule: "top 10 usa stocks" is a list from the Screener, not the agent's Indian ideas
+        return {"intent": "market_top", "args": top}
     m = _SHOULD_I.search(t)
     if m:
         name = clean_name(m.group(1) or m.group(2) or "")
@@ -359,6 +393,15 @@ def _finish(intent: str, args: dict[str, Any], search: Callable[..., list[dict[s
         return {"intent": "followed_deals", "args": {}, "say": "Looking at the latest deals.", "via": via}
     if intent == "market_summary":
         return {"intent": "market_summary", "args": {}, "say": "Looking at the markets.", "via": via}
+    if intent == "market_top":
+        mk = str(args.get("market") or "IN").upper()
+        kind = str(args.get("kind") or "leaders").lower()
+        try:
+            n = max(3, min(10, int(args.get("n") or 5)))
+        except (TypeError, ValueError):
+            n = 5
+        return {"intent": "market_top", "args": {"market": mk if mk in MARKET_CODES else "IN", "kind": kind if kind in ("leaders", "gainers", "losers") else "leaders", "n": n},
+                "say": "Looking at the Screener.", "via": via}
     return {"intent": "unknown", "args": {}, "say": f"{HINT} {CAN}", "via": via}
 
 
@@ -370,7 +413,8 @@ SYSTEM = ("You turn a user's short sentence into ONE JSON object for a read-only
           "user's own profit and loss, portfolio value, cash, number of holdings, best or worst stock, or a summary; you never write numbers), "
           "ideas (a question asking which stock to look at or buy; this only shows the app's own ideas), market_status (args: market = IN, US, UK "
           "or JP; when = today, tomorrow or holidays for why the NSE is closed or its next holidays; is a market open or closed), followed_deals (what the followed investors are buying or selling, the latest deals), market_summary "
-          "(how the market is doing today: its stance and the index moves; not the news), open_tab (args: tab = one of " + ", ".join(TABS) + "), show_health, "
+          "(how the market is doing today: its stance and the index moves; not the news), market_top (the top stocks, gainers or losers of a market; "
+          "args: market = IN, US, UK or JP; kind = leaders, gainers or losers; n = 3 to 10), open_tab (args: tab = one of " + ", ".join(TABS) + "), show_health, "
           "unknown. There is NO intent for buying, selling or any order: if asked, answer unknown. Answer with the JSON object "
           'only, for example {"intent":"open_stock","args":{"query":"Tata Motors"}}.')
 SCHEMA = {"type": "object", "properties": {"intent": {"type": "string", "enum": [*INTENTS, "unknown"]},
@@ -397,7 +441,7 @@ def ask_ollama(settings: Any, text: str, session: Any = None) -> dict[str, Any] 
         if intent not in INTENTS:
             return {"intent": "unknown", "args": {}} if intent == "unknown" else None
         args = data.get("args") if isinstance(data.get("args"), dict) else {}
-        keep = {k: str(v)[:80] for k, v in args.items() if k in ("query", "scope", "tab", "topic", "market", "when") and isinstance(v, (str, int, float))}
+        keep = {k: str(v)[:80] for k, v in args.items() if k in ("query", "scope", "tab", "topic", "market", "when", "kind", "n") and isinstance(v, (str, int, float))}
         return {"intent": intent, "args": keep}
     except Exception as e:  # noqa: BLE001 - down, slow, not JSON: the caller says unknown
         log.info("ask: Ollama did not answer (%s)", type(e).__name__)
@@ -427,6 +471,15 @@ def _scoped(text: str, ticker: str, parsed: dict[str, Any] | None) -> dict[str, 
     return {"intent": intent, "args": {"ticker": sym, "name": "", "alternatives": []}, "say": _say_stock(intent, sym), "via": "rules"}
 
 
+def _bounded(fn: Callable[..., Any], *args: Any) -> Any:
+    """``fn(*args)`` or None when it is not done within the model's time limit (plus a second): a slow or stuck Ollama never holds the answer."""
+    box: list[Any] = []
+    t = threading.Thread(target=lambda: box.append(fn(*args)), daemon=True, name="ask-ollama")
+    t.start()
+    t.join(OLLAMA_TIMEOUT + 1.0)
+    return box[0] if box else None
+
+
 def _model_ok(intent: str, text: str) -> bool:
     """A page is opened or the news read on a model's say-so only when the sentence itself asks for it (a sentence that merely
     contains "market" or "health" opens nothing)."""
@@ -452,7 +505,7 @@ def interpret(text: str, search: Callable[..., list[dict[str, Any]]], settings: 
         if order_request(text):
             parsed = {"intent": "refused", "args": {}}
         elif use_ollama:
-            parsed, via = ask_ollama(settings, text, session), "ollama"
+            parsed, via = _bounded(ask_ollama, settings, text, session), "ollama"
         if parsed is None:
             return {"intent": "unknown", "args": {}, "say": f"{HINT} {CAN}", "via": via}
     if parsed["intent"] == "refused":
@@ -463,7 +516,7 @@ def interpret(text: str, search: Callable[..., list[dict[str, Any]]], settings: 
         return {"intent": "unknown", "args": {}, "say": f"{HINT} {CAN}", "via": via}
     out = _finish(parsed["intent"], parsed.get("args") or {}, search, via)
     if out["intent"] == "unknown" and via == "rules" and use_ollama:   # a rule read it but the company is unknown: let the model try
-        model = ask_ollama(settings, text, session)
+        model = _bounded(ask_ollama, settings, text, session)
         if model and model["intent"] != "unknown" and _model_ok(model["intent"], text):
             return _finish(model["intent"], model.get("args") or {}, search, "ollama")
     return out
