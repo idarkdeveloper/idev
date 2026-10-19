@@ -168,15 +168,19 @@
     function paintHead(){ const e = root.querySelector(".sp-head"); if(e) e.innerHTML = headHtml(); }
 
     // ---- holding ----
+    // Two separate blocks: the REAL Groww position first (live page only: opts.holding is the dashboard's holdings list),
+    // then the practice account's position (the lookup's own ``position``), each labelled for what it is.
     function holdingHtml(){
       const r = st.r; if(!r) return "";
-      const h = r.position || (opts.holding ? opts.holding(st.ticker) : null);
-      const f = holdingFigures(h, price());
-      if(!f) return "";
-      return `<div class="sp-hold card-inset"><h3>Your holding</h3><div class="sp-kv">
+      const block = (title, note, f, owns) => `<div class="sp-hold card-inset"><h3>${title}</h3><div class="sub" style="font-size:12px;margin:-4px 0 6px">${note}</div>
+        ${owns ? `<div class="sp-own">You own <b>${f.qty} ${f.qty === 1 ? "share" : "shares"}</b> at an average ${rupees(f.avg)} (invested ${rupees(f.avg != null ? f.qty * f.avg : null)}, now ${rupees(f.value)})</div>` : ""}<div class="sp-kv">
         ${kv("Shares", String(f.qty))}${kv("Average price", rupees(f.avg))}${kv("Value", rupees(f.value))}
         ${kv("Profit / loss", signedRupees(f.pl), tone(f.pl))}${kv("Return", signedPercent(f.plPct), tone(f.plPct))}
         ${f.stop != null ? kv("Stop", rupees(f.stop) + (f.stopLabel ? " (" + f.stopLabel + ")" : "")) : (f.stopType === "none" ? kv("Stop", "none set") : "")}</div></div>`;
+      const real = opts.mode !== "demo" && opts.holding ? holdingFigures(opts.holding(st.ticker), price()) : null;
+      const practice = holdingFigures(r.position, price());
+      return (real ? block("Your Groww holding (read-only)", "Your real account, from Groww. Nothing here can change it.", real, true) : "")
+        + (practice ? block("Practice account", "Practice money only; not your Groww account.", practice) : "");
     }
     function paintHolding(){ const e = root.querySelector(".sp-holdbox"); if(e) e.innerHTML = holdingHtml(); }
 
