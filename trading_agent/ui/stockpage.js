@@ -188,8 +188,9 @@
         ${f.stop != null ? kv("Stop", rupees(f.stop) + (f.stopLabel ? " (" + f.stopLabel + ")" : "")) : (f.stopType === "none" ? kv("Stop", "none set") : "")}</div></div>`;
       const real = opts.mode !== "demo" && opts.holding ? holdingFigures(opts.holding(st.ticker), price()) : null;
       const practice = holdingFigures(r.position, price());
-      return (real ? block("Your Groww holding (read-only)", "Your real account, from Groww. Nothing here can change it.", real, true) : "")
-        + (practice ? block("Practice account", "Practice money only; not your Groww account.", practice) : "");
+      const broker = opts.brokerName || "broker";   // the page passes the broker's name: this file never names it
+      return (real ? block(`Your ${broker} holding (read-only)`, `Your real account, from ${broker}. Nothing here can change it.`, real, true) : "")
+        + (practice ? block("Practice account", `Practice money only; not your ${broker} account.`, practice) : "");
     }
     function paintHolding(){ const e = root.querySelector(".sp-holdbox"); if(e) e.innerHTML = holdingHtml(); }
 

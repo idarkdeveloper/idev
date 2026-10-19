@@ -133,7 +133,7 @@ def lookup_takeaway(r: dict[str, Any], now: Any = None, ctx: dict[str, Any] | No
                     else f"; its {kind} stop at {_money(pos['stop'], 2)} is {room * 100:.1f}% below the price" if room is not None else "")
         qty = pos["qty"]
         qty_txt = f"{int(qty)}" if float(qty).is_integer() else f"{qty}"
-        out.append(f"You hold {qty_txt} at {_money(pos['avg_entry_price'], 2)} ({'+' if pl >= 0 else ''}{pl * 100:.1f}%){stop_txt}.")
+        out.append(f"Your practice account holds {qty_txt} at {_money(pos['avg_entry_price'], 2)} ({'+' if pl >= 0 else ''}{pl * 100:.1f}%){stop_txt}.")
     raw_rg = (ctx or {}).get("regime")
     rg: dict[str, Any] = raw_rg if isinstance(raw_rg, dict) and not raw_rg.get("error") else {}
     nifty = (rg.get("markets") or {}).get("nifty50") or {}

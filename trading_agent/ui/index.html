@@ -1694,7 +1694,7 @@
     if(t.via !== "host"){ drawerPushed = false; location.assign(t.url); return; }
     closeDrawer(); palHost[t.op](t.symbol);
   }
-  const stockOpts = (extra) => Object.assign({mode: MODE, context: () => ({regime: S && S.regime, screen: S && S.screen}), holding: growwHolding,
+  const stockOpts = (extra) => Object.assign({mode: MODE, brokerName: "Groww", context: () => ({regime: S && S.regime, screen: S && S.screen}), holding: growwHolding,
     onPractice: practiceOrder, onLoaded: (r) => { curStock = TA.foreignMarket(r.ticker) ? String(r.ticker) : String(r.ticker).split(".")[0]; syncUrl(); lkSeq++; renderLookupCard(r); $("lk-ticker").value = r.ticker;
       $("sp-modal-name").textContent = r.name || r.ticker; $("sp-modal-px").textContent = String(r.ticker) + (r.price != null ? " · " + TA.px(r.price, r.currency) : "");
       $("sp-modal-foot").textContent = "Prices from Yahoo Finance (delayed). Read-only: nothing here places an order; " + (r.view_only ? "US, UK and Japan stocks are for viewing only." : "Practice buy and sell only open the practice form."); }}, extra || {});
