@@ -45,6 +45,48 @@ def momentum_stats(bars: list[dict[str, Any]]) -> dict[str, Any]:
     return stats
 
 
+class SeriesArrays:
+    """One symbol's bars as plain columns, built once: a backtest asks for the stats at every month, and each answer
+    only needs slices of these (C-speed) instead of a copy of the bars and a Python loop over them."""
+    __slots__ = ("dates", "close", "adj", "cv")
+
+    def __init__(self, bars: list[dict[str, Any]]):
+        self.dates = [b["date"] for b in bars]
+        self.close = [b["close"] for b in bars]
+        self.adj = [b["adj_close"] for b in bars]
+        self.cv = [b["close"] * b["volume"] for b in bars]
+
+
+def momentum_stats_at(a: SeriesArrays, n: int) -> dict[str, Any]:
+    """``momentum_stats(bars[:n])`` from the columns of ``bars``, bit for bit (same sums in the same order)."""
+    if n <= 0:
+        return {"error": "no price history"}
+    adj = a.adj
+    stats: dict[str, Any] = {"last_close": a.close[n - 1], "as_of": a.dates[n - 1], "bars": n}
+
+    def ret(lookback: int, skip: int = 0) -> float | None:
+        if n <= lookback + skip:
+            return None
+        end, start = adj[n - 1 - skip], adj[n - 1 - skip - lookback]
+        return (end / start - 1.0) if start else None
+    for name, k in TRADING_DAYS.items():
+        stats[f"ret_{name}"] = ret(k)
+    stats["ret_12_1"] = ret(TRADING_DAYS["12m"] - TRADING_DAYS["1m"], TRADING_DAYS["1m"])
+    if n >= 200:
+        ma200 = sum(adj[n - 200:n]) / 200
+        stats["ma200"] = ma200
+        stats["above_200dma"] = adj[n - 1] > ma200
+    else:
+        stats["ma200"] = None
+        stats["above_200dma"] = None
+    lo = max(0, n - 60)
+    stats["avg_turnover_60d"] = sum(a.cv[lo:n]) / (n - lo)
+    high_52w = max(adj[max(0, n - 252):n])
+    stats["pct_from_52w_high"] = adj[n - 1] / high_52w - 1.0 if high_52w else None
+    stats["verdict"] = momentum_verdict(stats)
+    return stats
+
+
 def momentum_verdict(stats: dict[str, Any]) -> str:
     """'strong' | 'neutral' | 'weak' | 'insufficient'."""
     r6, r121, above = stats.get("ret_6m"), stats.get("ret_12_1"), stats.get("above_200dma")
