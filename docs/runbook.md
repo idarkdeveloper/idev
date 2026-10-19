@@ -18,7 +18,7 @@ Claude Code, and how to operate the Oracle Cloud server. Commands are copy-paste
 | Settings | `.env` in the project folder | `/opt/trading-agent/.env` (mode 600, only `agent` can read it) |
 | State (accounts, caches, logs) | `state\` in the project folder | `/opt/trading-agent/state/` |
 | Dashboard | http://127.0.0.1:8787/ | http://127.0.0.1:8788/ on the laptop, through the SSH tunnel (section 4) |
-| Repo | https://github.com/idarkdeveloper/idev (public) | same, pulled over HTTPS |
+| Repo | https://github.com/idarkdeveloper/share-trading (public; renamed from idev on 19 Oct 2026, the old address redirects) | same, pulled over HTTPS |
 
 Server: Oracle Cloud, region India West (Mumbai), Ubuntu 24.04 on Ampere A1 (2 cores, 12 GB), reserved public
 IP **130.210.18.7** (registered with Groww as the static IP). Login user `ubuntu`, SSH key `C:\Users\affaf\.ssh\oracle_agent`.
@@ -116,6 +116,7 @@ sudo systemctl restart trading-agent-watch trading-agent-dashboard   # apply
 | `PAPER_STARTING_CASH` | `100000` | practice account size |
 | `NOTIFY_EMAIL_TO` / `NOTIFY_EMAIL_FROM` | `affafhashmi02@gmail.com` / `Trading Agent <onboarding@resend.dev>` | with Resend's test sender, mail only reaches your Resend account address; verify a domain at resend.com/domains to use any address |
 | `NEWS_TAGGER` | `auto` | Ollama if running, else none (Claude only if set to `claude`) |
+| `NEWS_ALERT_CHANNELS` | empty | Where each news alert goes: `telegram` (push only, no email), `email`, or `both`. Empty = Telegram when `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` and `TELEGRAM_ALERTS` are set, else email. A Telegram failure sends that one alert by email. By email at most one alert per stock per 30 min; all of them are in the digests' "News today". To stop the news emails: `NEWS_ALERT_CHANNELS=telegram` (or leave it empty with Telegram set up), then restart the watch service. |
 | `OLLAMA_URL` / `OLLAMA_MODEL` | `http://127.0.0.1:11434` / `qwen2.5:3b` | local language model for news tags and email summaries |
 | `DIGEST_ENABLED`, `DIGEST_MORNING_ON`, `DIGEST_EVENING_ON` | `true` | daily emails on/off |
 | `DIGEST_MORNING` / `DIGEST_EVENING` | `09:00` / `15:45` | IST send times (before the open / after the close) |
@@ -543,3 +544,20 @@ Gate checklist before relying on it:
 - Alert when the feed's `window_end` date is not today on a trading day: a dead watch reads "closed, not stale" the next morning.
 - The 150-login cap is unaffected: the feed reuses the cached token, it does not log in.
 - Revoking a phone works (step 8) and the revoked secret gets 401.
+
+## Install on your phone
+
+The dashboard is an installable web app (manifest, icons and a small service worker; nothing is stored that holds money data).
+
+* **Android (Chrome):** open the HTTPS Tailscale address (for example `https://trading-agent.tail2f4b4a.ts.net:8443/`) with Tailscale
+  connected, then the menu (three dots) > **Install app** (or **Add to Home screen**). Open it from the home-screen icon: it runs
+  without the address bar. Chrome offers the install only over HTTPS (the `tailscale serve` certificate is fine) or on `localhost`.
+* **iPhone (Safari):** Share > **Add to Home Screen**.
+* **Offline:** the pages and every number come from the server, so with no connection (for example Tailscale switched off) the app
+  shows "Trading Agent is offline: check that Tailscale is connected, then reload" with a Reload button. Nothing from the
+  API (`/api/`, `/demo/api/`, `/replay/api/`) or any page is ever kept by the app; only scripts, styles, fonts and icons.
+* **Updates:** after a deploy the page opens the new version by itself (scripts and styles are fetched fresh when online). If the
+  home-screen app looks stale, pull down to reload or close and reopen it once; to force the service worker to refresh, clear the
+  site data in Chrome (Site settings) once.
+* **Host check:** the manifest, `/sw.js` and the icons are plain files served under the same `TA_ALLOWED_HOSTS` rule as every page; the
+  `/api` protections are unchanged.

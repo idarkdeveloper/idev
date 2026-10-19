@@ -59,6 +59,13 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
                                                   "text/javascript; charset=utf-8")}
+# Installable app: the manifest, the service worker and the icons. Plain files, no data; the Host check still applies to them.
+PWA_FILES = {"/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json", "no-cache"),
+             "/sw.js": ("sw.js", "text/javascript; charset=utf-8", "no-cache"),
+             "/icons/icon-192.png": ("icons/icon-192.png", "image/png", "public, max-age=86400"),
+             "/icons/icon-512.png": ("icons/icon-512.png", "image/png", "public, max-age=86400"),
+             "/icons/icon-maskable-512.png": ("icons/icon-maskable-512.png", "image/png", "public, max-age=86400"),
+             "/icons/apple-touch-icon.png": ("icons/apple-touch-icon.png", "image/png", "public, max-age=86400")}
 # Dashboard POST routes that trade, reach Groww or start jobs: refused (403) while the kill switch is set.
 HALT_REFUSED_POSTS = {"/api/integration/run", "/api/order", "/api/practice/copy-groww",
                       "/api/practice/sell", "/api/practice/reset-to-groww", "/api/close", "/api/groww-test",
@@ -2272,11 +2279,13 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(body)
 
-        def _bytes(self, body: bytes, ctype: str, cache: str = "no-cache") -> None:
+        def _bytes(self, body: bytes, ctype: str, cache: str = "no-cache", extra: dict[str, str] | None = None) -> None:
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", cache)
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
 
@@ -2304,6 +2313,15 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._refuse(refused)
                 return
             path = urlparse(self.path).path
+            if path in PWA_FILES:
+                name, ctype, cache = PWA_FILES[path]
+                try:
+                    data = (resources.files("trading_agent") / "ui" / name).read_bytes()
+                except FileNotFoundError:
+                    self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+                    return
+                self._bytes(data, ctype, cache, {"Service-Worker-Allowed": "/"} if path == "/sw.js" else None)
+                return
             if path in STATIC_FILES:
                 name, ctype = STATIC_FILES[path]
                 try:

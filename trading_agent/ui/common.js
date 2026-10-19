@@ -1118,3 +1118,8 @@ window.TA = (function(){
           daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart, loader};
 })();
 window.TA.theme.init();
+// Installable app: the service worker (sw.js) only on https or this machine; it never stores API answers. Quiet when it cannot.
+try {
+  if("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1"))
+    window.addEventListener("load", () => { navigator.serviceWorker.register("/sw.js", {scope: "/"}).catch(() => {}); });
+} catch(e){}
