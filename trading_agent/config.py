@@ -285,6 +285,8 @@ class Settings:
     bse_deals: bool = True
     insider_trades: bool = True      # INSIDER_TRADES: the watch reads every NSE insider filing (alerts + dashboard)
     insider_min_buy: float = 1e7     # INSIDER_MIN_BUY: rupees; smallest insider open-market buy on the dashboard list
+    big_money: bool = True           # BIG_MONEY: institutions' bulk/block deals in every stock (alerts + dashboard)
+    big_money_min: float = 1e8       # BIG_MONEY_MIN: rupees; smallest institutional deal on the dashboard list
     bse_host: str = "beta.bseindia.com"
     # Market data (flows.py, breadth.py, bands.py): FII/DII flows + breadth lines in the morning email; price-band filter.
     flows_breadth: bool = True
@@ -521,6 +523,8 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         bse_deals=_bool(env("BSE_DEALS"), True),
         insider_trades=_bool(env("INSIDER_TRADES"), True),
         insider_min_buy=float(env("INSIDER_MIN_BUY") or 1e7),
+        big_money=_bool(env("BIG_MONEY"), True),
+        big_money_min=float(env("BIG_MONEY_MIN") or 1e8),
         bse_host=bse_host,
         flows_breadth=_bool(env("FLOWS_BREADTH"), True),
         price_band_filter=_bool(env("PRICE_BAND_FILTER"), True),

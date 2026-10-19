@@ -550,33 +550,43 @@ class Watcher:
         """Every 15 minutes, 07:00-22:00 IST: refresh the book of NSE insider filings (all companies) on a worker thread,
         then alert on new insider trades in the stocks you hold or that are recommended. Never raises."""
         s = self.settings
-        if (not getattr(s, "insider_trades", False) or getattr(s, "market", "in") != "in"
+        on_insider, on_money = getattr(s, "insider_trades", False), getattr(s, "big_money", False)
+        if (not (on_insider or on_money) or getattr(s, "market", "in") != "in"
                 or self._data is None or not hasattr(self._data, "insider_trades") or not 7 <= now.hour < 22):
             return None
         if self._insider_thread is not None and self._insider_thread.is_alive():
             return "running"
+        from .big_money import book_for as money_book_for
         from .insider_watch import book_for
-        book = book_for(s)
-        if not book.due(now):
+        book = book_for(s) if on_insider and book_for(s).due(now) else None
+        money = money_book_for(s) if on_money and money_book_for(s).due(now) else None
+        if book is None and money is None:
             return None
-        self._insider_thread = threading.Thread(target=self._insider_refresh, args=(book, now), daemon=True,
+        self._insider_thread = threading.Thread(target=self._insider_refresh, args=(book, now, money), daemon=True,
                                                 name="insider-book")
         self._insider_thread.start()
         return "started"
 
-    def _insider_refresh(self, book: Any, now: datetime) -> None:
-        try:
-            from .nse import NSEClient
-            # its own client (a session per thread), sharing the cache and the watch's NSE back-off
-            client = NSEClient(cache_dir=getattr(self._data, "cache_dir", None), breaker=getattr(self._data, "breaker", None))
-            book.refresh(client, now)
-            fresh = book.new_for(self.interesting_tickers())
-            if fresh and self._notifier is not None:
-                from .insider_watch import alert_text
-                subject, body = alert_text(fresh)
-                self._notifier.send(_plain(subject), _plain(body))
-        except Exception as e:  # noqa: BLE001 - a second source: the watch carries on
-            log.warning("insider book refresh failed: %s", e)
+    def _insider_refresh(self, book: Any, now: datetime, money: Any = None) -> None:
+        """The insider book and the institutions' deals (big_money.py), each with its own alert; one failing never
+        stops the other."""
+        from .nse import NSEClient
+        # its own client (a session per thread), sharing the cache, BSE and the watch's NSE back-off
+        client = NSEClient(cache_dir=getattr(self._data, "cache_dir", None), breaker=getattr(self._data, "breaker", None))
+        client.bse = getattr(self._data, "bse", None)
+        from .big_money import alert_text as money_alert
+        from .insider_watch import alert_text as insider_alert
+        for b, alert, what in ((book, insider_alert, "insider book"), (money, money_alert, "institutions' deals")):
+            if b is None:
+                continue
+            try:
+                b.refresh(client, now)
+                fresh = b.new_for(self.interesting_tickers())
+                if fresh and self._notifier is not None:
+                    subject, body = alert(fresh)
+                    self._notifier.send(_plain(subject), _plain(body))
+            except Exception as e:  # noqa: BLE001 - a second source: the watch carries on
+                log.warning("%s refresh failed: %s", what, e)
 
     def poll_deals_blocked(self) -> list[dict[str, Any]]:
         """Alerts-only mode: tell the user about new deals without analysing them (that needs the broker).

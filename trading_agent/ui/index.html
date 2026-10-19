@@ -193,6 +193,10 @@
       <div class="cardhead"><h2>Promoter and director buying</h2><span class="sub" id="ins-sub">open-market buys from NSE insider filings, last 30 days</span></div>
       <div class="cardbody" id="ins-body"><div class="sub">Loading insider filings…</div></div>
     </div>
+    <div class="card" data-anchor="funds" id="bm-card">
+      <div class="cardhead"><h2>Funds buying and selling</h2><span class="sub" id="bm-sub">mutual funds, foreign funds and insurers in bulk and block deals, last 30 days</span></div>
+      <div class="cardbody" id="bm-body"><div class="sub">Loading deals…</div></div>
+    </div>
     <div class="card" data-anchor="track-record">
       <div class="cardhead"><h2>Claude's track record</h2><span class="sub">each call vs the index afterwards</span><button type="button" class="small" id="scd-run" style="margin-left:auto">Refresh</button></div>
       <div class="cardbody" id="scd-result"><div class="sub">Scores every recommendation once it has 5 trading days of history: buys are right when they beat the index by more than the trading cost, sells when the stock then lagged.</div></div>
@@ -691,6 +695,7 @@
   });
 
   let MP = null;
+  let BM = null;    // the institutions' deals (GET /api/big-money)
   let INS = null;   // the insider book (GET /api/insider): big insider buys and a per-stock summary  // the last My Groww portfolio answer: it fills the Live tiles
   const LIVE_TILES = ["Holdings value", "Cash", "Profit / loss", "Today", "Holdings"];
   if(MODE !== "demo") $("tiles").innerHTML = LIVE_TILES.map(l => tile(l, "…", "Loading your holdings…")).join("");
@@ -1237,7 +1242,7 @@
     const total = m.holdings.reduce((t, h) => t + (h.value || 0), 0);
     const sorted = m.holdings.slice().sort((x, y) => (y.value || 0) - (x.value || 0));   // biggest first, as on Groww
     if(!keepRows) rows.innerHTML = sorted.length ? sorted.map(h => { const dm = dayMove(h); return `<tr data-open-stock="${esc(h.symbol)}">
-        <td class="stock-cell"><div class="sym-line"><a href="#" data-lookup="${esc(h.symbol)}" class="sym" title="${esc(h.name || h.symbol)}">${esc(h.symbol)}</a>${h.kind === "bond" ? ` <span class="pill warn mini" title="bond${h.maturity ? " maturing " + esc(h.maturity) : ""}">Bond</span>` : ""}${h.exchange === "BSE" ? ' <span class="pill mini">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill mini" title="NSE daily price band">Band ${esc(MP.bands[h.symbol])}</span>` : ""}${((MP.filter_flags || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Review flag from the Indian-market filters; the agent never sells on it">${esc(f)}</span>`).join("")}${((MP.corp_actions || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Corporate action within 7 days: the GTT stop-loss is paused over the ex-date and re-set at the adjusted level">${esc(f)}</span>`).join("")}${insiderChip(h.symbol)}</div>${h.name ? `<div class="sub hname" title="${esc(h.name)}">${esc(h.name)}</div>` : ""}
+        <td class="stock-cell"><div class="sym-line"><a href="#" data-lookup="${esc(h.symbol)}" class="sym" title="${esc(h.name || h.symbol)}">${esc(h.symbol)}</a>${h.kind === "bond" ? ` <span class="pill warn mini" title="bond${h.maturity ? " maturing " + esc(h.maturity) : ""}">Bond</span>` : ""}${h.exchange === "BSE" ? ' <span class="pill mini">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill mini" title="NSE daily price band">Band ${esc(MP.bands[h.symbol])}</span>` : ""}${((MP.filter_flags || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Review flag from the Indian-market filters; the agent never sells on it">${esc(f)}</span>`).join("")}${((MP.corp_actions || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Corporate action within 7 days: the GTT stop-loss is paused over the ex-date and re-set at the adjusted level">${esc(f)}</span>`).join("")}${insiderChip(h.symbol)}${fundsChip(h.symbol)}</div>${h.name ? `<div class="sub hname" title="${esc(h.name)}">${esc(h.name)}</div>` : ""}
           <div class="sub l2">${(() => { const rest = [total && h.value != null ? `${(h.value / total * 100).toFixed(1)}%` : "", h.sellable_qty < h.qty ? `${h.sellable_qty} free to sell` : ""].filter(Boolean).join(" · ");
           return rest; })()}</div>
           <div class="hold-line" title="shares (or units) owned × average buy price">${(() => { const rest = [total && h.value != null ? `${(h.value / total * 100).toFixed(1)}%` : "", h.sellable_qty < h.qty ? `${h.sellable_qty} free to sell` : ""].filter(Boolean);
@@ -2049,6 +2054,42 @@
         ${all.length > 10 ? `<button type="button" class="small" id="ins-more" style="margin-top:8px">${insShowAll ? "Show the top 10" : `Show all ${all.length}`}</button>` : ""}
         <div class="sub" style="margin-top:6px">Insiders paying market price for more of their own company is usually read as confidence. ESOPs, gifts, transfers between promoters and pledges are left out. Not advice.</div>`;
   }
+  // ---- institutions' bulk/block deals in every stock (state/big_money.json, refreshed by the watch) ----
+  function fundsChip(sym){
+    const x = BM && BM.summary && BM.summary[sym];
+    if(!x || !(x.buys || x.sells)) return "";
+    const tip = `Institutions in bulk/block deals, last ${BM.days || 30} days: ${x.buys} buy(s) worth ${insMoney(x.buy_value)}, ${x.sells} sale(s) worth ${insMoney(x.sell_value)}.`;
+    const net = (x.buy_value || 0) - (x.sell_value || 0);
+    return ` <span class="pill ${net >= 0 ? "ok" : "warn"} mini" title="${esc(tip)}">${net >= 0 ? "Funds buying" : "Funds selling"}</span>`;
+  }
+  let bmShowAll = false, bmSide = "all";
+  function renderFunds(){
+    const el = $("bm-body"); if(!el) return;
+    if(!BM || BM.error && !BM.updated){ el.innerHTML = `<div class="sub">Deals unavailable${BM && BM.error ? ": " + esc(BM.error) : ""}.</div>`; return; }
+    if(!BM.updated){ el.innerHTML = `<div class="sub">No data yet: the watch service reads the exchanges' bulk and block deals every 15 minutes (set BIG_MONEY=false to turn this off).</div>`; return; }
+    $("bm-sub").textContent = `deals of ${insMoney(BM.min_value)} or more by mutual funds, foreign funds, insurers and banks · NSE and BSE, last ${BM.days || 30} days · updated ${String(BM.updated).slice(11, 16)} IST`;
+    const all = (BM.notable || []).filter(g => bmSide === "all" || g.side === bmSide), n = bmShowAll ? all : all.slice(0, 10);
+    const tabs = ["all", "buy", "sell"].map(k => `<button type="button" class="small chip" data-bm-side="${k}" aria-pressed="${bmSide === k}">${k === "all" ? "All" : k === "buy" ? "Buys" : "Sales"}</button>`).join(" ");
+    el.innerHTML = `<div class="row" style="gap:6px;margin-bottom:8px">${tabs}</div>` + (!n.length ? `<div class="sub">No institutional deal of ${esc(insMoney(BM.min_value))} or more in the last ${esc(BM.days || 30)} days.</div>`
+      : `<div class="scroll"><table class="dt"><thead><tr><th>Stock</th><th>Fund</th><th class="num">Deal</th><th class="num">Avg price</th><th>When</th></tr></thead><tbody>${n.map(g =>
+          `<tr><td><a href="#" data-lookup="${esc(g.symbol)}" class="sym">${esc(g.symbol)}</a>${g.company ? `<div class="sub l2">${esc(g.company)}</div>` : ""}</td>
+           <td>${esc(g.client)}<div class="sub l2">${(g.exchanges || []).map(esc).join(" + ")}${g.deals > 1 ? ` · ${g.deals} deals` : ""}</div></td>
+           <td class="num"><span class="${g.side === "buy" ? "pl-profit" : "pl-loss"}">${g.side === "buy" ? "Bought" : "Sold"} ${insMoney(g.value)}</span><div class="sub l2">${Math.round(g.qty).toLocaleString("en-IN")} sh</div></td>
+           <td class="num">${g.avg_price ? "₹" + Number(g.avg_price).toLocaleString("en-IN", {maximumFractionDigits: 2}) : "n/a"}</td>
+           <td>${esc(g.first === g.last ? g.last || "" : (g.first || "") + " to " + (g.last || ""))}</td></tr>`).join("")}</tbody></table></div>
+        ${all.length > 10 ? `<button type="button" class="small" id="bm-more" style="margin-top:8px">${bmShowAll ? "Show the top 10" : `Show all ${all.length}`}</button>` : ""}`)
+      + `<div class="sub" style="margin-top:6px">From the exchanges' bulk and block deal files. A fund buying a large block is usually a researched view; it can also be rebalancing or an index change. Brokers' trading desks are left out. Not advice.</div>`;
+  }
+  document.addEventListener("click", (ev) => {
+    const t = ev.target && ev.target.closest && ev.target.closest("[data-bm-side], #bm-more"); if(!t) return;
+    if(t.id === "bm-more") bmShowAll = !bmShowAll; else { bmSide = t.dataset.bmSide; bmShowAll = false; }
+    renderFunds();
+  });
+  async function loadFunds(){
+    try { BM = await api("/api/big-money"); } catch(e){ BM = {error: e.message}; }
+    renderFunds();
+    if(MP && MP.holdings && !(sellEdit !== null && sellEdit.source === "groww")) renderMyPortfolio(MP);
+  }
   let insShowAll = false;
   document.addEventListener("click", (ev) => { if(ev.target && ev.target.id === "ins-more"){ insShowAll = !insShowAll; renderInsider(); } });
   async function loadInsiderBook(){
@@ -2057,8 +2098,8 @@
     if(MP && MP.holdings && !(sellEdit !== null && sellEdit.source === "groww")) renderMyPortfolio(MP);
   }
 
-  loadInsiderBook();
-  setInterval(() => { if(!document.hidden) loadInsiderBook(); }, 5 * 60 * 1000);   // the book itself changes every 15 min   // just over the server's 60 s Groww cache: every poll gets a fresh read, and never more than one a minute
+  loadInsiderBook(); loadFunds();
+  setInterval(() => { if(!document.hidden){ loadInsiderBook(); loadFunds(); } }, 5 * 60 * 1000);   // the book itself changes every 15 min   // just over the server's 60 s Groww cache: every poll gets a fresh read, and never more than one a minute
   // While the NSE is open the price shown beside a stock (order form, Look up card, stock drawer) follows the market too.
   // Quiet updates only: the text changes in place; nothing is rebuilt, so no panel closes and the page does not jump.
   setInterval(async () => {

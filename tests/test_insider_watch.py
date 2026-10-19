@@ -87,12 +87,12 @@ def test_a_failed_refresh_keeps_the_last_rows(tmp_path):
         pass
     d = book.load()
     assert len(d["rows"]) == 9 and "NSE refused" in d["error"] and "NSE refused" in health.read_runs(tmp_path)["insider_market"]["error"]
-    assert not book.due(NOW + timedelta(minutes=10)) and book.due(NOW + timedelta(minutes=16))
+    assert not book.due(NOW + timedelta(minutes=30)) and book.due(NOW + timedelta(minutes=36))   # 15 min after the failure too
 
 
 def test_the_watch_refreshes_on_a_worker_every_15_minutes(settings, monkeypatch):
     from trading_agent.watch import Watcher
-    settings.market, settings.insider_trades = "in", True
+    settings.market, settings.insider_trades, settings.big_money = "in", True, False
     sent = []
 
     class Notifier:

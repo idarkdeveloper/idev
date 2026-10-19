@@ -168,11 +168,15 @@ class InsiderBook:
         atomic_write(self.path, json.dumps(d, sort_keys=True))
 
     def due(self, now: datetime) -> bool:
-        try:
-            last = datetime.fromisoformat(str(self.load().get("updated")))
-        except ValueError:
-            return True
-        return (now - last).total_seconds() >= EVERY_S
+        """EVERY_S after the last read, whether it worked or failed (a failing NSE is not asked every minute)."""
+        d = self.load()
+        times = []
+        for k in ("updated", "error_at"):
+            try:
+                times.append(datetime.fromisoformat(str(d.get(k))))
+            except ValueError:
+                pass
+        return not times or (now - max(times)).total_seconds() >= EVERY_S
 
     def refresh(self, client: Any, now: datetime) -> dict[str, Any]:
         """Read the last DAYS of insider filings from ``client`` (an NSEClient) and store them. Records the outcome

@@ -782,6 +782,15 @@ stored in `state/insider_book.json`), whatever `WATCH_SOURCE` says. It gives:
 `python -m trading_agent insider [--refresh] [--symbol SYM]` shows the same from the command line. The Health page row
 "Insider trades, all NSE companies" shows when it last read. Read-only public filings: no login, no orders.
 
+**Funds in every stock's deals** (`BIG_MONEY`, default `true`): beside the insider book, the watch reads the last 30
+days of NSE and BSE bulk and block deals every 15 minutes (`trading_agent/big_money.py`, `state/big_money.json`) and
+keeps the institutions: mutual funds, foreign funds (FPIs), insurers, banks, pension and sovereign funds (brokers'
+trading desks are left out; names are classified by `investors.classify_client`, so a promoter family trust can look
+like a fund). It gives an alert when one buys or sells a stock you hold or that is recommended, a "Funds buying" /
+"Funds selling" mark on the portfolio row, a *Fund deals* section on the stock page and the *Funds buying and selling*
+card (Research): deals of `BIG_MONEY_MIN` rupees or more (default ₹10 crore), summed per fund, stock and side.
+`python -m trading_agent funds [--refresh] [--symbol SYM]` shows the same.
+
 `BSE_DEALS` (default `true`): also read BSE's bulk and block deals (public page, no login) beside NSE's,
 so mid and small-cap deals made only on BSE are followed too. They show in the deals table with an
 Exchange column, in alerts ("on BSE"), the Claude check, the daily emails and the deal backtest. Set

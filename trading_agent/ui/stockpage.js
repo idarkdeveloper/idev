@@ -5,7 +5,7 @@
 //
 // Safety: the Practice buy / Practice sell buttons never send an order. They call opts.onPractice(side, symbol) and the
 // host page opens the existing practice order form pre-filled (the Live page goes to /demo?buy=SYM / ?sell=SYM). The
-// only server reads here are GETs: /api/lookup, /api/stock, /api/candles, /api/news, /api/announcements, /api/insider.
+// only server reads here are GETs: /api/lookup, /api/stock, /api/candles, /api/news, /api/announcements, /api/insider, /api/big-money.
 (function(){
   "use strict";
 
@@ -286,6 +286,24 @@
          <td class="num">${isNum(x.qty) ? group(Math.round(x.qty), 0) : "n/a"}</td><td class="num">${insiderMoney(x.value)}</td></tr>`).join("")}</tbody></table></div>
         <div class="sub" style="margin-top:6px">From NSE insider-trading (PIT) filings. A promoter buying in the market is usually read as a good sign; a sale can also be for tax or personal reasons.</div>`;
     }
+    // Institutions (mutual funds, foreign funds, insurers, banks) in this stock's bulk and block deals, last month.
+    function fundsHint(){
+      const t = st.funds && st.funds.trades; if(!t || !t.length) return "";
+      const b = t.filter(x => x.side === "buy").length, s = t.length - b;
+      return `${b} buy${b === 1 ? "" : "s"} · ${s} sale${s === 1 ? "" : "s"}`;
+    }
+    function fundsHtml(){
+      const d = st.funds;
+      if(d === undefined) return loading("fund deals");
+      if(!d || d.error && !(d.trades || []).length) return `<div class="sub">Fund deals unavailable${d && d.error ? ": " + esc(d.error) : ""}.</div>`;
+      if(!d.updated) return `<div class="sub">No data yet: the watch service reads the bulk and block deals every 15 minutes.</div>`;
+      const t = d.trades || [];
+      if(!t.length) return `<div class="sub">No mutual fund, foreign fund or insurer bulk or block deal in the last ${esc(d.days || 30)} days.</div>`;
+      return `<div class="scroll"><table class="dt sp-funds"><thead><tr><th>Date</th><th>Fund</th><th>Deal</th><th class="num">Shares</th><th class="num">Value</th></tr></thead><tbody>${t.map(x =>
+        `<tr><td>${esc(x.date || "")}</td><td>${esc(x.client)}<div class="sub l2">${esc((x.kind || "") + " deal · " + (x.exchange || "NSE"))}</div></td>
+         <td><span class="${x.side === "buy" ? "pl-profit" : "pl-loss"}">${x.side === "buy" ? "Bought" : "Sold"}</span><div class="sub l2">${isNum(x.price) ? "@ ₹" + group(x.price, 2) : ""}</div></td>
+         <td class="num">${isNum(x.qty) ? group(Math.round(x.qty), 0) : "n/a"}</td><td class="num">${insiderMoney(x.value)}</td></tr>`).join("")}</tbody></table></div>`;
+    }
     function shareholdingHtml(){
       const d = st.stock; if(!d) return st.stockError ? `<div class="sub">Unavailable: ${esc(st.stockError)}</div>` : loading("shareholding");
       const s = d.shareholding || {};
@@ -325,7 +343,8 @@
         + sec("about", "About company", aboutHtml(), false)
         + (fund || fx ? "" : sec("shareholding", "Shareholding pattern", shareholdingHtml(), true))
         + (fund || fx ? "" : sec("similar", "Similar stocks", similarHtml(), true))
-        + (fund || fx ? "" : sec("insider", "Insider trades", insiderHtml(), dflt, insiderHint()));
+        + (fund || fx ? "" : sec("insider", "Insider trades", insiderHtml(), dflt, insiderHint()))
+        + (fund || fx ? "" : sec("funds", "Fund deals", fundsHtml(), dflt, fundsHint()));
     }
     function paintOverview(){ const e = root.querySelector('[data-panel="overview"]'); if(e) e.innerHTML = overviewHtml(); }
 
@@ -447,7 +466,7 @@
     // ---- stock figures (the second request) ----
     async function loadStock(mySeq){
       const my = ++stockSeq;
-      st.stock = null; st.stockError = null; st.finIdx = null; st.insider = undefined; paintHead(); paintOverview(); paintTechnicals();
+      st.stock = null; st.stockError = null; st.finIdx = null; st.insider = undefined; st.funds = undefined; paintHead(); paintOverview(); paintTechnicals();
       try {
         const d = await api("/api/stock?ticker=" + encodeURIComponent(st.ticker) + "&exchange=" + st.exchange);
         if(mySeq !== seq || my !== stockSeq || dead) return;
@@ -458,7 +477,14 @@
         st.stockError = e.message || "request failed";
       }
       paintHead(); paintHolding(); paintOverview(); paintTechnicals();
-      if(!foreign()) loadInsider(mySeq);
+      if(!foreign()){ loadInsider(mySeq); loadFunds(mySeq); }
+    }
+    async function loadFunds(mySeq){
+      st.funds = undefined;
+      let d;
+      try { d = await api("/api/big-money?symbol=" + encodeURIComponent(st.ticker)); } catch(e){ d = {error: e.message || "request failed", trades: []}; }
+      if(mySeq !== seq || dead) return;
+      st.funds = d; paintOverview();
     }
     async function loadInsider(mySeq){
       st.insider = undefined;

@@ -359,6 +359,42 @@ def cmd_insider(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_funds(args: argparse.Namespace) -> int:
+    """Institutions (mutual funds, foreign funds, insurers, banks) in the bulk and block deals of every stock."""
+    from datetime import datetime
+    from .big_money import book_for
+    from .runner import make_data_source
+    from .timezones import IST
+
+    settings = _settings(args)
+    book = book_for(settings)
+    if args.refresh:
+        try:
+            d = book.refresh(make_data_source(settings), datetime.now(IST))
+        except Exception as e:  # noqa: BLE001
+            print(f"Deals unavailable: {e}", file=sys.stderr)
+            return 1
+        print(f"Read {len(d['rows'])} institutional deals from the last {d['days']} days.")
+    v = book.view(args.symbol or None)
+    if not v.get("updated"):
+        print("Nothing stored yet: run with --refresh (the watch service refreshes it every 15 minutes).")
+        return 0
+    if args.symbol:
+        for r in v["trades"] or []:
+            print(f"{r.get('date') or '?'}  {'BUY ' if r['side'] == 'buy' else 'SELL'}  {r['client']}  "
+                  f"{r.get('qty') or 0:,.0f} sh @ ₹{r.get('price') or 0:,.2f}  {r.get('kind')} {r.get('exchange')}")
+        if not v["trades"]:
+            print(f"No institutional deals in {args.symbol.upper()} in the last {v['days']} days.")
+        return 0
+    print(f"Institutional deals of ₹{v['min_value'] / 1e7:g} crore or more, last {v['days']} days (updated {v['updated']}):")
+    for g in v["notable"] or []:
+        print(f"  {g['symbol']:<12} {'BUY ' if g['side'] == 'buy' else 'SELL'} ₹{g['value'] / 1e7:8.2f} cr  {g['client']}, "
+              f"{g['first']} to {g['last']}")
+    if not v["notable"]:
+        print("  none")
+    return 0
+
+
 def cmd_market_data(args: argparse.Namespace) -> int:
     """FII/DII flows, NIFTY 500 breadth and NSE price bands: show what is stored, or fetch now (public NSE files)."""
     from datetime import datetime
@@ -2125,6 +2161,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--refresh", action="store_true")
     sp.add_argument("--limit", type=int, default=30)
     sp.set_defaults(func=cmd_orders)
+    sp = sub.add_parser("funds", help="mutual funds, foreign funds and insurers in every stock's bulk/block deals (read-only)")
+    sp.add_argument("--refresh", action="store_true", help="read the deal files now (else show what is stored)")
+    sp.add_argument("--symbol", help="list one stock's institutional deals instead")
+    sp.set_defaults(func=cmd_funds)
     sp = sub.add_parser("insider", help="NSE insider trades, all companies: big insider buys, or one stock's (read-only)")
     sp.add_argument("--refresh", action="store_true", help="read NSE's insider filings now (else show the stored book)")
     sp.add_argument("--symbol", help="list one stock's insider trades instead")
