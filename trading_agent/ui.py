@@ -196,6 +196,7 @@ class App:
         self._active: dict[str, Job] = {}  # kind -> the running job (one per kind)
         self._replay: Any | None = None  # ReplayApp, built on first use
         self._screener: Any | None = None  # ScreenerService, built on first use
+        self._screener_foreign: dict[str, Any] = {}  # US / UK / Japan lists: one service each, built on first use
         self._holidays: Any | None = None
         self._demo: "App | None" = None
         self._settings_version = 0  # bumped when settings change, so the Demo child is rebuilt only then
@@ -443,15 +444,31 @@ class App:
             pass
         return out
 
+    def foreign_screener(self, key: str) -> Any:
+        """The service of one US / UK / Japan list (screener_markets): Yahoo history and fundamentals, view only."""
+        if self._parent is not None:
+            return self._parent.foreign_screener(key)
+        with self._lazy_lock:
+            if key not in self._screener_foreign:
+                from .screener_markets import make_service
+                self._screener_foreign[key] = make_service(key, self.settings.state_dir)
+            return self._screener_foreign[key]
+
     def screener_data(self, universe: str) -> dict[str, Any]:
         """GET /api/screener: rows cached so far plus how many stocks are still being fetched (the page polls)."""
         from .screener import DEALS, HOLDINGS, deal_buyers, universe_key
         from .screen import UNIVERSES
+        from .screener_markets import UNIVERSES as FOREIGN
         key = universe_key(universe)
         if key is None:
-            raise ValueError("universe must be one of " + ", ".join([*UNIVERSES, HOLDINGS, DEALS]))
+            raise ValueError("universe must be one of " + ", ".join([*UNIVERSES, *FOREIGN, HOLDINGS, DEALS]))
         if self._parent is not None:
             return self._parent.screener_data(key)
+        if key in FOREIGN:   # not India: no holdings, deals or Indian filters; offline sample has no network
+            if self.demo_trades is not None:
+                return {"universe": key, "count": 0, "total": 0, "pending": 0, "loading": False, "rows": [], "as_of": None, "source": "",
+                        "tv": {"state": "off", "until": None}, "error": "The screener needs live market data, which the offline sample does not use."}
+            return self.foreign_screener(key).snapshot(key)
         if self.demo_trades is not None:   # the offline sample: no network, so no market lists
             return {"universe": key, "count": 0, "pending": 0, "loading": False, "rows": [], "as_of": None, "source": "",
                     "tv": {"state": "off", "until": None},

@@ -43,8 +43,17 @@
     {key: "tv_eps_growth", label: "EPS growth % (TV)", type: "pct", group: "tv", def: true, tone: true, tip: "from TradingView, unofficial"},
   ];
   const colByKey = (key) => COLS.find(c => c.key === key) || null;
-  const UNIVERSES = ["NIFTY50", "NIFTY100", "NIFTY200", "NIFTY500", "NIFTYMIDCAP150", "NIFTYSMALLCAP250", "HOLDINGS", "DEALS"];
-  const UNIVERSE_LABEL = {HOLDINGS: "My holdings", DEALS: "Followed investors' recent buys"};
+  const UNIVERSES = ["NIFTY50", "NIFTY100", "NIFTY200", "NIFTY500", "NIFTYMIDCAP150", "NIFTYSMALLCAP250", "HOLDINGS", "DEALS", "SP500_US", "FTSE100_UK", "TOPIX100_JP"];
+  const UNIVERSE_LABEL = {HOLDINGS: "My holdings", DEALS: "Followed investors' recent buys", SP500_US: "S&P 500", FTSE100_UK: "FTSE 100", TOPIX100_JP: "TOPIX 100"};
+  const UNIVERSE_GROUPS = [["India", ["NIFTY50", "NIFTY100", "NIFTY200", "NIFTY500", "NIFTYMIDCAP150", "NIFTYSMALLCAP250", "HOLDINGS", "DEALS"]],
+                           ["United States", ["SP500_US"]], ["United Kingdom", ["FTSE100_UK"]], ["Japan", ["TOPIX100_JP"]]];
+  // Other markets (view only): their own currency, and none of the India-only columns, filters or presets.
+  const MARKET_OF = {SP500_US: "US", FTSE100_UK: "UK", TOPIX100_JP: "JP"};
+  const marketOf = (u) => MARKET_OF[u] || "IN";
+  const CUR = {IN: {sym: "₹", loc: "en-IN", dec: 2, name: "India"}, US: {sym: "$", loc: "en-US", dec: 2, name: "US"},
+               UK: {sym: "£", loc: "en-GB", dec: 2, name: "UK"}, JP: {sym: "¥", loc: "ja-JP", dec: 0, name: "Japan"}};
+  const INDIA_ONLY = ["band", "filter_flags", "filter_block", "held", "deal", "market_cap_cr", "avg_turnover_cr"];
+  let numLocale = "en-IN", curSym = "₹";
   const OPS = {num: [">", ">=", "<", "<=", "=", "between"], pct: [">", ">=", "<", "<=", "=", "between"], text: ["is", "contains"], bool: ["="], stock: ["contains"]};
   const OP_WORD = {">": ">", ">=": "≥", "<": "<", "<=": "≤", "=": "=", between: "between", is: "is", contains: "contains"};
 
@@ -88,13 +97,13 @@
     if(num(f.value) === null) return false;
     return f.op !== "between" || num(f.value2) !== null;
   }
-  const groupNum = (n, dec) => Number(n).toLocaleString("en-IN", {minimumFractionDigits: dec || 0, maximumFractionDigits: dec || 0});
+  const groupNum = (n, dec) => Number(n).toLocaleString(numLocale, {minimumFractionDigits: dec || 0, maximumFractionDigits: dec || 0});
   function describeFilter(f){
     const col = colByKey(f.col); if(!col) return "";
     if(col.type === "bool") return col.label + " = " + (f.value === true || f.value === "yes" ? "yes" : "no");
     const unit = col.type === "pct" ? "%" : "";
     const val = (x) => col.type === "text" || col.type === "stock" ? String(x) : groupNum(num(x), Math.min(2, String(x).split(".")[1] ? String(x).split(".")[1].length : 0)) + unit;
-    const label = col.label.replace(/ %$/, "");
+    const label = col.label.replace(/ %$/, "").replace("(₹)", "(" + curSym + ")");
     if(f.op === "between") return label + " between " + val(f.value) + " and " + val(f.value2);
     return label + " " + OP_WORD[f.op] + " " + val(f.value);
   }
@@ -130,9 +139,9 @@
     {id: "volume", label: "Unusual volume", note: "Today's volume more than twice its 20-day average",
      filters: [f("rel_volume", ">", 2)], sort: {key: "rel_volume", dir: "desc"}},
     {id: "followed", label: "Followed investors' buys", note: "Bought by a followed investor in a disclosed deal in the last 30 days",
-     universe: "DEALS", filters: [f("deal", "=", true)], sort: {key: "chg_1d", dir: "desc"}},
+     universe: "DEALS", india: true, filters: [f("deal", "=", true)], sort: {key: "chg_1d", dir: "desc"}},
     {id: "unflagged", label: "Exclude flagged", note: "Not on an ASM/GSM list, no results within 5 trading days, no high or rising promoter pledges",
-     filters: [f("filter_block", "=", false)], sort: {key: "market_cap_cr", dir: "desc"}},
+     india: true, filters: [f("filter_block", "=", false)], sort: {key: "market_cap_cr", dir: "desc"}},
   ];
   const presetById = (id) => PRESETS.find(p => p.id === id) || null;
 
@@ -184,7 +193,7 @@
   // ---- polling: keep asking while stocks are still being fetched; ignore an answer for a list no longer shown ----
   const needsPoll = (data) => !!data && !data.error && (data.loading === true || (data.pending || 0) > 0);
 
-  const logic = {COLS, colByKey, UNIVERSES, UNIVERSE_LABEL, OPS, OP_WORD, defaultColumns, allColumns, sparkPath, num, passes, matchesQuery, applyFilters,
+  const logic = {COLS, colByKey, UNIVERSES, UNIVERSE_LABEL, UNIVERSE_GROUPS, marketOf, CUR, INDIA_ONLY, OPS, OP_WORD, defaultColumns, allColumns, sparkPath, num, passes, matchesQuery, applyFilters,
                  validFilter, describeFilter, sortRows, PRESETS, presetById, cleanSaved, MAX_SAVED, csvCell, toCsv, needsPoll, groupNum};
   if(typeof module !== "undefined" && module.exports) module.exports = logic;
   if(typeof window === "undefined" || typeof document === "undefined" || !window.TA) return;
@@ -213,11 +222,24 @@
   }
   const saveState = () => store.set(KEY_STATE, {universe: st.universe, filters: st.filters, sort: st.sort, density: st.density, allCols: st.allCols});
   const tvOn = () => !!(st.data && st.data.tv && st.data.tv.state === "on");
+  const mk = () => marketOf(st.universe), cur = () => CUR[mk()], foreign = () => mk() !== "IN";
+  const shortSym = (s) => foreign() ? String(s).replace(/\.(US|L|T)$/, "") : s;   // AAPL.US is shown as AAPL; the full code is what Look up takes
+  const colLabel = (c, short) => c.key === "price" ? (short ? "Price " + cur().sym : "Price (" + cur().sym + ")") : (short ? (c.short || c.label) : c.label);
+  const colsFor = () => COLS.filter(c => c.type !== "stock" && !(foreign() && INDIA_ONLY.indexOf(c.key) >= 0));
+  // Switching list: the number format and currency follow it, India-only filters are dropped, the Add-filter list is rebuilt.
+  function applyMarket(){
+    numLocale = cur().loc; curSym = cur().sym;
+    if(foreign()){ st.filters = st.filters.filter(x => INDIA_ONLY.indexOf(x.col) < 0); if(INDIA_ONLY.indexOf(st.sort.key) >= 0) st.sort = {key: "mom_score", dir: "desc"}; }
+    const p = /^b:/.test(st.preset) ? presetById(st.preset.slice(2)) : null;
+    if(foreign() && p && p.india) st.preset = "";
+    if($("af-col")) $("af-col").innerHTML = colsFor().map(c => `<option value="${esc(c.key)}">${esc(colLabel(c))}</option>`).join("");
+    if(st.pop && foreign() && INDIA_ONLY.indexOf(st.pop.col) >= 0) st.pop.col = "price";
+  }
   // The stock column is drawn on its own (sticky, with badges); these are the figure columns after it. Whatever a filter or
   // the sort uses is shown too, so a preset's own figures are always visible.
   const visibleCols = () => {
     const base = (st.allCols ? allColumns(tvOn()) : defaultColumns(narrow(), tvOn())).concat(st.filters.map(x => x.col), [st.sort.key]);
-    return COLS.filter(c => c.key !== "symbol" && !c.hide && base.indexOf(c.key) >= 0 && (c.group !== "tv" || tvOn()));
+    return COLS.filter(c => c.key !== "symbol" && !c.hide && base.indexOf(c.key) >= 0 && (c.group !== "tv" || tvOn()) && !(foreign() && INDIA_ONLY.indexOf(c.key) >= 0));
   };
   const baseRows = () => st.data && st.data.rows ? st.data.rows : [];
   const currentRows = () => sortRows(applyFilters(baseRows(), st.filters, st.query), st.sort.key, st.sort.dir);
@@ -230,7 +252,7 @@
     if(c.type === "bool") return v ? "Yes" : "No";
     if(c.type === "text") return String(v);
     if(c.type === "pct") return (c.plain ? "" : (v > 0 ? "+" : "")) + groupNum(v, c.dec == null ? 2 : c.dec) + "%";
-    return groupNum(v, c.dec);
+    return groupNum(v, c.key === "price" ? cur().dec : c.dec);
   }
   const badges = (r) => (r.held ? '<span class="sc-badge sc-held">Held</span>' : "")
     + (r.deal ? `<span class="sc-badge sc-bought" title="${esc((r.deal_who || []).join(", "))}">Bought</span>` : "");
@@ -267,13 +289,23 @@
     const pill = (id, label, n, title) => `<button type="button" class="sc-pill" data-preset="${esc(id)}" aria-pressed="${st.preset === id}"${title ? ` title="${esc(title)}"` : ""}>`
       + `<span>${label}</span>${n == null ? "" : `<span class="sc-pillcount">${n}</span>`}</button>`;
     // a preset that switches list (followed investors) can only be counted once its own list is showing
-    const built = PRESETS.map(p => pill("b:" + p.id, esc(p.label), p.universe && p.universe !== st.universe ? null : count(p.filters), p.note));
+    const built = PRESETS.filter(p => !(foreign() && p.india)).map(p => pill("b:" + p.id, esc(p.label), p.universe && p.universe !== st.universe ? null : count(p.filters), p.note));
     const mine = saved.map((p, i) => pill("s:" + i, esc(p.name), p.universe && p.universe !== st.universe ? null : count(p.filters), "Your saved view")
       + (st.preset === "s:" + i ? `<button type="button" class="sc-link sc-delsaved" data-del="${i}" aria-label="Delete saved view ${esc(p.name)}">Delete</button>` : ""));
     $("sc-presets").innerHTML = built.concat(mine).join("");
     const sel = /^b:/.test(st.preset) ? presetById(st.preset.slice(2)) : null;
     $("sc-presetnote").textContent = sel ? sel.note : "";
     $("sc-presetnote").hidden = !sel;
+    renderMarket();
+  }
+  // "US market, view-only; prices delayed", open or closed with the local time and IST (from the server's market block)
+  function renderMarket(){
+    const el = $("sc-market"); if(!el) return;
+    if(!foreign()){ el.hidden = true; el.textContent = ""; return; }
+    const m = st.data && st.data.market;
+    el.hidden = false;
+    el.textContent = m ? `${m.note} ${m.open ? "Open now" : "Closed now"} (${m.local} ${m.tz.split("/").pop().replace("_", " ")}, ${m.ist} IST).${m.pence_note ? " " + m.pence_note : ""} Benchmark for context: ${m.benchmark}.`
+      : `${cur().name} market, view-only; prices delayed.`;
   }
   function renderChips(){
     $("sc-chips").innerHTML = st.filters.map((fl, i) =>
@@ -310,7 +342,7 @@
         + `${on ? `<span aria-hidden="true">${st.sort.dir === "asc" ? "▲" : "▼"}</span>` : ""}</button></th>`;
     };
     $("sc-head").innerHTML = "<tr>" + th("symbol", "Stock", "sc-stock", "") + `<th class="sc-sparkcol">30 days</th>`
-      + cols.map(c => th(c.key, esc(c.short || c.label), c.type === "text" || c.type === "bool" ? "" : "num", c.tip ? c.label + ": " + c.tip : c.label)).join("") + "</tr>";
+      + cols.map(c => th(c.key, esc(colLabel(c, true)), c.type === "text" || c.type === "bool" ? "" : "num", c.tip ? c.label + ": " + c.tip : c.label)).join("") + "</tr>";
     let body;
     if(data && data.error && !all) body = `<tr><td colspan="${span}" class="empty">${esc(data.error)}</td></tr>`;
     else if(!all) body = `<tr><td colspan="${span}" class="empty">${data && data.loading ? "Loading the stock list…" : data ? "No stocks in this list." : "Loading…"}</td></tr>`;
@@ -318,7 +350,7 @@
     else body = rows.map(r => {
       const sub = [r.name, r.industry].filter(Boolean).join(" · ");
       return `<tr data-sym="${esc(r.symbol)}" tabindex="0" aria-selected="${st.sel === r.symbol}">`
-        + `<td class="sc-stock"><div class="sc-symrow"><a class="sc-sym" href="${esc(TA.palette.landingUrl("lookup", r.symbol))}">${esc(r.symbol)}</a>${badges(r)}</div>`
+        + `<td class="sc-stock"><div class="sc-symrow"><a class="sc-sym" href="${esc(TA.palette.landingUrl("lookup", r.code || r.symbol))}">${esc(shortSym(r.symbol))}</a>${badges(r)}</div>`
         + (sub ? `<div class="sc-name" title="${esc(sub)}">${esc(r.name)}${r.name && r.industry ? " · " : ""}${esc(r.industry)}</div>` : "") + `</td>`
         + `<td class="sc-sparkcol">${spark(r)}</td>` + cols.map(c => cell(c, r)).join("") + `</tr>`;
     }).join("");
@@ -336,7 +368,7 @@
     }
     $("sc-fresh").textContent = t;
     const bits = [];
-    if(d && (d.pending > 0 || d.loading)) bits.push(d.loading && !(d.rows || []).length ? "Loading the stock list…" : `${d.pending} stock${d.pending === 1 ? "" : "s"} still being fetched; the table fills in as they arrive.`);
+    if(d && (d.pending > 0 || d.loading)) bits.push(d.loading && !(d.rows || []).length ? "Loading the stock list…" : foreign() && d.total ? `Loading ${Math.max(0, d.total - d.pending)} of ${d.total} stocks; the table fills in as they arrive.` : `${d.pending} stock${d.pending === 1 ? "" : "s"} still being fetched; the table fills in as they arrive.`);
     if(d && d.error && d.rows && d.rows.length) bits.push(d.error);
     if(d && d.filters_note) bits.push(String(d.filters_note).charAt(0).toUpperCase() + String(d.filters_note).slice(1) + ".");
     if(d && d.tv && d.tv.state === "refused_server") bits.push("TradingView columns are never used on the server.");
@@ -354,7 +386,7 @@
     if(p.sort) st.sort = {key: p.sort.key, dir: p.sort.dir};
     const u = p.universe && UNIVERSES.indexOf(p.universe) >= 0 ? p.universe : null;
     saveState();
-    if(u && u !== st.universe){ st.universe = u; $("sc-universe").value = u; load(true); }
+    if(u && u !== st.universe){ st.universe = u; $("sc-universe").value = u; applyMarket(); load(true); }
     else renderTable();
   }
   const filtersChanged = () => { st.preset = ""; saveState(); renderTable(); };
@@ -416,7 +448,7 @@
     const line = sparkPath(pts, 360, 140, 4), up = pts.length > 1 && pts[pts.length - 1] >= pts[0];
     const chart = line ? `<svg class="sc-drchart ${up ? "up" : "down"}" viewBox="0 0 360 140" preserveAspectRatio="none" aria-hidden="true">`
       + `<path class="area" d="${line} L356 136 L4 136 Z"></path><path class="line" d="${line}"></path></svg>`
-      + `<div class="sc-drrange sub"><span>${pts.length} days · low ₹${esc(groupNum(Math.min.apply(null, pts), 2))}</span><span>high ₹${esc(groupNum(Math.max.apply(null, pts), 2))}</span></div>`
+      + `<div class="sc-drrange sub"><span>${pts.length} days · low ${cur().sym}${esc(groupNum(Math.min.apply(null, pts), cur().dec))}</span><span>high ${cur().sym}${esc(groupNum(Math.max.apply(null, pts), cur().dec))}</span></div>`
       : `<div class="empty">No price history yet.</div>`;
     const ret = (k, lab) => { const v = r[k]; return `<div class="sc-ret"><div class="sc-eyebrow">${lab}</div><div class="${toneCls(v)}">${esc(missing(v) ? "n/a" : fmt(C(k), v))}</div></div>`; };
     const stat = (k, lab) => `<div class="sc-stat"><span>${esc(lab)}</span><span>${esc(fmt(C(k), r[k]))}</span></div>`;
@@ -426,17 +458,17 @@
       + `<button type="button" class="sc-icon" data-dr="prev" aria-label="Previous stock" ${i ? "" : "disabled"}>‹</button>`
       + `<button type="button" class="sc-icon" data-dr="next" aria-label="Next stock" ${i < rows.length - 1 ? "" : "disabled"}>›</button>`
       + `<button type="button" class="sc-icon" data-dr="close" aria-label="Close details">×</button></span></div>`
-      + `<div class="sc-drbody"><div class="sc-symrow"><h3 id="dr-symbol">${esc(r.symbol)}</h3>${badges(r)}</div>`
+      + `<div class="sc-drbody"><div class="sc-symrow"><h3 id="dr-symbol">${esc(shortSym(r.symbol))}</h3>${badges(r)}</div>`
       + (sub.length ? `<div class="sub">${esc(r.name)}${sub.length > 1 ? " · " : ""}${esc(r.industry)}</div>` : "")
-      + `<div class="sc-drprice"><span class="sc-big">${missing(r.price) ? "n/a" : "₹" + esc(groupNum(r.price, 2))}</span>`
+      + `<div class="sc-drprice"><span class="sc-big">${missing(r.price) ? "n/a" : cur().sym + esc(groupNum(r.price, cur().dec))}</span>`
       + `<span class="${toneCls(r.chg_1d)}">${esc(fmt(C("chg_1d"), r.chg_1d))}</span><span class="sub">today</span></div>`
       + chart
       + `<div class="sc-rets">${ret("ret_1w", "1W")}${ret("ret_1m", "1M")}${ret("ret_6m", "6M")}${ret("ret_1y", "1Y")}${ret("ret_12_1", "12-1")}</div>`
-      + `<div class="sc-stats">${stat("market_cap_cr", "Market cap (₹ cr)")}${stat("pe", "P/E")}${stat("div_yield", "Dividend yield")}${stat("volume", "Volume")}`
+      + `<div class="sc-stats">${foreign() ? "" : stat("market_cap_cr", "Market cap (₹ cr)")}${stat("pe", "P/E")}${stat("div_yield", "Dividend yield")}${stat("volume", "Volume")}`
       + `${stat("rel_volume", "Relative volume")}${stat("pct_from_high", "From 52-week high")}${stat("rsi", "RSI (14)")}${stat("atr_pct", "ATR")}`
-      + `${stat("band", "Price band")}${stat("above_200", "Above 200-day")}${stat("mom_score", "Momentum score")}${stat("mom_eligible", "Passes factor screen")}</div>`
+      + `${foreign() ? "" : stat("band", "Price band")}${stat("above_200", "Above 200-day")}${stat("mom_score", "Momentum score")}${stat("mom_eligible", "Passes factor screen")}</div>`
       + (r.deal ? `<div class="sc-deal">Bought in a disclosed deal in the last 30 days by <b>${esc((r.deal_who || []).join(", ") || "a followed investor")}</b></div>` : "")
-      + `<a class="sc-btn sc-outline sc-drlink" href="${esc(TA.palette.landingUrl("lookup", r.symbol))}">Open in Look up</a></div>`;
+      + `<a class="sc-btn sc-outline sc-drlink" href="${esc(TA.palette.landingUrl("lookup", r.code || r.symbol))}">Open in Look up</a></div>`;
     for(const tr of $("sc-rows").querySelectorAll("tr[data-sym]")) tr.setAttribute("aria-selected", String(tr.dataset.sym === st.sel));
   }
   function openDrawer(sym){
@@ -503,12 +535,12 @@
 
   function init(){
     loadState();
-    $("sc-universe").innerHTML = UNIVERSES.map(u => `<option value="${esc(u)}">${esc(UNIVERSE_LABEL[u] || u)}</option>`).join("");
+    $("sc-universe").innerHTML = UNIVERSE_GROUPS.map(([g, list]) => `<optgroup label="${esc(g)}">` + list.map(u => `<option value="${esc(u)}">${esc(UNIVERSE_LABEL[u] || u)}</option>`).join("") + "</optgroup>").join("");
     $("sc-universe").value = st.universe;
-    $("af-col").innerHTML = COLS.filter(c => c.type !== "stock").map(c => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join("");
+    applyMarket();
     renderTable();
 
-    $("sc-universe").addEventListener("change", (e) => { st.universe = e.target.value; st.preset = ""; saveState(); load(true); });
+    $("sc-universe").addEventListener("change", (e) => { st.universe = e.target.value; st.preset = ""; applyMarket(); saveState(); load(true); });
     $("sc-q").addEventListener("input", (e) => { st.query = e.target.value; renderTable(); });
     $("sc-density").addEventListener("click", (e) => {
       const b = e.target.closest && e.target.closest("[data-density]"); if(!b) return;

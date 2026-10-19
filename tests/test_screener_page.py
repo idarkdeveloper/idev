@@ -121,7 +121,7 @@ def test_local_storage_is_always_wrapped_in_try_catch():
 
 def test_user_text_is_escaped_into_the_table_and_chips():
     # every place a server or user string reaches innerHTML goes through esc(...)
-    for needle in ("esc(r.symbol)", "esc(r.name)", "esc(describeFilter(fl))", "esc(v)", "esc(c.label)", "esc(p.name)", "esc(data.error)"):
+    for needle in ("esc(shortSym(r.symbol))", "esc(r.name)", "esc(describeFilter(fl))", "esc(v)", "esc(colLabel(c))", "esc(p.name)", "esc(data.error)"):
         assert needle in JS, needle
     assert "innerHTML = d." not in JS and "innerHTML = data." not in JS
 
@@ -175,3 +175,11 @@ def test_screener_css_uses_tokens_and_sticks_the_stock_column():
 def test_add_filter_popup_is_not_closed_by_a_height_only_resize():
     # a phone's keyboard (raised when the popup focuses its field) resizes the height; only a width change may close the popup
     assert "wider = window.innerWidth !== lastW" in JS and "if(wider && popOpen()) closePop()" in JS
+
+
+def test_the_page_groups_universes_by_market_and_switches_currency_and_hides_india_only_parts():
+    assert 'id="sc-market"' in HTML
+    for needle in ("UNIVERSE_GROUPS", "<optgroup label=", "function applyMarket", "INDIA_ONLY.indexOf(", "numLocale = cur().loc", "view-only; prices delayed",
+                   "Loading ${Math.max(0, d.total - d.pending)} of ${d.total} stocks", "r.code || r.symbol", "!(foreign() && p.india)", "cur().sym"):
+        assert needle in JS, needle
+    assert "/api/screener?universe=" in JS and "/api/order" not in JS

@@ -17,6 +17,7 @@ means 1.5%); market cap is in rupees crore; a figure that is not known yet is ``
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -43,9 +44,10 @@ TURNOVER_FLOOR = 1e7                 # the factor screen's liquidity floor, rupe
 
 
 def universe_key(text: str) -> str | None:
-    """'nifty 50' -> 'NIFTY50'; one of the index lists, HOLDINGS or DEALS, else None."""
+    """'nifty 50' -> 'NIFTY50'; one of the index lists, a US/UK/Japan list (screener_markets), HOLDINGS or DEALS, else None."""
+    from .screener_markets import UNIVERSES as FOREIGN
     key = str(text or "").strip().upper().replace(" ", "")
-    return key if key in UNIVERSES or key in DYNAMIC else None
+    return key if key in UNIVERSES or key in DYNAMIC or key in FOREIGN else None
 
 
 def _pct(v: float | None) -> float | None:
@@ -111,12 +113,16 @@ class ScreenerService:
                  filters: Callable[[], Any] | None = None,
                  names: Callable[[list[str]], dict[str, str]] | None = None,
                  workers: int = 3, fund_workers: int = 2, pace: float = 0.1,
-                 clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep):
+                 clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep,
+                 fund_fn: Callable[[str, dict[str, Any], float], dict[str, Any]] | None = None, turnover_floor: float = TURNOVER_FLOOR,
+                 metrics_ttl: Callable[[], float] | None = None, jitter: bool = False,
+                 meta: Callable[[str], dict[str, Any]] | None = None):
         self.prices, self.fundamentals, self._load_universe = prices, fundamentals, load_universe
         self.bands, self.tv, self._names_fn = bands, tv, names
         self.filters = filters   # indian_filters.FilterBook factory: ASM/GSM, results blackout, pledges (flags only here)
         self.workers, self.fund_workers, self.pace = workers, fund_workers, pace
         self.clock, self.sleep = clock, sleep
+        self.fund_fn, self.turnover_floor, self._metrics_ttl_fn, self.jitter, self.meta = fund_fn or fundamentals_fields, turnover_floor, metrics_ttl, jitter, meta
         self._lock = threading.Lock()
         self._metrics: dict[str, tuple[float, dict[str, Any]]] = {}
         self._funds: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -129,6 +135,13 @@ class ScreenerService:
         self._running: dict[str, threading.Thread] = {}
 
     # -- cache bookkeeping ------------------------------------------------------
+    def _metrics_ttl(self) -> float:
+        return self._metrics_ttl_fn() if self._metrics_ttl_fn is not None else METRICS_TTL
+
+    def _pause(self) -> None:
+        if self.pace:
+            self.sleep(self.pace * (0.5 + random.random()) if self.jitter else self.pace)   # a little jitter keeps requests apart
+
     def _fresh(self, entry: tuple[float, dict[str, Any]] | None, ttl: float) -> bool:
         if entry is None:
             return False
@@ -161,14 +174,14 @@ class ScreenerService:
         with self._lock:
             missing_p = [s for s in symbols if s not in self._metrics]
             missing_f = [s for s in symbols if s not in self._funds]
-            stale = (not fresh_univ or any(not self._fresh(self._metrics.get(s), METRICS_TTL) for s in symbols)
+            stale = (not fresh_univ or any(not self._fresh(self._metrics.get(s), self._metrics_ttl()) for s in symbols)
                      or any(not self._fresh(self._funds.get(s), FUNDS_TTL) for s in symbols))
             tv_missing = self._tv_wanted(key)
         pending = len(set(missing_p) | set(missing_f))
         if stale or tv_missing:
             self._ensure_fill(key, given)
         rows = self._rows(members, held, deals, key)
-        return self._payload(key, rows, pending=pending, loading=False, error=None)
+        return self._payload(key, rows, pending=pending, loading=False, error=None, total=len(symbols))
 
     def _fresh_universe(self, key: str) -> bool:
         hit = self._universes.get(key)
@@ -182,7 +195,7 @@ class ScreenerService:
         last = max(self._tv[key][0] if key in self._tv else 0.0, self._tv_tried.get(key, 0.0))
         return self.clock() - last >= TV_REFRESH and self.tv.status()["state"] == "on"
 
-    def _payload(self, key: str, rows: list[dict[str, Any]], *, pending: int, loading: bool, error: str | None) -> dict[str, Any]:
+    def _payload(self, key: str, rows: list[dict[str, Any]], *, pending: int, loading: bool, error: str | None, total: int | None = None) -> dict[str, Any]:
         as_of = max((r["as_of"] for r in rows if r.get("as_of")), default=None)
         tv = self.tv.status() if self.tv is not None else {"state": "off", "until": None}
         note = None
@@ -191,9 +204,12 @@ class ScreenerService:
                 note = self.filters().note()
             except Exception:  # noqa: BLE001
                 note = None
-        return {"universe": key, "count": len(rows), "pending": pending, "loading": loading, "error": error,
-                "as_of": as_of, "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "source": SOURCE_NOTE, "tv": tv, "rows": rows, "filters_note": note}
+        out = {"universe": key, "count": len(rows), "total": len(rows) if total is None else total, "pending": pending, "loading": loading,
+               "error": error, "as_of": as_of, "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+               "source": SOURCE_NOTE, "tv": tv, "rows": rows, "filters_note": note}
+        if self.meta is not None:
+            out["market"] = self.meta(key)
+        return out
 
     def _rows(self, members: list[dict[str, str]], held: set[str], deals: dict[str, list[str]], key: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -203,7 +219,7 @@ class ScreenerService:
             f_snap = {m["symbol"]: self._funds[m["symbol"]][1] for m in members if m["symbol"] in self._funds}
             tv_snap = self._tv[key][1] if key in self._tv else {}
             sector, names = dict(self._sector), dict(self._names)
-        scored = {r["symbol"]: r for r in score_universe(stats, min_turnover=TURNOVER_FLOOR)}
+        scored = {r["symbol"]: r for r in score_universe(stats, min_turnover=self.turnover_floor)}
         book = self.bands() if self.bands is not None else None
         fbook = None
         if self.filters is not None:
@@ -235,6 +251,8 @@ class ScreenerService:
                 "as_of": met.get("as_of"), "ready": bool(met) and bool(fun), "spark": met.get("spark"),
                 "error": met.get("error") if "error" in met else None,
             }
+            if m.get("code"):
+                row["code"] = m["code"]
             if fbook is not None:   # a flag column and a yes/no the "Exclude flagged" preset filters on
                 try:
                     c = fbook.check(sym)
@@ -296,7 +314,7 @@ class ScreenerService:
                             self._names.update({s: n for s, n in got.items() if n})
                     except Exception:  # noqa: BLE001 - names are a nicety
                         pass
-            todo_p = [s for s in symbols if not self._fresh(self._metrics.get(s), METRICS_TTL)]
+            todo_p = [s for s in symbols if not self._fresh(self._metrics.get(s), self._metrics_ttl())]
             with ThreadPoolExecutor(max_workers=max(1, self.workers)) as ex:
                 list(ex.map(self._fetch_metrics, todo_p))
             self._fill_tv(key, symbols)
@@ -307,8 +325,7 @@ class ScreenerService:
             log.exception("screener fill for %s failed", key)
 
     def _fetch_metrics(self, symbol: str) -> None:
-        if self.pace:
-            self.sleep(self.pace)
+        self._pause()
         try:
             entry = compute_metrics(self.prices.history(symbol, "2y"))
         except Exception as e:  # noqa: BLE001 - one stock must not stop the rest
@@ -317,10 +334,9 @@ class ScreenerService:
             self._metrics[symbol] = (self.clock(), entry)
 
     def _fetch_funds(self, symbol: str) -> None:
-        if self.pace:
-            self.sleep(self.pace)
+        self._pause()
         try:
-            entry = fundamentals_fields(symbol, self.fundamentals.get(symbol), self.clock())
+            entry = self.fund_fn(symbol, self.fundamentals.get(symbol), self.clock())
         except Exception as e:  # noqa: BLE001
             entry = {"error": f"{type(e).__name__}: {e}"}
         with self._lock:
