@@ -318,8 +318,8 @@ Everything the CLI does is also in the dashboard:
 | `momentum` | Look up a stock (also click any ticker) |
 | `size` | Position size panel, and *Suggest size* in the paper order ticket |
 | `costs` | Trade cost panel with the full buy/sell breakdown |
-| `screen`, `backtest` (+ `--json`) | Factor screen and Backtest panels, each with *Export JSON* |
-| `factor-backtest` | *Backtest the screen as a portfolio* under the factor screen, with a growth-of-100 chart |
+| `screen`, `backtest` (+ `--json`) | Factor screen and *Investor deals backtest* panels, each with *Export JSON* |
+| `factor-backtest` | *Backtest the screen as a portfolio* under the factor screen, with a growth-of-100 chart. NIFTYMIDCAP150 with hold top 20 tests the list the forward paper account trades |
 | `signal-lab` | *Signal lab* card: which algo-trading signals predicted the next week, month or quarter |
 | `index-history` | Built automatically when the signal lab or portfolio backtest uses a broad index |
 | `scorecard` | *Claude's track record* panel |

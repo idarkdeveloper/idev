@@ -38,7 +38,7 @@
   <nav class="ws-nav" aria-label="Sections" id="ws-nav">
     <div class="ws-navgroup"><span class="ws-navhead">Overview</span><a href="#overview">Today</a><a href="#portfolio">My Groww portfolio</a><a href="#recs">Recommendations</a><a href="#practice" data-demo-only hidden>Practice portfolio</a><a href="#forward">Factor screen, forward</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Deals &amp; orders</span><a href="#deals">Disclosed deals</a><a href="#orders">Order history</a><a href="#runs">Recent runs</a></div>
-    <div class="ws-navgroup"><span class="ws-navhead">Research</span><a href="#lookup">Look up a stock</a><a href="#track-record">Claude's track record</a><a href="#screen">Factor screen</a><a href="#signal-lab">Signal lab</a><a href="#backtest">Backtest</a></div>
+    <div class="ws-navgroup"><span class="ws-navhead">Research</span><a href="#lookup">Look up a stock</a><a href="#track-record">Claude's track record</a><a href="#screen">Factor screen</a><a href="#signal-lab">Signal lab</a><a href="#backtest">Investor deals backtest</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Paper accounts</span><a href="#paper">All four, side by side</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Tools</span><a href="#size">Position size</a><a href="#costs">Trade cost</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Health</span><a href="#kill-switch">Kill switch</a><a href="#health">Data sources</a><a href="#groww-logins">Groww logins</a></div>
@@ -208,6 +208,7 @@
           <button type="submit" class="primary small" id="fb-run">Run portfolio backtest</button><span class="sub" id="fb-status"></span>
         </div>
         <div class="sub">Monthly rebalance into the top stocks with the same ranking, real Indian charges on every trade, compared with NIFTY 50 including dividends and an equal-weight hold of the universe. Uses the universe selected above. NIFTY 50 uses each month's actual members, including stocks later dropped; other universes use today's members.</div>
+        <div class="sub" id="fb-paper-hint"><b>Your paper accounts:</b> pick NIFTYMIDCAP150 above and hold top 20 to test the list the forward paper account trades (the model, resmom and top-10 accounts are variants of it). The model account's own picks are judged going forward on the Paper accounts tab, not backtested here.</div>
         <div id="fb-result"></div>
       </form>
     </details>
@@ -224,7 +225,7 @@
       </form>
     </details>
     <details class="card coll" data-anchor="backtest">
-      <summary class="cardhead"><span class="coll-arrow" aria-hidden="true"></span><h2>Backtest</h2><span class="sub">replay disclosed deals: entry next close, excess return vs NIFTY 50 after cost</span></summary>
+      <summary class="cardhead"><span class="coll-arrow" aria-hidden="true"></span><h2>Investor deals backtest</h2><span class="sub">copying the investors you follow: their disclosed deals replayed, entry next close, excess return vs NIFTY 50 after cost</span></summary>
       <form class="cardbody" id="bt-form">
         <div class="grid4">
           <div class="field"><label for="bt-investor">Investor</label><select id="bt-investor" name="investor"></select>
