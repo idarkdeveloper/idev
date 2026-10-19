@@ -313,7 +313,8 @@ who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
   machine with a fixed IP, which the April 2026 SEBI rules require for live orders.
 
 **US, UK and Japan stocks (view only).** Pick *US*, *UK* or *Japan* beside the Look up box and type the code (AAPL,
-VOD, 7203), or type it with its market: `AAPL.US`, `VOD.L` (London), `7203.T` (Tokyo). The card and the full view show
+VOD, 7203), or type it with its market: `AAPL.US`, `VOD.L` (London), `7203.T` (Tokyo). A company name works too: *tesla*
+under *US* finds TSLA (the card says "Matched TESLA to TSLA.US"). The card and the full view show
 the price in the stock's own currency ($, pence for London quotes, ¥), the trend, the chart (line and candles), Yahoo's
 company figures and financials (amounts as $/£/¥ with K/M/B/T), the indicators and headlines. Nothing Indian applies to
 them: no agent's checklist, price band, ASM/GSM or pledge flags, NSE/BSE announcements, shareholding or similar stocks,
