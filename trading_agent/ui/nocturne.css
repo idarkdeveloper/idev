@@ -1341,3 +1341,29 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .mp-table .hold-line { display: none; }   /* the phone card's own line; desktop has the Shares and Buy price columns */
 .sp-hold + .sp-hold { margin-top: 10px; }
 .sp-own { margin: 0 0 8px; font-size: 14px; }
+
+/* ---- Holding cards on a phone: one grid, nothing overlaps (this block is last and decides the layout) ----
+   row 1  ticker + tags (cols a-b)          | price (c)
+   row 2  company name (a-c)
+   row 3  "50 shares x avg . share % . invested" (a-b, ellipsis only on the tail) | Today (c)
+   row 4  Value (a) | sparkline centred in the free middle (b) | profit / loss, % under it (c)
+   row 5  stop chip */
+@media (max-width: 700px) {
+  #mp-card #mp-rows tr[data-open-stock] { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: none; gap: 3px 10px; padding: 10px 16px; align-items: center; }
+  #mp-card #mp-rows td.stock-cell { display: contents; }
+  #mp-card #mp-rows .stock-cell > .sym-line { grid-column: 1 / 3; grid-row: 1; align-self: start; min-width: 0; }
+  #mp-card #mp-rows td.num:nth-child(5) { grid-column: 3; grid-row: 1; align-self: start; justify-self: end; font-family: var(--mono); font-size: 15px; font-weight: 600; }
+  #mp-card #mp-rows .stock-cell > .hname { grid-column: 1 / -1; grid-row: 2; max-width: none; min-width: 0; }
+  #mp-card #mp-rows .stock-cell > .hold-line { display: block; grid-column: 1 / 3; grid-row: 3; min-width: 0; }
+  #mp-card #mp-rows td.num:nth-child(6) { grid-column: 3; grid-row: 3; justify-self: end; font-size: 12px; white-space: nowrap; }
+  #mp-card #mp-rows td.num:nth-child(7) { grid-column: 1; grid-row: 4; justify-self: start; font-size: 13px; white-space: nowrap; }
+  #mp-card #mp-rows td.spark-col { grid-column: 2; grid-row: 4; justify-self: stretch; align-self: center; width: auto; height: 28px; min-width: 0; overflow: hidden;
+    display: flex; justify-content: center; align-items: center; container-type: inline-size; }
+  #mp-card #mp-rows td.spark-col svg { width: 88px; height: 28px; max-width: 100%; flex: none; }
+  @container (max-width: 69px) { #mp-card #mp-rows td.spark-col svg { display: none; } }   /* too narrow for a readable line: hide it rather than overlap */
+  #mp-card #mp-rows td.num:nth-child(8) { grid-column: 3; grid-row: 4; justify-self: end; display: block; text-align: right; white-space: nowrap; font-weight: 600; }
+  #mp-card #mp-rows td.num:nth-child(8) .l2 { display: block; font-size: 12px; font-weight: 500; }
+  :root[data-density="compact"] #mp-card #mp-rows td.num:nth-child(8) .l2 { display: none; }   /* compact rows: the % under the profit is dropped */
+  #mp-card #mp-rows td.prot-cell { grid-column: 1 / -1; grid-row: 5; }
+  #mp-card #mp-rows .stock-cell > div:not(.sym-line):not(.l2):not(.hname):not(.hold-line) { grid-column: 1 / -1; grid-row: 6; }
+}
