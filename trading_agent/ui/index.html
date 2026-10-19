@@ -184,8 +184,11 @@
     </div>
     <div class="grid-2">
       <div class="card" data-anchor="orders">
-        <div class="cardhead"><h2>Order history</h2><span class="sub" id="fees-note"></span></div>
-        <div class="scroll tscroll"><table class="dt"><thead><tr><th>Time</th><th>Order</th><th class="num">Value</th><th>Status</th></tr></thead><tbody id="orders"></tbody></table></div>
+        <div class="cardhead"><h2>Order history</h2><span class="sub" id="fees-note"></span>
+          <div class="oh-seg" role="group" aria-label="Order history view"><button type="button" data-ov="trades" aria-pressed="true">Trades</button><button type="button" data-ov="all" aria-pressed="false">All orders</button></div></div>
+        <div class="oh-sum" id="orders-sum" role="group" aria-label="Summary" hidden></div>
+        <div class="scroll tscroll"><table class="dt oh-table"><thead id="orders-head"></thead><tbody id="orders"></tbody></table></div>
+        <div class="oh-cards" id="orders-cards"></div>
         <div class="cardfoot" id="orders-foot" hidden><button type="button" class="small" id="orders-more">Show more</button><span class="sub" id="orders-count"></span></div>
       </div>
       <div class="card" data-anchor="runs">
@@ -1095,20 +1098,78 @@
       </tbody></table></div>
       <div class="sub">A stop sells the whole holding at the latest price once it is at or below the stop; the price can be a little under the stop when it gaps down. Practice money only.</div>`;
   }
-  let ordersLimit = 10;   // the latest 10, then Show more
+  let ordersLimit = 10, ordersView = "trades";   // the latest 10, then Show more; Trades (one row per trade) or All orders (every fill)
+  try { if(localStorage.getItem("ordersView") === "all") ordersView = "all"; } catch(e){}
+  const OH_HEAD_ALL = "<tr><th>Time</th><th>Order</th><th class=\"num\">Price</th><th class=\"num\">Value</th><th class=\"num\">Charges</th><th>Status</th></tr>";
+  const OH_HEAD_TRADES = "<tr><th>Date</th><th>Stock</th><th class=\"num\">Qty</th><th class=\"num\">Buy price</th><th class=\"num\">Sell / now</th><th class=\"num\">P/L</th><th class=\"num\">Charges</th><th>Status</th></tr>";
+  const dayOf = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString("en-GB", {day: "numeric", month: "short", timeZone: "Asia/Kolkata"}); };
+  const hmOf = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString("en-GB", {hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Kolkata"}); };
+  const nowOf = (t) => { if(t.now_px != null) return t.now_px; const h = (MP && MP.holdings || []).find(x => bareCode(x.symbol) === bareCode(t.symbol)); return h && h.price != null ? Number(h.price) : null; };
+  // One trade as the page shows it: the P/L with a word and an arrow as well as a colour.
+  function tradeFacts(t){
+    const now = t.kind === "open" ? nowOf(t) : null;
+    const net = t.kind === "open" ? (now != null ? t.qty * (now - t.buy_px) : null) : t.net;
+    const pct = t.kind === "open" ? (net != null && t.buy_px ? net / (t.qty * t.buy_px) * 100 : null) : t.pct;
+    const up = net != null && net >= 0, word = t.kind === "closed" ? (up ? "Profit" : "Loss") : (up ? "Up" : "Down");
+    return {now, net, pct, up, word};
+  }
+  const tsgn = (v) => v == null ? "n/a" : (v > 0 ? "+" : v < 0 ? "−" : "") + inr(Math.abs(v), Math.abs(v) < 100 ? 2 : 0);
+  const tpct = (v) => v == null ? "" : (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(2) + "%";
+  function tradeStatus(t){ return t.kind === "open" ? '<span class="oh-chip open">Open</span>' : `<span class="oh-chip ${t.reason === "stop-loss" ? "warn" : ""}">Closed · ${esc(t.reason || "manual")}</span>`; }
+  function tradeRows(trades){
+    return trades.map((t) => { const f = tradeFacts(t), when = t.kind === "closed" ? t.sell_at : t.buy_at;
+      return `<tr data-open-stock="${esc(t.symbol)}"><td>${esc(dayOf(when))}<span class="oh-sub">${t.kind === "closed" ? `sold ${esc(dayOf(t.sell_at))}${t.buy_at ? ", bought " + esc(dayOf(t.buy_at)) : ""}` : `bought ${esc(hmOf(t.buy_at))} IST`}</span></td>
+        <td><a href="/?stock=${encodeURIComponent(t.symbol)}" data-lookup="${esc(t.symbol)}" class="sym">${esc(t.symbol)}</a><span class="oh-sub">${t.live ? "Groww" : "paper"}</span></td>
+        <td class="num">${esc(Number(t.qty).toLocaleString("en-IN"))}</td><td class="num">${inr(t.buy_px, 2)}</td>
+        <td class="num">${t.kind === "closed" ? inr(t.sell_px, 2) : f.now != null ? inr(f.now, 2) : "n/a"}<span class="oh-sub">${t.kind === "closed" ? "sold " + esc(dayOf(t.sell_at)) : "now"}</span></td>
+        <td class="num">${f.net == null ? '<span class="sub">n/a</span>' : `<span class="oh-pl ${f.up ? "up" : "down"}">${f.up ? "▲" : "▼"} ${f.word} ${tsgn(f.net)}<small>${tpct(f.pct)}${t.kind === "open" ? " unrealised" : t.fees == null ? "" : " after charges"}</small></span>`}</td>
+        <td class="num">${t.fees == null ? '<span class="sub">n/a</span>' : money(t.fees, 2)}</td><td>${tradeStatus(t)}</td></tr>`; }).join("");
+  }
+  function tradeCards(trades){
+    return trades.map((t) => { const f = tradeFacts(t);
+      return `<a class="oh-card" href="/?stock=${encodeURIComponent(t.symbol)}" data-lookup="${esc(t.symbol)}" aria-label="${esc(t.symbol)}, ${f.net == null ? "no price" : f.word + " " + tsgn(f.net)}. Open the stock page">
+        <span class="oh-c1"><span class="sym">${esc(t.symbol)}</span>${f.net == null ? '<span class="oh-pl sub">n/a</span>' : `<span class="oh-pl ${f.up ? "up" : "down"}">${f.up ? "▲" : "▼"} ${f.word} ${tsgn(f.net)} (${tpct(f.pct)})</span>`}</span>
+        <span class="oh-c2">${t.kind === "closed" ? `Bought ${t.buy_at ? esc(dayOf(t.buy_at)) : "earlier"} @ ${esc(inr(t.buy_px, 2).replace("₹", ""))} → Sold ${esc(dayOf(t.sell_at))} @ ${esc(inr(t.sell_px, 2).replace("₹", ""))} · ${esc(Number(t.qty).toLocaleString("en-IN"))} sh` : `Bought ${esc(dayOf(t.buy_at))} @ ${esc(inr(t.buy_px, 2).replace("₹", ""))} · now ${f.now != null ? esc(inr(f.now, 2).replace("₹", "")) : "n/a"} · ${esc(Number(t.qty).toLocaleString("en-IN"))} sh`}</span>
+        <span class="oh-c3">${tradeStatus(t)}${t.kind === "open" ? '<span class="oh-chip">unrealised</span>' : ""}<span class="oh-chip">charges ${t.fees == null ? "n/a" : money(t.fees, 2)}</span><span class="oh-chip">${t.live ? "Groww" : "paper"}</span></span></a>`; }).join("");
+  }
+  function orderCards(rows){
+    return rows.map((x) => `<a class="oh-card" href="/?stock=${encodeURIComponent(x.symbol)}" data-lookup="${esc(x.symbol)}"><span class="oh-c1"><span class="side-chip ${x.side === "sell" ? "sell" : "buy"}">${esc(String(x.side || "").toUpperCase())}</span><span class="sym">${esc(x.symbol)}</span><span class="oh-pl">${money(x.notional)}</span></span>
+        <span class="oh-c2">${esc(String(x.qty != null ? x.qty : x.filled_quantity || ""))} sh @ ${x.filled_avg_price != null ? inr(x.filled_avg_price, 2) : "n/a"} · ${when(x.at || x.filled_at)}</span><span class="oh-c3"><span class="oh-chip">charges ${x.fees != null ? money(x.fees, 2) : "n/a"}</span>${orderStatus(x)}</span></a>`).join("");
+  }
   function renderOrders(){
-    const o = S.orders || [], perf = S.performance, shown = o.slice(0, ordersLimit);
-    $("fees-note").textContent = perf ? `${perf.orders} orders · charges paid ${money(perf.fees_paid||0,2)}` : "paper fills, charges included";
-    $("orders").innerHTML = shown.length ? shown.map(x => `<tr><td class="sub nowrap">${when(x.at || x.filled_at)}</td>
-      <td class="nowrap"><span class="side-chip ${x.side==="sell"?"sell":"buy"}">${esc(String(x.side||"").toUpperCase())}</span> <a href="#" data-lookup="${esc(x.symbol)}" class="sym">${esc(x.symbol)}</a> <span class="sub">× ${esc(x.qty ?? "")}${x.filled_avg_price!=null ? " @ " + money(x.filled_avg_price,2) : ""}</span></td>
-      <td class="num nowrap">${money(x.notional)}<div class="sub l2">charges ${x.fees!=null?money(x.fees,2):"n/a"}</div></td>
+    const o = S.orders || [], perf = S.performance, tv = S.trade_view || {trades: [], summary: null};
+    const list = ordersView === "trades" ? tv.trades : o, shown = list.slice(0, ordersLimit);
+    $("fees-note").textContent = MODE === "demo" ? "paper trades · IST" : "real orders at Groww · IST";
+    document.querySelectorAll("[data-ov]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.ov === ordersView)));
+    const sm = tv.summary, box = $("orders-sum");
+    box.hidden = !sm || !sm.orders;
+    if(sm && sm.orders){
+      const unreal = (tv.trades || []).filter(t => t.kind === "open").reduce((a, t) => { const f = tradeFacts(t); return f.net == null ? a : a + f.net; }, 0);
+      const chg = sm.charges != null ? sm.charges : (perf ? perf.fees_paid : null);
+      box.innerHTML = `<div><span>Realised P/L</span><b class="${sm.realised >= 0 ? "up" : "down"}">${sm.realised >= 0 ? "▲" : "▼"} ${tsgn(sm.realised)}</b><small>${sm.closed} closed trade${sm.closed === 1 ? "" : "s"}${sm.charges == null ? "" : ", after charges"}</small></div>
+        <div><span>Unrealised P/L</span><b class="${unreal >= 0 ? "up" : "down"}">${unreal >= 0 ? "▲" : "▼"} ${tsgn(unreal)}</b><small>${sm.open} open at today's price</small></div>
+        <div><span>Charges paid</span><b>${chg == null ? "n/a" : money(chg, 2)}</b><small>${chg == null ? "Groww does not report them here" : "buy + sell, all orders"}</small></div>
+        <div><span>Orders</span><b>${sm.orders}</b><small>${sm.closed} closed trade${sm.closed === 1 ? "" : "s"}, ${sm.open} open</small></div>`;
+    }
+    $("orders-head").innerHTML = ordersView === "trades" ? OH_HEAD_TRADES : OH_HEAD_ALL;
+    const colspan = ordersView === "trades" ? 8 : 6;
+    $("orders-cards").innerHTML = shown.length ? (ordersView === "trades" ? tradeCards(shown) : orderCards(shown)) : "";
+    if(ordersView === "trades"){ $("orders").innerHTML = shown.length ? tradeRows(shown) : `<tr><td colspan="${colspan}" class="empty"><b>No orders yet</b>${MODE === "demo" ? "Practice trades appear here, with what you paid, what you got and the profit or loss." : "Your real Groww orders appear here once the agent has placed some."}</td></tr>`;
+      if(!shown.length) $("orders-cards").innerHTML = `<div class="oh-empty"><b>No orders yet</b>${MODE === "demo" ? "Practice trades appear here, with what you paid, what you got and the profit or loss." : "Your real Groww orders appear here once the agent has placed some."}</div>`;
+      $("orders-foot").hidden = list.length <= 10; $("orders-more").hidden = list.length <= ordersLimit; $("orders-count").textContent = list.length > 10 ? `showing ${shown.length} of ${list.length}` : "";
+      return; }
+    $("orders").innerHTML = shown.length ? shown.map(x => `<tr data-open-stock="${esc(x.symbol)}"><td class="sub nowrap">${when(x.at || x.filled_at)}</td>
+      <td class="nowrap"><span class="side-chip ${x.side==="sell"?"sell":"buy"}">${esc(String(x.side||"").toUpperCase())}</span> <a href="#" data-lookup="${esc(x.symbol)}" class="sym">${esc(x.symbol)}</a> <span class="sub">× ${esc(String(x.qty != null ? x.qty : x.filled_quantity || ""))}</span></td>
+      <td class="num nowrap">${x.filled_avg_price != null ? inr(x.filled_avg_price, 2) : "n/a"}</td><td class="num nowrap">${money(x.notional)}</td>
+      <td class="num nowrap">${x.fees != null ? money(x.fees, 2) : '<span class="sub">n/a</span>'}</td>
       <td>${orderStatus(x)}</td></tr>`).join("")
-      : `<tr><td colspan="4" class="empty">No orders yet.</td></tr>`;
+      : `<tr><td colspan="6" class="empty"><b>No orders yet</b>${MODE === "demo" ? "Practice trades appear here." : "Your real Groww orders appear here once the agent has placed some."}</td></tr>`;
     $("orders-foot").hidden = o.length <= 10;
     $("orders-more").hidden = o.length <= ordersLimit;
     $("orders-count").textContent = o.length > 10 ? `showing ${shown.length} of ${o.length}` : "";
   }
   $("orders-more").addEventListener("click", () => { ordersLimit += 20; renderOrders(); });
+  document.querySelectorAll("[data-ov]").forEach(b => b.addEventListener("click", () => { ordersView = b.dataset.ov === "all" ? "all" : "trades"; ordersLimit = 10; try { localStorage.setItem("ordersView", ordersView); } catch(e){} renderOrders(); }));
   function renderScreen(sc){
     const fx = sc.fundamentals;
     const fcols = r => fx ? `<td class="num">${pct(r.roe)}</td><td class="num">${r.financial ? '<span class="sub">bank/fin</span>' : r.debt_to_equity != null ? r.debt_to_equity.toFixed(2) + "×" : "n/a"}</td><td class="num">${r.pe ? r.pe.toFixed(1) : "n/a"}</td>` : "";

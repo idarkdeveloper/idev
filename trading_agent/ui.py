@@ -39,6 +39,7 @@ from .runner import (free_prices, make_broker, equity_key, make_data_source, mak
                      make_practice_broker, read_groww_portfolio)
 from . import safety
 from .state import STATE_LOCK, State
+from .trades import trade_view
 from .stops import FILLS_KEY, PracticeStopChecker
 from .digest_schedule import build_digest
 
@@ -912,11 +913,13 @@ class App:
                 regime = {k: r[k] for k in ("regime", "score", "signals", "guidance", "summary", "markets")}
             except Exception as e:  # noqa: BLE001
                 regime = {"error": str(e)}
+        order_rows = self.orders(500)
         return {
             "now": _now(),
             "page": self.page,
             "regime": regime,
-            "orders": self.orders(),
+            "orders": order_rows[:50],
+            "trade_view": trade_view(order_rows, positions),   # the same fills as trades: closed (buy, sell, P/L) and open (unrealised)
             "limit_orders": self.limit_orders(),
             "stop_sells": self.stop_sells(),
             "forward": self.forward_summary(),
