@@ -201,9 +201,12 @@ def test_every_page_has_head_script_and_switch():
         head = html.split("</head>")[0]
         assert "dataset.theme" in head and 'localStorage.getItem("theme")' in head, name
         assert head.index("dataset.theme") < head.index("nocturne.css"), name   # before CSS paints
-        for choice in ("dark", "light", "auto"):
-            assert f'data-theme-choice="{choice}"' in html, (name, choice)
-        assert ">Theme<" in html and 'aria-pressed="' in html
+        if name == "index.html":   # the one switch is in Settings > Appearance on the Live page; Replay and Screener only apply the saved choice
+            for choice in ("dark", "light", "auto"):
+                assert f'data-theme-choice="{choice}"' in html, (name, choice)
+            assert ">Theme<" in html and 'aria-pressed="' in html
+        else:
+            assert "data-theme-choice" not in html, name
 
 
 # ---------- node harness ----------
@@ -214,7 +217,7 @@ def test_theme_switch_in_node_harness():
     r = subprocess.run([node, str(Path(__file__).parent / "theme_harness.js")], capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr + r.stdout
     out = json.loads(r.stdout)
-    for page in ("index.html", "replay.html"):
+    for page in ("index.html",):   # the one switch is on the Live page; Replay and Screener only apply the saved choice (head script, checked above)
         o = out[page]
         assert o["head"] == {"stored_light": "light", "stored_dark": "dark", "auto_os_light": "light", "auto_os_dark": "dark",
                              "storage_throws": "dark", "storage_throws_os_light": "light", "no_matchmedia": "dark",

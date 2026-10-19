@@ -61,7 +61,7 @@ function page(html, {stored, throws, light} = {}) {
 }
 
 const out = {};
-for (const file of ["index.html", "replay.html"]) {
+for (const file of ["index.html"]) {
   const html = fs.readFileSync(path.join(ui, file), "utf8");
   const o = {};
   o.head = {

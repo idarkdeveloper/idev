@@ -61,12 +61,12 @@ def test_every_page_links_to_the_screener_and_it_marks_itself_current():
         assert 'data-tab="screener" aria-current' not in html
 
 
-def test_screener_page_has_the_search_button_and_theme_switch():
-    assert 'id="btn-palette"' in HTML and "<span>Search</span>" in HTML and 'aria-keyshortcuts="Control+K Meta+K"' in HTML
+def test_screener_page_has_the_live_header_and_applies_the_saved_theme():
+    # the header is the Live page's (tests/test_header.py compares them); the theme switch lives in Settings > Appearance on the Live page
+    assert 'id="btn-palette"' in HTML and "<span>Search</span>" in HTML and 'aria-keyshortcuts="Control+K Meta+K"' in HTML and 'id="btn-settings"' in HTML
     head = HTML.split("</head>")[0]
     assert "dataset.theme" in head and 'localStorage.getItem("theme")' in head and head.index("dataset.theme") < head.index("nocturne.css")
-    for choice in ("dark", "light", "auto"):
-        assert f'data-theme-choice="{choice}"' in HTML
+    assert "data-theme-choice" not in HTML
     assert 'class="toast"' in HTML
 
 

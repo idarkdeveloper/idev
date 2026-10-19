@@ -1917,6 +1917,15 @@
     const b = ev.target.closest && ev.target.closest("[data-set-jump]"); if(!b) return;
     const t = $(b.dataset.setJump); if(t && t.scrollIntoView) t.scrollIntoView({behavior: "smooth", block: "start"});
   });
+  { // /?settings=appearance (the gear on Replay and Screener): open this dialog on the Appearance section, then drop the parameter
+    const q = new URLSearchParams(typeof location !== "undefined" ? location.search : "");
+    if(q.get("settings") === "appearance"){
+      q.delete("settings"); history.replaceState(null, "", location.pathname + (q.toString() ? "?" + q : "") + location.hash);
+      let tries = 0;
+      const go = () => { $("btn-settings").click(); setTimeout(() => { const a = $("set-appearance"); if(a && a.scrollIntoView) a.scrollIntoView({block: "start"}); }, 60); };
+      const t = setInterval(() => { if((S && S.settings) || ++tries > 40){ clearInterval(t); go(); } }, 150);
+    }
+  }
   $("btn-settings").addEventListener("click", () => {
     if($("set-live").hidden || !S || !S.settings){ $("dlg").showModal(); return; }   // Demo: Appearance only
     const s = S.settings, c = S.connections;

@@ -1020,7 +1020,7 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
 .sc-sheet, .sc-sheet-body { display: contents; }
 .sc-sheet-backdrop[hidden] { display: none; }
 @media (max-width: 700px) {
-  body[data-mode="screener"] header .brand .sub, body[data-mode="screener"] .theme-label { display: none; }
+  body[data-mode="screener"] .theme-label { display: none; }
   body[data-mode="screener"] .sc-wrap { gap: 8px; }
   .sc-card { gap: 8px; padding: 12px 8px 8px; }
   .sc-sparkcol, .sc-spark { width: 44px; }
