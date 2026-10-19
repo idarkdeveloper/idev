@@ -312,12 +312,20 @@ who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
   minute between 08:45 and 18:30 IST on weekdays, notifying on anything new. Meant for a
   machine with a fixed IP, which the April 2026 SEBI rules require for live orders.
 
+**US, UK and Japan stocks (view only).** Pick *US*, *UK* or *Japan* beside the Look up box and type the code (AAPL,
+VOD, 7203), or type it with its market: `AAPL.US`, `VOD.L` (London), `7203.T` (Tokyo). The card and the full view show
+the price in the stock's own currency ($, pence for London quotes, ¥), the trend, the chart (line and candles), Yahoo's
+company figures and financials (amounts as $/£/¥ with K/M/B/T), the indicators and headlines. Nothing Indian applies to
+them: no agent's checklist, price band, ASM/GSM or pledge flags, NSE/BSE announcements, shareholding or similar stocks,
+and no orders of any kind (the practice order form refuses them). Prices are Yahoo Finance's, delayed.
+(`trading_agent/markets.py`.)
+
 Everything the CLI does is also in the dashboard:
 
 | CLI | Dashboard |
 |---|---|
 | `portfolio`, `history`, `reset` | Paper portfolio, order history, recommendations, run log, Reset in Settings |
-| `momentum` | Look up a stock (also click any ticker) |
+| `momentum` | Look up a stock (also click any ticker). The market picker beside the box adds **US, UK and Japan stocks for viewing only** (see below) |
 | `size` | Position size panel, and *Suggest size* in the paper order ticket |
 | `costs` | Trade cost panel with the full buy/sell breakdown |
 | `screen`, `backtest` (+ `--json`) | Factor screen and *Investor deals backtest* panels, each with *Export JSON* |

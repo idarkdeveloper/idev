@@ -104,7 +104,11 @@ class YahooFundamentals:
 
     def _result(self, symbol: str, modules: str) -> dict[str, Any]:
         """One quoteSummary result (the raw module dict) for ``modules``; raises LookupError when Yahoo has none."""
-        ysym = symbol.upper() if "." in symbol else f"{symbol.upper()}{self.suffix}"
+        from .markets import foreign_market, yahoo_symbol
+        if foreign_market(symbol):   # AAPL.US -> AAPL, VOD.L and 7203.T as they are
+            ysym = yahoo_symbol(symbol)
+        else:
+            ysym = symbol.upper() if "." in symbol else f"{symbol.upper()}{self.suffix}"
         for attempt in (0, 1):
             if self._calls and self.pause:
                 self.sleep(self.pause)

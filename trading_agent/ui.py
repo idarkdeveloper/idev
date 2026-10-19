@@ -743,6 +743,13 @@ class App:
         if svc is None:
             return {"items": [], "errors": [], "tagger": "none", "demo": True}
         ticker, company = self.resolve(text)
+        from .markets import foreign_market, yahoo_symbol
+        if foreign_market(ticker):   # headlines by the company's name, not an NSE code
+            company = self._foreign_name(ticker)[0] or yahoo_symbol(ticker)
+            try:
+                return {**svc.for_symbol(yahoo_symbol(ticker), company, background=True), "ticker": ticker.upper()}
+            except Exception as e:  # noqa: BLE001 - headlines are a nicety
+                return {"items": [], "errors": [f"{type(e).__name__}: {e}"], "tagger": "none", "ticker": ticker.upper()}
         try:
             return {**svc.for_symbol(ticker, company, background=True), "ticker": ticker.upper()}
         except Exception as e:  # noqa: BLE001 - headlines are a nicety
@@ -753,7 +760,11 @@ class App:
         return n.search(query, limit) if n is not None else []
 
     def resolve(self, text: str) -> tuple[str, str | None]:
-        """A ticker, or a company name a person typed, to (ticker, company name)."""
+        """A ticker, or a company name a person typed, to (ticker, company name). A foreign ticker (AAPL.US, VOD.L,
+        7203.T: markets.py) is taken as typed, never matched against NSE's company names."""
+        from .markets import foreign_market
+        if foreign_market(text):
+            return text.strip().upper(), None
         n = self.names
         if n is None:
             return text.strip().upper(), None
@@ -776,6 +787,9 @@ class App:
     def lookup(self, ticker: str) -> dict[str, Any]:
         typed = ticker
         ticker, company = self.resolve(ticker)
+        from .markets import info as market_info
+        if market_info(ticker):
+            return self._foreign_lookup(ticker)
         stats = self.momentum.stats(ticker)
         out: dict[str, Any] = {"ticker": ticker.upper(), "name": company, "momentum": stats,
                                "matched_from": typed if typed.strip().upper() != ticker.upper() else None,
@@ -818,6 +832,55 @@ class App:
             pass
         return out
 
+    def _foreign_lookup(self, ticker: str) -> dict[str, Any]:
+        """A US, UK or Japan stock for viewing: price, trend and a year of closes with the 200-day average. Nothing
+        Indian applies (bands, filters, NSE announcements) and it can never be held or ordered here."""
+        from .markets import info as market_info
+        stats = self.momentum.stats(ticker)
+        out: dict[str, Any] = {"ticker": ticker.upper(), "name": None, "momentum": stats, "matched_from": None,
+                               "momentum_summary": stats.get("error") or momentum_summary(stats),
+                               "announcements": [], "announcements_error": None, **(market_info(ticker) or {})}
+        name, currency = self._foreign_name(ticker)
+        out["name"] = name
+        out["currency"] = currency or out.get("currency")
+        out["history"] = []
+        try:
+            bars = self.prices.history(ticker, "2y")
+            closes = [b["close"] for b in bars]
+            pts = []
+            for i in range(max(0, len(bars) - 252), len(bars)):
+                ma = sum(closes[i - 199:i + 1]) / 200 if i >= 199 else None
+                pts.append({"d": bars[i]["date"], "c": round(closes[i], 2), "ma200": round(ma, 2) if ma else None})
+            out["history"] = pts
+            out["price"] = round(float(closes[-1]), 4) if closes else None
+        except Exception as e:  # noqa: BLE001
+            out["history_error"] = str(e)
+            out["price"] = None
+        try:
+            out["price"] = self.prices.latest_price(ticker)
+        except Exception:  # noqa: BLE001 - the last close stays
+            pass
+        return out
+
+    def _foreign_name(self, ticker: str) -> tuple[str | None, str | None]:
+        """(company name, quote currency) of a foreign ticker from Yahoo, kept for a day; (None, None) when unknown."""
+        if self.demo_trades is not None and self._parent is None:   # the offline sample makes no market-data calls
+            return None, None
+        key = ticker.upper()
+        cache = self.__dict__.setdefault("_foreign_names", {})
+        hit = cache.get(key)
+        if hit and time.time() - hit[0] < 86400:
+            return hit[1], hit[2]
+        try:
+            pr = (self.quote_service.provider.fetch_modules(key, "price") or {}).get("price") or {}
+        except Exception:  # noqa: BLE001 - the name is a nicety
+            return None, None
+        name = pr.get("longName") or pr.get("shortName")
+        name = name.strip() if isinstance(name, str) and name.strip() else None
+        cur = pr.get("currency") if isinstance(pr.get("currency"), str) else None
+        cache[key] = (time.time(), name, cur)
+        return name, cur
+
     def holding(self, ticker: str) -> dict[str, Any] | None:
         """The user's practice holding in ``ticker`` as {qty, avg_entry_price, stop, stop_type, stop_label}, else None."""
         pos = next((p for p in self.broker.positions() if p.symbol == ticker.upper()), None) \
@@ -858,6 +921,11 @@ class App:
         """A stock's corporate announcements from one exchange, for the stock page's NSE / BSE switch. Read-only.
         BSE reads the company's own BSE filings (the NSE symbol mapped to its scrip code by ISIN)."""
         ticker = self.resolve(ticker)[0].upper()
+        from .markets import info as market_info
+        fm = market_info(ticker)
+        if fm:
+            return {"ticker": ticker, "exchange": fm["exchange"], "announcements": [],
+                    "error": f"exchange announcements are read for Indian stocks only ({fm['market_name']} stocks are view-only)"}
         exch = "BSE" if exchange.upper() == "BSE" or ticker.endswith(".BO") else "NSE"
         out: dict[str, Any] = {"ticker": ticker, "exchange": exch, "announcements": [], "error": None}
         data = self.data
@@ -884,10 +952,14 @@ class App:
         from .candles import ALL, INTRADAY, build_candles, build_intraday
         ticker = self.resolve(ticker)[0].upper()
         base = ticker.split(".")[0]
+        from .markets import info as market_info
+        fm = market_info(ticker)
         if ticker.endswith(".BO"):
             exchange = "BSE"
+        if fm:
+            exchange = fm["market"]   # the prices module reads a foreign ticker as it is
         symbol = f"{base}.BO" if exchange == "BSE" else ticker
-        held = self.holding(ticker)
+        held = None if fm else self.holding(ticker)
         position = {"cost": held["avg_entry_price"], "stop": held["stop"]} if held else None
         error: str | None = None
         if range_key in INTRADAY:
@@ -972,7 +1044,7 @@ class App:
 
     def stock(self, ticker: str, exchange: str = "NSE") -> dict[str, Any]:
         """GET /api/stock: price block, fundamentals, financials, profile, shareholding, technicals and similar stocks."""
-        return cast(dict[str, Any], self.stock_service.get(self.resolve(ticker)[0], exchange))
+        return cast(dict[str, Any], self.stock_service.get(self.resolve(ticker)[0], exchange))   # foreign: markets.py
 
     def quote(self, ticker: str) -> dict[str, Any]:
         """Quote-panel figures for a ticker. Separate from lookup() so a slow Yahoo call never delays the chart."""
@@ -1112,6 +1184,9 @@ class App:
         symbol = str(symbol).strip().upper()
         if not symbol:
             raise ValueError("symbol required")
+        from .markets import VIEW_ONLY_NOTE, foreign_market
+        if foreign_market(symbol):
+            raise ValueError(VIEW_ONLY_NOTE)
         if side not in ("buy", "sell"):
             raise ValueError("side must be buy or sell")
         stop = None

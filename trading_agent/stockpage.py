@@ -267,8 +267,13 @@ class StockService:
         self._lock = threading.Lock()
 
     def get(self, ticker: str, exchange: str = "NSE") -> dict[str, Any]:
-        base = ticker.strip().upper().split(".")[0]
-        exch = "BSE" if exchange.upper() == "BSE" or ticker.strip().upper().endswith(".BO") else "NSE"
+        from .markets import foreign_market
+        fm = foreign_market(ticker)
+        if fm:   # a US, UK or Japan stock (markets.py): the whole ticker is the key, the market is the "exchange"
+            base, exch = ticker.strip().upper(), fm
+        else:
+            base = ticker.strip().upper().split(".")[0]
+            exch = "BSE" if exchange.upper() == "BSE" or ticker.strip().upper().endswith(".BO") else "NSE"
         key, now = (base, exch), self.clock()
         with self._lock:
             hit = self._cache.get(key)
@@ -301,6 +306,9 @@ class StockService:
         return rows[:SIMILAR], ipe, n
 
     def _build(self, base: str, exch: str, now: float) -> dict[str, Any]:
+        from .markets import MARKETS
+        if exch in MARKETS:
+            return self._build_foreign(base, exch, now)
         ysym = f"{base}.BO" if exch == "BSE" else f"{base}.NS"
         errors: dict[str, str] = {}
         out: dict[str, Any] = {"ticker": base, "exchange": exch, "yahoo_symbol": ysym, "source": SOURCE, "fetched_at": now,
@@ -341,4 +349,45 @@ class StockService:
             similar=similar, errors=errors)
         if out["fund"]:
             out["similar"], out["shareholding"] = [], shareholding_payload(None)
+        return out
+
+    def _build_foreign(self, ticker: str, market: str, now: float) -> dict[str, Any]:
+        """A US, UK or Japan stock (view only): Yahoo's price, profile, valuation and statements, plus the indicators
+        from its daily bars. No NSE shareholding, price band, face value or same-industry list. Money figures are in the
+        stock's own currency (``currency``: USD, GBp = pence, JPY); the ``*_cr`` fields keep their crore scale (value /
+        1e7) so the page formats them the same way, in that currency."""
+        from .markets import info, yahoo_symbol
+        ysym = yahoo_symbol(ticker)
+        errors: dict[str, str] = {}
+        m = info(ticker) or {}
+        out: dict[str, Any] = {"ticker": ticker, "exchange": market, "yahoo_symbol": ysym, "source": SOURCE,
+                               "fetched_at": now, "error": None, "fund": False, "foreign": True, **m}
+
+        def guarded(name: str, fn: Callable[[], Any]) -> Any:
+            try:
+                return fn()
+            except Exception as e:  # noqa: BLE001 - one failing part must not blank the page
+                errors[name] = f"{type(e).__name__}: {e}"
+                return None
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_mod = ex.submit(guarded, "yahoo", lambda: self.src.modules(ticker))
+            f_bars = ex.submit(guarded, "technicals", lambda: self.src.daily_bars(ticker, market))
+        result, bars = f_mod.result(), f_bars.result()
+        result = result if isinstance(result, dict) else {}
+        if "yahoo" in errors:
+            out["error"] = errors["yahoo"]
+        price = parse_price(result)
+        currency = (result.get("price") or {}).get("currency")
+        fund = build_fundamentals(ticker, result, price, face_value=None, industry_pe=None, fetched_at=now) if result else None
+        quarterly, yearly = parse_periods(result, "quarterly"), parse_periods(result, "yearly")
+        out.update(
+            name=price.pop("name"), fund=bool(fund and fund["fund"]), price=price,
+            currency=currency if isinstance(currency, str) and currency else m.get("currency"),
+            week52={"low": fund["week52_low"], "high": fund["week52_high"]} if fund else {"low": None, "high": None},
+            circuit={"state": "none_foreign"}, fundamentals=fund, industry_pe_n=0,
+            financials={"quarterly": quarterly, "yearly": yearly, "growth": growth_table(quarterly, yearly)},
+            about={**parse_profile(result), "nse_industry": None},
+            shareholding=shareholding_payload(None, "NSE shareholding is for Indian stocks only"),
+            technicals=technicals(bars or []) if bars else {"available": False},
+            similar=[], errors=errors)
         return out

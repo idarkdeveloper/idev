@@ -95,6 +95,8 @@ class YahooPrices:
 
     def yahoo_symbol(self, symbol: str) -> str:
         symbol = symbol.upper()
+        if symbol.endswith(".US") and len(symbol) > 3:   # a US stock written AAPL.US (markets.py): Yahoo writes it bare
+            return symbol[:-3]
         for prefix in ("NSE_", "BSE_"):
             if symbol.startswith(prefix):
                 symbol = symbol[len(prefix):]
