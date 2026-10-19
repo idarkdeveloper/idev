@@ -52,6 +52,22 @@
   const marketOf = (u) => MARKET_OF[u] || "IN";
   const CUR = {IN: {sym: "₹", loc: "en-IN", dec: 2, name: "India"}, US: {sym: "$", loc: "en-US", dec: 2, name: "US"},
                UK: {sym: "£", loc: "en-GB", dec: 2, name: "UK"}, JP: {sym: "¥", loc: "ja-JP", dec: 0, name: "Japan"}};
+  // The market tabs above the card (Screener v3): each with its exchanges and its own lists.
+  const MARKET_TABS = [{id: "IN", label: "India", exchange: "NSE · BSE", universes: UNIVERSE_GROUPS[0][1]},
+                       {id: "US", label: "US", exchange: "NYSE · Nasdaq", universes: ["SP500_US"]},
+                       {id: "UK", label: "UK", exchange: "LSE", universes: ["FTSE100_UK"]},
+                       {id: "JP", label: "Japan", exchange: "Tokyo", universes: ["TOPIX100_JP"]}];
+  const TITLE = {NIFTY50: "Nifty 50", NIFTY100: "Nifty 100", NIFTY200: "Nifty 200", NIFTY500: "Nifty 500",
+                 NIFTYMIDCAP150: "Nifty Midcap 150", NIFTYSMALLCAP250: "Nifty Smallcap 250"};
+  const titleOf = (u) => TITLE[u] || UNIVERSE_LABEL[u] || u;
+  // NSE's regular session, Monday to Friday 09:15-15:30 IST (exchange holidays are not known here).
+  const nseOpen = (d) => {
+    try {
+      const p = new Intl.DateTimeFormat("en-GB", {timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false}).formatToParts(d || new Date()).reduce((o, x) => (o[x.type] = x.value, o), {});
+      const m = Number(p.hour) * 60 + Number(p.minute);
+      return {open: !/^(Sat|Sun)$/.test(p.weekday) && m >= 555 && m < 930, time: p.hour + ":" + p.minute};
+    } catch(e){ return {open: false, time: ""}; }
+  };
   const INDIA_ONLY = ["band", "filter_flags", "filter_block", "held", "deal", "market_cap_cr", "avg_turnover_cr"];
   let numLocale = "en-IN", curSym = "₹";
   const OPS = {num: [">", ">=", "<", "<=", "=", "between"], pct: [">", ">=", "<", "<=", "=", "between"], text: ["is", "contains"], bool: ["="], stock: ["contains"]};
@@ -193,7 +209,7 @@
   // ---- polling: keep asking while stocks are still being fetched; ignore an answer for a list no longer shown ----
   const needsPoll = (data) => !!data && !data.error && (data.loading === true || (data.pending || 0) > 0);
 
-  const logic = {COLS, colByKey, UNIVERSES, UNIVERSE_LABEL, UNIVERSE_GROUPS, marketOf, CUR, INDIA_ONLY, OPS, OP_WORD, defaultColumns, allColumns, sparkPath, num, passes, matchesQuery, applyFilters,
+  const logic = {COLS, colByKey, UNIVERSES, UNIVERSE_LABEL, UNIVERSE_GROUPS, MARKET_TABS, titleOf, nseOpen, marketOf, CUR, INDIA_ONLY, OPS, OP_WORD, defaultColumns, allColumns, sparkPath, num, passes, matchesQuery, applyFilters,
                  validFilter, describeFilter, sortRows, PRESETS, presetById, cleanSaved, MAX_SAVED, csvCell, toCsv, needsPoll, groupNum};
   if(typeof module !== "undefined" && module.exports) module.exports = logic;
   if(typeof window === "undefined" || typeof document === "undefined" || !window.TA) return;
@@ -275,6 +291,8 @@
   function renderTop(rows){
     const all = baseRows().length;
     $("sc-count").innerHTML = st.data && all ? `<b>${rows.length}</b> of ${all} stocks match` : "";
+    $("sc-title").textContent = titleOf(st.universe);
+    renderMarkets();
     for(const b of $("sc-density").querySelectorAll("[data-density]")) b.setAttribute("aria-pressed", String(b.dataset.density === st.density));
     $("sc-allcols").textContent = st.allCols ? "Fewer columns" : "All columns";
     $("sc-allcols").setAttribute("aria-pressed", String(st.allCols));
@@ -283,6 +301,59 @@
     $("sc-card").classList.toggle("sc-compact", st.density === "compact");
     $("sc-card").classList.toggle("sc-allcols", st.allCols);
   }
+  // ---- market tabs (India / US / UK / Japan) and the list picker for the market shown ----
+  const tabOf = (u) => MARKET_TABS.find(m => m.universes.indexOf(u) >= 0) || MARKET_TABS[0];
+  const lastUni = {};   // the list last shown in each market, so switching back returns to it
+  function fillUniverse(){
+    const t = tabOf(st.universe), sel = $("sc-universe");
+    sel.innerHTML = t.universes.map(u => `<option value="${esc(u)}">${esc(titleOf(u))}</option>`).join("");
+    sel.value = st.universe;
+    sel.disabled = t.universes.length < 2;
+  }
+  function renderMarkets(){
+    const t = tabOf(st.universe), el = $("sc-markets"); if(!el) return;
+    el.innerHTML = MARKET_TABS.map(m => `<button type="button" class="sc-mtab" data-market="${esc(m.id)}" aria-pressed="${m.id === t.id}">`
+      + `<span class="sc-mlabel">${esc(m.label)}</span><span class="sc-mex">${esc(m.exchange)}</span></button>`).join("");
+    let open = false, text = "";
+    if(t.id === "IN"){ const n = nseOpen(); open = n.open; text = `NSE ${open ? "open" : "closed"}${n.time ? " · " + n.time + " IST" : ""}`; }
+    else {
+      const m = st.data && st.data.market;
+      if(m){ open = !!m.open; text = `${t.exchange.split(" · ")[0]} ${open ? "open" : "closed"} · ${m.local} local, ${m.ist} IST · view only`; }
+      else text = `${t.label} · view only`;
+    }
+    $("sc-mstatus").innerHTML = `<span class="sc-mdot${open ? " on" : ""}" aria-hidden="true"></span>${esc(text)}`;
+  }
+  function switchMarket(id){
+    const t = MARKET_TABS.find(m => m.id === id); if(!t || tabOf(st.universe).id === id) return;
+    lastUni[tabOf(st.universe).id] = st.universe;
+    st.universe = lastUni[id] && t.universes.indexOf(lastUni[id]) >= 0 ? lastUni[id] : t.universes[0];
+    st.preset = ""; st.filters = []; st.sel = null; closeDrawer();
+    fillUniverse(); applyMarket(); saveState(); load(true);
+  }
+
+  // ---- phones: a card per stock and a Sort control instead of the wide table ----
+  const sortable = () => colsFor().filter(c => !c.hide && c.type !== "text");
+  function renderCards(rows){
+    const on = narrow();
+    $("sc-cards").hidden = !on; $("sc-sortbar").hidden = !on;
+    document.querySelector(".sc-scroll").hidden = on;
+    if(!on) return;
+    const sk = $("sc-sortkey"), opts = sortable(), sc = colByKey(st.sort.key);
+    sk.innerHTML = opts.map(c => `<option value="${esc(c.key)}">${esc(colLabel(c))}</option>`).join("")
+      + (opts.some(c => c.key === st.sort.key) || !sc ? "" : `<option value="${esc(sc.key)}">${esc(colLabel(sc))}</option>`);
+    sk.value = st.sort.key;
+    $("sc-sortdir").textContent = st.sort.dir === "asc" ? "Low → high" : "High → low";
+    const all = baseRows().length;
+    if(!rows.length){ $("sc-cards").innerHTML = `<div class="empty">${!all ? (st.data && st.data.error ? esc(st.data.error) : "Loading the stock list…") : "No stock matches these filters."}</div>`; return; }
+    const chg = colByKey("chg_1d"), showSort = sc && ["chg_1d", "price", "symbol"].indexOf(sc.key) < 0;
+    $("sc-cards").innerHTML = rows.map(r => `<div class="sc-cardrow" role="listitem" tabindex="0" data-sym="${esc(r.symbol)}" aria-selected="${st.sel === r.symbol}">`
+      + `<div class="sc-cr-sym"><span class="sc-sym">${esc(shortSym(r.symbol))}</span>${badges(r)}</div>`
+      + `<div class="sc-cr-spark">${spark(r)}</div><div class="sc-cr-px">${fmt(colByKey("price"), r.price)}</div>`
+      + `<div class="sc-cr-name">${esc(r.name || "")}</div>`
+      + `<div class="sc-cr-sort">${showSort ? `${esc(colLabel(sc, true))} <span class="${sc.tone ? toneCls(r[sc.key]) : ""}">${fmt(sc, r[sc.key])}</span>` : ""}</div>`
+      + `<div class="sc-cr-chg ${toneCls(r.chg_1d)}">${chg ? fmt(chg, r.chg_1d) : ""}</div></div>`).join("");
+  }
+
   function renderPresets(){
     const rows = baseRows(), have = rows.length > 0;
     const count = (filters) => have ? applyFilters(rows, filters, "").length : null;
@@ -292,7 +363,8 @@
     const built = PRESETS.filter(p => !(foreign() && p.india)).map(p => pill("b:" + p.id, esc(p.label), p.universe && p.universe !== st.universe ? null : count(p.filters), p.note));
     const mine = saved.map((p, i) => pill("s:" + i, esc(p.name), p.universe && p.universe !== st.universe ? null : count(p.filters), "Your saved view")
       + (st.preset === "s:" + i ? `<button type="button" class="sc-link sc-delsaved" data-del="${i}" aria-label="Delete saved view ${esc(p.name)}">Delete</button>` : ""));
-    $("sc-presets").innerHTML = built.concat(mine).join("");
+    const allPill = `<button type="button" class="sc-pill sc-pillall" data-preset="" aria-pressed="${!st.preset && !st.filters.length}" title="No preset and no filters"><span>All</span></button>`;
+    $("sc-presets").innerHTML = allPill + built.concat(mine).join("");
     const sel = /^b:/.test(st.preset) ? presetById(st.preset.slice(2)) : null;
     $("sc-presetnote").textContent = sel ? sel.note : "";
     $("sc-presetnote").hidden = !sel;
@@ -355,6 +427,7 @@
         + `<td class="sc-sparkcol">${spark(r)}</td>` + cols.map(c => cell(c, r)).join("") + `</tr>`;
     }).join("");
     $("sc-rows").innerHTML = body;
+    renderCards(rows);
     renderTop(rows); renderPresets(); renderChips(); renderFresh();
     if(st.sel) renderDrawer();
   }
@@ -380,6 +453,7 @@
 
   // ---- presets ----
   function applyPreset(id){
+    if(!id){ st.preset = ""; st.filters = []; saveState(); renderTable(); return; }   // "All": everything in the list
     if(st.preset === id){ st.preset = ""; st.filters = []; saveState(); renderTable(); return; }   // the active pill clears it
     const p = /^b:/.test(id) ? presetById(id.slice(2)) : /^s:/.test(id) ? saved[Number(id.slice(2))] : null;
     if(!p) return;
@@ -537,8 +611,17 @@
 
   function init(){
     loadState();
-    $("sc-universe").innerHTML = UNIVERSE_GROUPS.map(([g, list]) => `<optgroup label="${esc(g)}">` + list.map(u => `<option value="${esc(u)}">${esc(UNIVERSE_LABEL[u] || u)}</option>`).join("") + "</optgroup>").join("");
-    $("sc-universe").value = st.universe;
+    fillUniverse();
+    $("sc-markets").addEventListener("click", (e) => { const b = e.target.closest && e.target.closest("[data-market]"); if(b) switchMarket(b.dataset.market); });
+    $("sc-sortkey").addEventListener("change", (e) => { st.sort = {key: e.target.value, dir: "desc"}; saveState(); renderTable(); });
+    $("sc-sortdir").addEventListener("click", () => { st.sort = {key: st.sort.key, dir: st.sort.dir === "asc" ? "desc" : "asc"}; saveState(); renderTable(); });
+    const cardAct = (el) => { if(st.sel === el.dataset.sym) closeDrawer(); else openDrawer(el.dataset.sym); };
+    $("sc-cards").addEventListener("click", (e) => { const c = e.target.closest && e.target.closest("[data-sym]"); if(c) cardAct(c); });
+    $("sc-cards").addEventListener("keydown", (e) => {
+      if(e.key !== "Enter" && e.key !== " ") return;
+      const c = e.target.closest && e.target.closest("[data-sym]"); if(!c || e.target !== c) return;
+      e.preventDefault(); cardAct(c);
+    });
     applyMarket();
     renderTable();
 

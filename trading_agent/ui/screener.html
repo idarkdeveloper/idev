@@ -27,6 +27,10 @@
   </div>
 </header>
 <main class="sc-main">
+  <div class="sc-markets-row">
+    <div class="sc-markets" id="sc-markets" role="group" aria-label="Market"></div>
+    <div class="sc-mstatus" id="sc-mstatus" aria-live="polite"></div>
+  </div>
   <section class="card sc-card" id="sc-card" aria-labelledby="sc-title">
     <div class="sc-top">
       <h2 id="sc-title">Stock screener</h2>
@@ -61,7 +65,9 @@
     </div>
     <div class="sc-note sub" id="sc-presetnote" aria-live="polite"></div>
     <div class="sc-note sub" id="sc-market" aria-live="polite" hidden></div>
+    <div class="sc-sortbar" id="sc-sortbar" hidden><label for="sc-sortkey">Sort</label><select id="sc-sortkey"></select><button type="button" class="sc-btn" id="sc-sortdir"></button></div>
     <div class="scroll sc-scroll"><table class="sc-table" id="sc-table"><thead id="sc-head"></thead><tbody id="sc-rows"></tbody></table></div>
+    <div class="sc-cards" id="sc-cards" role="list" aria-label="Stocks" hidden></div>
     <div class="sc-foot sub"><span id="sc-fresh"></span><span id="sc-status" aria-live="polite"></span><span>Click a row for details. Returns include dividends. A figure Yahoo has not given shows n/a and never matches a filter. This page is read-only: nothing here places an order.</span></div>
   </section>
 </main>
