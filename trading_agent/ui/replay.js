@@ -353,9 +353,11 @@
   document.querySelectorAll("[data-tool]").forEach(b => b.addEventListener("click", async () => {
     try {
       const j = await api(`/replay/api/trial/${slug}/tool`, {kind: b.dataset.tool, years: Number($("tl-years").value) || 3});
-      if(j.ok === false){ toast(j.message); return; }
-      $("tools").innerHTML = `<div class="sub">Running… this loads up to five years of prices before the replay date.</div>`;
-      const done = await waitJob(j.id, null); toast(done.message); loadTools();
+      const ctl = TA.loader.tool(b, $("tools"));
+      if(j.ok === false){ ctl.refuse(j.message); toast(j.message); return; }
+      ctl.start("Loading up to five years of prices before the replay date…");
+      const done = await waitJob(j.id, {set textContent(v){ ctl.progress(v); }});
+      ctl.finish(done.ok !== false, done.message); toast(done.message); if(done.ok !== false) loadTools();
     } catch(e){ toast(e.message); }
   }));
   async function loadTools(){

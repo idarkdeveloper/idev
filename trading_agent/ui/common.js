@@ -1028,7 +1028,7 @@ window.TA = (function(){
   const loader = (() => {
     const spinner = (cls) => `<span class="ld-ring${cls ? " " + cls : ""}" aria-hidden="true"></span>`;
     // 5a: a sparkline that draws itself, then its end dot lands.
-    const spark = () => `<svg class="ld-spark" width="120" height="48" viewBox="0 0 120 48" aria-hidden="true">
+    const spark = (w, h) => `<svg class="ld-spark" width="${Number(w) || 120}" height="${Number(h) || 48}" viewBox="0 0 120 48" aria-hidden="true">
       <line class="base" x1="0" y1="40" x2="120" y2="40"></line>
       <polyline class="line" points="4,36 22,30 36,33 52,20 66,24 82,12 98,16 114,6"></polyline>
       <circle class="end" cx="114" cy="6" r="4"></circle></svg>`;
@@ -1110,7 +1110,55 @@ window.TA = (function(){
         done: close, fail: close,
       };
     }
-    return {spinner, spark, skeletonRows, busy, isBusy, page};
+    // ---- a long-running tool: the Run button shows a ring, its status line a progress block (drawn line, the server's message,
+    // "running 0:42" ticking every second). Several tools can run at once; each has its own button and block. ----
+    const mmss = (sec) => { const s = Math.max(0, Math.floor(Number(sec) || 0)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); };
+    const prog = new WeakMap();   // status element -> {t0, iv}
+    function progress(el, msg, since, word){
+      if(!el) return;
+      let p = prog.get(el);
+      if(!p){
+        p = {t0: since || Date.now(), iv: 0}; prog.set(el, p);
+        el.innerHTML = `<span class="ld-prog" role="status">${spark(56, 22)}<span class="msg"></span><span class="el"></span></span>`;
+        const tick = () => { const n = el.querySelector(".el"); if(n) n.textContent = (word || "running") + " " + mmss((Date.now() - p.t0) / 1000); };
+        p.iv = setInterval(tick, 1000); tick();
+      }
+      const m = el.querySelector(".msg"); if(m) m.textContent = msg || "";
+    }
+    function clearProgress(el, text){
+      if(!el) return;
+      const p = prog.get(el); if(p){ clearInterval(p.iv); prog.delete(el); }
+      el.textContent = text || "";
+    }
+    const tools = new WeakMap();   // Run button -> its controller
+    function tool(btn, el){
+      let c = tools.get(btn);
+      if(c){ if(el) c.el = el; return c; }
+      c = {el, running: false, locked: false, was: "", wasMin: ""};
+      const restore = () => { if(c.running) return; btn.innerHTML = c.was; btn.style.minWidth = c.wasMin; btn.disabled = false; btn.removeAttribute("aria-busy"); btn.classList.remove("ld-busy", "ld-done", "ld-fail"); c.locked = false; };
+      c.start = (msg, since) => {
+        if(c.running){ progress(c.el, msg, since); return; }
+        c.running = c.locked = true;
+        c.was = btn.innerHTML; c.wasMin = btn.style.minWidth;
+        btn.style.minWidth = btn.getBoundingClientRect().width + "px";   // the row does not jump
+        btn.disabled = true; btn.setAttribute("aria-busy", "true"); btn.classList.remove("ld-done", "ld-fail"); btn.classList.add("ld-busy");
+        btn.innerHTML = spinner() + "<span>Running…</span>";
+        progress(c.el, msg, since);
+      };
+      c.progress = (msg, since) => { if(!c.running) c.start(msg, since); else progress(c.el, msg, since); };
+      c.refuse = (msg) => { if(c.el && !c.running) c.el.innerHTML = `<span class="ld-prog ld-note" role="status">${esc(msg)}</span>`; };
+      c.finish = (ok, text) => {
+        if(!c.running) return;
+        c.running = false;
+        clearProgress(c.el, ok ? "" : text || "");
+        btn.classList.remove("ld-busy"); btn.classList.add(ok ? "ld-done" : "ld-fail"); btn.removeAttribute("aria-busy");
+        btn.innerHTML = `<span class="ld-tick" aria-hidden="true">${ok ? "✓" : "✕"}</span><span>${ok ? "Done" : "Failed"}</span>`;
+        setTimeout(restore, 1500);
+      };
+      tools.set(btn, c);
+      return c;
+    }
+    return {spinner, spark, skeletonRows, busy, isBusy, page, mmss, progress, clearProgress, tool};
   })();
 
   return {$, esc, priceMove, priceLine, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,

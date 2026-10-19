@@ -1768,7 +1768,7 @@ def test_service_worker_headers_and_it_never_touches_the_api(server):
     status, h, body = _raw(base + "/sw.js")
     assert status == 200 and h["Content-Type"].startswith("text/javascript") and h["Service-Worker-Allowed"] == "/" and "no-cache" in h["Cache-Control"]
     js = body.decode()
-    assert 'const API = /^\/(demo\/|replay\/)?api\//;' in js
+    assert r'const API = /^\/(demo\/|replay\/)?api\//;' in js
     assert "if (API.test(url.pathname)) return;" in js                  # the API branch returns before any respondWith
     assert js.index("API.test(url.pathname)") < js.index("event.respondWith(")
     assert 'req.method !== "GET"' in js and "Trading Agent is offline" in js and "Check that Tailscale is connected" in js
@@ -1796,3 +1796,28 @@ def test_install_files_follow_the_host_check_and_the_api_guards_are_unchanged(se
     assert _raw(base + "/manifest.webmanifest", {"Host": "trading-agent.tail2f4b4a.ts.net:8443"})[0] == 200
     assert _raw(base + "/api/state", {"Sec-Fetch-Site": "cross-site"})[0] == 403          # the API guard is as before
     assert _raw(base + "/api/state", {"Host": "evil.example"})[0] == 421
+
+
+def test_every_long_running_tool_uses_the_loader_and_shows_elapsed_time():
+    ui = Path(__file__).resolve().parent.parent / "trading_agent" / "ui"
+    index, common = (ui / "index.html").read_text(encoding="utf-8"), (ui / "common.js").read_text(encoding="utf-8")
+    replay, screener, css = (ui / "replay.js").read_text(encoding="utf-8"), (ui / "screener.js").read_text(encoding="utf-8"), (ui / "nocturne.css").read_text(encoding="utf-8")
+    for kind, btn in (("backtest", "bt-run"), ("screen", "sc-run"), ("factor_backtest", "fb-run"), ("signal_lab", "sl-run")):
+        assert f'{kind}: {{btn: "{btn}"' in index.replace("\n", " ").replace("  ", " ") or f'btn: "{btn}"' in index
+        assert f'toolCtl("{kind}").start(TOOLS.{kind}.msg)' in index and f'toolCtl("{kind}").refuse(j.message)' in index
+    assert "toolCtl(j.kind).progress(j.message || t.msg" in index and "toolRan(kind, j)" in index and "TA.loader.tool($(id)).locked" in index
+    assert "TA.loader.tool(b, $(\"tools\"))" in replay and "ctl.finish(done.ok !== false" in replay
+    assert 'TA.loader.progress($("sc-status")' in screener and '"loading"' in screener and "TA.loader.clearProgress($(\"sc-status\")" in screener
+    assert "const mmss = " in common and "setInterval(tick, 1000)" in common and "isConnected" not in common
+    assert ".ld-prog" in css and "button.ld-fail" in css and "animation: ld-in" in css
+
+
+def test_the_elapsed_formatter_gives_minutes_and_seconds():
+    import re
+    import subprocess
+    from pathlib import Path as P
+    common = (P(__file__).resolve().parent.parent / "trading_agent" / "ui" / "common.js").read_text(encoding="utf-8")
+    fn = re.search(r"const mmss = [^\n]+", common).group(0)
+    js = fn + '; console.log(JSON.stringify([mmss(0), mmss(5), mmss(42), mmss(60), mmss(125.9), mmss(3599), mmss(-4), mmss("x")]))'
+    out = subprocess.run(["node", "-e", js], capture_output=True, text=True, check=True).stdout
+    assert json.loads(out) == ["0:00", "0:05", "0:42", "1:00", "2:05", "59:59", "0:00", "0:00"]
