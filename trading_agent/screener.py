@@ -135,6 +135,29 @@ class ScreenerService:
         self._tv_tried: dict[str, float] = {}
         self._running: dict[str, threading.Thread] = {}
 
+    def is_running(self, key: str | None = None) -> bool:
+        """True while the background fill of ``key`` (or of any list) is running."""
+        with self._lock:
+            ts = [self._running.get(key)] if key is not None else list(self._running.values())
+        return any(t is not None and t.is_alive() for t in ts)
+
+    def start(self, key: str) -> None:
+        """Start the list's background fill (the one the Screener page starts); a no-op while it is already running."""
+        self._ensure_fill(key, None)
+
+    def peek(self, key: str) -> dict[str, Any]:
+        """The rows cached right now for ``key``, with how many stocks are still missing and when the newest figures were fetched
+        (epoch seconds). Unlike ``snapshot`` this never starts or continues a fill."""
+        members = self._members(key, None)
+        if members is None:
+            return {"universe": key, "rows": [], "total": 0, "pending": 0, "loading": self.is_running(key), "fetched_at": None}
+        symbols = [m["symbol"] for m in members]
+        with self._lock:
+            pending = len([s for s in symbols if s not in self._metrics])
+            stamps = [self._metrics[s][0] for s in symbols if s in self._metrics]
+        return {"universe": key, "rows": self._rows(members, set(), {}, key), "total": len(symbols), "pending": pending,
+                "loading": self.is_running(key), "fetched_at": max(stamps) if stamps else None}
+
     # -- cache bookkeeping ------------------------------------------------------
     def _metrics_ttl(self) -> float:
         return self._metrics_ttl_fn() if self._metrics_ttl_fn is not None else METRICS_TTL

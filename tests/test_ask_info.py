@@ -170,7 +170,7 @@ def test_ideas_in_a_risk_off_market_say_the_agent_advises_no_new_buys():
     d = {"regime": {"regime": "risk_off", "score": -2, "guidance": "No new buys; existing positions at most half size; prefer watch over buy."},
          "recs": recs(), "picks": ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"], "picks_as_of": "2026-10-12"}
     out = ask_info.compose_ideas(d)
-    assert out["say"].startswith("The agent's market stance is Risk-off, score minus 2. No new buys; existing positions at most half size; prefer watch over buy. "
+    assert out["say"].startswith("For Indian stocks, the agent's market stance is Risk-off, score minus 2. No new buys; existing positions at most half size; prefer watch over buy. "
                                  "The agent itself advises no new buys. The agent's latest ideas: JUBLPHARMA (watch, 12 Oct); TCS (buy, 11 Oct); ITC (watch, 10 Oct).")
     assert "The momentum screen's top picks as of 12 Oct: AAA, BBB, CCC, DDD, EEE." in out["say"] and "FFF" not in out["say"] and "GONE" not in out["say"]
     assert out["say"].endswith("These are the app's own rule-based screens, not financial advice. I cannot place orders.")
@@ -183,11 +183,11 @@ def test_ideas_in_a_risk_off_market_say_the_agent_advises_no_new_buys():
 
 def test_ideas_in_a_risk_on_market_and_with_nothing_known():
     on = ask_info.compose_ideas({"regime": {"regime": "risk_on", "score": 3, "guidance": "Normal sizing; neutral-momentum buys acceptable."}, "recs": [], "picks": [], "picks_as_of": None})
-    assert on["say"].startswith("The agent's market stance is Risk-on, score 3. Normal sizing; neutral-momentum buys acceptable. The agent has no recent recommendations.")
+    assert on["say"].startswith("For Indian stocks, the agent's market stance is Risk-on, score 3. Normal sizing; neutral-momentum buys acceptable. The agent has no recent recommendations.")
     assert "advises no new buys" not in on["say"] and on["facts"][0]["tone"] == "pos" and on["facts"][1] == {"label": "Latest idea", "value": "none yet", "tone": ""}
     assert on["say"].endswith(ask_info.NOT_ADVICE)
     none = ask_info.compose_ideas({"regime": None, "recs": None, "picks": None})
-    assert none["say"].startswith("I do not have the agent's market stance right now. The agent has no recent recommendations.") and none["say"].endswith(ask_info.NOT_ADVICE)
+    assert none["say"].startswith("For Indian stocks, I do not have the agent's market stance right now. The agent has no recent recommendations.") and none["say"].endswith(ask_info.NOT_ADVICE)
     assert none["facts"][0]["value"] == "not available"
     broken = ask_info.compose_ideas({"regime": {"error": "x"}, "recs": [{"ticker": "", "action": "buy"}]})
     assert "market stance right now" in broken["say"] and "no recent recommendations" in broken["say"]
@@ -228,7 +228,7 @@ def test_the_route_answers_the_three_owner_questions(server, monkeypatch):  # no
     monkeypatch.setattr(app, "forward_summary", lambda: {"last_picks": ["AAA", "BBB"], "last_rebalance": "2026-10-12"})
     monkeypatch.setattr(app, "clock", lambda: datetime(2026, 10, 19, 10, 30, tzinfo=IST))
     ideas = _post(base + "/api/ask", {"text": "which stock to buy today"})[1]
-    assert ideas["intent"] == "ideas" and ideas["say"].startswith("The agent's market stance is Risk-off, score minus 2.") and "advises no new buys" in ideas["say"]
+    assert ideas["intent"] == "ideas" and ideas["say"].startswith("For Indian stocks, the agent's market stance is Risk-off, score minus 2.") and "advises no new buys" in ideas["say"]
     assert ideas["facts"][0]["value"] == "Risk-off (-2)" and ideas["say"].endswith("I cannot place orders.")
     again = _post(base + "/api/ask", {"text": "suggest me to buy a stock today"})[1]
     assert again["intent"] == "ideas" and again["say"] == ideas["say"]

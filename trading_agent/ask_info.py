@@ -213,7 +213,7 @@ def compose_ideas(d: dict[str, Any]) -> dict[str, Any]:
     if r.get("regime") in REGIME_LABEL:
         label = REGIME_LABEL[r["regime"]]
         score = r.get("score")
-        said.append(f"The agent's market stance is {label}" + (f", score {'minus ' if score < 0 else ''}{abs(int(score))}." if isinstance(score, (int, float)) else "."))
+        said.append(f"For Indian stocks, the agent's market stance is {label}" + (f", score {'minus ' if score < 0 else ''}{abs(int(score))}." if isinstance(score, (int, float)) else "."))
         if r.get("guidance"):
             g = str(r["guidance"]).strip().rstrip(".")
             said.append(g[0].upper() + g[1:] + ".")
@@ -222,7 +222,7 @@ def compose_ideas(d: dict[str, Any]) -> dict[str, Any]:
         facts.append({"label": "Market stance", "value": label + (f" ({_signed(score)})" if isinstance(score, (int, float)) else ""),
                       "tone": "neg" if r["regime"] == "risk_off" else "pos" if r["regime"] == "risk_on" else ""})
     else:
-        said.append("I do not have the agent's market stance right now.")
+        said.append("For Indian stocks, I do not have the agent's market stance right now.")
         facts.append({"label": "Market stance", "value": "not available", "tone": ""})
     recs = [x for x in (d.get("recs") or []) if x and x.get("ticker") and not x.get("dismissed")][:3]
     if recs:
@@ -369,3 +369,86 @@ def compose_market_summary(d: dict[str, Any]) -> dict[str, Any]:
         said.append(f"As of {d['as_of']}.")
         facts.append({"label": "As of", "value": str(d["as_of"]), "tone": ""})
     return {"say": " ".join(said), "facts": facts}
+
+
+# ---- the top stocks of a market (the screener's tables) ----
+# market -> (adjective, currency symbol, decimals, spoken currency, name in the Screener's market tabs, Indian digit grouping)
+TOP_MARKETS = {"US": ("US", "$", 2, "dollars", "United States", False), "UK": ("UK", "£", 2, "pounds", "United Kingdom", False),
+               "JP": ("Japanese", "¥", 0, "yen", "Japan", False), "IN": ("Indian", "₹", 2, "rupees", "India", True)}
+KINDS = ("leaders", "gainers", "losers")
+
+
+def _money(v: float, symbol: str, dec: int, indian: bool) -> str:
+    whole, _, frac = f"{abs(v):.{dec}f}".partition(".")
+    grouped = _indian(int(whole)) if indian else f"{int(whole):,}"
+    return f"{'-' if v < 0 else ''}{symbol}{grouped}" + (f".{frac}" if frac else "")
+
+
+def _fmt_pct(v: float, dec: int = 1) -> str:
+    return f"{'+' if v > 0 else '-' if v < 0 else ''}{abs(v):.{dec}f}%"
+
+
+def loading_text(market: str) -> str:
+    adj, _s, _d, _w, tab, _i = TOP_MARKETS[market if market in TOP_MARKETS else "IN"]
+    return f"The {adj} list is loading, about 2 minutes. Ask again shortly, or open the Screener and pick {tab}."
+
+
+def compose_market_top(args: dict[str, Any], table: dict[str, Any], now: datetime, regime: dict[str, Any] | None = None) -> dict[str, Any]:
+    """{"say", "facts", "loading"} for "top US stocks", "UK gainers today", "biggest losers in Japan": from a Screener table
+    (``table``: rows as the Screener serves them, total, pending, fetched_at) only; fixed templates, nothing from a model.
+    ``leaders`` are ranked by the Screener's own momentum score (stocks that pass its factor screen), ``gainers`` and ``losers`` by the
+    1-day change. A table with no priced row is "loading". ``regime`` is only used for India."""
+    mk = str(args.get("market") or "IN").upper()
+    mk = mk if mk in TOP_MARKETS else "IN"
+    kind = str(args.get("kind") or "leaders")
+    kind = kind if kind in KINDS else "leaders"
+    try:
+        n = max(3, min(10, int(args.get("n") or 5)))
+    except (TypeError, ValueError):
+        n = 5
+    adj, sym, dec, word, _tab, indian = TOP_MARKETS[mk]
+    ready = [r for r in (table.get("rows") or []) if r.get("price") is not None and not r.get("error")]
+    if not ready:
+        return {"say": loading_text(mk), "facts": [], "loading": True}
+    if kind == "leaders":
+        pool = sorted((r for r in ready if r.get("mom_eligible") and r.get("mom_score") is not None), key=lambda r: -r["mom_score"])
+        head = f"The top {{n}} {adj} stocks by momentum right now:"
+    else:
+        pool = sorted((r for r in ready if r.get("chg_1d") is not None), key=lambda r: -r["chg_1d"] if kind == "gainers" else r["chg_1d"])
+        pool = [r for r in pool if (r["chg_1d"] > 0 if kind == "gainers" else r["chg_1d"] < 0)]
+        head = f"The top {{n}} {adj} gainers today:" if kind == "gainers" else f"The biggest {{n}} {adj} losers today:"
+    stamp = ""
+    if table.get("fetched_at"):
+        at = datetime.fromtimestamp(float(table["fetched_at"]), IST)
+        stamp = f" As of {at.strftime('%H:%M')} IST" + ("" if at.date() == now.astimezone(IST).date() else f" on {_short(at.date())}") + ", prices delayed."
+    partial = f" The list is still filling ({table.get('pending')} of {table.get('total')} stocks to come), so this is partial." if table.get("pending") else ""
+    if not pool:
+        what = "stock passes the Screener's momentum filter yet" if kind == "leaders" else "stock is " + ("up" if kind == "gainers" else "down") + " today"
+        return {"say": f"No {adj} {what}.{partial}{stamp}", "facts": [], "loading": False}
+    pool = pool[:n]
+    said, facts = [], []
+    for r in pool:
+        nm = str(r.get("name") or "").strip()
+        nm = re.sub(r"[,\s]+(?:inc|corp|corporation|plc|ltd|limited|co|company|holdings?)\.?$", "", nm, flags=re.I).strip(" ,") if nm else ""
+        who = f"{r['symbol']}" + (f" ({nm})" if nm else "")
+        price = r["price"]
+        spoken_price = _spoken_inr(price) if indian else f"{price:,.{dec}f} {word}"
+        if kind == "leaders":
+            y = r.get("ret_1y")
+            move = f"up {abs(y):.0f} percent over 12 months" if y is not None and y > 0 else f"down {abs(y):.0f} percent over 12 months" if y is not None and y < 0 else "flat over 12 months" if y is not None else "12-month change not available"
+            val = (f"{_fmt_pct(y)} 12m · " if y is not None else "") + _money(price, sym, dec, indian)
+            tone = "pos" if y and y > 0 else "neg" if y and y < 0 else ""
+        else:
+            c = r["chg_1d"]
+            move = f"{'up' if c > 0 else 'down'} {abs(c):.1f} percent today"
+            val = f"{_fmt_pct(c)} today · {_money(price, sym, dec, indian)}"
+            tone = "pos" if c > 0 else "neg"
+        said.append(f"{who}, {move}, at {spoken_price}")
+        facts.append({"label": f"{r['symbol']} · {nm}" if nm else str(r["symbol"]), "value": val, "tone": tone})
+    notes = [head.format(n=len(pool)) + " " + "; ".join(said) + "."]
+    if kind == "leaders":
+        notes.append("Ranked by momentum, the Screener's own measure; not market size.")
+    notes.append("These are the Screener's rankings, not recommendations; prices are delayed." if not stamp else "These are the Screener's rankings, not recommendations.")
+    if mk == "IN" and (regime or {}).get("regime") == "risk_off":
+        notes.append("The agent's risk-off stance applies to Indian buying only.")
+    return {"say": " ".join(notes) + partial + stamp, "facts": facts, "loading": False}
