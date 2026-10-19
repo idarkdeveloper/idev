@@ -495,8 +495,11 @@ class Watcher:
                     if b:
                         out["breadth"] = b["date"]
             if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:   # last: the lowest priority read
+                from .breadth import nifty500_members as n500
                 from .indian_filters import filters_for   # ASM/GSM, board meetings, pledges: once per trading day
-                got = filters_for(s, calendar=self.holidays).tick(self._data, now, deadline=deadline)
+                got = filters_for(s, calendar=self.holidays).tick(
+                    self._data, now, deadline=deadline,
+                    pledge_symbols=lambda: n500(data.session))   # the pledge fallback's stocks, if NSE's list is empty
                 if got:
                     out["indian_filters"] = got
             if getattr(s, "market", "in") == "in" and time.monotonic() < deadline:   # once a year (and monthly refresh)

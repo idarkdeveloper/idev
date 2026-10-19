@@ -796,7 +796,16 @@ Holdings are flagged, never sold: ASM/GSM, "Results due <date>" and a pledge war
 page and the morning email. Filings disseminated at or after 15:00 IST count from the next trading day. A list that is
 missing, unreadable or more than 2 trading days old (10 for promoter pledges, which change slowly; NSE's own pledge
 list was empty from 16 Oct 2026, and the error then says NSE is publishing none) blocks nothing and says "filter data
-unavailable". Nothing here places,
+unavailable". **Pledge fallback:** when NSE's pledge list comes back empty, the watch service reads promoter pledges from
+each NIFTY 500 company's quarterly shareholding-pattern filing instead (`trading_agent/pledge_shp.py`: NSE's filing list,
+then the filing's XBRL on `nsearchives.nseindia.com`, the only host it will download from). Pledged % of the promoter
+holding is the same measure, so the 20% and 5-point rules are unchanged; a rise is measured once a newer quarter is filed.
+Each filing is cached for good in `cache/shp_pledge/` and a company's filing list is asked again weekly, so after the first
+build (about 300 KB per company, spread over watch ticks in their 30-second budget) a day costs little. The list is used once
+90% of the companies have a filing; until then the last list stays in use and the Health page shows "N of 500 stocks so
+far", and afterwards its source. Stocks outside the NIFTY 500 have no pledge data in this mode. Groww publishes no pledge
+figures (its stock pages show the promoter holding only) and BSE's pledge pages refuse servers, so neither is used.
+Nothing here places,
 modifies or cancels an order. The tax-aware B2 buffer (defer a profitable rank-buffer exit aged 335-364 days to day 366)
 is not built: it waits for the B2 rank buffer.
 

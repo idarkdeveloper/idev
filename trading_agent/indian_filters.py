@@ -61,6 +61,11 @@ MAX_TRIES = 6
 BACKOFF_MINUTES = (5, 15, 60)
 _LOCK = threading.Lock()
 _warned: set[str] = set()
+SHP_SOURCE = "NSE shareholding filings (quarterly)"   # the pledge fallback, see pledge_shp.py
+
+
+class EmptyPledgeList(ValueError):
+    """NSE's pledge list came back empty (its page publishing nothing): the shareholding-filing fallback may step in."""
 
 
 # -- parsing NSE's answers ---------------------------------------------------------------------------
@@ -318,20 +323,36 @@ class FilterBook:
         parsed: Any = parse_pledges(payload, names) if part == "pledge" else PARSERS[part](payload)
         if not isinstance(parsed, dict) or not parsed:
             if part == "pledge" and _nse_pledge_count(client) == 0:
-                raise ValueError(f"{LABEL[part]}: NSE is publishing no pledge data right now (its own page counts 0 "
+                raise EmptyPledgeList(f"{LABEL[part]}: NSE is publishing no pledge data right now (its own page counts 0 "
                                  f"companies); the last good list stays in use for up to {MAX_AGE_BY_PART['pledge']} "
                                  "trading days")
+            if part == "pledge":
+                raise EmptyPledgeList(f"{LABEL[part]}: NSE answered with no usable rows")
             raise ValueError(f"{LABEL[part]}: NSE answered with no usable rows")
         return parsed
 
-    def tick(self, client: Any, now: datetime, deadline: float | None = None, names: Any = None) -> dict[str, int]:
+    def tick(self, client: Any, now: datetime, deadline: float | None = None, names: Any = None,
+             pledge_symbols: Any = None) -> dict[str, int]:
         """For the watch loop: fetch what is due, store it, never raise. Returns {part: symbols stored}. ``deadline``
-        (time.monotonic) stops between lists when the tick's network budget is spent; the rest wait for a later tick."""
+        (time.monotonic) stops between lists when the tick's network budget is spent; the rest wait for a later tick.
+        ``pledge_symbols`` (a callable giving the stocks to cover, e.g. NIFTY 500) turns on the pledge fallback: when
+        NSE's pledge list is empty, pledges are read from each company's quarterly shareholding filing instead
+        (pledge_shp.py), a share of the stocks per tick, without using up the day's tries."""
         import time
         out: dict[str, int] = {}
         if client is None or not hasattr(client, "_get"):
             return out
         parts = self.due(now)
+        day_iso = now.astimezone(IST).date().isoformat()
+        data = self.load()
+        if (pledge_symbols is not None and self.enabled.get("pledge") and data.get("pledge_fallback") == day_iso
+                and (data.get("pledge") or {}).get("date") != day_iso and _trading(now.astimezone(IST).date(), self.calendar)):
+            # NSE's pledge list was empty earlier today: keep reading filings every tick, whatever the other lists' back-off
+            parts = [p for p in parts if p != "pledge"]
+            if deadline is None or time.monotonic() < deadline:
+                n = self._pledge_fallback(client, now, deadline, pledge_symbols)
+                if n:
+                    out["pledge"] = n
         if not parts:
             return out
         errors: dict[str, str] = {}
@@ -342,12 +363,63 @@ class FilterBook:
                 parsed = self.fetch(client, part, now, names if names is not None else self._names)
                 self.store(part, parsed, now.astimezone(IST).date(), now)
                 out[part] = len(parsed)
+            except EmptyPledgeList as e:
+                if pledge_symbols is None:
+                    errors[part] = f"{type(e).__name__}: {e}"[:200]
+                    self._warn_once(f"Indian filter data unavailable ({LABEL[part]}): {e}", now.date())
+                    continue
+                data = self.load()
+                data["pledge_fallback"] = day_iso
+                self._save(data)
+                self._warn_once(f"{e}; reading promoter pledges from {SHP_SOURCE} instead", now.date())
+                n = self._pledge_fallback(client, now, deadline, pledge_symbols)
+                if n:
+                    out[part] = n
             except Exception as e:  # noqa: BLE001 - a missing list only means that filter blocks nothing
                 errors[part] = f"{type(e).__name__}: {e}"[:200]
                 self._warn_once(f"Indian filter data unavailable ({LABEL[part]}): {e}", now.date())
         if errors:
             self._note_try(now.astimezone(IST).date().isoformat(), now, errors)
         return out
+
+    def _pledge_fallback(self, client: Any, now: datetime, deadline: float | None, symbols_fn: Any) -> int:
+        """One step of the shareholding-filing fallback. Stores the pledge list (with its source) once enough stocks
+        have a filing and returns how many; otherwise records the progress for the Health page and returns 0. The
+        stock list is asked of ``symbols_fn`` once a day and kept in the cache. Never raises."""
+        from .pledge_shp import ShpPledges
+        day = now.astimezone(IST).date()
+        cache = self.path.parent / "cache"
+        try:
+            syms = self._pledge_universe(cache, day, symbols_fn)
+            res = ShpPledges(cache, today=lambda: day).build(client, syms, deadline)
+        except Exception as e:  # noqa: BLE001 - e.g. the index list unavailable: try again next tick
+            res = {"symbols": {}, "done": 0, "total": 0, "ready": False, "errors": 1, "error": str(e)[:160]}
+        data = self.load()
+        data["pledge_progress"] = {"day": day.isoformat(), "done": res["done"], "total": res["total"],
+                                   "at": now.isoformat(timespec="seconds"), **({"error": res["error"]} if res.get("error") else {})}
+        self._save(data)
+        if not res["ready"]:
+            return 0
+        self.store("pledge", res["symbols"], day, now)
+        data = self.load()
+        data["pledge"]["source"] = SHP_SOURCE
+        self._save(data)
+        return len(res["symbols"])
+
+    @staticmethod
+    def _pledge_universe(cache: Path, day: date, symbols_fn: Any) -> list[str]:
+        path = cache / "shp_pledge" / "_universe.json"
+        try:
+            d = json.loads(path.read_text(encoding="utf-8"))
+            if d.get("day") == day.isoformat() and d.get("symbols"):
+                return list(d["symbols"])
+        except (OSError, ValueError, AttributeError):
+            pass
+        syms = [str(s).strip().upper() for s in symbols_fn() if str(s).strip()]
+        if syms:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(path, json.dumps({"day": day.isoformat(), "symbols": syms}))
+        return syms
 
     def _names(self) -> dict[str, str]:
         """{symbol: company name} from NSE's equity list (EQUITY_L.csv, cached a day beside the other caches)."""
