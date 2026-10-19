@@ -29,6 +29,7 @@
   <button type="button" role="tab" id="wst-overview" data-ws-tab="overview" aria-controls="ws-overview" aria-selected="true">Overview</button>
   <button type="button" role="tab" id="wst-deals" data-ws-tab="deals" aria-controls="ws-deals" aria-selected="false" tabindex="-1">Deals &amp; orders<span class="ws-count" id="ws-newdeals" hidden></span></button>
   <button type="button" role="tab" id="wst-research" data-ws-tab="research" aria-controls="ws-research" aria-selected="false" tabindex="-1">Research</button>
+  <button type="button" role="tab" id="wst-paper" data-ws-tab="paper" aria-controls="ws-paper" aria-selected="false" tabindex="-1">Paper accounts</button>
   <button type="button" role="tab" id="wst-tools" data-ws-tab="tools" aria-controls="ws-tools" aria-selected="false" tabindex="-1">Tools</button>
   <button type="button" role="tab" id="wst-health" data-ws-tab="health" aria-controls="ws-health" aria-selected="false" tabindex="-1">Health<span class="ws-count hl-count" id="ws-health-count" hidden></span></button>
 </div></div>
@@ -38,6 +39,7 @@
     <div class="ws-navgroup"><span class="ws-navhead">Overview</span><a href="#overview">Today</a><a href="#portfolio">My Groww portfolio</a><a href="#recs">Recommendations</a><a href="#practice" data-demo-only hidden>Practice portfolio</a><a href="#forward">Factor screen, forward</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Deals &amp; orders</span><a href="#deals">Disclosed deals</a><a href="#orders">Order history</a><a href="#runs">Recent runs</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Research</span><a href="#lookup">Look up a stock</a><a href="#track-record">Claude's track record</a><a href="#screen">Factor screen</a><a href="#signal-lab">Signal lab</a><a href="#backtest">Backtest</a></div>
+    <div class="ws-navgroup"><span class="ws-navhead">Paper accounts</span><a href="#paper">All four, side by side</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Tools</span><a href="#size">Position size</a><a href="#costs">Trade cost</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Health</span><a href="#kill-switch">Kill switch</a><a href="#health">Data sources</a><a href="#groww-logins">Groww logins</a></div>
   </nav>
@@ -235,6 +237,18 @@
         <div id="bt-result"></div>
       </form>
     </details>
+  </section>
+
+  <!-- ===================== Paper accounts ===================== -->
+  <section class="ws-panel" id="ws-paper" data-ws="paper" role="tabpanel" aria-labelledby="wst-paper">
+    <section class="card" data-anchor="paper">
+      <div class="cardhead"><h2>Paper accounts</h2><span class="sub">practice money, run by the server after each close · never a real order</span><button type="button" class="small" id="pa-refresh" style="margin-left:auto">Refresh</button></div>
+      <div class="cardbody">
+        <div class="chart" id="pa-chart"></div>
+        <div class="sub" id="pa-note">Loading…</div>
+      </div>
+      <div id="pa-list" class="pa-list"></div>
+    </section>
   </section>
 
   <!-- ===================== Tools ===================== -->
@@ -477,11 +491,11 @@
   // Each tab has an address (#overview, #deals, #research, #tools); the old section anchors (#portfolio, #lookup, ...) map
   // into their tab and scroll there. The query string and the hash win over localStorage on load; unknown values are
   // ignored (see TA.safety.parseUrl). Health (#health) is the data health tab.
-  const WORKSPACES = [["overview", "Overview"], ["deals", "Deals & orders"], ["research", "Research"], ["tools", "Tools"], ["health", "Health"]];
+  const WORKSPACES = [["overview", "Overview"], ["deals", "Deals & orders"], ["research", "Research"], ["paper", "Paper accounts"], ["tools", "Tools"], ["health", "Health"]];
   const WS_OF = {overview: "overview", portfolio: "overview", recs: "overview", practice: "overview", forward: "overview",
                  deals: "deals", orders: "deals", runs: "deals",
                  research: "research", lookup: "research", "track-record": "research", screen: "research", "signal-lab": "research", backtest: "research",
-                 tools: "tools", size: "tools", costs: "tools", health: "health", "groww-logins": "health", "kill-switch": "health"};
+                 paper: "paper", tools: "tools", size: "tools", costs: "tools", health: "health", "groww-logins": "health", "kill-switch": "health"};
   const ANCHORS = Object.keys(WS_OF);
   const store = {get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }, set(k, v){ try { localStorage.setItem(k, v); } catch(e){} }};
   let layout = store.get("liveLayout") === "sections" ? "sections" : "tabs";
@@ -533,6 +547,7 @@
     paintWorkspaces();
     if(changed) setTimeout(redrawCharts, 0);   // charts drawn while their tab was hidden had no width
     if(ws === "health") loadHealth();
+    if(ws === "paper") loadPaper();
     curAnchor = id; syncUrl();
     if(id !== ws || layout === "sections") scrollToEl(document.querySelector(`[data-anchor="${id}"]`) || $("ws-" + ws), smooth);
   }
@@ -1220,6 +1235,48 @@
       empty: "The chart starts after the first daily point."});
   }
 
+  // ---- Paper accounts tab: the four accounts the server runs after each close (read-only, /api/paper-accounts) ----
+  let PA = null, paLoading = false;
+  async function loadPaper(){
+    if(paLoading) return; paLoading = true;
+    try { PA = await api("/api/paper-accounts"); renderPaper(); }
+    catch(e){ $("pa-note").textContent = "Paper accounts unavailable: " + e.message; }
+    finally { paLoading = false; }
+  }
+  function renderPaper(){
+    if(!PA) return;
+    const accts = PA.accounts || [], live = accts.filter(a => a.started && a.history && a.history.length);
+    const colors = [C.s1, C.s2, "var(--color-demo)", "var(--color-replay)"];   // the index fund: grey and dashed
+    const fall = v => v != null && v < 0 ? "worst fall " + pct(v) : "no fall yet";
+    $("pa-note").textContent = live.length
+      ? `Each line is an account's return since it started, with the index fund (${esc((live[0].benchmark) || "MID150BEES")}) bought on each start day. Give them several months before reading anything into a gap.`
+      : "No paper account has a daily point yet. They are marked after each close by the server.";
+    // one chart: each account's return since its own start, so different start days compare fairly
+    const dates = [...new Set(live.flatMap(a => a.history.map(p => p.date)))].sort();
+    const series = live.map((a, i) => { const m = new Map(a.history.map(p => [p.date, p.equity / a.capital - 1])); return {name: a.title, color: colors[accts.indexOf(a) % colors.length], values: dates.map(d => m.has(d) ? m.get(d) * 100 : null)}; });
+    const first = live[0];
+    if(first){ const m = new Map(first.history.map(p => [p.date, p.bench ? p.bench / first.capital - 1 : null])); series.push({name: "Index fund", color: C.s3, width: 1.5, dash: "5 4", values: dates.map(d => m.has(d) && m.get(d) != null ? m.get(d) * 100 : null)}); }
+    lineChart($("pa-chart"), {x: dates, legend: true, endLabels: false, height: 200, left: 48, yFmt: v => v.toFixed(1) + "%",
+      series, refs: [{y: 0, label: "Start"}], label: "Paper accounts, return since start", empty: "The chart starts after the first daily point."});
+    const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
+    $("pa-list").innerHTML = accts.map(a => {
+      if(a.error) return `<div class="cardbody pa-acct"><h3>${esc(a.title)}</h3><div class="sub">Unreadable: ${esc(a.error)}</div></div>`;
+      if(!a.started) return `<div class="cardbody pa-acct"><h3>${esc(a.title)}</h3><div class="sub">${esc(a.about)}</div><div class="sub">Not started yet: it starts on its first run after the close.</div></div>`;
+      const hold = (a.holdings || []).slice(0, 12).map(h => `<a href="#" data-lookup="${esc(h.symbol)}">${esc(h.symbol)}</a>${h.weight != null ? ` <span class="sub">${(h.weight * 100).toFixed(1)}%</span>` : ""}`).join(" · ");
+      return `<div class="cardbody pa-acct"><div class="row" style="justify-content:space-between"><h3>${esc(a.title)}</h3><span class="sub">since ${shortDate(a.since || "")} · ${a.days} day${a.days === 1 ? "" : "s"}</span></div>
+        <div class="sub">${esc(a.about)}</div>
+        <div class="fw-stats">
+          ${stat("Value", money(a.value), "started with " + money(a.capital))}
+          ${stat("Return", pct(a.strategy_return, 2), fall(a.strategy_max_drawdown), toneOf(a.strategy_return))}
+          ${stat(esc(a.benchmark), pct(a.benchmark_return, 2), fall(a.benchmark_max_drawdown))}
+          ${stat("Gap", pct(a.gap, 2), "account minus fund", toneOf(a.gap))}
+          ${stat("Charges", money(a.charges_paid), `${a.rebalances} rebalance${a.rebalances === 1 ? "" : "s"} · last ${esc(a.last_rebalance || "none")}`)}
+        </div>
+        <div class="sub">${(a.holdings || []).length ? `Holding ${a.holdings.length}: ${hold}${a.holdings.length > 12 ? " …" : ""}` : "No holdings yet."}</div></div>`;
+    }).join("");
+  }
+  $("pa-refresh").addEventListener("click", () => loadPaper());
+
   // Paper account summary: what the open positions cost, what they are worth, and the
   // whole account (cash + positions) against the practice money it started with.
   const spctP = v => (v >= 0 ? "+" : "\u2212") + Math.abs(v * 100).toFixed(2) + "%";
@@ -1639,7 +1696,7 @@
   });
   function redrawCharts(){   // after a resize, or when a tab that was hidden (no width) is shown
     if(!S) return;
-    renderEquity(); renderForward();
+    renderEquity(); renderForward(); renderPaper();
     if(S.factor_backtest && S.factor_backtest.dates) renderFactor(S.factor_backtest);
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
     if(S.signal_lab && S.signal_lab.results) renderSignalLab(S.signal_lab);
@@ -1824,7 +1881,7 @@
   let stTick = 0;
   const nseOpenNow = () => { const p = new Intl.DateTimeFormat("en-GB", {timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false}).formatToParts(new Date()).reduce((o, x) => (o[x.type] = x.value, o), {}); const m = Number(p.hour) * 60 + Number(p.minute); return !/^(Sat|Sun)$/.test(p.weekday) && m >= 555 && m <= 930; };
   setInterval(() => { if(document.hidden) return; const fast = nseOpenNow() && !(S && S.connections && S.connections.groww); if(fast || stTick++ % 2) refresh(); }, 30000);
-  loadFreshness(); loadIntegration(); calcCosts(); loadHealth();
+  loadFreshness(); loadIntegration(); calcCosts(); loadHealth(); loadPaper();
   setInterval(() => { if(!document.hidden){ loadFreshness(); loadIntegration(); } }, 60000);
   setInterval(() => { if(!document.hidden) loadHealth(); }, 120000);   // the tab badge counts failing sources
   document.addEventListener("visibilitychange", () => { if(!document.hidden){ loadFreshness(); refresh(); } });

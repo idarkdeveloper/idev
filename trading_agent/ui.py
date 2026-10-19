@@ -1836,18 +1836,57 @@ class App:
                 "holdings": len(holdings), "cash": acct.cash, "equity": acct.equity}
 
     def forward_summary(self) -> dict[str, Any] | None:
-        """The forward test's standing from stored prices (no network: the page polls)."""
+        """The forward test's standing from stored prices (no network: the page polls). It reads the forward test's own
+        file (FORWARD_UNIVERSE), never the other paper accounts kept beside it (model_*, resmom_*, top10_*)."""
         from .forward import ForwardTest
-        d = self.settings.state_dir / "forward"
-        files = sorted(f for f in d.glob("*.json") if not f.stem.endswith("_broker")) if d.exists() else []
-        if not files:
+        uni = str(self.settings.forward_universe or "NIFTYMIDCAP150").upper()
+        if not (self.settings.state_dir / "forward" / f"{uni.lower()}.json").exists():
             return None
         try:
-            s = ForwardTest(self.settings.state_dir, universe=files[0].stem.upper(), price_fn=None).summary()
+            s = ForwardTest(self.settings.state_dir, universe=uni, price_fn=None).summary()
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}
         s["history"] = s["history"][-1000:]
         return s
+
+    # The paper accounts the server runs after each close, practice money only (forward, model_paper, resmom_paper,
+    # top10_paper). (key, file prefix, title, what it tests)
+    PAPER_ACCOUNTS = (
+        ("forward", "", "Forward test", "The adopted momentum rules: top 20, monthly, no stop, tax-aware buffer, 25% floor."),
+        ("model", "model_", "Prediction model",
+         "The same top 20, each sized by the frozen AI prediction model (its probability is the weight; the rest is cash)."),
+        ("resmom", "resmom_", "Residual momentum (E)",
+         "Momentum after taking out the market's own move: the stocks that rose on their own."),
+        ("top10", "top10_", "Top 10 (B)", "The adopted rules with only the 10 best-ranked stocks."),
+    )
+
+    def paper_accounts(self) -> dict[str, Any]:
+        """GET /api/paper-accounts: every paper account's standing from its stored file (no network, never an order).
+        An account not started yet is listed as such."""
+        from .forward import ForwardTest
+        uni = str(self.settings.forward_universe or "NIFTYMIDCAP150").upper()
+        out: list[dict[str, Any]] = []
+        for key, prefix, title, about in self.PAPER_ACCOUNTS:
+            name = f"{prefix}{uni.lower()}"
+            row: dict[str, Any] = {"key": key, "title": title, "about": about, "started": False}
+            if (self.settings.state_dir / "forward" / f"{name}.json").exists():
+                try:
+                    s = ForwardTest(self.settings.state_dir, universe=uni, price_fn=None, name=name).summary()
+                    hist = s["history"][-1000:]
+                    row.update(started=bool(s.get("started")), since=(s.get("started") or "")[:10] or None,
+                               benchmark=s["benchmark"], capital=s["capital"], days=s["days"], top=s["top"],
+                               value=hist[-1]["equity"] if hist else None,
+                               strategy_return=s["strategy_return"], benchmark_return=s["benchmark_return"],
+                               gap=s["gap"], strategy_max_drawdown=s["strategy_max_drawdown"],
+                               benchmark_max_drawdown=s["benchmark_max_drawdown"], charges_paid=s["charges_paid"],
+                               rebalances=s["rebalances"], last_rebalance=s["last_rebalance"],
+                               holdings=s["holdings"][:25],
+                               history=[{"date": p["date"], "equity": p["equity"], "bench": p.get("bench")}
+                                        for p in hist])
+                except Exception as e:  # noqa: BLE001 - one unreadable account must not hide the others
+                    row["error"] = f"{type(e).__name__}: {e}"[:200]
+            out.append(row)
+        return {"universe": uni, "accounts": out}
 
     def orders(self, limit: int = 50) -> list[dict[str, Any]]:
         """Live page: real Groww orders (state.json). Demo page: practice fills. Offline sample: both. Newest first."""
@@ -2108,6 +2147,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     found = app.lookup(ticker)
                     app.note_bar(found)
                     self._json(found)
+            elif path == "/api/paper-accounts":
+                self._json(app.paper_accounts())
             elif path == "/api/announcements":
                 from urllib.parse import parse_qs
                 q = parse_qs(urlparse(self.path).query)

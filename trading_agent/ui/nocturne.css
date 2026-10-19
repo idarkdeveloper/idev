@@ -319,6 +319,10 @@
   #set-live { display: flex; flex-direction: column; gap: 20px; }
   #set-live[hidden] { display: none; }
   .set-foot { border-top: 1px solid var(--color-divider); padding-top: 16px; }
+  /* Paper accounts tab: one block per account under the shared chart */
+  .pa-list .pa-acct { border-top: 1px solid var(--color-divider); display: flex; flex-direction: column; gap: 8px; }
+  .pa-list .pa-acct h3 { margin: 0; }
+  @media (min-width: 900px) { .pa-list .pa-acct .fw-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
   .set-foot button[type="submit"] { margin-left: auto; }
   .radio { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--color-divider); }
   .radio:last-child { border-bottom: none; }

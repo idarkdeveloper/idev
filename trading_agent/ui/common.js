@@ -57,7 +57,7 @@ window.TA = (function(){
       s.values.forEach((v, i) => { if(v == null || !isFinite(v)){ pen = false; return; } d += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1); pen = true; });
       if(s.area && d){ const fi = s.values.findIndex(v => v != null), li = s.values.length - 1 - [...s.values].reverse().findIndex(v => v != null);
         g += `<path d="${d}L${X(li).toFixed(1)} ${Y(y0)}L${X(fi).toFixed(1)} ${Y(y0)}Z" fill="${s.color}" fill-opacity="0.08"/>`; }
-      g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2}" stroke-linejoin="round" stroke-linecap="round"/>`;
+      g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2}"${s.dash ? ` stroke-dasharray="${esc(String(s.dash))}"` : ""} stroke-linejoin="round" stroke-linecap="round"/>`;
       const li = s.values.length - 1 - [...s.values].reverse().findIndex(v => v != null);
       if(li >= 0 && li < n && s.values[li] != null){
         g += `<circle cx="${X(li)}" cy="${Y(s.values[li])}" r="4" fill="${s.color}" stroke="${C.ring}" stroke-width="2"/>`;
@@ -66,7 +66,7 @@ window.TA = (function(){
       }
     });
     const refs = cfg.refs || [], showLegend = cfg.legend !== false && (cfg.series.length + refs.length) > 1;
-    el.innerHTML = (showLegend ? `<div class="legend-row" style="margin-bottom:6px">${cfg.series.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}${refs.map(r => `<span><i style="background:repeating-linear-gradient(90deg, ${r.color || C.ctx} 0 4px, transparent 4px 7px)"></i>${esc(r.label)} ${esc(yF(r.y))}</span>`).join("")}</div>` : "")
+    el.innerHTML = (showLegend ? `<div class="legend-row" style="margin-bottom:6px">${cfg.series.map(s => `<span><i style="background:${s.dash ? `repeating-linear-gradient(90deg, ${s.color} 0 4px, transparent 4px 7px)` : s.color}"></i>${esc(s.name)}</span>`).join("")}${refs.map(r => `<span><i style="background:repeating-linear-gradient(90deg, ${r.color || C.ctx} 0 4px, transparent 4px 7px)"></i>${esc(r.label)} ${esc(yF(r.y))}</span>`).join("")}</div>` : "")
       + `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "chart")}">${g}<line class="xh" x1="0" x2="0" y1="${m.t}" y2="${m.t + ph}" stroke="${C.base}" stroke-width="1" visibility="hidden"/><g class="dots"></g><rect x="${m.l}" y="${m.t}" width="${pw}" height="${ph}" fill="transparent" class="hit"/></svg><div class="ctip"></div>`;
     const svg = el.querySelector("svg"), tip = el.querySelector(".ctip"), xh = svg.querySelector(".xh"), dots = svg.querySelector(".dots");
     const at = (ev) => { const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width; return Math.max(0, Math.min(n - 1, Math.round((sx - m.l) / pw * (n - 1)))); };
