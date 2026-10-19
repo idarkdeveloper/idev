@@ -60,7 +60,7 @@ RULES = [
     ("news about tata steel", "news_today", {"scope": "stock", "query": "tata steel"}),
     ("news for reliance today", "news_today", {"scope": "stock", "query": "reliance"}),
     ("tcs ki news", "news_today", {"scope": "portfolio"}),
-    ("how is the market", "news_today", {"scope": "market"}),
+    ("how is the market", "market_summary", {}),   # the stance and the Markets strip, not the headlines
     ("market news", "news_today", {"scope": "market"}),
     ("go to screener", "open_tab", {"tab": "screener"}),
     ("screener", "open_tab", {"tab": "screener"}),

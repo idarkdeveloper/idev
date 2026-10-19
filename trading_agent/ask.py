@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 MAX_TEXT = 300
 OLLAMA_TIMEOUT = 8.0
-INTENTS = ("open_stock", "open_chart", "open_size", "news_today", "portfolio_summary", "open_tab", "show_health", "ideas", "market_status", "followed_deals")
+INTENTS = ("open_stock", "open_chart", "open_size", "news_today", "portfolio_summary", "open_tab", "show_health", "ideas", "market_status", "followed_deals", "market_summary")
 MARKET_CODES = ("IN", "US", "UK", "JP")
 TABS = ("live", "replay", "demo", "screener", "research", "health", "paper accounts", "tools", "deals", "portfolio", "practice")
 TAB_ALIAS = {"portfolio": "live", "practice": "demo"}   # the Portfolio page has a Live and a Practice (demo) account
@@ -171,6 +171,29 @@ _DEALS = re.compile(
     r"\bfollowed investors?\b|\bmy investors?\b|\binvestors?\b.*\b(?:buying|selling|bought|sold|deals?)\b")
 
 
+_MARKET_SUMMARY = re.compile(
+    r"\bhow (?:is|are|s) (?:the |indian |us |stock )*(?:market|markets|nifty|sensex|bank nifty|dalal street)\b|\b(?:market|markets) (?:today|now|summary|update|mood|status|report|overview|snapshot|wrap|doing)\b|"
+    r"\bwhat(?:'s| is) (?:the )?(?:stock )?(?:market|markets) doing\b|\b(?:market|markets|bazaar|share market) (?:kaisa|kaisi|kaise|kya)\b|\b(?:nifty|sensex) (?:today|now|update|kaisa|doing)\b|"
+    r"\b(?:stock |share )?market (?:summary|update|report)\b")
+
+
+WHEN_VALUES = ("today", "tomorrow", "holidays")
+
+
+def market_when(t: str) -> str | None:
+    """"tomorrow", "today" or "holidays" when a sentence asks WHY a market is closed or about its holidays, else None."""
+    has_market = re.search(r"\b(?:markets?|nse|bse|exchange|holidays?|sensex|nifty)\b", t)
+    if re.search(r"\b(?:next|upcoming|coming|future)\b.*\bholidays?\b|\bholidays? (?:list|calendar|schedule)\b|\bmarket holidays\b|\bwhen (?:is|are) (?:the )?(?:next )?(?:market )?holidays?\b", t):
+        return "holidays"
+    if has_market and re.search(r"\btomorrow\b", t) and re.search(r"\b(?:why|is|will|are|holiday|closed?|open|clos\w+)\b", t):
+        return "tomorrow"
+    if re.search(r"\bwhy\b", t) and has_market and re.search(r"\b(?:closed?|clos\w+|open\w*|holiday)\b", t):
+        return "today"
+    if re.search(r"\bis (?:it|today) (?:a )?(?:market )?holiday\b|\bmarket holiday today\b", t):
+        return "today"
+    return None
+
+
 def market_of_text(t: str) -> str:
     """Which market a "is it open" question is about: IN (the NSE, the default), US, UK or JP."""
     if re.search(r"\b(?:us|usa|american|nyse|nasdaq|wall street|new york)\b", t):
@@ -196,6 +219,9 @@ def info_question(t: str) -> dict[str, Any] | None:
         return {"intent": "ideas", "args": {"topic": "buy_ideas"}}
     if _IDEAS.search(t):
         return {"intent": "ideas", "args": {"topic": "buy_ideas"}}
+    when = market_when(t)
+    if when and market_of_text(t) == "IN":   # "why is the market closed tomorrow", "is tomorrow a holiday", "upcoming market holidays"
+        return {"intent": "market_status", "args": {"market": "IN", "when": when}}
     if _MARKET_STATUS.search(t):
         return {"intent": "market_status", "args": {"market": market_of_text(t)}}
     if _DEALS.search(t):
@@ -227,8 +253,8 @@ def parse_rules(text: str) -> dict[str, Any] | None:
             return {"intent": "news_today", "args": {"scope": "stock", "query": name}}
         scope = "market" if re.search(r"\bmarkets?\b", t) and not re.search(r"\b(my|portfolio|holdings)\b", t) else "portfolio"
         return {"intent": "news_today", "args": {"scope": scope}}
-    if re.search(r"\bhow (?:is|are|s) the (?:market|markets)\b|\bmarket (?:today|now|summary|mood)\b", t):
-        return {"intent": "news_today", "args": {"scope": "market"}}
+    if _MARKET_SUMMARY.search(t):   # "how is the market today": the stance and the Markets strip, not the headlines
+        return {"intent": "market_summary", "args": {}}
     if _HEALTH.search(t):
         return {"intent": "show_health", "args": {}}
     pt = portfolio_topic(t)
@@ -326,9 +352,13 @@ def _finish(intent: str, args: dict[str, Any], search: Callable[..., list[dict[s
         return {"intent": "ideas", "args": {"topic": "buy_ideas"}, "say": "Looking at the app's ideas.", "via": via}
     if intent == "market_status":
         mk = str(args.get("market") or "IN").upper()
-        return {"intent": "market_status", "args": {"market": mk if mk in MARKET_CODES else "IN"}, "say": "Checking the market hours.", "via": via}
+        w = str(args.get("when") or "").lower()
+        mk = mk if mk in MARKET_CODES else "IN"
+        return {"intent": "market_status", "args": {"market": mk, **({"when": w} if w in WHEN_VALUES and mk == "IN" else {})}, "say": "Checking the market hours.", "via": via}
     if intent == "followed_deals":
         return {"intent": "followed_deals", "args": {}, "say": "Looking at the latest deals.", "via": via}
+    if intent == "market_summary":
+        return {"intent": "market_summary", "args": {}, "say": "Looking at the markets.", "via": via}
     return {"intent": "unknown", "args": {}, "say": f"{HINT} {CAN}", "via": via}
 
 
@@ -339,7 +369,8 @@ SYSTEM = ("You turn a user's short sentence into ONE JSON object for a read-only
           "company when scope is stock), portfolio_summary (args: topic = one of " + ", ".join(PORTFOLIO_TOPICS) + "; for questions about the "
           "user's own profit and loss, portfolio value, cash, number of holdings, best or worst stock, or a summary; you never write numbers), "
           "ideas (a question asking which stock to look at or buy; this only shows the app's own ideas), market_status (args: market = IN, US, UK "
-          "or JP; is a market open or closed), followed_deals (what the followed investors are buying or selling, the latest deals), open_tab (args: tab = one of " + ", ".join(TABS) + "), show_health, "
+          "or JP; when = today, tomorrow or holidays for why the NSE is closed or its next holidays; is a market open or closed), followed_deals (what the followed investors are buying or selling, the latest deals), market_summary "
+          "(how the market is doing today: its stance and the index moves; not the news), open_tab (args: tab = one of " + ", ".join(TABS) + "), show_health, "
           "unknown. There is NO intent for buying, selling or any order: if asked, answer unknown. Answer with the JSON object "
           'only, for example {"intent":"open_stock","args":{"query":"Tata Motors"}}.')
 SCHEMA = {"type": "object", "properties": {"intent": {"type": "string", "enum": [*INTENTS, "unknown"]},
@@ -366,7 +397,7 @@ def ask_ollama(settings: Any, text: str, session: Any = None) -> dict[str, Any] 
         if intent not in INTENTS:
             return {"intent": "unknown", "args": {}} if intent == "unknown" else None
         args = data.get("args") if isinstance(data.get("args"), dict) else {}
-        keep = {k: str(v)[:80] for k, v in args.items() if k in ("query", "scope", "tab", "topic", "market") and isinstance(v, (str, int, float))}
+        keep = {k: str(v)[:80] for k, v in args.items() if k in ("query", "scope", "tab", "topic", "market", "when") and isinstance(v, (str, int, float))}
         return {"intent": intent, "args": keep}
     except Exception as e:  # noqa: BLE001 - down, slow, not JSON: the caller says unknown
         log.info("ask: Ollama did not answer (%s)", type(e).__name__)
