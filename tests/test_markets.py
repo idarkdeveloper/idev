@@ -164,3 +164,98 @@ def test_the_look_up_card_has_a_market_picker_and_the_stock_page_hides_the_india
     assert "function renderForeignCard" in index and "if(r.view_only) return renderForeignCard(r);" in index
     assert "const foreign = () =>" in js and 'fx ? "" : sec("checklist"' in js and "fund || fx ?" in js
     assert "View only: no orders for US, UK or Japan stocks." in js and "currency: r.view_only ? r.currency : null" in js
+
+
+TESLA_SEARCH = [
+    {"symbol": "TSLA", "longname": "Tesla, Inc.", "exchDisp": "NASDAQ", "quoteType": "EQUITY"},
+    {"symbol": "STSLA=F", "shortname": "Tesla futures", "quoteType": "FUTURE"},
+    {"symbol": "TSLT", "longname": "T-REX 2X Long Tesla Daily Target ETF", "exchDisp": "BATS", "quoteType": "ETF"},
+    {"symbol": "TSLA.NE", "longname": "Tesla, Inc.", "exchDisp": "NEO", "quoteType": "EQUITY"},
+    {"symbol": "TL0.DE", "longname": "Tesla, Inc.", "quoteType": "EQUITY"}, {"quoteType": "EQUITY"}, "junk"]
+
+
+def test_search_results_are_narrowed_to_the_market():
+    us = markets.search_matches(TESLA_SEARCH, "US")
+    assert [m["ticker"] for m in us] == ["TSLA.US", "TSLT.US"] and us[0]["name"] == "Tesla, Inc."
+    uk = markets.search_matches([{"symbol": "VOD.L", "shortname": "Vodafone", "quoteType": "EQUITY"},
+                                 {"symbol": "VOD", "quoteType": "EQUITY"}, {"symbol": ".L", "quoteType": "EQUITY"}], "UK")
+    assert [m["ticker"] for m in uk] == ["VOD.L"]
+    jp = markets.search_matches([{"symbol": "7203.T", "longname": "Toyota Motor", "quoteType": "EQUITY"}], "jp")
+    assert jp[0]["ticker"] == "7203.T"
+    assert markets.search_matches(TESLA_SEARCH, "IN") == [] and markets.search_matches(None, "US") == []
+
+
+def test_yahoo_search_asks_for_the_typed_text(tmp_path):
+    asked = []
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"quotes": TESLA_SEARCH}
+
+    class Sess:
+        def get(self, url, params=None, **kw):
+            asked.append((url, params))
+            return Resp()
+    assert YahooFundamentals(tmp_path, session=Sess()).search("TESLA") == TESLA_SEARCH
+    assert asked[0][0].endswith("/v1/finance/search") and asked[0][1]["q"] == "TESLA" and asked[0][1]["newsCount"] == 0
+
+
+class FakeYahoo:
+    """fetch_modules knows TSLA.US only; search answers Tesla's results or raises."""
+
+    def __init__(self, quotes=TESLA_SEARCH):
+        self.quotes, self.searched, self.modules = quotes, [], []
+
+    def fetch_modules(self, sym, modules):
+        self.modules.append(sym)
+        if sym != "TSLA.US":
+            raise LookupError(f"Yahoo has no fundamentals for {sym}")
+        return {"price": {"longName": "Tesla, Inc.", "currency": "USD"}}
+
+    def search(self, text):
+        self.searched.append(text)
+        if isinstance(self.quotes, BaseException):
+            raise self.quotes
+        return self.quotes
+
+
+def _live(app, provider):
+    app.demo_trades = None      # as on the server: the offline sample skips market-data calls
+    app.quote_service.provider = provider
+    return app
+
+
+def test_a_company_name_finds_its_ticker_and_a_real_ticker_is_kept(server):  # noqa: F811
+    _, app = server
+    y = FakeYahoo()
+    _live(app, y)
+    assert app.resolve("tesla.us") == ("TSLA.US", "Tesla, Inc.") and y.searched == ["TESLA"]
+    assert app.resolve("TESLA.US") == ("TSLA.US", "Tesla, Inc.") and y.searched == ["TESLA"]   # kept for a day
+    assert app.resolve("TSLA.US") == ("TSLA.US", None) and y.searched == ["TESLA"]             # known: no search
+    y.quotes = []
+    assert app.resolve("NOSUCH.US") == ("NOSUCH.US", None)
+    y.quotes = ConnectionError("down")
+    assert app.resolve("OTHER.US") == ("OTHER.US", None)
+
+
+def test_the_look_up_card_says_what_it_matched_and_how_to_find_a_missing_stock(server):  # noqa: F811
+    base, app = server
+    src = Bars()
+    app.prices, app.momentum = src, MomentumScreen(src)
+    y = FakeYahoo()
+    _live(app, y)
+    _, r = _get(base + "/api/lookup?ticker=TESLA.US")
+    assert r["ticker"] == "TSLA.US" and r["matched_from"] == "TESLA" and r["name"] == "Tesla, Inc."
+
+    class NoBars(Bars):
+        def history(self, sym, range_="2y"):
+            raise LookupError(f"Yahoo has no data for {sym} (HTTP 404)")
+    app.prices = NoBars()
+    y.quotes = []
+    _, r = _get(base + "/api/lookup?ticker=ZZZQ.US")
+    assert r["ticker"] == "ZZZQ.US" and "No United States stock found for ZZZQ.US" in r["momentum_summary"]
+    index = (UI / "index.html").read_text(encoding="utf-8")
+    assert index.count('Matched "${esc(r.matched_from)}" to ${esc(sym)}') == 2

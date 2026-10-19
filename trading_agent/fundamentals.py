@@ -32,6 +32,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}"
 CRUMB_URL = "https://query1.finance.yahoo.com/v1/test/getcrumb"
+SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 MODULES = "financialData,defaultKeyStatistics,summaryDetail,quoteType"
 MAX_DEBT_TO_EQUITY = 2.0
 FINANCIAL_WORDS = ("bank", "financial", "finance", "insurance", "nbfc", "capital markets")
@@ -127,6 +128,14 @@ class YahooFundamentals:
 
     def _fetch(self, symbol: str) -> dict[str, Any]:
         return parse_summary(self._result(symbol, MODULES))
+
+    def search(self, text: str, count: int = 10) -> list[dict[str, Any]]:
+        """Yahoo's symbol search for a company name or ticker: its raw ``quotes`` list. Raises on failure."""
+        r = self.session.get(SEARCH_URL, headers={"User-Agent": UA}, timeout=self.timeout,
+                             params={"q": text, "quotesCount": count, "newsCount": 0, "listsCount": 0})
+        r.raise_for_status()
+        quotes = (r.json() or {}).get("quotes")
+        return quotes if isinstance(quotes, list) else []
 
     def fetch_modules(self, symbol: str, modules: str) -> dict[str, Any]:
         """The raw quoteSummary modules for the stock page (price, statements, profile ...). Not cached on disk: the page

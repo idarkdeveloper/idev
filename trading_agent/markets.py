@@ -60,3 +60,31 @@ def info(ticker: str) -> dict[str, Any] | None:
     m = MARKETS[key]
     return {"market": key, "market_name": m["name"], "exchange": m["exchange"], "currency": m["currency"],
             "view_only": True, "note": VIEW_ONLY_NOTE}
+
+
+def search_matches(quotes: Any, market: str) -> list[dict[str, Any]]:
+    """Yahoo search results (``quotes`` of ``/v1/finance/search``) narrowed to stocks and ETFs listed in ``market``, as
+    [{"ticker": this app's form ("TSLA.US"), "name", "exchange"}], best match first. Futures, funds, other countries'
+    listings (TSLA.NE) and anything without a symbol are dropped."""
+    m = MARKETS.get(str(market or "").upper())
+    out: list[dict[str, Any]] = []
+    if m is None or not isinstance(quotes, list):
+        return out
+    for q in quotes:
+        if not isinstance(q, dict) or q.get("quoteType") not in ("EQUITY", "ETF"):
+            continue
+        sym = str(q.get("symbol") or "").strip().upper()
+        if not sym:
+            continue
+        if m["yahoo_suffix"]:
+            if not sym.endswith(m["yahoo_suffix"]) or len(sym) <= len(m["yahoo_suffix"]):
+                continue
+            ticker = sym
+        else:   # the US: Yahoo writes it bare; any dot means another country's listing (BRK-B uses a dash)
+            if "." in sym or "=" in sym or "^" in sym:
+                continue
+            ticker = sym + m["suffix"]
+        name = q.get("longname") or q.get("shortname")
+        out.append({"ticker": ticker, "name": name.strip() if isinstance(name, str) and name.strip() else None,
+                    "exchange": q.get("exchDisp") or q.get("exchange")})
+    return out

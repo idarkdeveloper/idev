@@ -781,7 +781,7 @@ class App:
         7203.T: markets.py) is taken as typed, never matched against NSE's company names."""
         from .markets import foreign_market
         if foreign_market(text):
-            return text.strip().upper(), None
+            return self._foreign_resolve(text.strip().upper())
         n = self.names
         if n is None:
             return text.strip().upper(), None
@@ -789,6 +789,28 @@ class App:
             return n.resolve(text)
         except Exception:  # noqa: BLE001 - name list unavailable: treat the text as a ticker
             return text.strip().upper(), None
+
+    def _foreign_resolve(self, ticker: str) -> tuple[str, str | None]:
+        """A foreign ticker as typed, or the company it names ("TESLA.US" -> ("TSLA.US", "Tesla, Inc.")) from Yahoo's
+        search, kept for a day. A code Yahoo knows is kept as typed (no search); so is any code when the search fails."""
+        from .markets import MARKETS, foreign_market, search_matches
+        if self.demo_trades is not None and self._parent is None:   # the offline sample makes no market-data calls
+            return ticker, None
+        cache = self.__dict__.setdefault("_foreign_aliases", {})
+        hit = cache.get(ticker)
+        if hit and time.time() - hit[0] < 86400:
+            return hit[1], hit[2]
+        if self._foreign_name(ticker)[0] is not None:   # a real listing (and its name is now cached for the page)
+            return ticker, None
+        market = foreign_market(ticker) or ""
+        text = ticker[: -len(MARKETS[market]["suffix"])] if market else ticker
+        try:
+            found = search_matches(self.quote_service.provider.search(text), market)
+        except Exception:  # noqa: BLE001 - no search: take the code as typed
+            return ticker, None
+        out: tuple[str, str | None] = (found[0]["ticker"], found[0]["name"]) if found else (ticker, None)
+        cache[ticker] = (time.time(), *out)
+        return out
 
     def _bands_for(self, symbols: list[str]) -> dict[str, str]:
         """symbol -> price band label ("5%", "10%") for the pills; empty when the filter is off or no list is stored."""
@@ -806,7 +828,12 @@ class App:
         ticker, company = self.resolve(ticker)
         from .markets import info as market_info
         if market_info(ticker):
-            return self._foreign_lookup(ticker)
+            fx = self._foreign_lookup(ticker)
+            if typed.strip().upper() != ticker.upper():   # what the person typed, without the market suffix
+                from .markets import MARKETS, foreign_market
+                t, mk = typed.strip().upper(), foreign_market(typed)
+                fx["matched_from"] = t[: -len(MARKETS[mk]["suffix"])] if mk else t
+            return fx
         stats = self.momentum.stats(ticker)
         out: dict[str, Any] = {"ticker": ticker.upper(), "name": company, "momentum": stats,
                                "matched_from": typed if typed.strip().upper() != ticker.upper() else None,
@@ -873,6 +900,10 @@ class App:
         except Exception as e:  # noqa: BLE001
             out["history_error"] = str(e)
             out["price"] = None
+            if name is None:   # nothing at all under that code: say how to find it instead of Yahoo's error
+                where = out.get("market_name") or "foreign"
+                out["momentum_summary"] = (f"No {where} stock found for {ticker}. Type its ticker (TSLA for Tesla) "
+                                           "or its company name.")
         try:
             out["price"] = self.prices.latest_price(ticker)
         except Exception:  # noqa: BLE001 - the last close stays

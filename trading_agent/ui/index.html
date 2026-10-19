@@ -1736,7 +1736,8 @@
     const tone = m.verdict === "strong" ? "ok" : m.verdict === "weak" ? "bad" : "";
     $("lk-result").innerHTML = `<div class="lk-sum">
       <div class="lk-id"><span class="sub lk-code">${esc(sym)} · ${esc(r.exchange || r.market || "")}</span><span class="lk-name">${esc(r.name || sym)}</span>
-        <div class="lk-px"><span class="lk-price">${TA.px(r.price, r.currency)}</span>${d != null ? `<span class="${toneOf(d)}">${spct(d)} today</span>` : ""}</div></div>
+        <div class="lk-px"><span class="lk-price">${TA.px(r.price, r.currency)}</span>${d != null ? `<span class="${toneOf(d)}">${spct(d)} today</span>` : ""}</div>
+        ${r.matched_from ? `<span class="sub">Matched "${esc(r.matched_from)}" to ${esc(sym)}</span>` : ""}</div>
       ${mini}
       <div class="lk-verdict"><div class="row" style="gap:6px"><span class="pill">${esc(r.market_name || r.market || "")} · view only</span>${m.verdict ? `<span class="pill ${tone}">${esc(m.verdict)} momentum</span>` : ""}</div>
         <div class="sub" style="margin-top:4px">${esc(r.momentum_summary || "")}</div>
