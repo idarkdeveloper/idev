@@ -1,7 +1,14 @@
 name: ci
 on:
+  # master on every push; any other branch through its pull request (so a PR push runs CI once, not twice)
   push:
+    branches: [master]
   pull_request:
+  workflow_dispatch:
+concurrency:
+  # a newer push to the same pull request cancels the run it replaces; master runs always finish
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -30,7 +37,10 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -r requirements.txt
-      - run: python -m pytest -q
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt   # dev adds pytest-xdist
+      - run: python -m pytest -q -n auto                                # tests spread over the runner's cores
       - run: python -m trading_agent check --demo --dry-run
       - run: python -m trading_agent --market us check --demo --dry-run
