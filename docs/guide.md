@@ -663,6 +663,13 @@ run by the watch service in the same after-close job; nothing in them is retuned
   19 Oct 2026; `off` disables it), in its own files (`state/forward/top10_<universe>.json`). It is judged against the
   adopted rules over the same days; B replaces them only if it beats them over 12 months. The overfitting probability
   across the backward variants was 0.79, so its pass may be luck. `top10-paper --run` does today's run by hand.
+- `brake-paper`: the drawdown brake (100-day average), which passed the pre-registered India test on Oct 2007 – Mar 2016
+  (+295% against +120% for the adopted rules, worst fall −31.5% against −73.9%) but lost in the research years
+  2020–2025. The adopted rules, except that after a close below MID150BEES's 100-day average the account sells
+  everything and holds cash; it buys again at the next monthly rebalance after the fund closes back above its
+  average. From `BRAKE_PAPER_START` (default 20 Oct 2026; `off` disables it), in its own files
+  (`state/forward/brake_<universe>.json`). It changes nothing live; how it is read is in
+  `docs/research/brake-paper-account-2026-10-19.md`. `brake-paper --run` does today's run by hand.
 
 **US, Japan and UK replication (once per market).** `research-replication --market us|jp|uk --confirm` runs the adopted rules,
 unchanged except that no tax is charged, on the S&P MidCap 400 (against IJH) or the TOPIX Mid400 (against the TOPIX ETF

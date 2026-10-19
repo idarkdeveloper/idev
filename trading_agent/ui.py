@@ -2291,7 +2291,7 @@ class App:
 
     def forward_summary(self) -> dict[str, Any] | None:
         """The forward test's standing from stored prices (no network: the page polls). It reads the forward test's own
-        file (FORWARD_UNIVERSE), never the other paper accounts kept beside it (model_*, resmom_*, top10_*)."""
+        file (FORWARD_UNIVERSE), never the other paper accounts kept beside it (model_*, resmom_*, top10_*, brake_*)."""
         from .forward import ForwardTest
         uni = str(self.settings.forward_universe or "NIFTYMIDCAP150").upper()
         if not (self.settings.state_dir / "forward" / f"{uni.lower()}.json").exists():
@@ -2312,6 +2312,9 @@ class App:
         ("resmom", "resmom_", "Residual momentum (E)",
          "Momentum after taking out the market's own move: the stocks that rose on their own."),
         ("top10", "top10_", "Top 10 (B)", "The adopted rules with only the 10 best-ranked stocks."),
+        ("brake", "brake_", "Drawdown brake",
+         "The adopted rules, but all in cash while MID150BEES is below its 100-day average; buys again at the next "
+         "monthly rebalance."),
     )
 
     def paper_accounts(self) -> dict[str, Any]:

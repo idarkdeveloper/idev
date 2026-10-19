@@ -1664,14 +1664,14 @@ def test_demo_limit_orders_wait_fill_or_cancel(two_pages):
     assert fake.writes == []
 
 
-def test_paper_accounts_tab_lists_all_four_and_the_forward_card_reads_its_own_file(server):
+def test_paper_accounts_tab_lists_all_five_and_the_forward_card_reads_its_own_file(server):
     """The forward card read the first file in state/forward/, and model_niftymidcap150 sorts before niftymidcap150:
     with the model account there it showed the model account. Each account now reads its own file."""
     from datetime import datetime
     from trading_agent.forward import IST, ForwardTest
     base, app = server
     _, pa = _get(base + "/api/paper-accounts")
-    assert [a["key"] for a in pa["accounts"]] == ["forward", "model", "resmom", "top10"]
+    assert [a["key"] for a in pa["accounts"]] == ["forward", "model", "resmom", "top10", "brake"]
     assert not any(a["started"] for a in pa["accounts"])
     when = lambda: datetime(2026, 10, 19, 16, 0, tzinfo=IST)  # noqa: E731
     prices = {"MID150BEES": 200.0, "A": 100.0, "B": 50.0, "C": 80.0}
@@ -1688,6 +1688,7 @@ def test_paper_accounts_tab_lists_all_four_and_the_forward_card_reads_its_own_fi
     assert {h["symbol"] for h in acc["model"]["holdings"]} == {"C", "B"} and acc["model"]["capital"] == 500_000
     assert acc["model"]["history"][0]["date"] and acc["model"]["value"] is not None and acc["model"]["since"] == "2026-10-19"
     assert not acc["resmom"]["started"] and not acc["top10"]["started"] and acc["top10"]["about"]
+    assert not acc["brake"]["started"] and "100-day average" in acc["brake"]["about"]
 
 
 def test_order_forms_show_a_live_price_line_from_the_read_only_lookup():
