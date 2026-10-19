@@ -283,6 +283,8 @@ class Settings:
     # BSE bulk/block deals are read beside NSE's (Indian market only); bse_host is the page's host
     # (beta.bseindia.com: the WebForms page; www.bseindia.com now serves a JavaScript shell).
     bse_deals: bool = True
+    insider_trades: bool = True      # INSIDER_TRADES: the watch reads every NSE insider filing (alerts + dashboard)
+    insider_min_buy: float = 1e7     # INSIDER_MIN_BUY: rupees; smallest insider open-market buy on the dashboard list
     bse_host: str = "beta.bseindia.com"
     # Market data (flows.py, breadth.py, bands.py): FII/DII flows + breadth lines in the morning email; price-band filter.
     flows_breadth: bool = True
@@ -517,6 +519,8 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         news_claude_model=env("NEWS_CLAUDE_MODEL") or "claude-haiku-4-5",
         news_full_story=_bool(env("NEWS_FULL_STORY"), True),
         bse_deals=_bool(env("BSE_DEALS"), True),
+        insider_trades=_bool(env("INSIDER_TRADES"), True),
+        insider_min_buy=float(env("INSIDER_MIN_BUY") or 1e7),
         bse_host=bse_host,
         flows_breadth=_bool(env("FLOWS_BREADTH"), True),
         price_band_filter=_bool(env("PRICE_BAND_FILTER"), True),

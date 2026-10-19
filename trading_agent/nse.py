@@ -192,6 +192,16 @@ def _norm_insider(row: dict[str, Any]) -> DisclosedTrade:
     )
 
 
+def _broadcast_key(filing: dict[str, Any]) -> datetime:
+    """When NSE published an insider filing ("01-Oct-2026 10:19:55"); the earliest possible time when unreadable."""
+    for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y %H:%M", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(str(filing.get("broadcastDateTime") or "").strip().title(), fmt)
+        except ValueError:
+            continue
+    return datetime.min
+
+
 def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
@@ -397,7 +407,9 @@ class NSEClient:
         return [r for r in rows if r.get("xmlFileName")]
 
     def insider_xbrl_trades(self, start: date, end: date, symbol: str | None = None) -> list[DisclosedTrade]:
-        filings = self.insider_filings(start, end, symbol)
+        # NSE lists the oldest first: sort newest first, so the per-run download cap and the overall cap keep today's
+        # filings rather than the month's oldest
+        filings = sorted(self.insider_filings(start, end, symbol), key=_broadcast_key, reverse=True)
         if len(filings) > self.max_insider_filings:
             log.warning("NSE listed %d insider filings; reading the newest %d", len(filings),
                         self.max_insider_filings)

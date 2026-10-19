@@ -189,6 +189,10 @@
         <form id="lk-form" class="lk-form" role="search"><select id="lk-market" aria-label="Market" title="India, or a US, UK or Japan stock to view"><option value="IN">India</option><option value="US">US</option><option value="UK">UK</option><option value="JP">Japan</option></select><input id="lk-ticker" autocomplete="off" aria-label="Ticker or company name" placeholder="Ticker or company name, e.g. Tata Steel"><button type="submit" class="small">Check</button></form></div>
       <div class="cardbody lk-body" id="lk-result" aria-live="polite"><div class="sub">Price, the agent's checklist and a chart. "Open full view" adds fundamentals, financials, shareholding, technicals and news.</div></div>
     </div>
+    <div class="card" data-anchor="insider" id="ins-card">
+      <div class="cardhead"><h2>Promoter and director buying</h2><span class="sub" id="ins-sub">open-market buys from NSE insider filings, last 30 days</span></div>
+      <div class="cardbody" id="ins-body"><div class="sub">Loading insider filings…</div></div>
+    </div>
     <div class="card" data-anchor="track-record">
       <div class="cardhead"><h2>Claude's track record</h2><span class="sub">each call vs the index afterwards</span><button type="button" class="small" id="scd-run" style="margin-left:auto">Refresh</button></div>
       <div class="cardbody" id="scd-result"><div class="sub">Scores every recommendation once it has 5 trading days of history: buys are right when they beat the index by more than the trading cost, sells when the stock then lagged.</div></div>
@@ -686,7 +690,8 @@
     loadIntegration();
   });
 
-  let MP = null;  // the last My Groww portfolio answer: it fills the Live tiles
+  let MP = null;
+  let INS = null;   // the insider book (GET /api/insider): big insider buys and a per-stock summary  // the last My Groww portfolio answer: it fills the Live tiles
   const LIVE_TILES = ["Holdings value", "Cash", "Profit / loss", "Today", "Holdings"];
   if(MODE !== "demo") $("tiles").innerHTML = LIVE_TILES.map(l => tile(l, "…", "Loading your holdings…")).join("");
   const SOURCES = {in:[["deals","Bulk + block deals"],["bulk","Bulk deals only"],["block","Block deals only"],["insider","Insider (PIT) filings"],["all","Bulk + block deals and insider filings"]],
@@ -1232,7 +1237,7 @@
     const total = m.holdings.reduce((t, h) => t + (h.value || 0), 0);
     const sorted = m.holdings.slice().sort((x, y) => (y.value || 0) - (x.value || 0));   // biggest first, as on Groww
     if(!keepRows) rows.innerHTML = sorted.length ? sorted.map(h => { const dm = dayMove(h); return `<tr data-open-stock="${esc(h.symbol)}">
-        <td class="stock-cell"><div class="sym-line"><a href="#" data-lookup="${esc(h.symbol)}" class="sym" title="${esc(h.name || h.symbol)}">${esc(h.symbol)}</a>${h.kind === "bond" ? ` <span class="pill warn mini" title="bond${h.maturity ? " maturing " + esc(h.maturity) : ""}">Bond</span>` : ""}${h.exchange === "BSE" ? ' <span class="pill mini">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill mini" title="NSE daily price band">Band ${esc(MP.bands[h.symbol])}</span>` : ""}${((MP.filter_flags || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Review flag from the Indian-market filters; the agent never sells on it">${esc(f)}</span>`).join("")}${((MP.corp_actions || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Corporate action within 7 days: the GTT stop-loss is paused over the ex-date and re-set at the adjusted level">${esc(f)}</span>`).join("")}</div>${h.name ? `<div class="sub hname" title="${esc(h.name)}">${esc(h.name)}</div>` : ""}
+        <td class="stock-cell"><div class="sym-line"><a href="#" data-lookup="${esc(h.symbol)}" class="sym" title="${esc(h.name || h.symbol)}">${esc(h.symbol)}</a>${h.kind === "bond" ? ` <span class="pill warn mini" title="bond${h.maturity ? " maturing " + esc(h.maturity) : ""}">Bond</span>` : ""}${h.exchange === "BSE" ? ' <span class="pill mini">BSE</span>' : ""}${(MP.bands || {})[h.symbol] ? ` <span class="pill mini" title="NSE daily price band">Band ${esc(MP.bands[h.symbol])}</span>` : ""}${((MP.filter_flags || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Review flag from the Indian-market filters; the agent never sells on it">${esc(f)}</span>`).join("")}${((MP.corp_actions || {})[h.symbol] || []).map(f => ` <span class="pill warn mini" title="Corporate action within 7 days: the GTT stop-loss is paused over the ex-date and re-set at the adjusted level">${esc(f)}</span>`).join("")}${insiderChip(h.symbol)}</div>${h.name ? `<div class="sub hname" title="${esc(h.name)}">${esc(h.name)}</div>` : ""}
           <div class="sub l2">${(() => { const rest = [total && h.value != null ? `${(h.value / total * 100).toFixed(1)}%` : "", h.sellable_qty < h.qty ? `${h.sellable_qty} free to sell` : ""].filter(Boolean).join(" · ");
           return rest; })()}</div>
           <div class="hold-line" title="shares (or units) owned × average buy price">${(() => { const rest = [total && h.value != null ? `${(h.value / total * 100).toFixed(1)}%` : "", h.sellable_qty < h.qty ? `${h.sellable_qty} free to sell` : ""].filter(Boolean);
@@ -2018,7 +2023,42 @@
   refresh().then(() => { if(S && S.busy) pollWhileBusy(); loadScorecard(); pageLoad.step(0, S && S.deals ? `${S.deals.length} deals` : ""); });
   loadMyPortfolio(false).then(() => pageLoad.step(1, MP && MP.holdings ? `${MP.holdings.length} holdings` : MP && MP.linked === false ? "not linked" : ""));
   if(urlStock) lookup(urlStock);   // ?stock=SYM: the stock page opens on it
-  setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 62000);   // just over the server's 60 s Groww cache: every poll gets a fresh read, and never more than one a minute
+  setInterval(() => { if(!document.hidden) loadMyPortfolio(false); }, 62000);
+  // ---- insider trades (NSE PIT filings, all companies; the watch refreshes state/insider_book.json every 15 min) ----
+  const insMoney = (v) => !v ? "n/a" : v >= 1e7 ? "₹" + (v / 1e7).toFixed(2) + " Cr" : v >= 1e5 ? "₹" + (v / 1e5).toFixed(1) + " L" : "₹" + Math.round(v).toLocaleString("en-IN");
+  function insiderChip(sym){
+    const x = INS && INS.summary && INS.summary[sym];
+    if(!x || !(x.buys || x.sells)) return "";
+    const tip = `Insider filings, last ${INS.days || 30} days: ${x.buys} buy(s) worth ${insMoney(x.buy_value)}, ${x.sells} sale(s) worth ${insMoney(x.sell_value)}. Open the stock for the list.`;
+    const label = x.market_buys ? "Insider buying" : x.buys && !x.sells ? "Insider buy" : x.sells && !x.buys ? "Insider sale" : "Insider trades";
+    return ` <span class="pill ${x.market_buys ? "ok" : "warn"} mini" title="${esc(tip)}">${esc(label)}</span>`;
+  }
+  function renderInsider(){
+    const el = $("ins-body"); if(!el) return;
+    if(!INS || INS.error && !INS.updated){ el.innerHTML = `<div class="sub">Insider filings unavailable${INS && INS.error ? ": " + esc(INS.error) : ""}.</div>`; return; }
+    if(!INS.updated){ el.innerHTML = `<div class="sub">No insider data yet: the watch service reads NSE's insider filings every 15 minutes (set INSIDER_TRADES=false to turn this off).</div>`; return; }
+    $("ins-sub").textContent = `open-market buys of ${insMoney(INS.min_value)} or more · NSE insider filings, last ${INS.days || 30} days · updated ${String(INS.updated).slice(11, 16)} IST`;
+    const all = INS.notable || [], n = insShowAll ? all : all.slice(0, 10);
+    el.innerHTML = !n.length ? `<div class="sub">No promoter, director or key-manager bought ${esc(insMoney(INS.min_value))} or more in the market in the last ${esc(INS.days || 30)} days.</div>`
+      : `<div class="scroll"><table class="dt"><thead><tr><th>Stock</th><th>Who</th><th class="num">Bought</th><th class="num">Avg price</th><th>When</th></tr></thead><tbody>${n.map(g =>
+          `<tr><td><a href="#" data-lookup="${esc(g.symbol)}" class="sym">${esc(g.symbol)}</a>${g.company ? `<div class="sub l2">${esc(g.company)}</div>` : ""}</td>
+           <td>${esc(g.person)}<div class="sub l2">${esc(g.who)}${g.trades > 1 ? ` · ${g.trades} trades` : ""}</div></td>
+           <td class="num">${insMoney(g.value)}<div class="sub l2">${Math.round(g.qty).toLocaleString("en-IN")} sh</div></td>
+           <td class="num">${g.avg_price ? "₹" + Number(g.avg_price).toLocaleString("en-IN", {maximumFractionDigits: 2}) : "n/a"}</td>
+           <td>${esc(g.first === g.last ? g.last || "" : (g.first || "") + " to " + (g.last || ""))}</td></tr>`).join("")}</tbody></table></div>
+        ${all.length > 10 ? `<button type="button" class="small" id="ins-more" style="margin-top:8px">${insShowAll ? "Show the top 10" : `Show all ${all.length}`}</button>` : ""}
+        <div class="sub" style="margin-top:6px">Insiders paying market price for more of their own company is usually read as confidence. ESOPs, gifts, transfers between promoters and pledges are left out. Not advice.</div>`;
+  }
+  let insShowAll = false;
+  document.addEventListener("click", (ev) => { if(ev.target && ev.target.id === "ins-more"){ insShowAll = !insShowAll; renderInsider(); } });
+  async function loadInsiderBook(){
+    try { INS = await api("/api/insider"); } catch(e){ INS = {error: e.message}; }
+    renderInsider();
+    if(MP && MP.holdings && !(sellEdit !== null && sellEdit.source === "groww")) renderMyPortfolio(MP);
+  }
+
+  loadInsiderBook();
+  setInterval(() => { if(!document.hidden) loadInsiderBook(); }, 5 * 60 * 1000);   // the book itself changes every 15 min   // just over the server's 60 s Groww cache: every poll gets a fresh read, and never more than one a minute
   // While the NSE is open the price shown beside a stock (order form, Look up card, stock drawer) follows the market too.
   // Quiet updates only: the text changes in place; nothing is rebuilt, so no panel closes and the page does not jump.
   setInterval(async () => {

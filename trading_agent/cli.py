@@ -322,6 +322,43 @@ def cmd_fundamentals_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_insider(args: argparse.Namespace) -> int:
+    """NSE insider (PIT) trades across every company: big insider buys, or one stock's trades. --refresh reads NSE now."""
+    from datetime import datetime
+    from .insider_watch import book_for, who
+    from .nse import NSEClient
+    from .timezones import IST
+
+    settings = _settings(args)
+    book = book_for(settings)
+    if args.refresh:
+        try:
+            d = book.refresh(NSEClient(cache_dir=settings.state_dir / "cache"), datetime.now(IST))
+        except Exception as e:  # noqa: BLE001
+            print(f"Insider filings unavailable: {e}", file=sys.stderr)
+            return 1
+        print(f"Read {len(d['rows'])} insider trades from the last {d['days']} days.")
+    v = book.view(args.symbol or None)
+    if not v.get("updated"):
+        print("No insider book yet: run with --refresh (the watch service refreshes it every 15 minutes).")
+        return 0
+    if args.symbol:
+        for r in v["trades"] or []:
+            val = f"₹{r['value']:,.0f}" if r.get("value") else "value n/a"
+            print(f"{r.get('date') or '?'}  {'BUY ' if r['side'] == 'buy' else 'SELL'}  {r['person']} ({who(r)})  "
+                  f"{r.get('qty') or 0:,.0f} sh  {val}  {r.get('mode') or ''}")
+        if not v["trades"]:
+            print(f"No insider trades in {args.symbol.upper()} in the last {v['days']} days.")
+        return 0
+    print(f"Insider open-market buys of ₹{v['min_value'] / 1e7:g} crore or more, last {v['days']} days "
+          f"(updated {v['updated']}):")
+    for g in v["notable"] or []:
+        print(f"  {g['symbol']:<12} ₹{g['value'] / 1e7:8.2f} cr  {g['person']} ({g['who']}), {g['first']} to {g['last']}")
+    if not v["notable"]:
+        print("  none")
+    return 0
+
+
 def cmd_market_data(args: argparse.Namespace) -> int:
     """FII/DII flows, NIFTY 500 breadth and NSE price bands: show what is stored, or fetch now (public NSE files)."""
     from datetime import datetime
@@ -2088,6 +2125,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--refresh", action="store_true")
     sp.add_argument("--limit", type=int, default=30)
     sp.set_defaults(func=cmd_orders)
+    sp = sub.add_parser("insider", help="NSE insider trades, all companies: big insider buys, or one stock's (read-only)")
+    sp.add_argument("--refresh", action="store_true", help="read NSE's insider filings now (else show the stored book)")
+    sp.add_argument("--symbol", help="list one stock's insider trades instead")
+    sp.set_defaults(func=cmd_insider)
     sp = sub.add_parser("market-data", help="FII/DII flows, NIFTY 500 breadth and price bands: show, or fetch now")
     sp.add_argument("--fetch", nargs="?", const="all", choices=["flows", "breadth", "bands", "all"],
                     help="fetch from the public NSE files now (default: only show what is stored)")

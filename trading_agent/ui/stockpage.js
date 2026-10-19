@@ -5,7 +5,7 @@
 //
 // Safety: the Practice buy / Practice sell buttons never send an order. They call opts.onPractice(side, symbol) and the
 // host page opens the existing practice order form pre-filled (the Live page goes to /demo?buy=SYM / ?sell=SYM). The
-// only server reads here are GETs: /api/lookup, /api/stock, /api/candles, /api/news, /api/announcements.
+// only server reads here are GETs: /api/lookup, /api/stock, /api/candles, /api/news, /api/announcements, /api/insider.
 (function(){
   "use strict";
 
@@ -265,6 +265,27 @@
       if(!a.summary && !a.sector && !a.industry && !a.website) return `<div class="sub">No company profile from Yahoo.</div>`;
       return `${a.summary ? `<p class="sp-about">${esc(a.summary)}</p>` : ""}<div class="sp-kv">${kv("Sector", a.sector || "n/a")}${kv("Industry", a.industry || a.nse_industry || "n/a")}${kv("Website", a.website || "n/a")}</div>`;
     }
+    // NSE insider (PIT) filings for this stock over the last month: promoters, directors and key managers.
+    const insiderMoney = (v) => !isNum(v) || !v ? "n/a" : v >= 1e7 ? "₹" + (v / 1e7).toFixed(2) + " Cr" : v >= 1e5 ? "₹" + (v / 1e5).toFixed(1) + " L" : "₹" + group(Math.round(v), 0);
+    const insiderRole = (c) => /promoter/i.test(c || "") ? "Promoter" : /director/i.test(c || "") ? "Director" : /key\s*manag|\bkmp\b/i.test(c || "") ? "Key manager" : (c || "Insider");
+    function insiderHint(){
+      const t = st.insider && st.insider.trades; if(!t || !t.length) return "";
+      const b = t.filter(x => x.side === "buy").length, s = t.length - b;
+      return `${b} buy${b === 1 ? "" : "s"} · ${s} sale${s === 1 ? "" : "s"}`;
+    }
+    function insiderHtml(){
+      const d = st.insider;
+      if(d === undefined) return loading("insider trades");
+      if(!d || d.error && !(d.trades || []).length) return `<div class="sub">Insider trades unavailable${d && d.error ? ": " + esc(d.error) : ""}.</div>`;
+      if(!d.updated) return `<div class="sub">No insider data yet: the watch service reads NSE's insider filings every 15 minutes.</div>`;
+      const t = d.trades || [];
+      if(!t.length) return `<div class="sub">No insider buying or selling filed in the last ${esc(d.days || 30)} days.</div>`;
+      return `<div class="scroll"><table class="dt sp-insider"><thead><tr><th>Date</th><th>Who</th><th>Trade</th><th class="num">Shares</th><th class="num">Value</th></tr></thead><tbody>${t.map(x =>
+        `<tr><td>${esc(x.date || "")}</td><td>${esc(x.person)}<div class="sub l2">${esc(insiderRole(x.category))}</div></td>
+         <td><span class="${x.side === "buy" ? "pl-profit" : "pl-loss"}">${x.side === "buy" ? "Bought" : "Sold"}</span><div class="sub l2">${esc(x.mode || "")}</div></td>
+         <td class="num">${isNum(x.qty) ? group(Math.round(x.qty), 0) : "n/a"}</td><td class="num">${insiderMoney(x.value)}</td></tr>`).join("")}</tbody></table></div>
+        <div class="sub" style="margin-top:6px">From NSE insider-trading (PIT) filings. A promoter buying in the market is usually read as a good sign; a sale can also be for tax or personal reasons.</div>`;
+    }
     function shareholdingHtml(){
       const d = st.stock; if(!d) return st.stockError ? `<div class="sub">Unavailable: ${esc(st.stockError)}</div>` : loading("shareholding");
       const s = d.shareholding || {};
@@ -303,7 +324,8 @@
         + (fund ? "" : sec("financials", "Financial performance", financialHtml(), true))
         + sec("about", "About company", aboutHtml(), false)
         + (fund || fx ? "" : sec("shareholding", "Shareholding pattern", shareholdingHtml(), true))
-        + (fund || fx ? "" : sec("similar", "Similar stocks", similarHtml(), true));
+        + (fund || fx ? "" : sec("similar", "Similar stocks", similarHtml(), true))
+        + (fund || fx ? "" : sec("insider", "Insider trades", insiderHtml(), dflt, insiderHint()));
     }
     function paintOverview(){ const e = root.querySelector('[data-panel="overview"]'); if(e) e.innerHTML = overviewHtml(); }
 
@@ -425,7 +447,7 @@
     // ---- stock figures (the second request) ----
     async function loadStock(mySeq){
       const my = ++stockSeq;
-      st.stock = null; st.stockError = null; st.finIdx = null; paintHead(); paintOverview(); paintTechnicals();
+      st.stock = null; st.stockError = null; st.finIdx = null; st.insider = undefined; paintHead(); paintOverview(); paintTechnicals();
       try {
         const d = await api("/api/stock?ticker=" + encodeURIComponent(st.ticker) + "&exchange=" + st.exchange);
         if(mySeq !== seq || my !== stockSeq || dead) return;
@@ -436,6 +458,14 @@
         st.stockError = e.message || "request failed";
       }
       paintHead(); paintHolding(); paintOverview(); paintTechnicals();
+      if(!foreign()) loadInsider(mySeq);
+    }
+    async function loadInsider(mySeq){
+      st.insider = undefined;
+      let d;
+      try { d = await api("/api/insider?symbol=" + encodeURIComponent(st.ticker)); } catch(e){ d = {error: e.message || "request failed", trades: []}; }
+      if(mySeq !== seq || dead) return;
+      st.insider = d; paintOverview();
     }
 
     // ---- public ----

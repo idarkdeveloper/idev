@@ -108,6 +108,7 @@ class Watcher:
         self._integration = integration  # IntegrationScheduler: the read-only live-services check at 08:35 IST
         self._app_feed = app_feed  # app_feed.AppFeed: the phone app's feed file (read-only, off unless APP_FEED)
         self._app_feed_thread: threading.Thread | None = None
+        self._insider_thread: threading.Thread | None = None   # the insider-book refresh (insider_watch.py)
         self._unpollable: dict[str, Any] = {}   # BSE holding symbol -> the day its "no scrip code" note was logged
         self._ann_failed: dict[str, Any] = {}   # ticker -> the day its announcement failure was last warned about
         self._close_snapshot = close_snapshot  # groww_hours.CloseSnapshot: one saved Groww read at the close (15:35-15:50)
@@ -545,6 +546,38 @@ class Watcher:
             log.exception("market data poll failed")
         return out
 
+    def poll_insider(self, now: datetime) -> str | None:
+        """Every 15 minutes, 07:00-22:00 IST: refresh the book of NSE insider filings (all companies) on a worker thread,
+        then alert on new insider trades in the stocks you hold or that are recommended. Never raises."""
+        s = self.settings
+        if (not getattr(s, "insider_trades", False) or getattr(s, "market", "in") != "in"
+                or self._data is None or not hasattr(self._data, "insider_trades") or not 7 <= now.hour < 22):
+            return None
+        if self._insider_thread is not None and self._insider_thread.is_alive():
+            return "running"
+        from .insider_watch import book_for
+        book = book_for(s)
+        if not book.due(now):
+            return None
+        self._insider_thread = threading.Thread(target=self._insider_refresh, args=(book, now), daemon=True,
+                                                name="insider-book")
+        self._insider_thread.start()
+        return "started"
+
+    def _insider_refresh(self, book: Any, now: datetime) -> None:
+        try:
+            from .nse import NSEClient
+            # its own client (a session per thread), sharing the cache and the watch's NSE back-off
+            client = NSEClient(cache_dir=getattr(self._data, "cache_dir", None), breaker=getattr(self._data, "breaker", None))
+            book.refresh(client, now)
+            fresh = book.new_for(self.interesting_tickers())
+            if fresh and self._notifier is not None:
+                from .insider_watch import alert_text
+                subject, body = alert_text(fresh)
+                self._notifier.send(_plain(subject), _plain(body))
+        except Exception as e:  # noqa: BLE001 - a second source: the watch carries on
+            log.warning("insider book refresh failed: %s", e)
+
     def poll_deals_blocked(self) -> list[dict[str, Any]]:
         """Alerts-only mode: tell the user about new deals without analysing them (that needs the broker).
 
@@ -615,6 +648,7 @@ class Watcher:
             except Exception:  # noqa: BLE001 - the emails never stop the watch
                 log.exception("daily email check failed")
         info["market_data"] = self.poll_market_data(now)
+        info["insider"] = self.poll_insider(now)
         if getattr(self.settings, "market", "in") == "in":   # from 08:30 on an ex-date: rescale the paper accounts
             try:
                 from .corp_actions import normalise_all
