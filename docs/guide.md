@@ -61,6 +61,12 @@ show that saved copy priced from Yahoo ("market closed — holdings saved at the
 Groww. Only when no snapshot covers the latest session is there one Groww read, once a day. Practice-account prices,
 the canary and a live-orders broker follow the same window; `groww-check` is an explicit command and always calls Groww.
 
+**Bond prices.** No other free source quotes BSE bonds (Groww's live quotes are not in the free plan, Yahoo lists none,
+and BSE's quote API refuses cloud servers), so a bond holding is priced from BSE's free daily debt bhavcopy
+(`bse_bonds.py`): its last traded close within 30 days, shown as "last traded <date>" under the price. It is an
+end-of-day price, not a live one; a bond that has not traded in 30 days stays "no price" and out of the totals. Each
+day's file is cached in `cache/bse_debt/`.
+
 Other commands: `portfolio` (account + P&L), `history` (past recommendations),
 `reset` (forget seen trades, reset the paper account), `groww-token` (mint a daily token),
 `check --json`, and `--market us` to switch to the US stack.
