@@ -152,9 +152,11 @@ class GlobalContext:
         self.ttl = ttl
         self._cached: dict[str, Any] | None = None
         self._at = 0.0
+        self.ttl_fn: Any | None = None   # (default) -> ttl; only the dashboard's display copy sets it
 
     def fetch(self, force: bool = False) -> dict[str, Any]:
-        if self._cached and not force and time.time() - self._at < self.ttl:
+        ttl = self.ttl if self.ttl_fn is None else self.ttl_fn(self.ttl)
+        if self._cached and not force and time.time() - self._at < ttl:
             return self._cached
         series: dict[str, list[dict[str, Any]]] = {}
         errors: dict[str, str] = {}
