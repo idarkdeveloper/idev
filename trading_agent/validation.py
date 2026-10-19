@@ -142,13 +142,36 @@ def _pick(sorted_vals: list[float], q: float) -> float:
     return sorted_vals[int(round(q * (len(sorted_vals) - 1)))]
 
 
+FAN_QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
+
+
+def _path_stats(path: list[float]) -> tuple[list[float], float]:
+    """Growth of 1 at each step (starting at 1.0) and the worst fall from a peak (<= 0)."""
+    v, peak, worst, values = 1.0, 1.0, 0.0, [1.0]
+    for r in path:
+        v *= 1 + r
+        peak = max(peak, v)
+        worst = min(worst, v / peak - 1)
+        values.append(v)
+    return values, min(worst, 0.0)
+
+
 def monte_carlo(rets: list[float], n_paths: int = 5000, block: int = 3, seed: int = 7) -> dict[str, Any] | None:
-    """Block-bootstrap the period returns: how bad could the fall have been with the same returns reshuffled?"""
+    """Block-bootstrap the period returns: how bad could the fall have been with the same returns reshuffled?
+
+    Besides the 5/50/95% ranges it returns what the page draws:
+
+    * ``fan``: per step (0 = the start), the 5/25/50/75/95% growth of 1 across the reshuffles, and ``actual``,
+      the growth of 1 in the order the returns really came;
+    * ``drawdown_hist``: entry k counts the reshuffles whose worst fall was k% to just under (k+1)%, so the share
+      that fell L% or more is ``sum(drawdown_hist[L:]) / paths`` for any whole-percent limit L;
+    * ``actual_drawdown``: the worst fall of the real order."""
     n = len(rets)
     if n < 6:
         return None
     rng = random.Random(seed)
     finals, dds = [], []
+    columns: list[list[float]] = [[] for _ in range(n + 1)]
     for _ in range(n_paths):
         path: list[float] = []
         if block >= n:  # a block as long as the series is the series itself
@@ -156,18 +179,35 @@ def monte_carlo(rets: list[float], n_paths: int = 5000, block: int = 3, seed: in
         while len(path) < n:
             s = rng.randrange(n)
             path.extend(rets[(s + k) % n] for k in range(block))
-        v, peak, worst = 1.0, 1.0, 0.0
-        for r in path[:n]:
-            v *= 1 + r
-            peak = max(peak, v)
-            worst = min(worst, v / peak - 1)
-        finals.append(v - 1)
-        dds.append(min(worst, 0.0))
+        values, worst = _path_stats(path[:n])
+        for k, x in enumerate(values):
+            columns[k].append(x)
+        finals.append(values[-1] - 1)
+        dds.append(worst)
+    hist = [0] * (int(-min(dds) * 100 + 1e-9) + 1)
+    for d in dds:
+        hist[min(len(hist) - 1, int(-d * 100 + 1e-9))] += 1
+    fan = {f"p{round(q * 100)}": [] for q in FAN_QUANTILES}
+    for col in columns:
+        col.sort()
+        for q in FAN_QUANTILES:
+            fan[f"p{round(q * 100)}"].append(round(_pick(col, q), 5))
+    actual, actual_dd = _path_stats(list(rets))
+    fan["actual"] = [round(x, 5) for x in actual]
     finals.sort()
     dds.sort()
     rng_of = lambda xs: {"p5": _pick(xs, 0.05), "p50": _pick(xs, 0.5), "p95": _pick(xs, 0.95)}  # noqa: E731
     return {"paths": n_paths, "block": block, "final_return": rng_of(finals), "max_drawdown": rng_of(dds),
-            "loss_probability": sum(f < 0 for f in finals) / n_paths}
+            "loss_probability": sum(f < 0 for f in finals) / n_paths,
+            "fan": fan, "drawdown_hist": hist, "actual_drawdown": actual_dd}
+
+
+def breach_share(mc: dict[str, Any], limit_pct: int) -> float | None:
+    """Share of the reshuffles whose worst fall was ``limit_pct``% or more (None for an old result)."""
+    hist = mc.get("drawdown_hist")
+    if not hist or not mc.get("paths"):
+        return None
+    return sum(hist[max(0, int(limit_pct)):]) / mc["paths"]
 
 
 def _year_bounds(dates: list[str]) -> list[list[Any]]:

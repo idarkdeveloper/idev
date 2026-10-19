@@ -43,14 +43,23 @@ window.TA = (function(){
     const m = {l: cfg.left || 60, r: cfg.endLabels ? 92 : 14, t: 10, b: 24}, pw = W - m.l - m.r, ph = H - m.t - m.b;
     const vals = []; cfg.series.forEach(s => s.values.forEach(v => { if(v != null && isFinite(v)) vals.push(v); }));
     (cfg.refs || []).forEach(r => vals.push(r.y));
+    const bands = cfg.bands || [];   // shaded ranges [{name, lo:[], hi:[], color, opacity}], drawn under the lines
+    bands.forEach(b => b.lo.concat(b.hi).forEach(v => { if(v != null && isFinite(v)) vals.push(v); }));
     const ticks = niceTicks(Math.min(...vals), Math.max(...vals), 4), y0 = ticks[0], y1 = ticks[ticks.length - 1];
     const X = i => m.l + (n === 1 ? 0 : i / (n - 1) * pw), Y = v => m.t + ph - (v - y0) / ((y1 - y0) || 1) * ph;
     const yF = cfg.yFmt || (v => v.toLocaleString());
+    const xF = cfg.xFmt || shortDate;   // x labels are dates unless the caller says otherwise
     let g = "";
     ticks.forEach(t => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${t === y0 ? C.base : C.grid}" stroke-width="1"/><text x="${m.l - 8}" y="${Y(t) + 4}" text-anchor="end">${esc(yF(t))}</text>`; });
     const xt = Math.max(2, Math.min(5, n, Math.floor(pw / 95)));
-    for(let k = 0; k < xt; k++){ const i = Math.round(k * (n - 1) / (xt - 1)); g += `<text x="${X(i)}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === xt - 1 ? "end" : "middle"}">${esc(shortDate(xs[i]))}</text>`; }
+    for(let k = 0; k < xt; k++){ const i = Math.round(k * (n - 1) / (xt - 1)); g += `<text x="${X(i)}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === xt - 1 ? "end" : "middle"}">${esc(xF(xs[i]))}</text>`; }
     (cfg.refs || []).forEach(r => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(r.y)}" y2="${Y(r.y)}" stroke="${r.color || C.ctx}" stroke-width="1" stroke-dasharray="4 3"><title>${esc(r.label)} ${esc(yF(r.y))}</title></line>`; });
+    bands.forEach(b => {
+      let up = "", down = "";
+      for(let i = 0; i < n; i++){ if(b.hi[i] == null || b.lo[i] == null) continue; up += (up ? "L" : "M") + X(i).toFixed(1) + " " + Y(b.hi[i]).toFixed(1); }
+      for(let i = n - 1; i >= 0; i--){ if(b.hi[i] == null || b.lo[i] == null) continue; down += "L" + X(i).toFixed(1) + " " + Y(b.lo[i]).toFixed(1); }
+      if(up) g += `<path d="${up}${down}Z" fill="${b.color}" fill-opacity="${b.opacity == null ? 0.15 : b.opacity}" stroke="none"/>`;
+    });
     const placed = [];
     cfg.series.forEach(s => {
       let d = "", pen = false;
@@ -65,8 +74,8 @@ window.TA = (function(){
         if(cfg.endLabels && !placed.some(py => Math.abs(py - ly) < 13)){ placed.push(ly); g += `<text x="${X(li) + 8}" y="${ly + 4}" style="fill:var(--ink2)">${esc(s.label || s.name)}</text>`; }
       }
     });
-    const refs = cfg.refs || [], showLegend = cfg.legend !== false && (cfg.series.length + refs.length) > 1;
-    el.innerHTML = (showLegend ? `<div class="legend-row" style="margin-bottom:6px">${cfg.series.map(s => `<span><i style="background:${s.dash ? `repeating-linear-gradient(90deg, ${s.color} 0 4px, transparent 4px 7px)` : s.color}"></i>${esc(s.name)}</span>`).join("")}${refs.map(r => `<span><i style="background:repeating-linear-gradient(90deg, ${r.color || C.ctx} 0 4px, transparent 4px 7px)"></i>${esc(r.label)} ${esc(yF(r.y))}</span>`).join("")}</div>` : "")
+    const refs = cfg.refs || [], showLegend = cfg.legend !== false && (cfg.series.length + refs.length + bands.length) > 1;
+    el.innerHTML = (showLegend ? `<div class="legend-row" style="margin-bottom:6px">${cfg.series.map(s => `<span><i style="background:${s.dash ? `repeating-linear-gradient(90deg, ${s.color} 0 4px, transparent 4px 7px)` : s.color}"></i>${esc(s.name)}</span>`).join("")}${bands.map(b => `<span><i style="background:${b.color};opacity:${Math.min(1, (b.opacity == null ? 0.15 : b.opacity) * 2.5)}"></i>${esc(b.name)}</span>`).join("")}${refs.map(r => `<span><i style="background:repeating-linear-gradient(90deg, ${r.color || C.ctx} 0 4px, transparent 4px 7px)"></i>${esc(r.label)} ${esc(yF(r.y))}</span>`).join("")}</div>` : "")
       + `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "chart")}">${g}<line class="xh" x1="0" x2="0" y1="${m.t}" y2="${m.t + ph}" stroke="${C.base}" stroke-width="1" visibility="hidden"/><g class="dots"></g><rect x="${m.l}" y="${m.t}" width="${pw}" height="${ph}" fill="transparent" class="hit"/></svg><div class="ctip"></div>`;
     const svg = el.querySelector("svg"), tip = el.querySelector(".ctip"), xh = svg.querySelector(".xh"), dots = svg.querySelector(".dots");
     const at = (ev) => { const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width; return Math.max(0, Math.min(n - 1, Math.round((sx - m.l) / pw * (n - 1)))); };
@@ -75,7 +84,8 @@ window.TA = (function(){
       const i = at(ev), x = X(i);
       xh.setAttribute("x1", x); xh.setAttribute("x2", x); xh.setAttribute("visibility", "visible");
       dots.innerHTML = cfg.series.map(s => s.values[i] == null ? "" : `<circle cx="${x}" cy="${Y(s.values[i])}" r="4" fill="${s.color}" stroke="${C.ring}" stroke-width="2"/>`).join("");
-      tip.innerHTML = `<b>${esc(shortDate(xs[i]))}</b>` + cfg.series.map(s => s.values[i] == null ? "" : `<br><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.color};margin-right:6px"></span>${esc(s.name)} ${esc(yF(s.values[i]))}`).join("");
+      tip.innerHTML = `<b>${esc(xF(xs[i]))}</b>` + cfg.series.map(s => s.values[i] == null ? "" : `<br><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.color};margin-right:6px"></span>${esc(s.name)} ${esc(yF(s.values[i]))}`).join("")
+        + bands.map(b => b.lo[i] == null || b.hi[i] == null ? "" : `<br><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${b.color};margin-right:6px"></span>${esc(b.name)} ${esc(yF(b.lo[i]))} to ${esc(yF(b.hi[i]))}`).join("");
       tip.style.display = "block";
       const r = svg.getBoundingClientRect(), px = x * r.width / W, tw = tip.offsetWidth;
       tip.style.left = Math.max(0, Math.min(r.width - tw, px + 12 + tw > r.width ? px - tw - 12 : px + 12)) + "px"; tip.style.top = "8px";
@@ -126,6 +136,29 @@ window.TA = (function(){
     g += `<line x1="${X(0)}" x2="${X(0)}" y1="${m.t}" y2="${m.t + ph}" stroke="var(--ink2)" stroke-width="1"/>`;
     [lo, 0, hi].forEach((v, k) => { g += `<text x="${X(v)}" y="${H - 6}" text-anchor="${k === 0 ? "start" : k === 2 ? "end" : "middle"}">${pct(v,0)}</text>`; });
     el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "histogram")}">${g}</svg>`;
+  }
+  // Monte Carlo worst falls: hist[k] counts the reshuffles whose worst fall was k% to just under (k+1)%. Bars at or past
+  // the loss limit are red; a solid line marks the backtest's own worst fall. Bins widen to 2% or 5% when there are many.
+  function ddHistogram(el, hist, cfg){
+    const total = hist.reduce((a, b) => a + b, 0);
+    if(!hist.length || !total){ el.innerHTML = `<div class="chart-empty">No resamples to draw.</div>`; return; }
+    const W = Math.max(280, el.clientWidth || 560), H = cfg.height || 170, m = {l:44, r:14, t:10, b:26}, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const step = hist.length > 80 ? 5 : hist.length > 40 ? 2 : 1, bins = [];
+    for(let k = 0; k < hist.length; k += step){ let c = 0; for(let j = k; j < Math.min(k + step, hist.length); j++) c += hist[j]; bins.push({lo:k, hi:k + step, n:c}); }
+    const top = Math.max(bins[bins.length - 1].hi, (cfg.limit || 0) + 1, Math.ceil(-(cfg.actual || 0) * 100) + 1);
+    const share = c => c / total, yt = niceTicks(0, Math.max(...bins.map(b => share(b.n))), 3);
+    const X = v => m.l + v / top * pw, Y = f => m.t + ph - f / (yt[yt.length - 1] || 1) * ph;
+    let g = "";
+    yt.forEach(t => { g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="${t === 0 ? C.base : C.grid}"/><text x="${m.l - 8}" y="${Y(t) + 4}" text-anchor="end">${Math.round(t * 100)}%</text>`; });
+    bins.forEach(b => { if(!b.n) return; const x0 = X(b.lo) + 1, x1 = Math.max(x0 + 1, X(b.hi) - 1), r = Math.min(3, (x1 - x0) / 2), y = Y(share(b.n));
+      const bad = cfg.limit != null && b.lo >= cfg.limit;
+      g += `<path d="M${x0} ${Y(0)}V${y + r}q0 -${r} ${r} -${r}H${x1 - r}q${r} 0 ${r} ${r}V${Y(0)}Z" fill="${bad ? C.neg : C.s1}"><title>Worst fall ${b.lo}% to ${b.hi}%: ${(share(b.n) * 100).toFixed(1)}% of reshuffles</title></path>`; });
+    if(cfg.limit != null){ g += `<line x1="${X(cfg.limit)}" x2="${X(cfg.limit)}" y1="${m.t}" y2="${m.t + ph}" stroke="${C.neg}" stroke-dasharray="4 3"><title>Loss limit ${cfg.limit}%</title></line>`; }
+    if(cfg.actual != null){ const xa = X(-cfg.actual * 100); g += `<line x1="${xa}" x2="${xa}" y1="${m.t}" y2="${m.t + ph}" stroke="var(--ink2)" stroke-width="1.5"><title>This backtest's worst fall ${(-cfg.actual * 100).toFixed(1)}%</title></line>`; }
+    const xt = niceTicks(0, top, Math.max(2, Math.min(6, Math.floor(pw / 70)))).filter(t => t <= top);
+    xt.forEach(t => { g += `<text x="${X(t)}" y="${H - 6}" text-anchor="${t === 0 ? "start" : "middle"}">${t === 0 ? "0%" : "−" + t + "%"}</text>`; });
+    el.innerHTML = `<div class="legend-row" style="margin-bottom:6px"><span><i style="background:${C.s1}"></i>Within the limit</span><span><i style="background:${C.neg}"></i>Fell ${cfg.limit}% or more</span><span><i style="background:var(--ink2);height:2px"></i>This backtest</span></div>`
+      + `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(cfg.label || "worst falls")}">${g}</svg>`;
   }
   const rupeesShort = v => { const a = Math.abs(v); return (v < 0 ? "−" : "") + sym() + (a >= 1e7 ? (a / 1e7).toFixed(2) + " Cr" : a >= 1e5 ? (a / 1e5).toFixed(2) + " L" : Math.round(a).toLocaleString("en-IN")); };
   const inr = (v, d=0) => v == null ? "n/a" : "₹" + Number(v).toLocaleString("en-IN", {minimumFractionDigits:d, maximumFractionDigits:d});
@@ -958,7 +991,7 @@ window.TA = (function(){
   }
 
   return {$, esc, priceMove, priceLine, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
-          C, NS, niceTicks, shortDate, lineChart, histogram, rupeesShort, inr, sinr, spct, quoteHtml, rangePos, quoteAge,
+          C, NS, niceTicks, shortDate, lineChart, histogram, ddHistogram, rupeesShort, inr, sinr, spct, quoteHtml, rangePos, quoteAge,
           daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart};
 })();
 window.TA.theme.init();

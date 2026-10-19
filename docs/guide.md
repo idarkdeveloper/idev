@@ -499,6 +499,12 @@ automatically) and the result gets three plain checks:
   sizes are counted, so treat it as an upper bound).
 - *Monte Carlo*: the monthly returns are resampled in short blocks 5,000 times, giving the
   range of worst falls and final returns that the same luck could have produced.
+  On the dashboard this is drawn as a stress test: a fan chart (growth of 100 for the
+  middle half and 90% of the reshuffles, the median one, and the backtest's own order)
+  and a histogram of each reshuffle's worst fall. Type a loss limit (20% by default,
+  remembered in this browser) to see what share of reshuffles fell that far or more,
+  and whether the backtest itself did. It measures the luck of the order only; it does
+  not predict new returns.
 
 It ends with one verdict: likely skill (only against the universe's own index fund, with at
 least 3 full out-of-sample years), could be luck, or no edge. The signal lab applies
