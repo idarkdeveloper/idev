@@ -1885,6 +1885,31 @@ def _app_feed(settings: Any, holidays: Any) -> Any:
                    _app_feed_trend(prices), holidays)
 
 
+def start_live_prices(settings: Any, holidays: Any) -> Any | None:
+    """Start the Groww live-prices thread when LIVE_PRICES is on and everything it needs is there; else None."""
+    if not (settings.live_prices and settings.market == "in" and settings.use_groww and settings.has_groww_credentials):
+        return None
+    if not settings.app_feed:   # the holdings it prices come from the phone feed's snapshot
+        logging.getLogger(__name__).warning("LIVE_PRICES needs APP_FEED=true (the feed supplies the holdings): live prices stay off")
+        return None
+    lp = _live_prices(settings, holidays)
+    lp.start()   # its own daemon thread; read-only, never raises into the watch
+    return lp
+
+
+def _live_prices(settings: Any, holidays: Any) -> Any:
+    """LivePrices with a read-only Groww client (live orders off, no price fallback): the saved token is reused, and a
+    cool-down, a missing token or any error only makes it back off."""
+    from .groww import GrowwBroker
+    from .live_prices import LivePrices
+    from .runner import resolve_groww_token
+
+    def ltp(symbols: list[str]) -> dict[str, float]:
+        return GrowwBroker(resolve_groww_token(settings), live_orders=False, exchange=settings.groww_exchange,
+                           timeout=10.0).ltp_strict(symbols)
+    return LivePrices(settings, ltp, holidays)
+
+
 def cmd_watch(args: argparse.Namespace) -> int:
     """Always-on local mode: poll deals and announcements during market hours."""
     from .runner import make_broker, make_data_source, make_notifier
@@ -1934,6 +1959,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     app_feed = None
     if settings.app_feed and settings.use_groww and settings.has_groww_credentials:
         app_feed = _app_feed(settings, holidays)
+    start_live_prices(settings, holidays)
     def after_close() -> None:
         print(run_forward_due(settings, forward_prices, holidays, notifier))
         from .model_paper import run_model_paper_due   # the prediction model's own paper account (never raises)

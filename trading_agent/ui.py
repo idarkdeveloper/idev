@@ -1698,7 +1698,7 @@ class App:
         if self._parent is not None:  # the same real holdings, read once
             return self._parent.my_portfolio(refresh, force=True) if force else self._parent.my_portfolio(refresh)
         if self._my_portfolio is not None and not refresh and not force and time.time() - self._my_portfolio_at < 60:
-            return {**self._my_portfolio, **self._cooldown(), **self._feed_cash()}
+            return self._live({**self._my_portfolio, **self._cooldown(), **self._feed_cash()})
         out = read_groww_portfolio(self.settings, self.prices, _now(), force=force)
         out.update(self._cooldown())
         if not out.get("at"):  # not linked, or an error: not cached
@@ -1724,7 +1724,16 @@ class App:
         except Exception:  # noqa: BLE001
             out["corp_actions"], out["corp_actions_note"] = {}, None
         self._my_portfolio, self._my_portfolio_at = out, time.time()
-        return out
+        return self._live(out)
+
+    def _live(self, out: dict[str, Any]) -> dict[str, Any]:
+        """Groww's live prices (state/app/live_prices.json, written by the watch service; fresh under 180 s) on the
+        holdings it covers. This page never calls Groww; no fresh file leaves the Yahoo prices as they are."""
+        try:
+            from .live_prices import apply_live_prices, load_live
+            return apply_live_prices(out, load_live(self.settings.state_dir))
+        except Exception:  # noqa: BLE001 - a nicety, never an error
+            return out
 
     def _feed_cash(self) -> dict[str, Any]:
         """The Groww cash the agent last recorded for the phone feed, read from its file on disk (never from Groww).

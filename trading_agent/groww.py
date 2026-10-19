@@ -870,6 +870,19 @@ class GrowwBroker:
                         pass
         return out
 
+    def ltp_strict(self, symbols: list[str]) -> dict[str, float]:
+        """Live Data LTP (read-only GET) for up to 50 symbols, raising on any failure and NEVER falling back to another
+        price source, so what it returns is Groww's own price."""
+        symbols = list(symbols)[:50]
+        keys = [f"{self.exchange}_{s.upper()}" for s in symbols]
+        payload = self._req("GET", "live-data/ltp", params={"segment": SEGMENT, "exchange_symbols": ",".join(keys)})
+        out: dict[str, float] = {}
+        for s, k in zip(symbols, keys):
+            v = payload.get(k) if isinstance(payload, dict) else None
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
+                out[s.upper()] = float(v)   # one odd value drops that symbol only
+        return out
+
     def opening_price(self, symbol: str) -> float | None:
         """Today's opening price (the pre-open auction's price): Groww's quote, else ``open_price_fn``. Read-only."""
         from .collar import opening_from_quote
