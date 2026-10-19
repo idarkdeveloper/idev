@@ -606,3 +606,18 @@ remembered in the browser).
   Synthesis from Google" (Google Text-to-speech) the preferred engine, open its settings, Install voice data, choose English
   (India), and download the voice. Speech recognition for the microphone needs "Google Speech Services" (the Google app) and the
   internet. If the device has no English voice at all, the card says so and the answers stay text-only.
+
+### Telegram alert design
+
+Every Telegram alert (a [DEAL] recommendation, a news headline, grouped exchange filings, the morning and evening briefs) has one look:
+the first line is the whole story (`▼ SOLD XPROINDIA · Kacholia`; the marker ▲ ▼ ● always sits next to a word), then three or four
+short fact lines with the numbers in monospace, one "Why" line of at most two sentences, and the full original text in a collapsed
+(expandable) quote. What shows without opening anything is at most 900 characters, the whole message at most 4,096. Buttons are links
+only: "Open <stock>" (the dashboard's stock page), "All deals", "Read on <source>"; nothing in an alert acts.
+
+* The buttons need the dashboard's address: set `DASHBOARD_URL` (for example `https://box.tailnet.ts.net`), or leave it empty and the
+  first real host name in `TA_ALLOWED_HOSTS` is used; with neither there are no link buttons.
+* Telegram clients that do not draw the collapsed quote show it as a normal quote; if Telegram refuses a message's formatting the
+  same message is sent once as plain text, with everything in it.
+* Email, the webhook, the alert triggers, `NEWS_ALERT_CHANNELS` and the rate limits are unchanged.
+* See how each looks without sending anything: `python -m trading_agent telegram-preview --type deal|news|group|brief|all`.
