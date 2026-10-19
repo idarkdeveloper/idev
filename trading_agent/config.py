@@ -266,6 +266,8 @@ class Settings:
     groww_window_end: str = "16:00"
     app_feed: bool = False  # the watch service writes state/app/app_feed.json for the phone app (read-only)
     app_feed_every_s: int = 300  # at most one Groww read for it per this many seconds (minimum 60)
+    live_prices: bool = False  # the watch service writes state/app/live_prices.json from Groww's read-only LTP (dashboard prices)
+    live_prices_every_s: int = 60  # seconds between those reads while the NSE is open (minimum 30)
     # Needed when the API key is not scoped to one workspace (the API then asks for it).
     anthropic_workspace_id: str | None = None
     # News headline tagging: auto = local Ollama when it is running, else untagged (never Claude implicitly)
@@ -491,6 +493,8 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         groww_window_end=groww_window[1],
         app_feed=_bool(env("APP_FEED"), False),
         app_feed_every_s=int(_number("APP_FEED_EVERY_S", env("APP_FEED_EVERY_S"), 300, 60, 86400)),
+        live_prices=_bool(env("LIVE_PRICES"), False),
+        live_prices_every_s=int(_number("LIVE_PRICES_EVERY_S", env("LIVE_PRICES_EVERY_S"), 60, 30, 3600)),
         anthropic_workspace_id=env("ANTHROPIC_WORKSPACE_ID") or None,
         news_tagger=news_tagger,
         ollama_url=(env("OLLAMA_URL") or "http://127.0.0.1:11434").rstrip("/"),

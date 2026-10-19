@@ -1160,7 +1160,7 @@
     if(m.corp_actions_note) $("mp-sub").textContent += " · " + m.corp_actions_note;
     const stat = (k, v, sub, cls) => `<div class="mkt"><span class="k">${k}</span><span class="v ${cls||""}">${v}</span><span class="sub" style="font-size:12px">${sub}</span></div>`;
     stats.innerHTML = stat("Invested", inr(m.invested), "what you paid, all holdings")
-      + stat("Value now", inr(m.value), (m.unpriced.length ? `excludes ${m.unpriced.map(esc).join(", ")} (no market price)` : "at current prices") + (m.at ? ` · as of ${new Date(m.at).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false})} IST` : ""))
+      + stat("Value now", inr(m.value), (m.unpriced.length ? `excludes ${m.unpriced.map(esc).join(", ")} (no market price)` : "at current prices") + (m.prices_as_of ? ` · Groww live · as of ${new Date(m.prices_as_of).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false})} IST` : m.at ? ` · Yahoo, delayed · as of ${new Date(m.at).toLocaleTimeString("en-IN", {timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false})} IST` : ""))
       + stat("Profit / loss", sinr(m.pl), "on holdings with a price", tone(m.pl))
       + stat("Return", spct(m.pl_pct), "vs what you paid", tone(m.pl_pct));
     const total = m.holdings.reduce((t, h) => t + (h.value || 0), 0);

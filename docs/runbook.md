@@ -526,6 +526,16 @@ reaching the server from the phone over Tailscale see section 15 (not repeated h
    `/opt/trading-agent/state/app/app_feed.json` exists and that an authenticated request to `/v1/health` answers.
 8. Revoke a lost phone: `sudo -u agent /opt/trading-agent/.venv/bin/python -m trading_agent app-device --state-dir /opt/trading-agent/state revoke phone`.
 
+### Groww live prices (optional, read-only)
+
+`LIVE_PRICES=true` (with `APP_FEED=true`, Groww linked, a Groww plan that includes Live Data) makes the watch service call
+Groww's `live-data/ltp` once a minute (`LIVE_PRICES_EVERY_S`, minimum 30) while the NSE is open, for the holdings in the
+feed (up to 50 per call; BSE-only holdings stay on Yahoo), and write `state/app/live_prices.json`. The dashboard uses it
+for a holding's price only while the file is under 180 s old and shows "Groww live · as of HH:MM IST"; otherwise Yahoo's
+delayed price. Load: 1 Live Data call a minute (limit 300/min, shared with quote/ohlc). No token is created by it beyond
+the one the feed already uses. A failure (no Live Data plan, 401/403/429, cool-down) logs one warning and backs off up to
+10 minutes; nothing else changes. To turn it off set `LIVE_PRICES=false` and restart `trading-agent-watch`.
+
 Gate checklist before relying on it:
 
 - Alert when the feed's `window_end` date is not today on a trading day: a dead watch reads "closed, not stale" the next morning.
