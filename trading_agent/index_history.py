@@ -207,7 +207,8 @@ def fetch_changes(cache_dir: Path, *, since: str = "2021-01-01", session: reques
             r.raise_for_status()
             if not r.content.startswith(b"%PDF"):
                 continue
-            txt.write_text(_pdf_text(r.content))
+            from .prices import atomic_write_text
+            atomic_write_text(txt, _pdf_text(r.content))
         if progress:
             progress(f"parsed {k}/{len(notices)} notices")
         for c in parse_notice(txt.read_text(), n.title, n.published):

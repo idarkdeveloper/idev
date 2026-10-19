@@ -798,7 +798,8 @@
       + (c.claude ? `<span class="pill" title="${esc(s.claude_model)}">Claude ready</span>` : '<span class="pill warn">No ANTHROPIC_API_KEY</span>')
       + (s.demo ? '<span class="pill warn">Demo data</span>' : '')
       + (S.market_day && !S.market_day.open ? `<span class="pill">NSE closed today${S.market_day.holiday ? ": " + esc(S.market_day.holiday) : " (weekend)"}</span>` : '')
-      + (S.running ? `<span class="pill warn"><span class="dot"></span>${esc(S.running.label)} running…</span>` : "");
+      + ((S.running_jobs || []).length > 1 ? `<span class="pill warn"><span class="dot"></span>${S.running_jobs.length} tools running…</span>`
+        : S.running ? `<span class="pill warn"><span class="dot"></span>${esc(S.running.label)} running…</span>` : "");
     const lastRun = S.runs[0];
     $("lastcheck").textContent = lastRun ? "Checked " + when(lastRun.at) : "No checks yet";
     $("subtitle-check").textContent = " · " + (lastRun ? "checked " + when(lastRun.at) : "no checks yet");   // phones show this in the one-row header
@@ -852,13 +853,23 @@
     if(MODE === "demo") renderEquity();
     renderForward();
     if(S.factor_backtest && S.factor_backtest.dates && $("fb-result").dataset.at !== S.factor_backtest.at){ renderFactor(S.factor_backtest); $("fb-result").dataset.at = S.factor_backtest.at; }
-    $("fb-run").disabled = S.busy;
+    // each research tool is disabled only while ITS job runs (or an exclusive job runs, or three tools already run)
+    const RESEARCH = ["backtest", "screen", "factor_backtest", "signal_lab", "replay_tool"], jobs = S.running_jobs || [];
+    const toolOff = (kind) => jobs.some(j => j.kind === kind) || jobs.some(j => RESEARCH.indexOf(j.kind) < 0) || jobs.length >= 3;
+    $("fb-run").disabled = toolOff("factor_backtest");
     if(S.signal_lab && S.signal_lab.results && $("sl-result").dataset.at !== S.signal_lab.at){ renderSignalLab(S.signal_lab); $("sl-result").dataset.at = S.signal_lab.at; }
-    $("sl-run").disabled = S.busy;
+    $("sl-run").disabled = toolOff("signal_lab");
     if(!btCostSet && S.costs && S.costs.examples){ $("bt-cost").value = S.costs.examples["25000"]; btCostSet = true; }
     if(S.screen && S.screen.top) renderScreen(S.screen);
-    $("sc-run").disabled = S.busy;
-    $("bt-run").disabled = S.busy;
+    $("sc-run").disabled = toolOff("screen");
+    $("bt-run").disabled = toolOff("backtest");
+    const TOOL_STATUS = {backtest: ["bt-status", "Replaying deals and fetching price history…"], screen: ["sc-status", "Scoring the universe…"],
+      factor_backtest: ["fb-status", "Fetching history for the universe and simulating monthly rebalances…"], signal_lab: ["sl-status", "Loading price history and testing every signal…"]};
+    for(const j of jobs){   // a tool that is running (also after a page reload) shows its own progress, and is watched until it ends
+      const t = TOOL_STATUS[j.kind]; if(!t) continue;
+      $(t[0]).textContent = j.message || t[1];
+      if(!waitingJobs.has(j.id)){ waitingJobs.set(j.id, t[0]); if(!pollTimer || !S.busy) pollWhileBusy(); }
+    }
   }
 
   // ---- 30-day line and today's move per holding, from the read-only /api/candles (1M of daily bars) ----
@@ -1457,18 +1468,18 @@
     document.querySelectorAll("#sl-tabs button").forEach(b => b.addEventListener("click", () => { urlH = Number(b.dataset.h); renderSignalLab(r, b.dataset.h); syncUrl(); }));
   }
   // Wait for the running job, then report that job (by id), not whatever came last.
-  let waitingFor = null;
+  // Several research tools can run at once: each started job is watched by id and reports to its own status line.
+  const waitingJobs = new Map();   // job id -> the id of the status element of its tool
   function pollWhileBusy(){
     clearInterval(pollTimer);
-    if(S && S.running && S.jobs.length) waitingFor = waitingFor || S.jobs[S.jobs.length - 1].id;
     pollTimer = setInterval(async () => {
       await refresh();
-      if(S.busy) return;
-      clearInterval(pollTimer);
-      const j = (waitingFor && S.jobs.find(x => x.id === waitingFor)) || S.jobs[S.jobs.length - 1];
-      waitingFor = null;
-      if(j && j.finished_at) toast((j.ok === false ? "Failed: " : "Done: ") + j.message);
-      ["bt-status", "sc-status", "fb-status", "sl-status"].forEach(id => $(id).textContent = "");
+      for(const [id, el] of Array.from(waitingJobs)){
+        const j = S.jobs.find(x => x.id === id);
+        if(j && j.finished_at){ waitingJobs.delete(id); $(el).textContent = ""; toast((j.ok === false ? "Failed: " : "Done: ") + j.message); }
+        else if(!j && !(S.running_jobs || []).some(x => x.id === id)){ waitingJobs.delete(id); $(el).textContent = ""; }
+      }
+      if(!S.busy){ clearInterval(pollTimer); pollTimer = null; }
     }, 2500);
   }
 
@@ -1484,13 +1495,13 @@
     const f = Object.fromEntries(new FormData(ev.target).entries());
     if(String(f.investor_other || "").trim()) f.investor = String(f.investor_other).trim();   // a name that is not followed
     delete f.investor_other;
-    try { const j = await api("/api/backtest", f); if(j.ok===false){ toast(j.message); return; } waitingFor = j.id; $("bt-status").textContent = "Replaying deals and fetching price history…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/backtest", f); if(j.ok===false){ toast(j.message); return; } waitingJobs.set(j.id, "bt-status"); $("bt-status").textContent = "Replaying deals and fetching price history…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   $("sc-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target).entries());
-    try { const j = await api("/api/screen", f); if(j.ok===false){ toast(j.message); return; } waitingFor = j.id; $("sc-status").textContent = "Scoring the universe…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/screen", f); if(j.ok===false){ toast(j.message); return; } waitingJobs.set(j.id, "sc-status"); $("sc-status").textContent = "Scoring the universe…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   let side = "buy";
@@ -1716,13 +1727,13 @@
   $("sl-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const body = {universe: $("sl-universe").value, years: Number($("sl-years").value), horizons: "5,20,60"};
-    try { const j = await api("/api/signal-lab", body); if(j.ok===false){ toast(j.message); return; } waitingFor = j.id; $("sl-status").textContent = "Loading price history and testing every signal…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/signal-lab", body); if(j.ok===false){ toast(j.message); return; } waitingJobs.set(j.id, "sl-status"); $("sl-status").textContent = "Loading price history and testing every signal…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   $("fb-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const body = {universe: $("sc-universe").value, years: Number($("fb-years").value), top: Number($("fb-top").value)};
-    try { const j = await api("/api/factor-backtest", body); if(j.ok===false){ toast(j.message); return; } waitingFor = j.id; $("fb-status").textContent = "Fetching history for the universe and simulating monthly rebalances…"; await refresh(); pollWhileBusy(); }
+    try { const j = await api("/api/factor-backtest", body); if(j.ok===false){ toast(j.message); return; } waitingJobs.set(j.id, "fb-status"); $("fb-status").textContent = "Fetching history for the universe and simulating monthly rebalances…"; await refresh(); pollWhileBusy(); }
     catch(e){ toast(e.message); }
   });
   function redrawCharts(){   // after a resize, or when a tab that was hidden (no width) is shown

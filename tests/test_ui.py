@@ -380,7 +380,7 @@ def test_refused_job_is_not_recorded_and_names_the_running_one(server, monkeypat
     assert status == 202 and j["ok"] is None
     _, st = _get(base + "/api/state")
     assert st["busy"] and st["running"]["label"] == "The factor screen"
-    status, refused = _post(base + "/api/signal-lab", {"universe": "NIFTY50", "years": 3, "horizons": "5"})
+    status, refused = _post(base + "/api/screen", {"universe": "NIFTY50", "top": 5})   # the same tool twice; a different research tool would run alongside
     assert refused["ok"] is False and refused["message"].startswith("The factor screen is still running")
     release.set()
     for _ in range(50):
@@ -756,7 +756,8 @@ def test_job_starters_claim_the_slot_under_the_lock(settings):
             return real.__exit__(*a)
 
     app._slot_lock = Spy()
-    app.busy = True  # refused straight away, but only after taking the lock
+    from trading_agent.ui import Job
+    app._active["replay_step"] = Job(id=1, kind="replay_step")  # an exclusive job: refused straight away, but only after taking the lock
     for start in (lambda: app.start_backtest("x", 30, (5,), 50.0), lambda: app.start_screen("NIFTY50", 5),
                   lambda: app.start_factor_backtest("NIFTY50", 5, 1), lambda: app.start_signal_lab("NIFTY50", 1, [5])):
         held.clear()

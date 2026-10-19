@@ -154,7 +154,8 @@ class YahooFundamentals:
             return {"error": f"{type(e).__name__}: {e}"}
         if path:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(out), encoding="utf-8")
+            from .prices import atomic_write_text
+            atomic_write_text(path, json.dumps(out))
         return out
 
 
