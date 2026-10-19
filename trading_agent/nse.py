@@ -488,6 +488,22 @@ class NSEClient:
         out.sort(key=lambda a: a["at"], reverse=True)
         return out[:limit]
 
+    def bse_announcements(self, symbol: str, limit: int = 20) -> list[dict[str, Any]]:
+        """A company's own BSE filings, newest first, for an NSE symbol or a BSE-only <scrip code>.BO. The NSE symbol is
+        mapped to its BSE scrip code by ISIN (bse.ScripResolver.code_for). LookupError says why when there are none to
+        read: BSE switched off, or the company not found on BSE."""
+        sym = str(symbol or "").strip().upper()
+        bse = getattr(self, "bse", None)
+        if bse is None:
+            raise LookupError("BSE is switched off (Settings, Investors: Also read BSE bulk and block deals)")
+        if sym.endswith(".BO"):
+            return list(bse.announcements(sym, limit=limit))
+        resolver = getattr(bse, "resolver", None)
+        code = resolver.code_for(sym) if resolver is not None and hasattr(resolver, "code_for") else None
+        if not code:
+            raise LookupError(f"{sym} was not found on BSE")
+        return list(bse.announcements(f"{code}.BO", limit=limit))
+
     def shareholding(self, symbol: str, quarters: int = 5) -> list[dict[str, Any]]:
         """Shareholding pattern, newest quarter first (at most ``quarters``), from NSE's corporate shareholding endpoint
         through this client (so the breaker and back-off apply). Raises on any failure: the caller says "unavailable"."""

@@ -186,3 +186,32 @@ def test_insider_download_cap_per_run(tmp_path):
     c.insider_trades(10, end=date(2026, 10, 9))
     assert len([u for _, u, _ in sess.calls if u.endswith(".xml")]) == 3
     assert sleeps == [0.25, 0.25]  # pause between downloads, not before the first
+
+
+# --- BSE announcements for an NSE-listed company (the stock page's BSE switch) ---------------------------------------
+class _Resolver:
+    def code_for(self, sym):
+        return {"TATASTEEL": "500470"}.get(sym)
+
+
+class _Bse:
+    def __init__(self):
+        self.resolver, self.asked = _Resolver(), []
+
+    def announcements(self, symbol, limit=20):
+        self.asked.append(symbol)
+        return [{"symbol": symbol, "at": "2026-10-16 18:00", "category": "Board Meeting", "text": "Results on 27 Oct"}]
+
+
+def test_bse_announcements_map_the_nse_symbol_to_its_scrip_code():
+    c = NSEClient(session=FakeSession({}))
+    c.bse = _Bse()
+    rows = c.bse_announcements("tatasteel")
+    assert c.bse.asked == ["500470.BO"] and rows[0]["category"] == "Board Meeting"
+    c.bse_announcements("543287.BO")                       # a BSE-only stock goes straight through
+    assert c.bse.asked[-1] == "543287.BO"
+    with pytest.raises(LookupError, match="not found on BSE"):
+        c.bse_announcements("NOPE")
+    c.bse = None
+    with pytest.raises(LookupError, match="switched off"):
+        c.bse_announcements("TATASTEEL")

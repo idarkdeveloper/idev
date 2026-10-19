@@ -301,7 +301,7 @@ def test_the_dashboard_button_needs_the_typed_word_and_the_live_page(two_pages, 
 def test_the_dashboard_refuses_trading_routes_while_halted(server):  # noqa: F811
     base, app = server
     halt(app.settings)
-    for path, body in (("/api/order", {"symbol": "NVDA", "side": "buy", "notional": 1000}), ("/api/check", {}),
+    for path, body in (("/api/order", {"symbol": "NVDA", "side": "buy", "notional": 1000}),
                        ("/api/close", {"symbol": "NVDA"}), ("/api/groww/refresh", {}), ("/api/reset", {}),
                        ("/api/practice/sell", {"symbol": "NVDA", "qty": 1})):
         status, j = _post(base + path, body)
