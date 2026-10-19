@@ -14,6 +14,7 @@
 <script>(function(){var d=document.documentElement,c="auto",t;try{var v=localStorage.getItem("theme");if(v==="dark"||v==="light")c=v}catch(e){}t=c;if(c==="auto"){try{t=matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"}catch(e){t="dark"}}d.dataset.theme=t;d.dataset.themeChoice=c;try{if(localStorage.getItem("liveDensity")==="compact")d.dataset.density="compact";if(localStorage.getItem("liveLayout")==="sections")d.dataset.layout="sections"}catch(e){}})();</script>
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/nocturne.css">
+<link rel="stylesheet" href="/static/voice.css">
 </head>
 <body>
 <header>
@@ -188,6 +189,7 @@
       <div class="cardhead lk-head"><h2>Look up a stock</h2>
         <form id="lk-form" class="lk-form" role="search"><select id="lk-market" aria-label="Market" title="India, or a US, UK or Japan stock to view"><option value="IN">India</option><option value="US">US</option><option value="UK">UK</option><option value="JP">Japan</option></select><input id="lk-ticker" autocomplete="off" aria-label="Ticker or company name" placeholder="Ticker or company name, e.g. Tata Steel"><button type="submit" class="small">Check</button></form></div>
       <div class="cardbody lk-body" id="lk-result" aria-live="polite"><div class="sub">Price, the agent's checklist and a chart. "Open full view" adds fundamentals, financials, shareholding, technicals and news.</div></div>
+      <div id="lk-ask"></div>
     </div>
     <div class="card" data-anchor="track-record">
       <div class="cardhead"><h2>Claude's track record</h2><span class="sub">each call vs the index afterwards</span><button type="button" class="small" id="scd-run" style="margin-left:auto">Refresh</button></div>
@@ -415,6 +417,7 @@
 <script src="/static/common.js"></script>
 <script src="/static/palette.js"></script>
 <script src="/static/ask.js"></script>
+<script src="/static/voice.js"></script>
 <script src="/static/stockpage.js"></script>
 <script src="/static/lightweight-charts.js"></script>
 <script>
@@ -1713,7 +1716,7 @@
     closeDrawer(); palHost[t.op](t.symbol);
   }
   const stockOpts = (extra) => Object.assign({mode: MODE, brokerName: "Groww", context: () => ({regime: S && S.regime, screen: S && S.screen}), holding: growwHolding,
-    onPractice: practiceOrder, onLoaded: (r) => { curStock = TA.foreignMarket(r.ticker) ? String(r.ticker) : String(r.ticker).split(".")[0]; syncUrl(); lkSeq++; renderLookupCard(r); $("lk-ticker").value = r.ticker;
+    onPractice: practiceOrder, onLoaded: (r) => { curStock = TA.foreignMarket(r.ticker) ? String(r.ticker) : String(r.ticker).split(".")[0]; syncUrl(); if(TA.voice && !r.view_only) TA.voice.setScope(curStock); lkSeq++; renderLookupCard(r); $("lk-ticker").value = r.ticker;
       $("sp-modal-name").textContent = r.name || r.ticker; $("sp-modal-px").textContent = String(r.ticker) + (r.price != null ? " · " + TA.px(r.price, r.currency) : "");
       $("sp-modal-foot").textContent = "Prices from Yahoo Finance (delayed). Read-only: nothing here places an order; " + (r.view_only ? "US, UK and Japan stocks are for viewing only." : "Practice buy and sell only open the practice form."); }}, extra || {});
   const CK = {pass: ["✓", "passes"], warn: ["!", "needs a look"], fail: ["✕", "fails"]};

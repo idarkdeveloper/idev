@@ -299,7 +299,31 @@ def ask_ollama(settings: Any, text: str, session: Any = None) -> dict[str, Any] 
         return None
 
 
-def interpret(text: str, search: Callable[..., list[dict[str, Any]]], settings: Any, *, use_ollama: bool = True, session: Any = None) -> dict[str, Any]:
+def _scoped(text: str, ticker: str, parsed: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The answer when the question was asked on one stock's page ("news", "show the chart", "details"): the rules read the
+    sentence for what to do and ``ticker`` (already validated) is the stock. A sentence that names another company is left to
+    the normal rules."""
+    sym = _usable(ticker)
+    if not sym:
+        return None
+    t = _norm(text)
+    kind = parsed["intent"] if parsed else None
+    scope = (parsed or {}).get("args", {}).get("scope")
+    if kind not in (None, "open_stock", "open_chart", "open_size", "news_today") or (kind == "news_today" and scope == "stock"):
+        return None
+    if kind in ("open_stock", "open_chart", "open_size") and parsed and parsed["args"].get("query"):
+        return None
+    if re.search(r"\b(?:news|headlines?|updates?)\b", t) and not re.search(r"\bmarkets?\b", t):
+        return {"intent": "news_today", "args": {"scope": "stock", "ticker": sym, "name": ""}, "say": f"Reading the news on {sym}.", "via": "rules"}
+    intent = ("open_chart" if re.search(r"\b(?:chart|graph|candles?)\b", t) else "open_size" if re.search(r"\bposition size\b|\bsizing\b|\bsize\b", t)
+              else "open_stock" if re.search(r"\b(?:detail|details|info|information|about|open|show|look|tell|price|full view)\b", t) else None)
+    if not intent:
+        return None
+    return {"intent": intent, "args": {"ticker": sym, "name": "", "alternatives": []}, "say": _say_stock(intent, sym), "via": "rules"}
+
+
+def interpret(text: str, search: Callable[..., list[dict[str, Any]]], settings: Any, *, use_ollama: bool = True, session: Any = None,
+              ticker: str | None = None) -> dict[str, Any]:
     """The whole thing: {"intent", "args", "say", "via"}. Order words are refused first; rules next; Ollama last."""
     text = str(text or "").strip()
     if not text:
@@ -308,6 +332,10 @@ def interpret(text: str, search: Callable[..., list[dict[str, Any]]], settings: 
         raise ValueError(f"say or type at most {MAX_TEXT} characters")
     parsed = parse_rules(text)
     via = "rules"
+    if ticker and (not parsed or parsed["intent"] not in ("refused", "unknown")):
+        scoped = _scoped(text, ticker, parsed)
+        if scoped:
+            return scoped
     if parsed is None:
         if order_request(text):
             parsed = {"intent": "refused", "args": {}}

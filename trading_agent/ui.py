@@ -56,6 +56,8 @@ STATIC_FILES = {"/static/nocturne.css": ("nocturne.css", "text/css; charset=utf-
                 "/static/palette.js": ("palette.js", "text/javascript; charset=utf-8"),
                 "/static/screener.js": ("screener.js", "text/javascript; charset=utf-8"),
                 "/static/ask.js": ("ask.js", "text/javascript; charset=utf-8"),
+                "/static/voice.js": ("voice.js", "text/javascript; charset=utf-8"),
+                "/static/voice.css": ("voice.css", "text/css; charset=utf-8"),
                 "/static/stockpage.js": ("stockpage.js", "text/javascript; charset=utf-8"),
                 # TradingView Lightweight Charts v5.2.1 (Apache 2.0), vendored so the page needs no CDN.
                 "/static/lightweight-charts.js": ("vendor/lightweight-charts.standalone.production.js",
@@ -502,7 +504,7 @@ class App:
         return self._research_warm
 
     # -- Ask: sentences to read-only actions -------------------------------------
-    def ask(self, text: Any, client: str = "") -> dict[str, Any]:
+    def ask(self, text: Any, client: str = "", ticker: Any = None) -> dict[str, Any]:
         """POST /api/ask {"text"}: {"intent", "args", "say", "via"} (see ask.py). Read-only: opens pages, reads the news."""
         from . import ask as ask_mod
         s = self.settings
@@ -516,7 +518,13 @@ class App:
                 root._ask_limit = ask_mod.RateLimit(getattr(s, "ask_rate_per_min", 30))
         if not root._ask_limit.allow(client or "-"):
             raise ask_mod.RateLimited("Too many questions in a minute; wait a little.")
-        out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)))
+        hint = None
+        if ticker not in (None, ""):   # the stock whose page the question was asked on (optional; checked like every ticker)
+            if not isinstance(ticker, str):
+                raise ValueError("ticker must be a string")
+            from .nse import check_ticker
+            hint = check_ticker(ticker)
+        out = ask_mod.interpret(text, self.search, s, use_ollama=bool(getattr(s, "ask_ollama", True)), ticker=hint)
         if out["intent"] == "portfolio_summary":   # real numbers from the dashboard's own holdings, fixed sentences (ask.compose_portfolio)
             out.update(ask_mod.compose_portfolio(out["args"]["topic"], self._portfolio_figures()))
         log.info("ask: intent=%s via=%s", out["intent"], out["via"])
@@ -2475,6 +2483,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
         index_html = index_html.replace("<body>", f'<body data-mode="demo"{sample}>', 1)
     replay_html = (resources.files("trading_agent") / "ui" / "replay.html").read_text(encoding="utf-8")
     screener_html = (resources.files("trading_agent") / "ui" / "screener.html").read_text(encoding="utf-8")
+    if not (getattr(app.settings, "voice_ui", True) and getattr(app.settings, "ask_enabled", True)):   # VOICE_UI=false: the bar is not rendered
+        strip = lambda h: h.replace('<link rel="stylesheet" href="/static/voice.css">\n', "").replace('<script src="/static/voice.js"></script>\n', "")  # noqa: E731
+        index_html, demo_html, replay_html, screener_html = strip(index_html), strip(demo_html), strip(replay_html), strip(screener_html)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "trading-agent-ui/1"
@@ -2814,7 +2825,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if path == "/api/ask":
                     from .ask import RateLimited
                     try:
-                        self._json(app.ask(body.get("text"), self.client_address[0]))
+                        self._json(app.ask(body.get("text"), self.client_address[0], body.get("ticker", body.get("scope_ticker"))))
                     except RateLimited as e:
                         self._json({"error": str(e)}, HTTPStatus.TOO_MANY_REQUESTS)
                 elif path == "/api/kill-switch":
