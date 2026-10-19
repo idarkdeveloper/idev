@@ -1,5 +1,5 @@
 [tool.ruff]
-target-version = "py311"
+target-version = "py314"  # ruff's newest stable target; it runs on 3.15 (py315 is still a preview there)
 # The code base is written to ~120 columns; E501 is not enabled and no formatter is run.
 line-length = 120
 extend-exclude = [".venv", "deploy"]
@@ -18,7 +18,7 @@ ignore = [
 "tests/**" = ["B011", "B017", "B018", "B007", "BLE001", "F811"]  # F811: pytest fixtures imported by name
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.15"
 ignore_missing_imports = true
 check_untyped_defs = false
 files = ["trading_agent"]

@@ -134,7 +134,7 @@ python -m pytest -q -n auto      # 1,949 offline tests: fake broker, fake NSE, f
 ruff check trading_agent tests && mypy trading_agent
 ```
 
-CI runs the tests on Python 3.12 and 3.15, lint, types and both demo runs on every push.
+CI runs the tests on Python 3.15, lint, types and both demo runs on every push.
 
 ---
 

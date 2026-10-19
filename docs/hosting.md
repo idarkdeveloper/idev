@@ -91,7 +91,7 @@ message instead of a rejection from Groww. With `GROWW_ALLOWED_IP` unset, nothin
 
 ## Upgrading Python (to 3.15)
 
-The code is tested on Python 3.12 and 3.15 (CI runs both); 3.15 is the target. Every dependency ships ready-made
+The code is tested on Python 3.15 only (CI no longer runs 3.12): a machine still on an older Python must be upgraded. Every dependency ships ready-made
 3.15 builds for the server (ARM or x86) and for Windows.
 
 **Server.** From the repo folder, after the usual `git pull`:
