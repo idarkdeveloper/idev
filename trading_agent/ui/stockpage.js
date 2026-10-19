@@ -5,7 +5,7 @@
 //
 // Safety: the Practice buy / Practice sell buttons never send an order. They call opts.onPractice(side, symbol) and the
 // host page opens the existing practice order form pre-filled (the Live page goes to /demo?buy=SYM / ?sell=SYM). The
-// only server reads here are GETs: /api/lookup, /api/stock, /api/candles, /api/news.
+// only server reads here are GETs: /api/lookup, /api/stock, /api/candles, /api/news, /api/announcements.
 (function(){
   "use strict";
 
@@ -129,7 +129,7 @@
     const id = "sp" + (++uid);
     const phone = () => typeof matchMedia === "function" && matchMedia("(max-width: 700px)").matches;
     const st = {ticker: "", r: null, stock: null, stockError: null, news: null, tab: "overview", fin: "quarterly", finIdx: null, shIdx: 0,
-                exchange: opts.exchange === "BSE" ? "BSE" : "NSE", open: {}};
+                exchange: opts.exchange === "BSE" ? "BSE" : "NSE", open: {}, bseOnly: false, bseAnns: undefined};
     let seq = 0, stockSeq = 0, chartCtl = null, dead = false, root = null;
 
     const price = () => {
@@ -331,12 +331,23 @@
         : "Labels come from a language model and can be wrong.";
       return `<h3 style="margin-top:6px">News, last 7 days</h3>${rows || `<div class="sub">none found</div>`}${errs}${note ? `<div class="sub" style="font-size:12px">${esc(note)}</div>` : ""}`;
     }
+    // The company's own BSE filings, read once per stock when the switch first shows BSE (a BSE-only stock's lookup has them).
+    function loadBseAnns(mySeq){
+      if(st.exchange !== "BSE" || st.bseOnly || st.bseAnns !== undefined || !st.r) return;
+      st.bseAnns = null;   // reading
+      api("/api/announcements?ticker=" + encodeURIComponent(st.ticker) + "&exchange=BSE")
+        .then(j => { if(mySeq !== seq || dead) return; st.bseAnns = {rows: j.announcements || [], error: j.error || null}; paintNews(); })
+        .catch(e => { if(mySeq !== seq || dead) return; st.bseAnns = {rows: [], error: e.message || "BSE announcements unavailable"}; paintNews(); });
+    }
     function newsPanelHtml(){
       const r = st.r; if(!r) return loading("news");
-      const anns = r.announcements && r.announcements.length
-        ? r.announcements.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${TA.annChip(a)}${a.file && safeUrl(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener noreferrer">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
-        : `<div class="sub">${esc(r.announcements_error || "none found")}</div>`;
-      return `<h3 style="margin-top:6px">NSE announcements</h3>${anns}<div class="sp-news">${newsHtml(st.news)}</div>`;
+      const bse = st.exchange === "BSE" && !st.bseOnly, b = st.bseAnns;
+      const list = bse ? (b ? b.rows : []) : (r.announcements || []);
+      const why = bse ? (b ? b.error : null) : r.announcements_error;
+      const anns = bse && !b ? `<div class="sub">Reading BSE filings…</div>`
+        : list.length ? list.map(a => `<div class="ann"><div class="meta">${esc(a.at)} · ${esc(a.category)}</div><div>${TA.annChip(a)}${a.file && safeUrl(a.file) ? `<a href="${esc(a.file)}" target="_blank" rel="noopener noreferrer">${esc(a.text || a.category)}</a>` : esc(a.text || a.category)}</div></div>`).join("")
+        : `<div class="sub">${esc(why || "none found")}</div>`;
+      return `<h3 style="margin-top:6px">${st.exchange === "BSE" ? "BSE" : "NSE"} announcements</h3>${anns}<div class="sp-news">${newsHtml(st.news)}</div>`;
     }
     function paintNews(){ const e = root.querySelector('[data-panel="news"]'); if(e) e.innerHTML = newsPanelHtml(); }
 
@@ -413,6 +424,7 @@
       const my = ++seq; stockSeq++;
       if(chartCtl){ chartCtl.destroy(); chartCtl = null; }   // chart.remove() before the page is redrawn
       st.ticker = String(t || "").trim().toUpperCase(); st.r = null; st.stock = null; st.stockError = null; st.news = null; st.tab = "overview";
+      st.bseOnly = false; st.bseAnns = undefined;
       st.exchange = "NSE";   // a new stock starts on NSE (a ".BO" code on BSE); the switch is per stock
       if(/\.BO$/i.test(st.ticker)){ st.exchange = "BSE"; st.ticker = st.ticker.replace(/\.BO$/i, ""); }
       root.innerHTML = `<div class="sub">Looking up ${esc(st.ticker)}…</div>`;
@@ -421,8 +433,8 @@
       catch(e){ if(my === seq && !dead) root.innerHTML = `<span class="sub">${esc(e.message)}</span>`; return; }
       if(my !== seq || dead) return;
       st.r = r; st.ticker = String(r.ticker || st.ticker).toUpperCase().replace(/\.BO$/i, "");
-      if(/\.BO$/i.test(String(r.ticker || ""))) st.exchange = "BSE";
-      shell(); mountChart(r, my);
+      if(/\.BO$/i.test(String(r.ticker || ""))){ st.exchange = "BSE"; st.bseOnly = true; }   // its lookup announcements are BSE's already
+      shell(); mountChart(r, my); loadBseAnns(my);
       if(opts.onLoaded) { try { opts.onLoaded(r); } catch(e){} }
       api("/api/news?ticker=" + encodeURIComponent(st.ticker)).then(n => {
         if(my !== seq || dead) return;
@@ -435,7 +447,7 @@
       if(dead || !st.r || x === st.exchange) return;
       st.exchange = x;
       if(chartCtl) chartCtl.setExchange(x);
-      loadStock(seq);
+      loadStock(seq); loadBseAnns(seq); paintNews();
     }
 
     // ---- events (one set of listeners on the root; nothing global) ----

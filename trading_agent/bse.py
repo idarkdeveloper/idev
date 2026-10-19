@@ -317,6 +317,7 @@ class ScripResolver:
         self._isin_sym: dict[str, str] = {}
         self._sym_isin: dict[str, str] = {}
         self._name_sym: dict[str, str] = {}
+        self._isin_code: dict[str, str] = {}
         self._memo: dict[tuple[str, str], str | None] = {}
 
     def _load(self) -> None:
@@ -334,6 +335,8 @@ class ScripResolver:
                     code = (r.get("exchange_token") or "").strip()
                     if isin:
                         self._code_isin[code] = isin
+                        if code:
+                            self._isin_code.setdefault(isin, code)
                     self._code_name[code] = r.get("name") or ""
                 elif exch == "NSE" and (r.get("series") or "EQ").upper() in ("EQ", "BE", "BZ", "SM", "ST"):
                     sym = (r.get("trading_symbol") or "").strip().upper()
@@ -362,6 +365,14 @@ class ScripResolver:
             sym = self._name_sym.get(_company_key(self._code_name[code]))
         self._memo[key] = sym
         return sym
+
+    def code_for(self, symbol: str) -> str | None:
+        """An NSE symbol's BSE scrip code, through the ISIN both listings share; None when it is not on BSE (or the
+        instrument list is unavailable). Same list, same no-guessing rule as the other direction."""
+        if not self._loaded:
+            self._load()
+        isin = self._sym_isin.get((symbol or "").strip().upper())
+        return self._isin_code.get(isin) if isin else None
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +583,12 @@ class BSEClient:
     def announcements(self, symbol: str, limit: int = 20) -> list[dict[str, Any]]:
         """A BSE-only stock's own filings (bse_announcements.BSEAnnouncements), newest first."""
         return self._announcements.announcements(symbol, limit=limit)
+
+    @property
+    def announcements_note(self) -> str | None:
+        """Why the last announcements read may be short (BSE's API refused this server, so only its newest-filings
+        feed was read), or None."""
+        return getattr(self._announcements, "last_error", None)
 
     def deals(self, start: date, end: date, kinds: Iterable[str] = ("bulk", "block"),
               investors: Iterable[str] | None = None) -> list[DisclosedTrade]:

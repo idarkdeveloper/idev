@@ -423,6 +423,9 @@ def test_resolver_is_exact_only_never_fuzzy():
     assert r("500999", "FOOBSE") == "FOOIND"           # exact normalised company name
     assert r("544954", "ROOPA") is None                # BSE only
     assert r("999999", "ITC") is None                  # unknown code: an ID alone proves nothing
+    # the other direction, for BSE announcements: an NSE symbol -> its BSE scrip code, by the ISIN only
+    assert r.code_for("itc") == "500875"
+    assert r.code_for("FOOIND") is None and r.code_for("CLASH") is None and r.code_for("NOPE") is None
 
 
 def test_client_names_are_capped_and_stripped_of_control_characters():

@@ -837,6 +837,28 @@ class App:
                 self._candle_cache[key] = (now, bars)
         return bars, error
 
+    def announcements(self, ticker: str, exchange: str = "NSE") -> dict[str, Any]:
+        """A stock's corporate announcements from one exchange, for the stock page's NSE / BSE switch. Read-only.
+        BSE reads the company's own BSE filings (the NSE symbol mapped to its scrip code by ISIN)."""
+        ticker = self.resolve(ticker)[0].upper()
+        exch = "BSE" if exchange.upper() == "BSE" or ticker.endswith(".BO") else "NSE"
+        out: dict[str, Any] = {"ticker": ticker, "exchange": exch, "announcements": [], "error": None}
+        data = self.data
+        try:
+            if exch == "BSE":
+                if data is None or not hasattr(data, "bse_announcements"):
+                    raise LookupError("BSE announcements need the NSE data source")
+                out["announcements"] = data.bse_announcements(ticker, limit=8)
+                note = getattr(getattr(data, "bse", None), "announcements_note", None)
+                if not out["announcements"] and isinstance(note, str) and "refused" in note:
+                    out["error"] = ("none in BSE's newest-filings feed; BSE's full list refused this server, "
+                                    "so older filings show on the NSE list")
+            elif data is not None and hasattr(data, "announcements"):
+                out["announcements"] = data.announcements(ticker, limit=8)
+        except Exception as e:  # noqa: BLE001 - shown on the page as the reason there are none
+            out["error"] = str(e) or "announcements unavailable"
+        return out
+
     def candles(self, ticker: str, range_key: str, exchange: str = "NSE") -> dict[str, Any]:
         """Candles plus indicators for the lookup chart, from the same price source the lookup uses. Read-only. Daily
         ranges slice a cached 5-year series (All uses the full history); 1D is the latest session in 5-minute bars and
@@ -2079,6 +2101,14 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     found = app.lookup(ticker)
                     app.note_bar(found)
                     self._json(found)
+            elif path == "/api/announcements":
+                from urllib.parse import parse_qs
+                q = parse_qs(urlparse(self.path).query)
+                ticker = (q.get("ticker") or [""])[0].strip()
+                if not ticker or len(ticker) > MAX_LOOKUP_CHARS or not ticker.isprintable():
+                    self._json({"error": "ticker required"}, HTTPStatus.BAD_REQUEST)
+                else:
+                    self._json(app.announcements(ticker, (q.get("exchange") or ["NSE"])[0]))
             elif path == "/api/candles":
                 from urllib.parse import parse_qs
 

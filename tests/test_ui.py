@@ -1581,3 +1581,46 @@ def test_settings_is_one_gear_button_with_titled_sections():
     # Appearance (theme, table rows, layout) lives in the dialog, outside the part Demo hides
     assert dlg.index('data-theme-choice="dark"') < dlg.index('id="set-live"')
     assert dlg.index('id="f-tg-token"') > dlg.index('id="set-telegram"') > dlg.index('id="set-live"')
+
+
+def test_announcements_endpoint_reads_the_chosen_exchange(server):
+    base, app = server
+
+    class Data:
+        bse_asked: list = []
+
+        def announcements(self, ticker, limit=20):
+            return [{"at": "2026-10-16 17:00", "category": "Outcome", "text": "NSE filing"}]
+
+        def bse_announcements(self, ticker, limit=20):
+            self.bse_asked.append(ticker)
+            if ticker == "NOPE":
+                raise LookupError("NOPE was not found on BSE")
+            return [{"at": "2026-10-16 18:00", "category": "Board Meeting", "text": "BSE filing"}]
+
+    app._data = Data()
+    status, j = _get(base + "/api/announcements?ticker=TATASTEEL&exchange=BSE")
+    assert status == 200 and j["exchange"] == "BSE" and j["announcements"][0]["text"] == "BSE filing" and j["error"] is None
+    _, j = _get(base + "/api/announcements?ticker=TATASTEEL")
+    assert j["exchange"] == "NSE" and j["announcements"][0]["text"] == "NSE filing"
+    _, j = _get(base + "/api/announcements?ticker=NOPE&exchange=BSE")
+    assert j["announcements"] == [] and "not found on BSE" in j["error"]
+    status, _ = _get(base + "/api/announcements")
+    assert status == 400
+
+
+def test_an_empty_bse_list_says_when_bse_refused_the_server(server):
+    base, app = server
+
+    class Bse:
+        announcements_note = "api: BSEAnnouncementError: BSE announcements API refused this server (403); using the RSS feed"
+
+    class Data:
+        bse = Bse()
+
+        def bse_announcements(self, ticker, limit=20):
+            return []
+
+    app._data = Data()
+    _, j = _get(base + "/api/announcements?ticker=TATASTEEL&exchange=BSE")
+    assert j["announcements"] == [] and "refused this server" in j["error"]
