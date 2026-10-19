@@ -131,8 +131,8 @@ class YahooFundamentals:
 
     def search(self, text: str, count: int = 10) -> list[dict[str, Any]]:
         """Yahoo's symbol search for a company name or ticker: its raw ``quotes`` list. Raises on failure."""
-        r = self.session.get(SEARCH_URL, headers={"User-Agent": UA}, timeout=self.timeout,
-                             params={"q": text, "quotesCount": count, "newsCount": 0, "listsCount": 0})
+        params: dict[str, str | int] = {"q": text, "quotesCount": count, "newsCount": 0, "listsCount": 0}
+        r = self.session.get(SEARCH_URL, headers={"User-Agent": UA}, timeout=self.timeout, params=params)
         r.raise_for_status()
         quotes = (r.json() or {}).get("quotes")
         return quotes if isinstance(quotes, list) else []
