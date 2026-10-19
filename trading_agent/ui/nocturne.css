@@ -1584,4 +1584,40 @@ a.dl-deal:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--color
   .sc-cr-spark svg { width: 88px; height: 28px; margin: -3px 0; }
   .sc-metric { padding: 0 10px; font-size: 12px; line-height: 20px; }
   .sc-foot { padding: 12px; }
+
+/* Order history as trades: a summary strip, one row per trade (a table on a desktop, a card on a phone). Tokens only. */
+[data-anchor="orders"] { grid-column: 1 / -1; }
+[data-anchor="orders"] .cardhead { flex-wrap: wrap; row-gap: 6px; }
+.oh-seg { margin-left: auto; display: inline-flex; padding: 3px; border-radius: 999px; border: 1px solid var(--color-divider); background: var(--color-surface); }
+.oh-seg button { min-height: 40px; padding: 0 16px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--color-label); font-size: 14px; font-weight: 600; }
+.oh-seg button[aria-pressed="true"] { background: var(--color-accent-900); color: var(--color-text); border-color: var(--color-accent); }
+.oh-sum { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 4px 18px 10px; border: 1px solid var(--color-divider); border-radius: 12px; overflow: hidden; }
+.oh-sum[hidden] { display: none; }
+.oh-sum > div { padding: 10px 14px; border-left: 1px solid var(--color-divider); min-width: 0; }
+.oh-sum > div:first-child { border-left: 0; }
+.oh-sum span { display: block; font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--color-muted); }
+.oh-sum b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.oh-sum b.up, .oh-pl.up { color: var(--color-profit); } .oh-sum b.down, .oh-pl.down { color: var(--color-loss); }
+.oh-sum small { display: block; font-size: 12px; color: var(--color-muted); }
+.oh-table td, .oh-table th { font-variant-numeric: tabular-nums; }
+.oh-table th.num { text-align: right; }
+.oh-sub { display: block; font-size: 12px; color: var(--color-muted); }
+.oh-pl { font-weight: 700; white-space: nowrap; } .oh-pl small { display: block; font-weight: 500; font-size: 12px; }
+.oh-chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--color-divider); color: var(--color-label); white-space: nowrap; }
+.oh-chip.warn { border-color: var(--color-replay); color: var(--color-replay); } .oh-chip.open { border-color: var(--color-accent); color: var(--color-accent); }
+.oh-table td.empty { text-align: center; padding: 28px 18px; color: var(--color-muted); } .oh-table td.empty b, .oh-empty b { display: block; color: var(--color-text); margin-bottom: 4px; }
+.oh-empty { padding: 28px 18px; text-align: center; color: var(--color-muted); }
+.oh-cards { display: none; }
+@media (max-width: 700px) {
+  .oh-sum { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 4px 12px 8px; }
+  .oh-sum > div:nth-child(3) { border-left: 0; border-top: 1px solid var(--color-divider); } .oh-sum > div:nth-child(4) { border-top: 1px solid var(--color-divider); }
+  .oh-sum b { font-size: 18px; }
+  .oh-seg { margin-left: 0; width: 100%; } .oh-seg button { flex: 1 1 0; min-height: 44px; }
+  [data-anchor="orders"] .tscroll { display: none; }
+  .oh-cards { display: flex; flex-direction: column; }
+  a.oh-card { display: grid; gap: 3px; padding: 12px 14px; color: inherit; text-decoration: none; border-bottom: 1px solid var(--color-rule); min-height: 76px; }
+  a.oh-card:hover { background: var(--color-hover); }
+  .oh-c1 { display: flex; align-items: baseline; gap: 8px; } .oh-c1 .sym { font-size: 16px; font-weight: 700; } .oh-c1 .oh-pl { margin-left: auto; font-size: 15px; }
+  .oh-c2 { font-size: 13px; color: var(--color-label); font-variant-numeric: tabular-nums; }
+  .oh-c3 { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 }
