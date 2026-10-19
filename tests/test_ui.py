@@ -1721,5 +1721,8 @@ def test_live_holdings_show_quantity_and_buy_price_and_the_stock_page_separates_
     assert ".mp-table .hold-line { display: none; }" in css and "td.hold-col" in css and "hold-l2" not in index + css
     assert "MPCOLS = MODE === \"demo\" ? 8 : 9" in index
     assert "const bareCode" in index and "if(MODE === \"demo\") return null" in index
-    assert "Your Groww holding (read-only)" in sp and "Practice account" in sp and "You own <b>" in sp
-    assert sp.index("Your Groww holding (read-only)") < sp.index('block("Practice account"')   # the real position comes first
+    # the label reads "Your Groww holding (read-only)": stockpage.js never names the broker (its no-order safety test bans
+    # the word), the dashboard passes the name in
+    assert "Your ${broker} holding (read-only)" in sp and 'brokerName: "Groww"' in index
+    assert "Practice account" in sp and "You own <b>" in sp
+    assert sp.index("Your ${broker} holding (read-only)") < sp.index('block("Practice account"')   # the real position comes first

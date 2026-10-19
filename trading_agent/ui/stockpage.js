@@ -19,6 +19,7 @@
   const ratio = (v, d) => isNum(v) ? v.toFixed(d == null ? 2 : d) : "n/a";
   const crore = (cr) => !isNum(cr) ? "n/a" : Math.abs(cr) < 1 ? "₹" + cr.toFixed(2) + " Cr" : "₹" + group(Math.round(cr), 0) + " Cr";   // 1234567 -> ₹12,34,567 Cr
   const volume = (v) => isNum(v) ? group(v, 0) : "n/a";
+  const rupeesIN = rupees, signedRupeesIN = signedRupees, croreIN = crore;   // stockPage() shadows these for foreign stocks
   const tone = (v) => !isNum(v) || v === 0 ? "" : v > 0 ? "pl-profit" : "pl-loss";
   // Where a price sits between a low and a high: 0..1, or null when the range is missing or flat.
   const markerPos = (price, lo, hi) => !isNum(price) || !isNum(lo) || !isNum(hi) || !(hi > lo) ? null : Math.min(1, Math.max(0, (price - lo) / (hi - lo)));
@@ -131,6 +132,13 @@
     const st = {ticker: "", r: null, stock: null, stockError: null, news: null, tab: "overview", fin: "quarterly", finIdx: null, shIdx: 0,
                 exchange: opts.exchange === "BSE" ? "BSE" : "NSE", open: {}, bseOnly: false, bseAnns: undefined};
     let seq = 0, stockSeq = 0, chartCtl = null, dead = false, root = null;
+    // A US, UK or Japan stock (view only, markets.py): money in its own currency, no Indian checks, no practice orders.
+    const foreign = () => !!((st.r && st.r.view_only) || (st.stock && st.stock.foreign));
+    const cur = () => (st.stock && st.stock.currency) || (st.r && st.r.currency) || "INR";
+    const rupees = (v, d) => foreign() ? TA.px(v, cur(), d == null ? 2 : d) : rupeesIN(v, d);
+    const signedRupees = (v, d) => !foreign() ? signedRupeesIN(v, d) : !isNum(v) ? "n/a" : (v >= 0 ? "+" : "−") + TA.px(Math.abs(v), cur(), d == null ? 2 : d);
+    const crore = (cr) => foreign() ? (isNum(cr) ? TA.bigMoney(cr * 1e7, cur()) : "n/a") : croreIN(cr);
+    const volume = (v) => !isNum(v) ? "n/a" : foreign() ? Number(v).toLocaleString("en-US", {maximumFractionDigits: 0}) : group(v, 0);
 
     const price = () => {
       const p = st.stock && st.stock.price;
@@ -148,11 +156,11 @@
       const name = (r && r.name) || (d && d.name) || st.ticker;
       const chg = p && isNum(p.change) ? p.change : null, chgPct = p && isNum(p.change_pct) ? p.change_pct : null;
       const cls = tone(chg);
-      const exch = ["NSE", "BSE"].map(x => `<button type="button" data-exch="${x}" aria-pressed="${x === st.exchange}" class="${x === st.exchange ? "on" : ""}">${x}</button>`).join("");
+      const exch = foreign() ? "" : ["NSE", "BSE"].map(x => `<button type="button" data-exch="${x}" aria-pressed="${x === st.exchange}" class="${x === st.exchange ? "on" : ""}">${x}</button>`).join("");
       return `<div class="sp-name">${esc(name)}</div>
         ${r && r.matched_from ? `<div class="sub" style="font-size:12px">Matched "${esc(r.matched_from)}" to ${esc(st.ticker)}</div>` : ""}
-        <div class="sp-code row" style="gap:8px"><span class="sp-codetxt">${esc(st.ticker)} · ${st.exchange}</span>
-          <span class="seg sp-exch" role="group" aria-label="Exchange">${exch}</span>
+        <div class="sp-code row" style="gap:8px"><span class="sp-codetxt">${esc(st.ticker)} · ${esc(foreign() ? (r && r.exchange) || "" : st.exchange)}</span>
+          ${foreign() ? `<span class="pill" style="font-size:11px">${esc((r && r.market_name) || "")} · view only</span>` : `<span class="seg sp-exch" role="group" aria-label="Exchange">${exch}</span>`}
           ${r && r.band ? `<span class="pill ${r.band_skip ? "bad" : ""}" title="${esc(r.band_note || "NSE daily price band")}" style="font-size:11px">Band ${esc(bandText(r.band))}</span>` : ""}
           ${(r && r.filter_flags || []).map(f => `<span class="pill ${r.filter_block ? "bad" : "warn"}" title="${esc((r.filter_reasons || []).join("; ") || "Indian-market filter flag")}" style="font-size:11px">${esc(f)}</span>`).join("")}
           ${r && r.momentum ? `<span class="pill ${r.momentum.verdict === "strong" ? "ok" : r.momentum.verdict === "weak" ? "bad" : ""}">${esc(r.momentum.verdict || "n/a")} momentum</span>` : ""}</div>
@@ -163,6 +171,7 @@
         <div class="sp-actions">${actionsHtml()}</div>`;
     }
     function actionsHtml(){
+      if(foreign()) return `<span class="sub">View only: no orders for US, UK or Japan stocks.</span>`;
       return `<button type="button" class="small" data-practice="sell">Practice sell</button><button type="button" class="small primary" data-practice="buy">Practice buy</button>`;
     }
     function paintHead(){ const e = root.querySelector(".sp-head"); if(e) e.innerHTML = headHtml(); }
@@ -179,8 +188,9 @@
         ${f.stop != null ? kv("Stop", rupees(f.stop) + (f.stopLabel ? " (" + f.stopLabel + ")" : "")) : (f.stopType === "none" ? kv("Stop", "none set") : "")}</div></div>`;
       const real = opts.mode !== "demo" && opts.holding ? holdingFigures(opts.holding(st.ticker), price()) : null;
       const practice = holdingFigures(r.position, price());
-      return (real ? block("Your Groww holding (read-only)", "Your real account, from Groww. Nothing here can change it.", real, true) : "")
-        + (practice ? block("Practice account", "Practice money only; not your Groww account.", practice) : "");
+      const broker = opts.brokerName || "broker";   // the page passes the broker's name: this file never names it
+      return (real ? block(`Your ${broker} holding (read-only)`, `Your real account, from ${broker}. Nothing here can change it.`, real, true) : "")
+        + (practice ? block("Practice account", `Practice money only; not your ${broker} account.`, practice) : "");
     }
     function paintHolding(){ const e = root.querySelector(".sp-holdbox"); if(e) e.innerHTML = holdingHtml(); }
 
@@ -202,9 +212,11 @@
       const p = d.price || {}, w = d.week52 || {}, last = price();
       return rangeRow("Today's low", "Today's high", p.day_low, p.day_high, last, "Today's range")
         + rangeRow("52 week low", "52 week high", w.low, w.high, last, "52-week range")
-        + `<div class="sp-kv">${kv("Open", rupees(p.open))}${kv("Prev. close", rupees(p.prev_close))}${kv("Volume", volume(p.volume))}
+        + (foreign() ? `<div class="sp-kv">${kv("Open", rupees(p.open))}${kv("Prev. close", rupees(p.prev_close))}${kv("Volume", volume(p.volume))}</div>
+          <div class="sub" style="font-size:12px">Prices in ${esc(cur() === "GBp" ? "pence (p)" : cur())}, from Yahoo Finance; may be delayed.</div>` : "")
+        + (foreign() ? "" : `<div class="sp-kv">${kv("Open", rupees(p.open))}${kv("Prev. close", rupees(p.prev_close))}${kv("Volume", volume(p.volume))}
           ${kv("Lower circuit", circuitText(d.circuit, "lower"))}${kv("Upper circuit", circuitText(d.circuit, "upper"))}</div>
-          <div class="sub" style="font-size:12px">${d.circuit && d.circuit.state === "band" ? "Circuit limits: " + esc(d.circuit.band) + " NSE price band applied to the previous close." : d.circuit && d.circuit.state === "none" ? "This stock has no NSE price band." : "NSE price band not known for this stock."}</div>`;
+          <div class="sub" style="font-size:12px">${d.circuit && d.circuit.state === "band" ? "Circuit limits: " + esc(d.circuit.band) + " NSE price band applied to the previous close." : d.circuit && d.circuit.state === "none" ? "This stock has no NSE price band." : "NSE price band not known for this stock."}</div>`);
     }
     function fundamentalsHtml(){
       const d = st.stock; if(!d) return st.stockError ? `<div class="sub">Unavailable: ${esc(st.stockError)}</div>` : loading("fundamentals");
@@ -283,14 +295,15 @@
     function overviewHtml(){
       const fund = !!(st.stock && st.stock.fund);
       const dflt = !phone();
-      return sec("checklist", "Agent's checklist", checklistHtml(), true, checklistHint())
-        + sec("insights", "Insights", insightsHtml(), dflt)
+      const fx = foreign();   // a US, UK or Japan stock: the agent's checklist, insights, shareholding and peers are Indian
+      return (fx ? "" : sec("checklist", "Agent's checklist", checklistHtml(), true, checklistHint()))
+        + (fx ? "" : sec("insights", "Insights", insightsHtml(), dflt))
         + sec("performance", "Performance", performanceHtml(), true)
         + (fund ? "" : sec("fundamentals", "Fundamentals", fundamentalsHtml(), true))
         + (fund ? "" : sec("financials", "Financial performance", financialHtml(), true))
         + sec("about", "About company", aboutHtml(), false)
-        + (fund ? "" : sec("shareholding", "Shareholding pattern", shareholdingHtml(), true))
-        + (fund ? "" : sec("similar", "Similar stocks", similarHtml(), true));
+        + (fund || fx ? "" : sec("shareholding", "Shareholding pattern", shareholdingHtml(), true))
+        + (fund || fx ? "" : sec("similar", "Similar stocks", similarHtml(), true));
     }
     function paintOverview(){ const e = root.querySelector('[data-panel="overview"]'); if(e) e.innerHTML = overviewHtml(); }
 
@@ -345,6 +358,7 @@
     }
     function newsPanelHtml(){
       const r = st.r; if(!r) return loading("news");
+      if(foreign()) return `<div class="sp-news">${newsHtml(st.news)}</div>`;
       const bse = st.exchange === "BSE" && !st.bseOnly, b = st.bseAnns;
       const list = bse ? (b ? b.rows : []) : (r.announcements || []);
       const why = bse ? (b ? b.error : null) : r.announcements_error;
@@ -381,7 +395,7 @@
     }
     function shell(){
       root.innerHTML = `<div class="sp-main"><div class="sp-head"></div><div class="sp-chartbox"></div><div class="sp-holdbox"></div></div><div class="sp-side">${tabsHtml()}</div>
-        <div class="sp-bar" role="group" aria-label="Practice orders (practice account only)"><div class="sp-bar-note sub">Practice account only</div><div class="sp-bar-btns">${actionsHtml()}</div></div>`;
+        ${foreign() ? "" : `<div class="sp-bar" role="group" aria-label="Practice orders (practice account only)"><div class="sp-bar-note sub">Practice account only</div><div class="sp-bar-btns">${actionsHtml()}</div></div>`}`;
       paintHead(); paintHolding(); paintOverview(); paintTechnicals(); paintNews();
     }
 
@@ -397,12 +411,13 @@
         if(chartCtl){ chartCtl.destroy(); chartCtl = null; }
         ck.innerHTML = "";
         TA.lineChart(ck, {x: hist.map(p => p.d), height: 170, left: 52, endLabels: false, legend: true, refs,
-          yFmt: v => TA.sym() + Math.round(v).toLocaleString("en-IN"), label: `${r.ticker} price, last year`,
+          yFmt: v => foreign() ? TA.px(v, cur(), 0) : TA.sym() + Math.round(v).toLocaleString("en-IN"), label: `${r.ticker} price, last year`,
           empty: r.history_error ? "Price history unavailable: " + r.history_error : "No price history.",
           series: [{name: "Price", color: TA.C.s1, values: hist.map(p => p.c)}, {name: "200-day average", color: TA.C.ctx, width: 1.5, values: hist.map(p => p.ma200)}]});
       };
       try {
         chartCtl = TA.stockChart(ck, {ticker: r.ticker, isCurrent: () => mySeq === seq && !dead, fallback: drawLine, exchange: st.exchange, exchangeChips: false,
+          currency: r.view_only ? r.currency : null,
           fetchCandles: (range, exch) => api("/api/candles?ticker=" + encodeURIComponent(st.ticker) + "&range=" + encodeURIComponent(range) + "&exchange=" + encodeURIComponent(exch || "NSE"))});
       } catch(e){ drawLine(e.message); }
     }

@@ -162,6 +162,33 @@ window.TA = (function(){
   }
   const rupeesShort = v => { const a = Math.abs(v); return (v < 0 ? "−" : "") + sym() + (a >= 1e7 ? (a / 1e7).toFixed(2) + " Cr" : a >= 1e5 ? (a / 1e5).toFixed(2) + " L" : Math.round(a).toLocaleString("en-IN")); };
   const inr = (v, d=0) => v == null ? "n/a" : "₹" + Number(v).toLocaleString("en-IN", {minimumFractionDigits:d, maximumFractionDigits:d});
+  // ---- foreign stocks (view only): US (AAPL.US), UK (VOD.L, priced in pence) and Japan (7203.T); see markets.py ----
+  const MARKET_SUFFIX = {US: ".US", UK: ".L", JP: ".T"};
+  const foreignMarket = (t) => { const u = String(t || "").trim().toUpperCase(); return Object.keys(MARKET_SUFFIX).find(k => u.endsWith(MARKET_SUFFIX[k]) && u.length > MARKET_SUFFIX[k].length) || null; };
+  // What a person typed, with the picked market's suffix when it has none: ("aapl", "US") -> "AAPL.US". India keeps it as typed.
+  const qualifyTicker = (t, market) => { const u = String(t || "").trim().toUpperCase(); const sfx = MARKET_SUFFIX[market]; return !u || !sfx || foreignMarket(u) || u.includes(".") ? u : u + sfx; };
+  // A price in its own currency: ₹ (INR, the default), $ (USD), pence for GBp (LSE quotes), £ (GBP), ¥ (JPY, whole yen above 100).
+  function px(v, cur, d){
+    if(v == null || !isFinite(v)) return "n/a";
+    const c = cur || "INR", n = Number(v), dd = d == null ? 2 : d;
+    if(c === "INR") return inr(n, dd);
+    const f = (loc, dec) => Math.abs(n).toLocaleString(loc, {minimumFractionDigits: dec, maximumFractionDigits: dec});
+    const neg = n < 0 ? "−" : "";
+    if(c === "USD") return neg + "$" + f("en-US", dd);
+    if(c === "GBp" || c === "GBX") return neg + f("en-GB", dd) + "p";
+    if(c === "GBP") return neg + "£" + f("en-GB", dd);
+    if(c === "JPY") return neg + "¥" + f("ja-JP", Math.abs(n) >= 100 ? 0 : Math.min(dd, 1));
+    return neg + c + " " + f("en-US", dd);
+  }
+  // A large amount (market cap, revenue) in its own currency with K/M/B/T; pence amounts are shown in pounds.
+  function bigMoney(v, cur){
+    if(v == null || !isFinite(v)) return "n/a";
+    let n = Number(v), c = cur || "INR";
+    if(c === "GBp" || c === "GBX"){ n /= 100; c = "GBP"; }
+    const s = {USD: "$", GBP: "£", JPY: "¥", INR: "₹"}[c] || c + " ", a = Math.abs(n), neg = n < 0 ? "−" : "";
+    const [div, u] = a >= 1e12 ? [1e12, "T"] : a >= 1e9 ? [1e9, "B"] : a >= 1e6 ? [1e6, "M"] : a >= 1e3 ? [1e3, "K"] : [1, ""];
+    return neg + s + (a / div).toFixed(a / div >= 100 ? 0 : a / div >= 10 ? 1 : 2) + u;
+  }
   const sinr = (v, d=0) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + inr(Math.abs(v), d);
   const spct = (v) => v == null ? "n/a" : (v >= 0 ? "+" : "−") + Math.abs(v * 100).toFixed(2) + "%";
 
@@ -694,6 +721,7 @@ window.TA = (function(){
     let chart = null, data = null, dead = false, seq = 0, colors = null, ro = null, mo = null, mq = null;
     let series = {}, byDate = new Map(), legendFor = null, savedRange = null;
     let exchange = cfg.exchange === "BSE" ? "BSE" : "NSE";
+    const cmoney = (v, d) => cfg.currency && cfg.currency !== "INR" ? px(v, cfg.currency, d) : money(v, d);   // a foreign stock's own currency
     const exchChips = cfg.exchangeChips !== false;
     host.innerHTML = `<div class="ck-controls">${exchChips ? `<div class="ck-chips" role="group" aria-label="Exchange">${["NSE", "BSE"].map(x =>
         `<button type="button" class="ck-chip" data-exch="${x}" aria-pressed="false">${x}</button>`).join("")}</div>` : ""}<div class="ck-chips" role="group" aria-label="Chart range">${STOCK_RANGES.map(r =>
@@ -790,7 +818,7 @@ window.TA = (function(){
       if(!keepRange) savedRange = null;
       if(dead || !data || !data.bars || !data.bars.length) return;
       const k = colors = stockColors(), on = eff(), candle = prefs.mode === "candle";
-      const fmt = (v) => money(v, 2);
+      const fmt = (v) => cmoney(v, 2);
       chart = LW.createChart(box, {
         width: Math.max(box.clientWidth, 100), height: totalHeight(),
         layout: {fontFamily: getComputedStyle(document.body).fontFamily, fontSize: 11, attributionLogo: true},
@@ -874,8 +902,8 @@ window.TA = (function(){
       const b = data.bars[i], prev = data.intraday && data.range === "1D" && data.prev_close != null ? data.prev_close : (i > 0 ? data.bars[i - 1].close : null);
       const chg = prev ? (b.close - prev) / prev : null, cls = chg == null ? "" : chg >= 0 ? "ck-up" : "ck-down";
       const p = [`<span class="ck-exch">${esc(data.exchange || exchange)}</span> <b>${esc(barTime(b.time))}</b>`];
-      if(candle) p.push(`O ${esc(money(b.open, 2))}`, `H ${esc(money(b.high, 2))}`, `L ${esc(money(b.low, 2))}`);
-      p.push(`${candle ? "C" : "Price"} ${esc(money(b.close, 2))}`);
+      if(candle) p.push(`O ${esc(cmoney(b.open, 2))}`, `H ${esc(cmoney(b.high, 2))}`, `L ${esc(cmoney(b.low, 2))}`);
+      p.push(`${candle ? "C" : "Price"} ${esc(cmoney(b.close, 2))}`);
       if(chg != null) p.push(`<span class="${cls}">${chg >= 0 ? "+" : "−"}${Math.abs(chg * 100).toFixed(2)}%</span>`);
       if(on.vol) p.push(`Vol ${esc(fmtVol(b.volume))}`);
       const add = (label, arr, d, color) => { const v = valueAt(arr, b.time); if(v != null) p.push(`<span style="color:${color || "inherit"}">${label} ${esc(Number(v).toFixed(d))}</span>`); };
@@ -991,7 +1019,7 @@ window.TA = (function(){
   }
 
   return {$, esc, priceMove, priceLine, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
-          C, NS, niceTicks, shortDate, lineChart, histogram, ddHistogram, rupeesShort, inr, sinr, spct, quoteHtml, rangePos, quoteAge,
+          C, NS, niceTicks, shortDate, lineChart, histogram, ddHistogram, rupeesShort, inr, px, bigMoney, foreignMarket, qualifyTicker, MARKET_SUFFIX, sinr, spct, quoteHtml, rangePos, quoteAge,
           daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart};
 })();
 window.TA.theme.init();

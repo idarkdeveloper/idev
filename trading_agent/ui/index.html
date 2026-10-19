@@ -180,7 +180,7 @@
   <section class="ws-panel" id="ws-research" data-ws="research" role="tabpanel" aria-labelledby="wst-research">
     <div class="card" data-anchor="lookup" id="lk-card">
       <div class="cardhead lk-head"><h2>Look up a stock</h2>
-        <form id="lk-form" class="lk-form" role="search"><input id="lk-ticker" autocomplete="off" aria-label="Ticker or company name" placeholder="Ticker or company name, e.g. Tata Steel"><button type="submit" class="small">Check</button></form></div>
+        <form id="lk-form" class="lk-form" role="search"><select id="lk-market" aria-label="Market" title="India, or a US, UK or Japan stock to view"><option value="IN">India</option><option value="US">US</option><option value="UK">UK</option><option value="JP">Japan</option></select><input id="lk-ticker" autocomplete="off" aria-label="Ticker or company name" placeholder="Ticker or company name, e.g. Tata Steel"><button type="submit" class="small">Check</button></form></div>
       <div class="cardbody lk-body" id="lk-result" aria-live="polite"><div class="sub">Price, the agent's checklist and a chart. "Open full view" adds fundamentals, financials, shareholding, technicals and news.</div></div>
     </div>
     <div class="card" data-anchor="track-record">
@@ -401,7 +401,7 @@
     <iframe id="dg-frame" title="Email preview" sandbox="" style="width:100%;height:60vh;border:1px solid var(--color-divider)"></iframe>
   </div>
 </dialog>
-<dialog id="sp-drawer" class="sp-drawer" aria-labelledby="sp-modal-name"><div class="sp-drawer-head"><button type="button" class="icon-btn" id="sp-drawer-close" aria-label="Back to the dashboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg></button><div class="sp-modal-t"><span id="sp-modal-name" class="sp-drawer-title">Stock</span><span id="sp-modal-px" class="sub"></span></div></div><div class="sp-drawer-body" id="sp-drawer-body"></div><div class="sp-modal-foot sub">Prices from Yahoo Finance (delayed). Read-only: nothing here places an order; Practice buy and sell only open the practice form.</div></dialog>
+<dialog id="sp-drawer" class="sp-drawer" aria-labelledby="sp-modal-name"><div class="sp-drawer-head"><button type="button" class="icon-btn" id="sp-drawer-close" aria-label="Back to the dashboard"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg></button><div class="sp-modal-t"><span id="sp-modal-name" class="sp-drawer-title">Stock</span><span id="sp-modal-px" class="sub"></span></div></div><div class="sp-drawer-body" id="sp-drawer-body"></div><div class="sp-modal-foot sub" id="sp-modal-foot">Prices from Yahoo Finance (delayed). Read-only: nothing here places an order; Practice buy and sell only open the practice form.</div></dialog>
 <div class="popover" id="deal-pop" role="dialog" aria-label="Add a deal filter" hidden><div class="field"><label for="dp-field">Filter on</label><select id="dp-field"><option value="side">Side</option><option value="exch">Exchange</option><option value="symbol">Stock</option><option value="size">Size</option><option value="date">Date</option></select></div><div class="dp-vals" id="dp-vals" role="group" aria-label="Value"></div><div class="dp-actions"><button type="button" class="small" id="dp-cancel">Cancel</button><button type="button" class="small primary" id="dp-add">Add filter</button></div></div>
 <div class="suggest" id="suggest" role="listbox" aria-label="Matching companies"></div>
 <div class="toast" id="toast"></div>
@@ -1694,13 +1694,16 @@
     if(t.via !== "host"){ drawerPushed = false; location.assign(t.url); return; }
     closeDrawer(); palHost[t.op](t.symbol);
   }
-  const stockOpts = (extra) => Object.assign({mode: MODE, context: () => ({regime: S && S.regime, screen: S && S.screen}), holding: growwHolding,
-    onPractice: practiceOrder, onLoaded: (r) => { curStock = String(r.ticker).split(".")[0]; syncUrl(); lkSeq++; renderLookupCard(r); $("lk-ticker").value = r.ticker;
-      $("sp-modal-name").textContent = r.name || r.ticker; $("sp-modal-px").textContent = String(r.ticker) + (r.price != null ? " · " + inr(r.price, 2) : ""); }}, extra || {});
+  const stockOpts = (extra) => Object.assign({mode: MODE, brokerName: "Groww", context: () => ({regime: S && S.regime, screen: S && S.screen}), holding: growwHolding,
+    onPractice: practiceOrder, onLoaded: (r) => { curStock = TA.foreignMarket(r.ticker) ? String(r.ticker) : String(r.ticker).split(".")[0]; syncUrl(); lkSeq++; renderLookupCard(r); $("lk-ticker").value = r.ticker;
+      $("sp-modal-name").textContent = r.name || r.ticker; $("sp-modal-px").textContent = String(r.ticker) + (r.price != null ? " · " + TA.px(r.price, r.currency) : "");
+      $("sp-modal-foot").textContent = "Prices from Yahoo Finance (delayed). Read-only: nothing here places an order; " + (r.view_only ? "US, UK and Japan stocks are for viewing only." : "Practice buy and sell only open the practice form."); }}, extra || {});
   const CK = {pass: ["✓", "passes"], warn: ["!", "needs a look"], fail: ["✕", "fails"]};
   // Today's move on the card: the price against the close before the latest bar of the year's history.
   const lkDay = (r) => { const h = (r.history || []).filter(p => p && p.c != null); return r.price == null || h.length < 2 || !h[h.length - 2].c ? null : r.price / h[h.length - 2].c - 1; };
   function renderLookupCard(r){
+    $("lk-market").value = r.view_only ? (r.market || "IN") : "IN";
+    if(r.view_only) return renderForeignCard(r);
     const a = TA.stockPage.helpers.agentChecks(r, {regime: S && S.regime});
     const sym = String(r.ticker || "").replace(/\.BO$/i, ""), exch = /\.BO$/i.test(String(r.ticker || "")) ? "BSE" : "NSE", d = lkDay(r);
     const v = (r.history || []).slice(-120).map(p => p.c).filter(x => x != null);
@@ -1719,6 +1722,26 @@
       <div class="lk-verdict"><div><span class="lk-call ${cls}">${esc(a.call)}</span> <span class="sub">${a.passN} of ${a.n} checks pass</span></div>
         <div class="lk-chips">${a.checks.map(c => `<span class="ck-pill" title="${esc(c.detail)}"><b class="ck-${c.state}" aria-hidden="true">${CK[c.state][0]}</b>${esc(c.label)}<span class="sr-only"> ${CK[c.state][1]}: ${esc(c.detail)}</span></span>`).join("")}</div></div>
       <button type="button" class="primary lk-open" data-open-full="${esc(sym)}">Open full view →</button> <button type="button" class="lk-open" data-size-it="${esc(sym)}">Position size</button></div>`;
+  }
+  // A US, UK or Japan stock (view only): price in its own currency, the trend, the chart; no Indian checks, no orders.
+  function renderForeignCard(r){
+    const sym = String(r.ticker || ""), d = lkDay(r), m = r.momentum || {};
+    const v = (r.history || []).slice(-120).map(p => p.c).filter(x => x != null);
+    let mini = "";
+    if(v.length > 1){
+      const lo = Math.min(...v), hi = Math.max(...v), W = 260, H = 56, p = 3, sx = (W - 2 * p) / (v.length - 1), sy = (H - 2 * p) / ((hi - lo) || 1);
+      const path = v.map((y, i) => (i ? "L" : "M") + (p + i * sx).toFixed(1) + " " + (H - p - (y - lo) * sy).toFixed(1)).join(" ");
+      mini = `<svg class="lk-mini ${v[v.length - 1] >= v[0] ? "up" : "down"}" viewBox="0 0 260 56" preserveAspectRatio="none" role="img" aria-label="${esc(sym)}, last six months"><path d="${path}"></path></svg>`;
+    }
+    const tone = m.verdict === "strong" ? "ok" : m.verdict === "weak" ? "bad" : "";
+    $("lk-result").innerHTML = `<div class="lk-sum">
+      <div class="lk-id"><span class="sub lk-code">${esc(sym)} · ${esc(r.exchange || r.market || "")}</span><span class="lk-name">${esc(r.name || sym)}</span>
+        <div class="lk-px"><span class="lk-price">${TA.px(r.price, r.currency)}</span>${d != null ? `<span class="${toneOf(d)}">${spct(d)} today</span>` : ""}</div></div>
+      ${mini}
+      <div class="lk-verdict"><div class="row" style="gap:6px"><span class="pill">${esc(r.market_name || r.market || "")} · view only</span>${m.verdict ? `<span class="pill ${tone}">${esc(m.verdict)} momentum</span>` : ""}</div>
+        <div class="sub" style="margin-top:4px">${esc(r.momentum_summary || "")}</div>
+        <div class="sub" style="margin-top:4px">${esc(r.note || "")}</div></div>
+      <button type="button" class="primary lk-open" data-open-full="${esc(sym)}">Open full view →</button></div>`;
   }
   async function checkStock(t){   // the card only: one read of /api/lookup
     t = String(t || "").trim(); if(!t) return;
@@ -1799,7 +1822,7 @@
     if(S.signal_lab && S.signal_lab.results) renderSignalLab(S.signal_lab);
   }
   let rsT; window.addEventListener("resize", () => { clearTimeout(rsT); rsT = setTimeout(redrawCharts, 200); });
-  $("lk-form").addEventListener("submit", (ev) => { ev.preventDefault(); const t = $("lk-ticker").value.trim().toUpperCase(); if(t) checkStock(t); });
+  $("lk-form").addEventListener("submit", (ev) => { ev.preventDefault(); const t = TA.qualifyTicker($("lk-ticker").value, $("lk-market").value); if(t) checkStock(t); });
   // the Research card's own <details> sections: remember nothing, but redraw a chart that was drawn while closed
   document.querySelectorAll("details.coll").forEach(d => d.addEventListener("toggle", () => { if(d.open) setTimeout(redrawCharts, 0); }));
   document.addEventListener("change", (ev) => {
@@ -1982,7 +2005,7 @@
     if(curStock && $("lk-result").querySelector(".lk-price")){
       const my = lkSeq;
       try { const r = await api("/api/lookup?ticker=" + encodeURIComponent(curStock)); if(my !== lkSeq || r.price == null) return;
-        $("lk-result").querySelector(".lk-price").textContent = inr(r.price, 2);
+        $("lk-result").querySelector(".lk-price").textContent = r.view_only ? TA.px(r.price, r.currency) : inr(r.price, 2);
         const d = lkDay(r), t = $("lk-result").querySelector(".lk-px span:not(.lk-price)"); if(t && d != null){ t.textContent = spct(d) + " today"; t.className = toneOf(d); } } catch(e){}
     }
   }, 60000);

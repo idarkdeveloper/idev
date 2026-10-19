@@ -1280,6 +1280,9 @@ table.cs-table { min-width: 0; font-size: 13.5px; }
   #mp-card #mp-rows td.num:nth-child(6)::before, #mp-card #mp-rows td.num:nth-child(7)::before { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; display: inline; font-size: 12px; color: var(--color-muted); letter-spacing: 0; text-transform: none; margin-right: 4px; }
   #mp-card #mp-rows td.num:nth-child(6)::before { content: "Today"; } #mp-card #mp-rows td.num:nth-child(7)::before { content: "Value"; }
 }
+/* Look up: the market picker (India, US, UK, Japan) stays narrow beside the ticker box */
+.lk-form select#lk-market { flex: 0 0 auto; width: auto; }
+
 /* Monte Carlo stress test: the loss-limit box stays narrow at every width */
 .mc-limit-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
 .mc-limit-row > #mc-limit { width: 5.5em; flex: 0 0 auto; }
