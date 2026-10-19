@@ -444,6 +444,25 @@ def _corp_row(settings: Any, sd: Path, now: datetime, cal: Any, runs: dict[str, 
                        "stops are left as they are (never cancelled blindly)", now=now)
 
 
+def _pledge_gap(data: dict[str, Any], errors: dict[str, Any], on: list[str], now: datetime, cal: Any) -> str | None:
+    """The plain sentence for a pledge error that is NSE publishing nothing (EmptyPledgeList, or the older "no usable
+    rows" wording) while the stored pledge list is still within its age limit; None for every other case."""
+    from .indian_filters import MAX_AGE_BY_PART, age_in_trading_days
+    msg = str(errors.get("pledge") or "")
+    if "pledge" not in on or not ("publishing no pledge data" in msg or "no usable rows" in msg or "EmptyPledgeList" in msg):
+        return None
+    try:
+        listed = date.fromisoformat(str(_dict(data.get("pledge")).get("date")))
+    except ValueError:
+        return None
+    limit = MAX_AGE_BY_PART["pledge"]
+    age = age_in_trading_days(listed, now.date(), cal)
+    if age > limit:
+        return None
+    return (f"NSE is publishing no pledge data right now; using the list from {_day_text(listed)} "
+            f"({age} trading day{'' if age == 1 else 's'} old; usable up to {limit} trading days)")
+
+
 def _filters_row(settings: Any, sd: Path, now: datetime, cal: Any, nse_off: str | None) -> dict[str, Any]:
     """indian_filters.json: the ASM, GSM, board-meeting and pledge lists, each with its own date."""
     from .indian_filters import LABEL, PARTS, SWITCH
@@ -478,9 +497,17 @@ def _filters_row(settings: Any, sd: Path, now: datetime, cal: Any, nse_off: str 
         last_err = "; ".join(f"{LABEL.get(k, k)}: {v}" for k, v in errors.items()) or None
         detail += (f" · NSE's pledge list is empty; reading each company's quarterly shareholding filing instead: "
                    f"{prog.get('done', 0)} of {prog.get('total', 0)} stocks so far (the last list stays in use meanwhile)")
+    due_text = "not fetched for " + _day_text(due) + ": " + ", ".join(missing) if missing else ""
+    gap = _pledge_gap(data, errors, on, now, cal)
+    if gap:   # NSE itself publishes no pledge data and the last good list is still usable: late, not failing
+        errors.pop("pledge", None)
+        detail += " · " + gap
+        last_err = "; ".join(f"{LABEL.get(k, k)}: {v}" for k, v in errors.items()) or None
+        others = [m for m in missing if m != LABEL["pledge"]]
+        due_text = (f"not fetched for {_day_text(due)}: {', '.join(others)}; " if others else "") + gap
     return _row("filters", "ASM/GSM, board meetings, pledges (NSE)", [AGENT, SCREEN, MORNING, DASH], configured=bool(on),
                 last_ok=min(stamps) if stamps else None, rows=rows or None, late=bool(missing),
-                due_text="not fetched for " + _day_text(due) + ": " + ", ".join(missing) if missing else "",
+                due_text=due_text,
                 error=last_err, error_at=_parse(tries.get("last")) if last_err else None, failing=bool(nse_off), backoff=nse_off,
                 schedule="once each trading day from the open, through the NSE client; retries 5, 15 then 60 min apart",
                 detail=detail, now=now)
