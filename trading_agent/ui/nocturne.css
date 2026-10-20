@@ -1706,7 +1706,8 @@ body[data-mode="screener"] .sc-mtab, .sc-mtab { flex-direction: row; align-items
 
 /* Deals & orders (the Portfolio design): Order history wider than Recent runs */
 .ord-runs { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
-@media (max-width: 900px) { .ord-runs { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 700px) { .ord-runs { grid-template-columns: minmax(0, 1fr); } }
+.dl-pair { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
 
 /* Research (the Portfolio design): the collapsed tools sit side by side; an opened one takes the full width */
 .coll-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; align-items: start; }
@@ -1720,3 +1721,7 @@ body[data-mode="screener"] .sc-mtab, .sc-mtab { flex-direction: row; align-items
 
 /* Health (the Portfolio design): the kill switch card carries a red outline so it is never mistaken for a report */
 .ks-card { box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-loss) 55%, transparent); background: color-mix(in srgb, var(--color-loss) 6%, var(--color-surface)); }
+
+/* Paper accounts: the holdings line is plain text (the 44 px touch size is for buttons, not for a ticker inside a sentence) */
+.pa-list .pa-acct .sub a { display: inline; min-height: 0; padding: 0; }
+.pa-list .pa-acct .sub .sub { display: inline; }
