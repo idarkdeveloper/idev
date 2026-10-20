@@ -1464,6 +1464,15 @@ class App:
             self._members_cache = (time.time(), members)
         return members
 
+    def portfolio_sectors(self) -> dict[str, Any]:
+        """GET /api/portfolio-sectors: {SYMBOL: NSE industry} for the NIFTY 500, which is the sector the allocation chart groups by.
+        Public NSE data (the same 12-hour list as similar stocks), never Groww. Without it the chart says "Other"."""
+        try:
+            return {"sectors": {m["symbol"].upper(): m["industry"] for m in self._index_members() if m.get("industry")}}
+        except Exception as e:  # noqa: BLE001 - the chart is a nicety
+            log.warning("sector list unavailable: %s", e)
+            return {"sectors": {}}
+
     def stock(self, ticker: str, exchange: str = "NSE") -> dict[str, Any]:
         """GET /api/stock: price block, fundamentals, financials, profile, shareholding, technicals and similar stocks."""
         return cast(dict[str, Any], self.stock_service.get(self.resolve(ticker)[0], exchange))   # foreign: markets.py
@@ -2732,6 +2741,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.integration())
             elif path == "/api/health":
                 self._json(app.health())
+            elif path == "/api/portfolio-sectors":
+                self._json(app.portfolio_sectors())
             elif path == "/api/my-portfolio":
                 from urllib.parse import parse_qs
                 q = parse_qs(urlparse(self.path).query)

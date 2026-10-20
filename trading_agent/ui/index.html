@@ -99,6 +99,11 @@
             <button type="button" class="small" id="copy-no">Cancel</button></div></div>
         <div class="cardbody sub" id="copy-result" aria-live="polite" hidden></div>
         <div class="cardbody" id="mp-body" hidden><div class="stats" id="mp-stats"></div></div>
+        <div class="mp-charts" id="mp-charts" hidden>
+          <section class="mp-chart" aria-labelledby="mp-alloc-h"><h3 id="mp-alloc-h">Allocation by sector</h3>
+            <div class="alloc"><svg id="mp-donut" viewBox="0 0 120 120" role="img" aria-label="Allocation by sector"></svg><ul class="alloc-legend" id="mp-alloc-legend"></ul></div></section>
+          <section class="mp-chart" aria-labelledby="mp-pl-h"><h3 id="mp-pl-h">Profit / loss by holding</h3><div class="plbars" id="mp-plbars"></div></section>
+        </div>
         <div class="scroll tscroll"><table class="dt mp-table"><thead><tr><th>Stock</th><th class="spark-col">30 days</th><th class="num hold-col">Shares</th><th class="num hold-col">Buy price</th><th class="num">Price</th><th class="num">Today</th><th class="num">Value</th><th class="num">Profit / loss</th><th class="prot-cell" id="mp-prot-th">Stop</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
       </section>
       <section class="recs-col" data-anchor="recs">
@@ -1414,9 +1419,29 @@
       : `<tr><td colspan="${MPCOLS}" class="empty">No holdings in your Groww account.</td></tr>`;
     const today = todayTotal();
     $("mp-foot").innerHTML = m.holdings.length ? `<tr><td>Total<div class="sub l2" style="font-weight:400">${m.holdings.length} holdings${m.unpriced.length ? `, ${m.unpriced.length} without a price` : ""}</div></td>
-        <td></td><td class="num hold-col"></td><td class="num hold-col">${m.invested != null ? inr(m.invested) : ""}</td><td></td><td class="num ${tone(today)}">${today == null ? "" : sinr(today)}</td><td class="num">${inr(m.value)}</td>
+        <td></td><td class="num hold-col"></td><td class="num hold-col">${m.invested != null ? inr(m.invested) : ""}</td><td></td><td class="num nowrap ${tone(today)}">${today == null ? "" : sinr(today)}</td><td class="num">${inr(m.value)}</td>
         <td class="num"><div class="${tone(m.pl)}">${sinr(m.pl)}</div><div class="l2 ${tone(m.pl_pct)}">${spct(m.pl_pct)}</div></td>${MODE === "demo" ? "" : "<td></td>"}</tr>` : "";
     loadSparks(m.holdings);
+    renderCharts(m);
+  }
+  // Allocation by sector (a donut) and profit/loss by holding (bars), drawn from the holdings already on the page.
+  // The sector is NSE's industry from the NIFTY 500 list (/api/portfolio-sectors); a bond is "Bonds", anything not in the list "Other".
+  let SECTORS = null, secLoading = false;
+  function renderCharts(m){
+    const box = $("mp-charts"), hs = (m.holdings || []).filter(h => h.value != null && h.value > 0);
+    box.hidden = !hs.length; if(!hs.length) return;
+    if(SECTORS === null && !secLoading){ secLoading = true; api("/api/portfolio-sectors").then(r => { SECTORS = r.sectors || {}; }, () => { SECTORS = {}; }).then(() => { secLoading = false; if(MP && MP.holdings) renderCharts(MP); }); }
+    const by = {}; let total = 0;
+    hs.forEach(h => { const k = h.kind === "bond" ? "Bonds" : (SECTORS || {})[String(h.symbol).toUpperCase()] || (SECTORS === null ? "Loading…" : "Other"); by[k] = (by[k] || 0) + h.value; total += h.value; });
+    const named = Object.entries(by).filter(p => p[0] !== "Other").sort((x, y) => y[1] - x[1]);   // "Other" always comes last, with the small sectors folded in
+    const other = (by.Other || 0) + named.slice(6).reduce((s, p) => s + p[1], 0);
+    const parts = named.slice(0, 6).concat(other > 0 ? [["Other", other]] : []);
+    const C = 2 * Math.PI * 48; let off = 0;
+    $("mp-donut").innerHTML = parts.map((p, i) => { const len = p[1] / total * C, gap = parts.length > 1 ? 1.5 : 0, d = `<circle cx="60" cy="60" r="48" fill="none" stroke="var(--sec-${i + 1})" stroke-width="16" stroke-dasharray="${Math.max(len - gap, 0.1).toFixed(2)} ${(C - len + gap).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 60 60)"><title>${esc(p[0])}: ${(p[1] / total * 100).toFixed(1)}%</title></circle>`; off += len; return d; }).join("")
+      + `<text x="60" y="57" text-anchor="middle" font-size="8" style="fill:var(--color-muted)">${hs.length} holdings</text><text x="60" y="70" text-anchor="middle" font-size="11" font-weight="600">${esc(inr(total))}</text>`;
+    $("mp-alloc-legend").innerHTML = parts.map((p, i) => `<li><i style="background:var(--sec-${i + 1})"></i><span title="${esc(p[0])}">${esc(p[0])}</span><b>${(p[1] / total * 100).toFixed(1)}%</b></li>`).join("");
+    const pls = (m.holdings || []).filter(h => h.pl != null).sort((x, y) => y.pl - x.pl), mx = Math.max(1, ...pls.map(h => Math.abs(h.pl)));
+    $("mp-plbars").innerHTML = pls.map(h => `<div class="plrow"><a href="#" data-lookup="${esc(h.symbol)}" class="sym">${esc(h.symbol)}</a><div class="pltrack"><span class="neg">${h.pl < 0 ? `<i style="width:${(-h.pl / mx * 100).toFixed(1)}%"></i>` : ""}</span><span class="pos">${h.pl > 0 ? `<i style="width:${(h.pl / mx * 100).toFixed(1)}%"></i>` : ""}</span></div><b class="${toneOf(h.pl)}">${sinr(h.pl)}</b></div>`).join("");
   }
   $("mp-refresh").addEventListener("click", () => TA.loader.busy($("mp-refresh"), () => loadMyPortfolio(true),
     {busy: "Refreshing…", done: () => MP && !MP.error ? "Updated" : null}));

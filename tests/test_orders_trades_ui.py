@@ -44,3 +44,21 @@ def test_every_page_loads_the_shared_palette_before_nocturne():
     for page in ("index.html", "replay.html", "screener.html"):
         html = (UI / page).read_text(encoding="utf-8")
         assert html.index("/static/colors.css") < html.index("/static/nocturne.css"), page
+
+
+def test_portfolio_sectors_maps_symbols_to_nse_industry_and_survives_a_failure():
+    from types import SimpleNamespace
+    from trading_agent.ui import App
+    ok = SimpleNamespace(_index_members=lambda: [{"symbol": "tcs", "industry": "Information Technology"}, {"symbol": "XYZ", "industry": ""}])
+    assert App.portfolio_sectors(ok) == {"sectors": {"TCS": "Information Technology"}}   # type: ignore[arg-type]
+
+    def boom():
+        raise OSError("NSE down")
+    assert App.portfolio_sectors(SimpleNamespace(_index_members=boom)) == {"sectors": {}}   # type: ignore[arg-type]
+
+
+def test_portfolio_page_has_the_sector_donut_and_pl_bars():
+    html = (UI / "index.html").read_text(encoding="utf-8")
+    for needle in ('id="mp-charts"', 'id="mp-donut"', 'id="mp-alloc-legend"', 'id="mp-plbars"', "/api/portfolio-sectors", "function renderCharts"):
+        assert needle in html, needle
+    assert all(f"--sec-{i}:" in CSS for i in range(1, 8))
