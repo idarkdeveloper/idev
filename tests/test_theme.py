@@ -31,8 +31,14 @@ def _block(selector: str) -> dict[str, str]:
     return out
 
 
-DARK = _block(":root")
-LIGHT = _block(':root[data-theme="light"]')
+# colors.css (loaded before nocturne.css on every page) holds the shared palette (--teal-*, --blue-*, --amber-*) that
+# both themes map their --color-* tokens onto, so a token may resolve through it
+PALETTE = {m.group(1): m.group(2).strip() for m in re.finditer(r"(--[\w-]+)\s*:\s*([^;]+);",
+                                                                (UI / "colors.css").read_text(encoding="utf-8"))}
+THEME_DARK = _block(":root")
+THEME_LIGHT = _block(':root[data-theme="light"]')
+DARK = {**PALETTE, **THEME_DARK}
+LIGHT = {**PALETTE, **THEME_LIGHT}
 
 
 # ---------- WCAG helpers (pure functions) ----------
@@ -160,13 +166,14 @@ def test_contrast_function_is_wcag():
 
 
 def test_light_and_dark_define_the_same_tokens():
-    assert set(DARK) == set(LIGHT), sorted(set(DARK) ^ set(LIGHT))
-    assert len(DARK) > 60
+    assert set(THEME_DARK) == set(THEME_LIGHT), sorted(set(THEME_DARK) ^ set(THEME_LIGHT))
+    assert len(THEME_DARK) > 60
 
 
 def test_light_tokens_actually_differ():
     for name in ("--color-bg", "--color-surface", "--color-text", "--color-accent", "--color-profit", "--color-loss"):
-        assert DARK[name] != LIGHT[name], name
+        # compared resolved: the neutral accent is var(--color-text) in both themes, and the text colours differ
+        assert _parse(DARK, DARK[name]) != _parse(LIGHT, LIGHT[name]), name
     assert "color-scheme: light" in CSS and "color-scheme: dark" in CSS
 
 

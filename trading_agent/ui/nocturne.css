@@ -81,7 +81,7 @@
     --color-neutral-100: #1a1c28; --color-neutral-300: #343848; --color-neutral-400: #474b5e; --color-neutral-500: #6a6e82;
     --color-neutral-600: #7d8196; --color-neutral-700: #a9adbd; --color-neutral-800: #e4e6ee; --color-neutral-900: #eceef5;
     --color-accent-100: var(--color-neutral-100); --color-accent-200: var(--color-neutral-300); --color-accent-300: var(--color-neutral-300); --color-accent-400: var(--color-neutral-400);
-    --color-accent-600: var(--color-neutral-600); --color-accent-800: var(--color-neutral-800); --color-accent-900: var(--color-neutral-900);
+    --color-accent-600: var(--color-neutral-500);   /* link hover: neutral-600 is 3.85:1 on white, below 4.5 */ --color-accent-800: var(--color-neutral-800); --color-accent-900: var(--color-neutral-900);
     --font-heading: "Inter", "Inter Fallback", system-ui, -apple-system, "Segoe UI", sans-serif; --font-heading-weight: 500;
     --font-body: "Inter", "Inter Fallback", system-ui, -apple-system, "Segoe UI", sans-serif;
     --space-1: 2.8px; --space-2: 5.6px; --space-3: 8.4px; --space-4: 11.2px;
@@ -1787,10 +1787,11 @@ svg.lk-mini.down .lk-fill { fill: color-mix(in srgb, var(--color-loss) 14%, tran
     background: transparent; color: var(--color-muted); font-size: 10.5px; font-weight: 600; }
   .ws-bottom button[aria-current="page"] { color: var(--color-text); background: var(--color-hover); }
   .ws-tabbar { display: none; }
-  body { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
-  body .va { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }   /* above the bar; body in front so voice.css (loaded later) does not win */
-  body.va-on { padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
-  body.va-on .toast, body.va-on .ask-card { bottom: calc(148px + env(safe-area-inset-bottom, 0px)); }
+  /* only on a page that has the bar (Live and Demo): Screener and Replay keep their own bottom spacing */
+  body:has(.ws-bottom) { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+  body:has(.ws-bottom) .va { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }   /* above the bar; body in front so voice.css (loaded later) does not win */
+  body.va-on:has(.ws-bottom) { padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+  body.va-on:has(.ws-bottom) .toast, body.va-on:has(.ws-bottom) .ask-card { bottom: calc(148px + env(safe-area-inset-bottom, 0px)); }
 }
 .eq-delta.eq-small { font-size: 12px; font-weight: 500; opacity: .85; }
 

@@ -75,16 +75,16 @@ def test_new_page_code_has_no_order_post():
             assert needle not in code, (a, needle)
         for args in _api_calls(code):
             assert not _top_level_comma(args), (a, args)   # api(path, body) is a POST; every call here is a one-argument GET
-            assert re.match(r"""\s*[`"']/api/(candles|lookup|costs|size)""", args), (a, args)
+            assert re.match(r"""\s*[`"']/api/(candles|lookup|costs|size|equity-history|portfolio-sectors)""", args), (a, args)
 
 
 def test_tabs_are_addressable_and_old_anchors_map_into_them():
     ws = re.search(r"const WORKSPACES = (\[.*?\]);", INDEX).group(1)
     assert [x[0] for x in json.loads(ws)] == ["overview", "deals", "research", "paper", "tools", "health"]   # Health: the data health tab
     block = _between("const WS_OF = {", "};")
-    for anchor, tab in (("portfolio", "overview"), ("practice", "overview"), ("forward", "overview"), ("recs", "overview"),
+    for anchor, tab in (("portfolio", "overview"), ("practice", "overview"), ("forward", "paper"), ("recs", "overview"),
                         ("deals", "deals"), ("orders", "deals"), ("runs", "deals"),
-                        ("lookup", "research"), ("screen", "research"), ("signal-lab", "research"), ("backtest", "research"),
+                        ("lookup", "tools"), ("screen", "research"), ("signal-lab", "research"), ("backtest", "research"),
                         ("track-record", "research"), ("paper", "paper"), ("size", "tools"), ("costs", "tools"), ("health", "health"),
                         ("groww-logins", "health")):
         assert re.search(rf'"?{re.escape(anchor)}"?: "{tab}"', block), anchor

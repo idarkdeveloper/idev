@@ -68,4 +68,5 @@ def test_the_card_has_a_signed_change_with_an_arrow_and_a_labelled_metric():
 def test_the_phone_screener_has_room_for_the_voice_button_and_tokens_only():
     assert 'body[data-mode="screener"].va-on { padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px)); }' in BLOCK
     assert not re.search(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(", BLOCK)
-    assert ".va" not in BLOCK.replace(".va-on", "")                                              # nothing here moves the voice button
+    # nothing here moves the voice button on the Screener; the Live/Demo bottom tab bar lifts it only on a page with the bar
+    assert ".va" not in BLOCK.replace(".va-on", "").replace("body:has(.ws-bottom) .va", "")
