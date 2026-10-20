@@ -1725,3 +1725,35 @@ body[data-mode="screener"] .sc-mtab, .sc-mtab { flex-direction: row; align-items
 /* Paper accounts: the holdings line is plain text (the 44 px touch size is for buttons, not for a ticker inside a sentence) */
 .pa-list .pa-acct .sub a { display: inline; min-height: 0; padding: 0; }
 .pa-list .pa-acct .sub .sub { display: inline; }
+
+/* Tools (the Portfolio design): sizing as four boxes, the trade-cost headline, the look-up checklist as a list */
+.sz-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sz-fields .sz-stock { grid-column: 1 / -1; }
+.sz-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--color-divider); border-radius: 12px; overflow: hidden; margin: 4px 0 10px; }
+.sz-strip > div, .lk-rets > div { padding: 10px 12px; border-left: 1px solid var(--color-divider); min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sz-strip > div:first-child, .lk-rets > div:first-child { border-left: 0; }
+.sz-strip .k, .lk-rets .k, .lk-verdict > .k { font-size: 11px; letter-spacing: .5px; text-transform: uppercase; color: var(--color-muted); }
+.sz-strip b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.sz-strip small { font-size: 12px; color: var(--color-muted); }
+.sz-note { margin-bottom: 8px; }
+.cs-total { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 12px 0 4px; }
+.cs-total b { font-size: 24px; font-variant-numeric: tabular-nums; }
+.cs-total span { font-size: 13px; color: var(--color-muted); }
+.lk-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 8px 28px; align-items: start; }
+.lk-grid > .lk-id, .lk-grid > svg.lk-mini, .lk-grid > .lk-rets, .lk-grid > .lk-actions { grid-column: 1; }
+.lk-grid > .lk-verdict { grid-column: 2; grid-row: 1 / span 4; }
+.lk-grid svg.lk-mini { width: 100%; height: 150px; flex: none; }
+svg.lk-mini .lk-fill { stroke: none; fill: color-mix(in srgb, var(--color-profit) 14%, transparent); }
+svg.lk-mini.down .lk-fill { fill: color-mix(in srgb, var(--color-loss) 14%, transparent); }
+.lk-rets { display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); border: 1px solid var(--color-divider); border-radius: 12px; overflow: hidden; }
+.lk-rets b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.lk-list { list-style: none; margin: 4px 0 0; padding: 0; display: grid; }
+.lk-list li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-bottom: 1px solid var(--color-rule); }
+.lk-list li:last-child { border-bottom: 0; }
+.lk-list li > b { font-size: 14px; line-height: 20px; }
+.lk-list li > div { display: flex; flex-direction: column; min-width: 0; }
+.lk-ck-t { font-weight: 600; font-size: 14px; }
+.lk-list .sub { font-size: 12.5px; }
+.lk-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 700px) { .sz-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } .sz-strip > div:nth-child(3) { border-left: 0; } .sz-strip > div:nth-child(n+3) { border-top: 1px solid var(--color-divider); }
+  .lk-grid { grid-template-columns: minmax(0, 1fr); } .lk-grid > .lk-verdict { grid-column: 1; grid-row: auto; } }

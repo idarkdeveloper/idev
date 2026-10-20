@@ -302,7 +302,7 @@
         <div class="cardhead"><h2>Position size</h2></div>
         <form class="cardbody" id="sz-form">
           <div class="sz-fields">
-            <div class="field"><label for="sz-ticker">Stock</label><input id="sz-ticker" name="ticker" autocomplete="off" placeholder="Ticker or company" required></div>
+            <div class="field sz-stock"><label for="sz-ticker">Stock</label><input id="sz-ticker" name="ticker" autocomplete="off" placeholder="Ticker or company" required></div>
             <div class="field"><label for="sz-risk">Risk per trade %</label><input id="sz-risk" name="risk_pct" type="number" value="1" min="0.1" max="5" step="0.1"></div>
             <div class="field"><label for="sz-max">Max position %</label><input id="sz-max" name="max_pct" type="number" value="10" min="1" max="50" step="1"></div>
           </div>
@@ -1879,10 +1879,15 @@
     try {
       const r = await api(`/api/size?ticker=${encodeURIComponent(t)}&risk_pct=${f.risk_pct}&max_pct=${f.max_pct}`);
       const c = r.round_trip_cost, eq = r.equity, risk = r.stop != null && r.price != null ? r.qty * (r.price - r.stop) : null;
-      $("sz-result").innerHTML = `<div class="big-line"><span class="big-num">${esc(r.qty)} share${r.qty === 1 ? "" : "s"}</span><span class="sub">${money(r.notional)}${eq ? ` · ${(r.notional / eq * 100).toFixed(1)}% of ${money(eq)} equity` : ""}</span></div>
-        <div class="sub">${esc(r.ticker)} at ${money(r.price,2)} · stop ${money(r.stop,2)}${r.atr != null ? ` (2× ATR of ${money(r.atr,2)})` : ""}${risk != null ? `; a fall to the stop costs about ${money(risk)}` : ""}.</div>
-        <div class="kv"><span>ATR(14)</span><span>${r.atr!=null?money(r.atr,2)+" ("+pct(r.atr_pct)+")":"n/a"}</span><span>Max position</span><span>${money(r.max_notional)}</span>${c?`<span>Round-trip cost</span><span>${money(c.total,2)} (${c.total_bps.toFixed(0)} bps)</span>`:""}</div>
-        <div class="sub">${esc(r.basis)}</div>
+      const capQty = r.price ? Math.floor(r.max_notional / r.price) : null, capHit = capQty != null && r.qty >= capQty;
+      const stopPct = r.stop != null && r.price ? (r.stop / r.price - 1) * 100 : null, riskPctEq = risk != null && eq ? risk / eq * 100 : null;
+      const box = (k, v, s, cls) => `<div><span class="k">${k}</span><b class="${cls || ""}">${v}</b><small>${s}</small></div>`;
+      $("sz-result").innerHTML = `<div class="sz-strip">
+          ${box("SHARES", esc(r.qty), `${money(r.notional)}${eq ? ` · ${(r.notional / eq * 100).toFixed(1)}% of equity` : ""}`)}
+          ${box("STOP", r.stop != null ? money(r.stop, 2) : "n/a", `${r.atr != null ? "2× ATR below" : esc(r.basis)}${stopPct != null ? ` · ${stopPct.toFixed(1)}%` : ""}`, "pl-loss")}
+          ${box("RISK", risk != null ? money(risk) : "n/a", riskPctEq != null ? `${riskPctEq.toFixed(1)}% of ${money(eq)} equity` : "")}
+          ${box("CAP", capHit ? "hit" : "not hit", `max ${esc(f.max_pct)}% = ${money(r.max_notional)}${capQty != null ? ` → ${capQty} sh` : ""}`, capHit ? "warn-text" : "pl-profit")}</div>
+        <div class="sub sz-note">${esc(r.ticker)} at ${money(r.price, 2)}${r.atr != null ? ` · ATR(14) ${money(r.atr, 2)} (${pct(r.atr_pct)})` : ""}${c ? ` · round-trip cost ${money(c.total, 2)} (${c.total_bps.toFixed(0)} bps)` : ""}. Shares so that a 2× ATR move costs your chosen risk, plus a stop level. Capped by max position and available cash.</div>
         ${sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct)) ? `<div class="callout"><b style="color:var(--color-accent)">What this means.</b> ${sizeTakeaway(r, Number(f.risk_pct), Number(f.max_pct))}</div>` : ""}
         ${MODE === "demo" ? '<div class="row"><button type="button" class="small" id="sz-use">Use in paper order</button></div>' : ""}`;
       if($("sz-use")) $("sz-use").addEventListener("click", () => { $("tk-symbol").value = r.ticker; tkPx.update(r.ticker, true); $("tk-qty").value = r.qty; $("tk-amount").value = ""; goWorkspace("practice"); $("tk-form").scrollIntoView({behavior:"smooth", block:"center"}); });
@@ -1900,7 +1905,8 @@
       $("cs-result").innerHTML = `<table class="cs-table"><thead><tr><th><span class="sr-only">Charge</span></th><th class="num">Buy</th><th class="num">Sell</th></tr></thead><tbody>
         ${row("brokerage","Brokerage")}${row("stt","STT")}${row("exchange","Exchange (NSE)")}${row("sebi","SEBI fee")}${row("stamp_duty","Stamp duty")}${row("gst","GST 18%")}${row("dp_charge","DP charge")}</tbody>
         <tfoot><tr><td>Total</td><td class="num">${money(r.buy.charges,2)}</td><td class="num">${money(r.sell.charges,2)}</td></tr></tfoot></table>
-        <div class="sub">Round trip ${money(r.charges,2)}, about ${r.charges_bps.toFixed(0)} bps before slippage; with ${r.slippage_bps_one_way} bps slippage a side, ${money(r.total,2)} (${r.total_bps.toFixed(0)} bps). A trade must gain at least ${(r.total_bps/100).toFixed(2)}% just to break even.</div>`;
+        <div class="cs-total"><b class="pl-loss">${money(r.total, 2)}</b><span>round trip with slippage · ${(r.total_bps / 100).toFixed(2)}% of ${money(amt)} · the stock must rise ${(r.total_bps / 100).toFixed(2)}% before you break even</span></div>
+        <div class="sub">Charges alone ${money(r.charges, 2)} (${r.charges_bps.toFixed(0)} bps); ${r.slippage_bps_one_way} bps slippage a side is assumed.</div>`;
     } catch(e){ if(my === csSeq) $("cs-result").innerHTML = `<span class="sub">${esc(e.message)}</span>`; }
   }
   $("cs-form").addEventListener("submit", (ev) => { ev.preventDefault(); calcCosts(); });
@@ -1956,17 +1962,20 @@
     if(v.length > 1){
       const lo = Math.min(...v), hi = Math.max(...v), W = 260, H = 56, p = 3, sx = (W - 2 * p) / (v.length - 1), sy = (H - 2 * p) / ((hi - lo) || 1);
       const path = v.map((y, i) => (i ? "L" : "M") + (p + i * sx).toFixed(1) + " " + (H - p - (y - lo) * sy).toFixed(1)).join(" ");
-      mini = `<svg class="lk-mini ${v[v.length - 1] >= v[0] ? "up" : "down"}" viewBox="0 0 260 56" preserveAspectRatio="none" role="img" aria-label="${esc(sym)}, last six months"><path d="${path}"></path></svg>`;
+      mini = `<svg class="lk-mini ${v[v.length - 1] >= v[0] ? "up" : "down"}" viewBox="0 0 260 56" preserveAspectRatio="none" role="img" aria-label="${esc(sym)}, last six months"><path class="lk-fill" d="${path} L ${(W - p).toFixed(1)} ${H} L ${p} ${H} Z"></path><path d="${path}"></path></svg>`;
     }
+    const all = (r.history || []).map(p => p.c).filter(x => x != null), ret = (n) => all.length > n ? all[all.length - 1] / all[all.length - 1 - n] - 1 : null;
+    const rets = [["1W", 5], ["1M", 21], ["6M", 126], ["1Y", 252]].map(([k, n]) => [k, ret(n)]).filter(x => x[1] != null)
+      .map(([k, x]) => `<div><span class="k">${k}</span><b class="${toneOf(x)}">${spct(x)}</b></div>`).join("");
     const cls = a.tone === "pass" ? "pl-profit" : a.tone === "fail" ? "pl-loss" : "warn-text";
-    $("lk-result").innerHTML = `<div class="lk-sum">
+    $("lk-result").innerHTML = `<div class="lk-sum lk-grid">
       <div class="lk-id"><span class="sub lk-code">${esc(sym)} · ${exch}</span><span class="lk-name">${esc(r.name || sym)}</span>
         <div class="lk-px"><span class="lk-price">${r.price != null ? inr(r.price, 2) : "n/a"}</span>${d != null ? `<span class="${toneOf(d)}">${spct(d)} today</span>` : ""}</div>
         ${r.matched_from ? `<span class="sub">Matched "${esc(r.matched_from)}" to ${esc(sym)}</span>` : ""}</div>
-      ${mini}
-      <div class="lk-verdict"><div><span class="lk-call ${cls}">${esc(a.call)}</span> <span class="sub">${a.passN} of ${a.n} checks pass</span></div>
-        <div class="lk-chips">${a.checks.map(c => `<span class="ck-pill" title="${esc(c.detail)}"><b class="ck-${c.state}" aria-hidden="true">${CK[c.state][0]}</b>${esc(c.label)}<span class="sr-only"> ${CK[c.state][1]}: ${esc(c.detail)}</span></span>`).join("")}</div></div>
-      <button type="button" class="primary lk-open" data-open-full="${esc(sym)}">Open full view →</button> <button type="button" class="lk-open" data-size-it="${esc(sym)}">Position size</button></div>`;
+      ${mini}${rets ? `<div class="lk-rets">${rets}</div>` : ""}
+      <div class="lk-verdict"><span class="k">THE AGENT'S CHECKLIST</span><div><span class="lk-call ${cls}">${esc(a.call)}</span> <span class="sub">${a.passN} of ${a.n} checks pass</span></div>
+        <ul class="lk-list">${a.checks.map(c => `<li><b class="ck-${c.state}" aria-hidden="true">${CK[c.state][0]}</b><div><span class="lk-ck-t">${esc(c.label)}</span><span class="sub">${esc(c.detail)}</span><span class="sr-only"> ${CK[c.state][1]}</span></div></li>`).join("")}</ul></div>
+      <div class="lk-actions"><button type="button" class="primary lk-open" data-open-full="${esc(sym)}">Open full view →</button> <button type="button" class="lk-open" data-size-it="${esc(sym)}">Position size</button></div></div>`;
   }
   // A US, UK or Japan stock (view only): price in its own currency, the trend, the chart; no Indian checks, no orders.
   function renderForeignCard(r){
