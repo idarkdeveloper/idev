@@ -891,6 +891,15 @@ td.prot-cell { min-width: 120px; }
 
 /* Recommendations */
 .recs .rec { padding: 14px 16px; gap: 8px; border-left: none; }
+/* A coloured edge and chip per action: BUY green, SELL red, HOLD ink, WATCH grey (the Portfolio design). Tokens only. */
+.recs .rec { border-left: 3px solid var(--color-neutral-600); }
+.recs .rec.buy { border-left-color: var(--color-profit); } .recs .rec.sell { border-left-color: var(--color-loss); }
+.recs .rec.hold { border-left-color: var(--color-text); } .recs .rec.watch { border-left-color: var(--color-neutral-600); }
+.act.buy { background: color-mix(in srgb, var(--color-profit) 18%, transparent); color: var(--color-profit); border-color: transparent; }
+.act.sell { background: color-mix(in srgb, var(--color-loss) 18%, transparent); color: var(--color-loss); border-color: transparent; }
+.act.hold { background: var(--color-text); color: var(--color-bg); }
+/* The holdings table: the profit/loss percentage as a soft pill under the amount */
+#mp-card .mp-table td .l2.pl-profit, #mp-card .mp-table td .l2.pl-loss { display: inline-block; margin-top: 3px; padding: 1px 8px; border-radius: 6px; font-size: 11.5px; background: color-mix(in srgb, currentColor 14%, transparent); }
 .rec-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .rec-when { margin-left: auto; font-size: 12px; white-space: nowrap; }
 .new-badge { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; padding: 1px 7px; border-radius: 999px; background: var(--color-accent); color: var(--color-bg); }

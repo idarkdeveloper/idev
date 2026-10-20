@@ -53,3 +53,9 @@ def test_the_forward_factor_screen_lives_on_the_paper_accounts_tab():
     paper = html[html.index('id="ws-paper"'):html.index('id="ws-tools"')]
     assert 'id="fw-card"' in paper and 'id="fw-card"' not in html[html.index('id="ws-overview"'):html.index('id="ws-deals"')]
     assert 'forward: "paper"' in html and '<a href="#forward">' in html
+
+
+def test_recommendation_cards_have_a_coloured_edge_per_action():
+    css = (UI / "nocturne.css").read_text(encoding="utf-8")
+    for needle in (".recs .rec.buy {", ".recs .rec.sell {", ".act.buy {", ".act.sell {", ".act.hold {", ".l2.pl-profit"):
+        assert needle in css, needle
