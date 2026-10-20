@@ -48,10 +48,10 @@
 
 <main class="ws-main">
   <nav class="ws-nav" aria-label="Sections" id="ws-nav">
-    <div class="ws-navgroup"><span class="ws-navhead">Overview</span><a href="#overview">Today</a><a href="#portfolio">My Groww portfolio</a><a href="#recs">Recommendations</a><a href="#practice" data-demo-only hidden>Practice portfolio</a><a href="#forward">Forward test: friction gate</a></div>
+    <div class="ws-navgroup"><span class="ws-navhead">Overview</span><a href="#overview">Today</a><a href="#portfolio">My Groww portfolio</a><a href="#recs">Recommendations</a><a href="#practice" data-demo-only hidden>Practice portfolio</a><a href="#forward">Friction gate</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Deals &amp; orders</span><a href="#deals">Disclosed deals</a><a href="#insider">Promoter and director buying</a><a href="#funds">Funds buying and selling</a><a href="#orders">Order history</a><a href="#runs">Recent runs</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Research</span><a href="#track-record">Claude's track record</a><a href="#screen">Factor screen</a><a href="#signal-lab">Signal lab</a><a href="#backtest">Investor deals backtest</a></div>
-    <div class="ws-navgroup"><span class="ws-navhead">Paper accounts</span><a href="#paper">All four, side by side</a><a href="#forward">Forward test: friction gate</a></div>
+    <div class="ws-navgroup"><span class="ws-navhead">Paper accounts</span><a href="#paper">All four, side by side</a><a href="#forward">Friction gate</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Tools</span><a href="#lookup">Look up a stock</a><a href="#size">Position size</a><a href="#costs">Trade cost</a></div>
     <div class="ws-navgroup"><span class="ws-navhead">Health</span><a href="#kill-switch">Kill switch</a><a href="#health">Data sources</a><a href="#groww-logins">Groww logins</a></div>
   </nav>
@@ -284,7 +284,7 @@
     </section>
 
     <section class="card" id="fw-card" data-anchor="forward">
-      <div class="cardhead"><h2>Forward test: friction gate</h2><span class="sub" id="fw-sub">paper-trading the screen month by month against its index fund</span></div>
+      <div class="cardhead"><h2>Friction gate</h2><span class="sub" id="fw-sub">does the Forward test account trade cheaply enough to trust?</span></div>
       <div class="cardbody fw-body" id="fw-body"></div>
     </section>
   </section>
@@ -1527,9 +1527,8 @@
       return;
     }
     // The value, return, gap and holdings of this account are the "Forward test" tile and the chart above; this card keeps what they do not show.
-    $("fw-sub").textContent = `top ${f.top} of ${f.universe} vs ${f.benchmark} · started ${shortDate((f.started||"").slice(0,10))}${f.band_filter_since ? " · price-band filter since " + shortDate(f.band_filter_since) : ""}${f.rules && f.rules.since ? " · research rules since " + shortDate(f.rules.since) + ": no stop, rank buffer " + f.rules.buffer + " (tax-aware to " + f.rules.tax_aware_floor + "), " + Math.round((f.rules.floor || 0) * 100) + "% disaster floor" : ""}`;
-    const h = f.history || [];
-    el.innerHTML = `<div class="sub">${h.length < 60 ? "Give it several months before reading anything into the gap. " : ""}The same account as the Forward test above; the friction gate below says whether it trades cheaply enough to trust.</div>${frictionRows(f.telemetry)}`;
+    $("fw-sub").textContent = `${f.rules && f.rules.since ? "rules since " + shortDate(f.rules.since) + ": no stop, rank buffer " + f.rules.buffer + ", " + Math.round((f.rules.floor || 0) * 100) + "% disaster floor" : "paper-traded against " + f.benchmark}`;
+    el.innerHTML = frictionRows(f.telemetry);
   }
 
   // ---- Paper accounts tab: the five accounts the server runs after each close (read-only, /api/paper-accounts) ----

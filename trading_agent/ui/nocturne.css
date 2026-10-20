@@ -1811,3 +1811,5 @@ svg.lk-mini.down .lk-fill { fill: color-mix(in srgb, var(--color-loss) 14%, tran
 }
 /* A narrow phone: the header has no room for the last-check text beside the brand (the freshness chip below says it) */
 @media (max-width: 520px) { .hdr #lastcheck { display: none; } }
+
+@media (max-width: 700px) { footer { padding-right: 76px; } }   /* the Ask mic floats over the right edge */
