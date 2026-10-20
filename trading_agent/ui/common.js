@@ -734,6 +734,41 @@ window.TA = (function(){
     return x;
   }
 
+  // Portfolio value over time with TradingView Lightweight Charts: an area for the holdings-at-past-prices series, a line for the
+  // value saved at each close, a dashed price line for the amount invested. Series are [[YYYY-MM-DD, value], ...] oldest first.
+  // Returns false when the library is missing; the caller says so. One chart at a time (a new call replaces the old one).
+  let valueChartInst = null;
+  function valueChart(box, o){
+    const LW = window.LightweightCharts;
+    if(valueChartInst){ try { valueChartInst.remove(); } catch(e){} valueChartInst = null; }
+    box.innerHTML = "";
+    if(!LW || typeof LW.createChart !== "function" || !LW.AreaSeries || !LW.LineSeries) return false;
+    const k = stockColors(), main = o.up ? k.up : k.down;
+    const chart = valueChartInst = LW.createChart(box, {
+      autoSize: true,
+      layout: {background: {type: LW.ColorType ? LW.ColorType.Solid : "solid", color: k.bg}, textColor: k.text, fontFamily: getComputedStyle(document.body).fontFamily, fontSize: 11, attributionLogo: true},
+      grid: {vertLines: {visible: false}, horzLines: {color: k.grid}},
+      rightPriceScale: {borderVisible: false}, timeScale: {borderVisible: false, fixLeftEdge: true, fixRightEdge: true, rightOffset: 1},
+      handleScroll: false, handleScale: false, crosshair: {mode: 0},
+      localization: {priceFormatter: (v) => "₹" + Math.round(v).toLocaleString("en-IN")}
+    });
+    const data = (pts) => pts.map(p => ({time: p[0], value: p[1]}));
+    let anchor = null;
+    const fit = o.inv == null ? undefined : (orig) => { const r = orig(); if(r && r.priceRange){ r.priceRange.minValue = Math.min(r.priceRange.minValue, o.inv); r.priceRange.maxValue = Math.max(r.priceRange.maxValue, o.inv); } return r; };   // the invested line stays on screen
+    if(o.back && o.back.length){
+      anchor = chart.addSeries(LW.AreaSeries, {lineColor: main, topColor: withAlpha(main, 0.28), bottomColor: withAlpha(main, 0), lineWidth: 2, priceLineVisible: false, lastValueVisible: false, autoscaleInfoProvider: fit});
+      anchor.setData(data(o.back));
+    }
+    if(o.real && o.real.length){
+      const real = chart.addSeries(LW.LineSeries, {color: k.ink, lineWidth: 2, priceLineVisible: false, lastValueVisible: false, pointMarkersVisible: true, autoscaleInfoProvider: fit});
+      real.setData(data(o.real));
+      anchor = anchor || real;
+    }
+    if(anchor && o.inv != null) anchor.createPriceLine({price: o.inv, color: k.text, lineWidth: 1, lineStyle: LW.LineStyle ? LW.LineStyle.Dashed : 2, axisLabelVisible: true, title: "invested"});
+    chart.timeScale().fitContent();
+    return true;
+  }
+
   const fmtVol = (v) => v == null ? "n/a" : v >= 1e7 ? (v / 1e7).toFixed(2) + " Cr" : v >= 1e5 ? (v / 1e5).toFixed(2) + " L"
     : Math.round(v).toLocaleString("en-IN");
   const timeKey = (t) => typeof t === "string" ? t : typeof t === "number" ? t
@@ -1195,7 +1230,7 @@ window.TA = (function(){
 
   return {$, esc, priceMove, priceLine, setCurrency: (fn) => { currencyFn = fn; }, currency, sym, money, signed, pct, when, cap, toast, api, tile,
           C, NS, niceTicks, shortDate, lineChart, histogram, ddHistogram, rupeesShort, inr, px, bigMoney, foreignMarket, qualifyTicker, MARKET_SUFFIX, sinr, spct, quoteHtml, rangePos, quoteAge,
-          dayLabel, groupRuns, isQuietRun, daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart, loader};
+          dayLabel, groupRuns, isQuietRun, daysAgo, shortDay, clip, lookupTakeaway, factorTakeaway, signalTakeaway, signalRows, sizeTakeaway, attachSuggest, annChip, newsNeedsLabels, newsPollNext, NEWS_POLL_MS, theme, safety, stockChart, valueChart, loader};
 })();
 window.TA.theme.init();
 // Installable app: the service worker (sw.js) only on https or this machine; it never stores API answers. Quiet when it cannot.

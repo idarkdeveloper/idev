@@ -666,10 +666,10 @@ def test_live_v2_workspaces_layout():
     pos = [html.index(f'id="ws-{w}"') for w in ("overview", "deals", "research", "paper", "tools")]
     assert pos == sorted(pos) and html.index('id="ws-tabs"') < pos[0]
     ov, deals, research, paper, tools = pos
-    assert ov < html.index('id="mp-card"') < html.index('data-anchor="recs"') < html.index('data-anchor="forward"') < deals
+    assert ov < html.index('id="mp-card"') < html.index('data-anchor="recs"') < deals
     assert deals < html.index('data-anchor="orders"') < html.index('data-anchor="runs"') < research
     assert research < html.index('data-anchor="lookup"') < html.index('data-anchor="backtest"') < paper
-    assert paper < html.index('data-anchor="paper"') < tools
+    assert paper < html.index('data-anchor="paper"') < html.index('data-anchor="forward"') < tools   # the forward test is a paper account
     assert tools < html.index('data-anchor="size"') < html.index('data-anchor="costs"') < html.index("<footer>")
     assert 'class="topsplit"' not in html and 'class="split-right"' not in html
     for w in ("overview", "deals", "research", "tools"):

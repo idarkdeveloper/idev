@@ -35,7 +35,21 @@ def test_the_app_serves_the_saved_days(tmp_path):
 
 def test_the_page_draws_the_value_chart():
     html = (UI / "index.html").read_text(encoding="utf-8")
-    for needle in ('id="mp-eq"', "/api/equity-history", "function renderEquity"):
+    for needle in ('id="mp-eq"', "/api/equity-history", "function renderValueChart"):
         assert needle in html, needle
     css = (UI / "nocturne.css").read_text(encoding="utf-8")
-    assert ".eq-back" in css and ".eq-real" in css
+    assert "#mp-eq" in css
+
+
+def test_the_value_chart_function_has_its_own_name():
+    """index.html already has a practice-account renderEquity(); a second one with that name silently replaced it
+    (hoisting) and the Portfolio chart stayed empty."""
+    html = (UI / "index.html").read_text(encoding="utf-8")
+    assert html.count("function renderEquity(") == 1
+
+
+def test_the_forward_factor_screen_lives_on_the_paper_accounts_tab():
+    html = (UI / "index.html").read_text(encoding="utf-8")
+    paper = html[html.index('id="ws-paper"'):html.index('id="ws-tools"')]
+    assert 'id="fw-card"' in paper and 'id="fw-card"' not in html[html.index('id="ws-overview"'):html.index('id="ws-deals"')]
+    assert 'forward: "paper"' in html and '<a href="#forward">' in html

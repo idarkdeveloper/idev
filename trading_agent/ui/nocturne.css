@@ -851,7 +851,8 @@ main.ws-main { flex-direction: row; align-items: flex-start; gap: 28px; padding-
 #mp-card .tiles { background: none; box-shadow: none; border-radius: 0; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); padding-left: 18px; }
 #mp-card .tile { padding: 4px 16px 14px 0; margin-right: 16px; gap: 2px; }
 #mp-card .tile .big { font-size: 24px; line-height: 30px; }
-.ws-panel > .tiles { margin: 0; }
+.ws-panel > .tiles { margin: 0 0 8px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.ws-panel > .tiles .tile .big { font-size: 22px; line-height: 28px; }
 .cardhead > h2 + .sub { min-width: 0; }
 
 /* Data tables: rules between rows, the table scrolls inside its card */
@@ -1688,14 +1689,8 @@ body[data-mode="screener"] .sc-mtab, .sc-mtab { flex-direction: row; align-items
 @media (max-width: 700px) { .alloc svg { width: 112px; height: 112px; } }
 .eq-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; margin-bottom: 8px; }
 .eq-k { flex: 0 0 100%; font-size: 11px; letter-spacing: .5px; color: var(--color-muted); }
-.eq-big { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.eq-big { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .eq-delta { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.eq-svg { width: 100%; height: auto; display: block; }
-.eq-axis { font-size: 10px; fill: var(--color-muted); font-variant-numeric: tabular-nums; }
-.eq-back { stroke-width: 2; stroke-linejoin: round; } .eq-back.up { stroke: var(--color-profit); } .eq-back.down { stroke: var(--color-loss); }
-.eq-area.up { fill: color-mix(in srgb, var(--color-profit) 16%, transparent); } .eq-area.down { fill: color-mix(in srgb, var(--color-loss) 16%, transparent); }
-.eq-inv { stroke: var(--color-neutral-500); stroke-width: 1.2; stroke-dasharray: 4 4; }
-.eq-real { stroke: var(--color-text); stroke-width: 2.5; stroke-linejoin: round; }
-.eq-real-dot { fill: var(--color-text); } .eq-back-dot { fill: var(--color-neutral-400); }
 .eq-key { display: inline-block; width: 18px; height: 0; vertical-align: middle; margin-right: 6px; border-top: 2px solid var(--color-text); }
+#mp-eq { height: 230px; }
 .eq-key.back { border-top-color: var(--color-profit); } .eq-key.inv { border-top: 2px dashed var(--color-neutral-500); }
