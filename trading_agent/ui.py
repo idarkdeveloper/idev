@@ -1464,6 +1464,11 @@ class App:
             self._members_cache = (time.time(), members)
         return members
 
+    def equity_history(self) -> dict[str, Any]:
+        """GET /api/equity-history: the saved portfolio value, one line per trading day since the first read."""
+        from .equity_history import read_days
+        return {"days": read_days(self.settings.state_dir)}
+
     def portfolio_sectors(self) -> dict[str, Any]:
         """GET /api/portfolio-sectors: {SYMBOL: NSE industry} for the NIFTY 500, which is the sector the allocation chart groups by.
         Public NSE data (the same 12-hour list as similar stocks), never Groww. Without it the chart says "Other"."""
@@ -2269,6 +2274,16 @@ class App:
         except Exception:  # noqa: BLE001
             out["corp_actions"], out["corp_actions_note"] = {}, None
         self._my_portfolio, self._my_portfolio_at = out, time.time()
+        try:   # one value per trading day for the Portfolio page's value-over-time chart (the last read of a day is its close)
+            if out.get("holdings") and out.get("value"):
+                from .equity_history import record_day
+                from .timezones import IST
+                now = self._now_dt()
+                hol = self._safe_holidays()
+                day = now.astimezone(IST).date() if safety.market_open(now, hol) else safety.last_close(now, hol).date()
+                record_day(self.settings.state_dir, day.isoformat(), out["value"], out.get("invested"))
+        except Exception as e:  # noqa: BLE001 - a nicety, never a reason to fail the page
+            log.warning("could not save the portfolio value: %s", e)
         try:   # the freshness chip's "prices from" date: a priced read while the NSE is open means today's prices, not the last close
             from .timezones import IST as _IST
             now = self._now_dt()
@@ -2741,6 +2756,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 self._json(app.integration())
             elif path == "/api/health":
                 self._json(app.health())
+            elif path == "/api/equity-history":
+                self._json(app.equity_history())
             elif path == "/api/portfolio-sectors":
                 self._json(app.portfolio_sectors())
             elif path == "/api/my-portfolio":

@@ -67,6 +67,17 @@
 
   <!-- ===================== Overview ===================== -->
   <section class="ws-panel" id="ws-overview" data-ws="overview" role="tabpanel" aria-labelledby="wst-overview">
+    <div class="ov-hero" id="mp-charts" hidden>
+      <section class="card mp-chart mp-equity" aria-labelledby="mp-eq-h"><h3 id="mp-eq-h" class="sr-only">Portfolio value</h3>
+        <div class="eq-head" id="mp-eq-head"></div>
+        <div id="mp-eq"></div>
+        <p class="sub" id="mp-eq-note" style="margin:8px 0 0;font-size:12px"></p></section>
+          <section class="card mp-chart" aria-labelledby="mp-alloc-h"><h3 id="mp-alloc-h">Allocation by sector</h3>
+            <div class="alloc"><svg id="mp-donut" viewBox="0 0 120 120" role="img" aria-label="Allocation by sector"></svg><ul class="alloc-legend" id="mp-alloc-legend"></ul></div></section>
+    </div>
+    <div class="tiles" id="tiles"></div>
+    <div class="sub" id="live-stamp" role="status" style="margin:-4px 0 8px;padding-left:18px;font-size:12px"></div>
+
     <div class="ov-today" data-anchor="overview">
       <section class="card regime-card">
         <div class="regime-left">
@@ -91,22 +102,16 @@
           <button type="button" class="small primary" id="mp-copy" style="margin-left:auto" hidden>Copy into practice account</button>
           <button type="button" class="small" id="mp-refresh">Refresh</button>
           <button type="button" class="small" id="mp-groww-refresh" hidden title="Read your holdings from Groww now, even outside market hours (read-only)">Refresh from Groww</button></div>
-        <div class="tiles" id="tiles"></div>
-      <div class="sub" id="live-stamp" role="status" style="margin:-4px 0 8px;padding-left:18px;font-size:12px"></div>
         <div class="cardbody" id="copy-confirm" role="group" aria-label="Confirm copying your Groww portfolio" hidden>
           <div class="row"><span id="copy-confirm-text"></span>
             <button type="button" class="small primary" id="copy-yes">Yes, copy</button>
             <button type="button" class="small" id="copy-no">Cancel</button></div></div>
         <div class="cardbody sub" id="copy-result" aria-live="polite" hidden></div>
         <div class="cardbody" id="mp-body" hidden><div class="stats" id="mp-stats"></div></div>
-        <div class="mp-charts" id="mp-charts" hidden>
-          <section class="mp-chart" aria-labelledby="mp-alloc-h"><h3 id="mp-alloc-h">Allocation by sector</h3>
-            <div class="alloc"><svg id="mp-donut" viewBox="0 0 120 120" role="img" aria-label="Allocation by sector"></svg><ul class="alloc-legend" id="mp-alloc-legend"></ul></div></section>
-          <section class="mp-chart" aria-labelledby="mp-pl-h"><h3 id="mp-pl-h">Profit / loss by holding</h3><div class="plbars" id="mp-plbars"></div></section>
-        </div>
         <div class="scroll tscroll"><table class="dt mp-table"><thead><tr><th>Stock</th><th class="spark-col">30 days</th><th class="num hold-col">Shares</th><th class="num hold-col">Buy price</th><th class="num">Price</th><th class="num">Today</th><th class="num">Value</th><th class="num">Profit / loss</th><th class="prot-cell" id="mp-prot-th">Stop</th></tr></thead><tbody id="mp-rows"></tbody><tfoot id="mp-foot"></tfoot></table></div>
       </section>
       <section class="recs-col" data-anchor="recs">
+        <section class="card mp-chart" id="mp-pl-card" hidden aria-labelledby="mp-pl-h"><h3 id="mp-pl-h">Profit / loss by holding</h3><div class="plbars" id="mp-plbars"></div></section>
         <div class="recs-head"><h2>Recommendations</h2><span class="sub">from Claude, newest first</span></div>
         <div id="recs" class="recs"></div>
       </section>
@@ -1427,9 +1432,44 @@
   // Allocation by sector (a donut) and profit/loss by holding (bars), drawn from the holdings already on the page.
   // The sector is NSE's industry from the NIFTY 500 list (/api/portfolio-sectors); a bond is "Bonds", anything not in the list "Other".
   let SECTORS = null, secLoading = false;
+  let EQ = null, eqLoading = false;   // the saved daily values from the server (/api/equity-history)
+  // Portfolio value over time. Dashed: what the holdings you own today were worth on each day of the last month (today's shares x
+  // Yahoo's closes; it ignores any buys or sells in that month). Solid: the value the server saved at each close, which is real
+  // and fills in as days pass.
+  function renderEquity(m){
+    const box = $("mp-eq"), note = $("mp-eq-note");
+    const hs = (m.holdings || []).filter(h => h.value != null && h.value > 0);
+    const real = (EQ || []).filter(r => r.value != null).map(r => [r.day, r.value]);
+    const priced = hs.filter(h => h.kind !== "bond" && h.qty != null && ((SPARK[h.symbol] || {}).bars || []).length > 1);
+    const fixed = hs.filter(h => !priced.includes(h)).reduce((s, h) => s + h.value, 0);   // bonds and unpriced: held flat
+    let back = [];
+    if(priced.length){
+      const days = [...new Set(priced.flatMap(h => SPARK[h.symbol].bars.map(b => String(b.time).slice(0, 10))))].sort();
+      back = days.map(d => [d, fixed + priced.reduce((s, h) => { const bars = SPARK[h.symbol].bars; let px = bars[0].close; for(const b of bars){ if(String(b.time).slice(0, 10) <= d) px = b.close; else break; } return s + h.qty * px; }, 0)]);
+    }
+    const total = hs.reduce((s, h) => s + h.value, 0), series = back.length > 1 ? back : real;
+    const chg = series.length > 1 ? total - series[0][1] : null, chgPct = chg != null && series[0][1] ? chg / series[0][1] * 100 : null;
+    $("mp-eq-head").innerHTML = `<span class="eq-k">HOLDINGS VALUE · GROWW</span><b class="eq-big">${esc(inr(total))}</b>`
+      + (chg != null ? `<span class="eq-delta ${toneOf(chg)}">${esc(sinr(chg))} (${chgPct >= 0 ? "+" : "−"}${Math.abs(chgPct).toFixed(2)}%) · ${back.length > 1 ? "1M" : "since " + esc(series[0][0])}</span>` : "");
+    if(back.length < 2 && real.length < 2){ box.innerHTML = '<div class="sub">The chart appears once prices for your holdings have loaded.</div>'; note.textContent = ""; return; }
+    const all = back.concat(real), ds = all.map(p => Date.parse(p[0] + "T00:00:00Z")), inv = m.invested > 0 ? m.invested : null, vs = all.map(p => p[1]).concat(inv == null ? [] : [inv]);
+    const x0 = Math.min(...ds), x1 = Math.max(...ds), lo = Math.min(...vs), hi = Math.max(...vs), pad = (hi - lo) * 0.12 || hi * 0.02 || 1;
+    const W = 640, H = 170, L = 8, R = 8, T = 10, B = 22, sx = d => L + (Date.parse(d + "T00:00:00Z") - x0) / ((x1 - x0) || 1) * (W - L - R), sy = v => T + (1 - (v - (lo - pad)) / ((hi + pad) - (lo - pad))) * (H - T - B);
+    const line = (pts, cls) => pts.length > 1 ? `<polyline class="${cls}" fill="none" points="${pts.map(p => sx(p[0]).toFixed(1) + "," + sy(p[1]).toFixed(1)).join(" ")}"/>` : pts.length === 1 ? `<circle class="${cls}-dot" cx="${sx(pts[0][0]).toFixed(1)}" cy="${sy(pts[0][1]).toFixed(1)}" r="3.5"/>` : "";
+    const area = pts => pts.length > 1 ? `<polygon class="eq-area ${chg != null && chg < 0 ? "down" : "up"}" points="${sx(pts[0][0]).toFixed(1)},${(H - B).toFixed(1)} ${pts.map(p => sx(p[0]).toFixed(1) + "," + sy(p[1]).toFixed(1)).join(" ")} ${sx(pts[pts.length - 1][0]).toFixed(1)},${(H - B).toFixed(1)}"/>` : "";
+    const fmt = d => new Date(d + "T00:00:00Z").toLocaleDateString("en-IN", {day: "numeric", month: "short", timeZone: "UTC"});
+    const first = new Date(x0).toISOString().slice(0, 10), last = new Date(x1).toISOString().slice(0, 10);
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="eq-svg" role="img" aria-label="Portfolio value from ${esc(fmt(first))} to ${esc(fmt(last))}, from ${esc(inr(vs[0]))} to ${esc(inr(vs[vs.length - 1]))}">
+      <text x="${L}" y="${T + 4}" class="eq-axis">${esc(inr(hi))}</text><text x="${L}" y="${H - B - 4}" class="eq-axis">${esc(inr(lo))}</text>
+      ${area(back)}${inv == null ? "" : `<line class="eq-inv" x1="${L}" x2="${W - R}" y1="${sy(inv).toFixed(1)}" y2="${sy(inv).toFixed(1)}"/>`}${line(back, "eq-back " + (chg != null && chg < 0 ? "down" : "up"))}${line(real, "eq-real")}
+      <text x="${L}" y="${H - 6}" class="eq-axis">${esc(fmt(first))}</text><text x="${W - R}" y="${H - 6}" text-anchor="end" class="eq-axis">${esc(fmt(last))}</text></svg>`;
+    note.innerHTML = `<span class="eq-key back"></span>today's holdings at past prices (ignores buys and sells) &nbsp; <span class="eq-key real"></span>value saved at each close${real.length ? ` · ${real.length} day${real.length === 1 ? "" : "s"} so far` : " · starts with the next read"}${inv == null ? "" : ` &nbsp; <span class="eq-key inv"></span>invested ${esc(inr(inv))}`}`;
+  }
   function renderCharts(m){
     const box = $("mp-charts"), hs = (m.holdings || []).filter(h => h.value != null && h.value > 0);
-    box.hidden = !hs.length; if(!hs.length) return;
+    box.hidden = !hs.length; $("mp-pl-card").hidden = !hs.length; if(!hs.length) return;
+    if(EQ === null && !eqLoading){ eqLoading = true; api("/api/equity-history").then(r => { EQ = r.days || []; }, () => { EQ = []; }).then(() => { eqLoading = false; if(MP && MP.holdings) renderCharts(MP); }); }
+    renderEquity(m);
     if(SECTORS === null && !secLoading){ secLoading = true; api("/api/portfolio-sectors").then(r => { SECTORS = r.sectors || {}; }, () => { SECTORS = {}; }).then(() => { secLoading = false; if(MP && MP.holdings) renderCharts(MP); }); }
     const by = {}; let total = 0;
     hs.forEach(h => { const k = h.kind === "bond" ? "Bonds" : (SECTORS || {})[String(h.symbol).toUpperCase()] || (SECTORS === null ? "Loading…" : "Other"); by[k] = (by[k] || 0) + h.value; total += h.value; });
