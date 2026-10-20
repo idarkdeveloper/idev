@@ -395,3 +395,19 @@ def test_the_watch_loop_ticks_the_backup_scheduler_and_survives_its_errors(setti
 
     w = Watcher(settings, backup=Boom(), awake=None, weekdays_only=False)
     assert "backup" not in w.tick() and len(seen) == 1
+
+
+def test_breaker_logs_which_call_was_refused(caplog):
+    """A refusal names the host, path and status (never the query string) so a degraded NSE can be diagnosed."""
+    from trading_agent.circuit import CircuitBreaker, GuardedSession
+
+    class R:
+        status_code = 403
+    class S:
+        def get(self, url, **kw):
+            return R()
+    g = GuardedSession(S(), CircuitBreaker("NSE"))
+    with caplog.at_level("WARNING"):
+        g.get("https://www.nseindia.com/api/corporate-announcements?symbol=TCS")
+    assert "www.nseindia.com/api/corporate-announcements HTTP 403" in caplog.text
+    assert "symbol=TCS" not in caplog.text

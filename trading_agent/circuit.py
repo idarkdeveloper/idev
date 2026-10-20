@@ -64,9 +64,11 @@ class CircuitBreaker:
                 log.info("%s connection recovered", self.name)
                 self._write()
 
-    def failure(self) -> None:
+    def failure(self, cause: str = "") -> None:
         with self._lock:
             self.failures += 1
+            if cause:   # which call was refused and how: the breaker alone says only "degraded"
+                log.warning("%s refusal %d: %s", self.name, self.failures, cause)
             if self.failures < self.threshold:
                 return
             delay = self.delays[min(self.failures - self.threshold, len(self.delays) - 1)]
@@ -102,6 +104,13 @@ def read_degraded(state_file: Path, now: float | None = None) -> dict[str, Any] 
     return data
 
 
+def _where(url: str) -> str:
+    """host and path of a request, without the query string."""
+    from urllib.parse import urlsplit
+    u = urlsplit(str(url))
+    return f"{u.netloc}{u.path}"
+
+
 class GuardedSession:
     """Wraps a requests session: ``get`` goes through the breaker; everything else is passed to the session."""
 
@@ -113,12 +122,12 @@ class GuardedSession:
         self.breaker.before()
         try:
             resp = self.inner.get(url, **kw)
-        except requests.RequestException:
-            self.breaker.failure()
+        except requests.RequestException as e:
+            self.breaker.failure(f"{_where(url)} {type(e).__name__}")
             raise
         code = getattr(resp, "status_code", 200)
         if isinstance(code, int) and (code in (403, 429) or code >= 500):
-            self.breaker.failure()
+            self.breaker.failure(f"{_where(url)} HTTP {code}")
         else:
             self.breaker.success()
         return resp
