@@ -1788,6 +1788,8 @@ svg.lk-mini.down .lk-fill { fill: color-mix(in srgb, var(--color-loss) 14%, tran
   .ws-bottom button[aria-current="page"] { color: var(--color-text); background: var(--color-hover); }
   .ws-tabbar { display: none; }
   body { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
-  .va { bottom: calc(68px + env(safe-area-inset-bottom, 0px)); }
-  .va-on { padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+  body .va { bottom: calc(76px + env(safe-area-inset-bottom, 0px)); }   /* above the bar; body in front so voice.css (loaded later) does not win */
+  body.va-on { padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+  body.va-on .toast, body.va-on .ask-card { bottom: calc(148px + env(safe-area-inset-bottom, 0px)); }
 }
+.eq-delta.eq-small { font-size: 12px; font-weight: 500; opacity: .85; }

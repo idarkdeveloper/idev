@@ -1459,11 +1459,14 @@
     }
     const total = hs.reduce((s, h) => s + h.value, 0), series = back.length > 1 ? back : real;
     const chg = series.length > 1 ? total - series[0][1] : null, chgPct = chg != null && series[0][1] ? chg / series[0][1] * 100 : null;
+    const paid = m.invested > 0 ? m.invested : null, pl = paid != null ? total - paid : null, plPct = paid != null ? pl / paid * 100 : null;   // the colour is profit or loss against what you paid
+    const delta = (v, p, label) => `<span class="eq-delta ${toneOf(v)}">${esc(sinr(v))} (${p >= 0 ? "+" : "−"}${Math.abs(p).toFixed(2)}%) · ${label}</span>`;
     $("mp-eq-head").innerHTML = `<span class="eq-k">HOLDINGS VALUE · GROWW</span><b class="eq-big">${esc(inr(total))}</b>`
-      + (chg != null ? `<span class="eq-delta ${toneOf(chg)}">${esc(sinr(chg))} (${chgPct >= 0 ? "+" : "−"}${Math.abs(chgPct).toFixed(2)}%) · ${back.length > 1 ? "1M" : "since " + esc(series[0][0])}</span>` : "");
+      + (pl != null ? delta(pl, plPct, "vs what you paid") : "")
+      + (chg != null ? delta(chg, chgPct, back.length > 1 ? "1M" : "since " + esc(series[0][0])).replace('class="eq-delta ', 'class="eq-delta eq-small ') : "");
     if(back.length < 2 && real.length < 2){ box.innerHTML = '<div class="sub">The chart appears once prices for your holdings have loaded.</div>'; note.textContent = ""; return; }
     const inv = m.invested > 0 ? m.invested : null;
-    if(!TA.valueChart(box, {back, real, inv, up: !(chg != null && chg < 0)})){ box.innerHTML = '<div class="sub">The chart library did not load.</div>'; note.textContent = ""; return; }
+    if(!TA.valueChart(box, {back, real, inv, up: pl != null ? pl >= 0 : !(chg != null && chg < 0)})){ box.innerHTML = '<div class="sub">The chart library did not load.</div>'; note.textContent = ""; return; }
     note.innerHTML = `<span class="eq-key back"></span>today's holdings at past prices (ignores buys and sells) &nbsp; <span class="eq-key real"></span>value saved at each close${real.length ? ` · ${real.length} day${real.length === 1 ? "" : "s"} so far` : " · starts with the next read"}${inv == null ? "" : ` &nbsp; <span class="eq-key inv"></span>invested ${esc(inr(inv))}`}`;
   }
   function renderCharts(m){
