@@ -1703,3 +1703,20 @@ body[data-mode="screener"] .sc-mtab, .sc-mtab { flex-direction: row; align-items
 .eq-key { display: inline-block; width: 18px; height: 0; vertical-align: middle; margin-right: 6px; border-top: 2px solid var(--color-text); }
 #mp-eq { height: 230px; }
 .eq-key.back { border-top-color: var(--color-profit); } .eq-key.inv { border-top: 2px dashed var(--color-neutral-500); }
+
+/* Deals & orders (the Portfolio design): Order history wider than Recent runs */
+.ord-runs { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+@media (max-width: 900px) { .ord-runs { grid-template-columns: minmax(0, 1fr); } }
+
+/* Research (the Portfolio design): the collapsed tools sit side by side; an opened one takes the full width */
+.coll-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 20px; align-items: start; }
+.coll-grid > details[open] { grid-column: 1 / -1; }
+.coll-grid > details > summary .sub { display: block; margin-top: 4px; }
+
+/* Paper accounts (the Portfolio design): the accounts sit side by side under the chart */
+.pa-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); }
+.pa-list .pa-acct .fw-stats { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+@media (min-width: 1100px) { .pa-list .pa-acct:nth-child(even) { box-shadow: inset 1px 0 0 var(--color-divider); } }
+
+/* Health (the Portfolio design): the kill switch card carries a red outline so it is never mistaken for a report */
+.ks-card { box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-loss) 55%, transparent); background: color-mix(in srgb, var(--color-loss) 6%, var(--color-surface)); }

@@ -668,9 +668,9 @@ def test_live_v2_workspaces_layout():
     ov, deals, research, paper, tools = pos
     assert ov < html.index('id="mp-card"') < html.index('data-anchor="recs"') < deals
     assert deals < html.index('data-anchor="orders"') < html.index('data-anchor="runs"') < research
-    assert research < html.index('data-anchor="lookup"') < html.index('data-anchor="backtest"') < paper
+    assert research < html.index('data-anchor="track-record"') < html.index('data-anchor="backtest"') < paper
     assert paper < html.index('data-anchor="paper"') < html.index('data-anchor="forward"') < tools   # the forward test is a paper account
-    assert tools < html.index('data-anchor="size"') < html.index('data-anchor="costs"') < html.index("<footer>")
+    assert tools < html.index('data-anchor="lookup"') < html.index('data-anchor="size"') < html.index('data-anchor="costs"') < html.index("<footer>")   # Look up a stock is a tool
     assert 'class="topsplit"' not in html and 'class="split-right"' not in html
     for w in ("overview", "deals", "research", "tools"):
         assert f'data-ws-tab="{w}"' in html and f'role="tab" id="wst-{w}"' in html
