@@ -1793,3 +1793,21 @@ svg.lk-mini.down .lk-fill { fill: color-mix(in srgb, var(--color-loss) 14%, tran
   body.va-on .toast, body.va-on .ask-card { bottom: calc(148px + env(safe-area-inset-bottom, 0px)); }
 }
 .eq-delta.eq-small { font-size: 12px; font-weight: 500; opacity: .85; }
+
+/* Claude's track record on a phone: each call is a small card instead of a table that scrolls sideways */
+@media (max-width: 700px) {
+  .scd-calls thead { display: none; }
+  .scd-calls, .scd-calls tbody, .scd-calls tr, .scd-calls td { display: block; }
+  .scd-calls { min-width: 0 !important; width: 100%; }
+  .scd-calls tr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 12px 0; border-bottom: 1px solid var(--color-rule); }
+  .scd-calls td { padding: 0 !important; border: 0; white-space: normal; }
+  .scd-calls td:nth-child(3) { order: 1; font-size: 16px; }
+  .scd-calls td:nth-child(2) { order: 2; }
+  .scd-calls td:last-child { order: 3; margin-left: auto; }
+  .scd-calls td:nth-child(1) { order: 4; flex: 1 1 100%; }
+  .scd-calls td:nth-child(4) { order: 5; flex: 1 1 100%; color: var(--color-label); }
+  .scd-calls td[data-l] { order: 6; font-size: 13px; }
+  .scd-calls td[data-l]::before { content: attr(data-l) ": "; color: var(--color-muted); }
+}
+/* A narrow phone: the header has no room for the last-check text beside the brand (the freshness chip below says it) */
+@media (max-width: 520px) { .hdr #lastcheck { display: none; } }
