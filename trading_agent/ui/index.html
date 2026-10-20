@@ -494,6 +494,7 @@
     $("demo-banner").hidden = false;
     $("mp-body").hidden = false;   // the Groww card keeps its own figures; the tiles above it are the practice account's
     $("ws-overview").insertBefore($("tiles"), $("ov-split"));
+    $("ws-overview").insertBefore($("pp-card"), $("ov-split"));   // the practice account sits above the Groww portfolio
     document.querySelectorAll("[data-demo-only]").forEach(e => { e.hidden = false; });
     $("demo-title").textContent = SAMPLE ? "Demo \u00b7 bundled sample data (offline)" : "Demo \u00b7 practice money on real market data";
     $("demo-sub").textContent = SAMPLE ? "Bundled sample deals and prices, its own practice account. Never touches Groww."
@@ -998,7 +999,7 @@
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
     renderOrders();
     renderStopSold();
-    if(MODE === "demo") renderEquity();
+    if(MODE === "demo"){ renderEquity(); paintHero(); }
     renderForward();
     if(S.factor_backtest && S.factor_backtest.dates && $("fb-result").dataset.at !== S.factor_backtest.at){ renderFactor(S.factor_backtest); $("fb-result").dataset.at = S.factor_backtest.at; }
     // each research tool is disabled only while ITS job runs (or an exclusive job runs, or three tools already run)
@@ -1437,7 +1438,7 @@
         <td></td><td class="num hold-col"></td><td class="num hold-col">${m.invested != null ? inr(m.invested) : ""}</td><td></td><td class="num nowrap ${tone(today)}">${today == null ? "" : sinr(today)}</td><td class="num">${inr(m.value)}</td>
         <td class="num"><div class="${tone(m.pl)}">${sinr(m.pl)}</div><div class="l2 ${tone(m.pl_pct)}">${spct(m.pl_pct)}</div></td>${MODE === "demo" ? "" : "<td></td>"}</tr>` : "";
     loadSparks(m.holdings);
-    renderCharts(m);
+    paintHero();
   }
   // Allocation by sector (a donut) and profit/loss by holding (bars), drawn from the holdings already on the page.
   // The sector is NSE's industry from the NIFTY 500 list (/api/portfolio-sectors); a bond is "Bonds", anything not in the list "Other".
@@ -1446,43 +1447,54 @@
   // Portfolio value over time (TradingView Lightweight Charts, TA.valueChart). The area: what the holdings you own today were worth on
   // each day of the last month (today's shares x Yahoo's closes; it ignores any buys or sells in that month). The white line: the
   // value the server saved at each close, which is real and fills in as days pass.
+  // The practice account in the same shape as the Groww read, so the hero (chart, donut, profit/loss bars) draws either one.
+  function practiceM(){
+    const a = S && S.account, ps = (S && S.positions) || [], perf = S && S.performance;
+    if(!a || !ps.length) return {holdings: []};
+    const byDay = {}; (S.equity_history || []).forEach(r => { byDay[String(r.at).slice(0, 10)] = r.equity; });
+    const hs = ps.map(p => { const inv = p.qty * p.avg_entry_price; return {symbol: p.symbol, qty: p.qty, value: p.market_value, pl: p.unrealized_pl, pl_pct: inv ? p.unrealized_pl / inv : null}; });
+    if(a.cash > 0) hs.push({symbol: "Cash", kind: "cash", value: a.cash});
+    return {practice: true, holdings: hs, total: a.equity, invested: perf ? (perf.baseline || perf.starting_cash) : null, series: Object.entries(byDay).sort()};
+  }
+  const paintHero = () => { const m = MODE === "demo" ? practiceM() : MP; if(m && m.holdings) renderCharts(m); };
   function renderValueChart(m){
     const box = $("mp-eq"), note = $("mp-eq-note");
     const hs = (m.holdings || []).filter(h => h.value != null && h.value > 0);
-    const real = (EQ || []).filter(r => r.value != null).map(r => [r.day, r.value]);
+    const prac = !!m.practice, real = prac ? m.series : (EQ || []).filter(r => r.value != null).map(r => [r.day, r.value]);
     const priced = hs.filter(h => h.kind !== "bond" && h.qty != null && ((SPARK[h.symbol] || {}).bars || []).length > 1);
     const fixed = hs.filter(h => !priced.includes(h)).reduce((s, h) => s + h.value, 0);   // bonds and unpriced: held flat
     let back = [];
-    if(priced.length){
+    if(priced.length && !prac){
       const days = [...new Set(priced.flatMap(h => SPARK[h.symbol].bars.map(b => String(b.time).slice(0, 10))))].sort();
       back = days.map(d => [d, fixed + priced.reduce((s, h) => { const bars = SPARK[h.symbol].bars; let px = bars[0].close; for(const b of bars){ if(String(b.time).slice(0, 10) <= d) px = b.close; else break; } return s + h.qty * px; }, 0)]);
     }
-    const total = hs.reduce((s, h) => s + h.value, 0), series = back.length > 1 ? back : real;
+    const total = prac ? m.total : hs.reduce((s, h) => s + h.value, 0), series = back.length > 1 ? back : real;
     const chg = series.length > 1 ? total - series[0][1] : null, chgPct = chg != null && series[0][1] ? chg / series[0][1] * 100 : null;
     const paid = m.invested > 0 ? m.invested : null, pl = paid != null ? total - paid : null, plPct = paid != null ? pl / paid * 100 : null;   // the colour is profit or loss against what you paid
     const delta = (v, p, label) => `<span class="eq-delta ${toneOf(v)}">${esc(sinr(v))} (${p >= 0 ? "+" : "−"}${Math.abs(p).toFixed(2)}%) · ${label}</span>`;
-    $("mp-eq-head").innerHTML = `<span class="eq-k">HOLDINGS VALUE · GROWW</span><b class="eq-big">${esc(inr(total))}</b>`
-      + (pl != null ? delta(pl, plPct, "vs what you paid") : "")
+    $("mp-eq-head").innerHTML = `<span class="eq-k">${prac ? "PRACTICE ACCOUNT · PRACTICE MONEY" : "HOLDINGS VALUE · GROWW"}</span><b class="eq-big">${esc(inr(total))}</b>`
+      + (pl != null ? delta(pl, plPct, prac ? "since start" : "vs what you paid") : "")
       + (chg != null ? delta(chg, chgPct, back.length > 1 ? "1M" : "since " + esc(series[0][0])).replace('class="eq-delta ', 'class="eq-delta eq-small ') : "");
     if(back.length < 2 && real.length < 2){ box.innerHTML = '<div class="sub">The chart appears once prices for your holdings have loaded.</div>'; note.textContent = ""; return; }
     const inv = m.invested > 0 ? m.invested : null;
     if(!TA.valueChart(box, {back, real, inv, up: pl != null ? pl >= 0 : !(chg != null && chg < 0)})){ box.innerHTML = '<div class="sub">The chart library did not load.</div>'; note.textContent = ""; return; }
+    if(prac){ note.innerHTML = `<span class="eq-key real"></span>account value at each check · <span class="eq-key inv"></span>starting value`; return; }
     note.innerHTML = `<span class="eq-key back"></span>today's holdings at past prices (ignores buys and sells) &nbsp; <span class="eq-key real"></span>value saved at each close${real.length ? ` · ${real.length} day${real.length === 1 ? "" : "s"} so far` : " · starts with the next read"}${inv == null ? "" : ` &nbsp; <span class="eq-key inv"></span>invested ${esc(inr(inv))}`}`;
   }
   function renderCharts(m){
     const box = $("mp-charts"), hs = (m.holdings || []).filter(h => h.value != null && h.value > 0);
     box.hidden = !hs.length; $("mp-pl-card").hidden = !hs.length; if(!hs.length) return;
-    if(EQ === null && !eqLoading){ eqLoading = true; api("/api/equity-history").then(r => { EQ = r.days || []; }, () => { EQ = []; }).then(() => { eqLoading = false; if(MP && MP.holdings) renderCharts(MP); }); }
+    if(!m.practice && EQ === null && !eqLoading){ eqLoading = true; api("/api/equity-history").then(r => { EQ = r.days || []; }, () => { EQ = []; }).then(() => { eqLoading = false; paintHero(); }); }
     renderValueChart(m);
-    if(SECTORS === null && !secLoading){ secLoading = true; api("/api/portfolio-sectors").then(r => { SECTORS = r.sectors || {}; }, () => { SECTORS = {}; }).then(() => { secLoading = false; if(MP && MP.holdings) renderCharts(MP); }); }
+    if(SECTORS === null && !secLoading){ secLoading = true; api("/api/portfolio-sectors").then(r => { SECTORS = r.sectors || {}; }, () => { SECTORS = {}; }).then(() => { secLoading = false; paintHero(); }); }
     const by = {}; let total = 0;
-    hs.forEach(h => { const k = h.kind === "bond" ? "Bonds" : (SECTORS || {})[String(h.symbol).toUpperCase()] || (SECTORS === null ? "Loading…" : "Other"); by[k] = (by[k] || 0) + h.value; total += h.value; });
+    hs.forEach(h => { const k = h.kind === "bond" ? "Bonds" : h.kind === "cash" ? "Cash" : (SECTORS || {})[String(h.symbol).toUpperCase()] || (SECTORS === null ? "Loading…" : "Other"); by[k] = (by[k] || 0) + h.value; total += h.value; });
     const named = Object.entries(by).filter(p => p[0] !== "Other").sort((x, y) => y[1] - x[1]);   // "Other" always comes last, with the small sectors folded in
     const other = (by.Other || 0) + named.slice(6).reduce((s, p) => s + p[1], 0);
     const parts = named.slice(0, 6).concat(other > 0 ? [["Other", other]] : []);
     const C = 2 * Math.PI * 48; let off = 0;
     $("mp-donut").innerHTML = parts.map((p, i) => { const len = p[1] / total * C, gap = parts.length > 1 ? 1.5 : 0, d = `<circle cx="60" cy="60" r="48" fill="none" stroke="var(--sec-${i + 1})" stroke-width="16" stroke-dasharray="${Math.max(len - gap, 0.1).toFixed(2)} ${(C - len + gap).toFixed(2)}" stroke-dashoffset="${(-off).toFixed(2)}" transform="rotate(-90 60 60)"><title>${esc(p[0])}: ${(p[1] / total * 100).toFixed(1)}%</title></circle>`; off += len; return d; }).join("")
-      + `<text x="60" y="57" text-anchor="middle" font-size="8" style="fill:var(--color-muted)">${hs.length} holdings</text><text x="60" y="70" text-anchor="middle" font-size="11" font-weight="600">${esc(inr(total))}</text>`;
+      + `<text x="60" y="57" text-anchor="middle" font-size="8" style="fill:var(--color-muted)">${hs.filter(h => h.kind !== "cash").length} holdings</text><text x="60" y="70" text-anchor="middle" font-size="11" font-weight="600">${esc(inr(total))}</text>`;
     $("mp-alloc-legend").innerHTML = parts.map((p, i) => `<li><i style="background:var(--sec-${i + 1})"></i><span title="${esc(p[0])}">${esc(p[0])}</span><b>${(p[1] / total * 100).toFixed(1)}%</b></li>`).join("");
     const pls = (m.holdings || []).filter(h => h.pl != null).sort((x, y) => y.pl - x.pl), mx = Math.max(1, ...pls.map(h => Math.abs(h.pl)));
     $("mp-plbars").innerHTML = pls.map(h => `<div class="plrow"><a href="#" data-lookup="${esc(h.symbol)}" class="sym">${esc(h.symbol)}</a><div class="pltrack"><span class="neg">${h.pl < 0 ? `<i style="width:${(-h.pl / mx * 100).toFixed(1)}%"></i>` : ""}</span><span class="pos">${h.pl > 0 ? `<i style="width:${(h.pl / mx * 100).toFixed(1)}%"></i>` : ""}</span></div><b class="${toneOf(h.pl)}">${sinr(h.pl)}</b></div>`).join("");
