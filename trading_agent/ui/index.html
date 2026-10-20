@@ -235,7 +235,7 @@
           <button type="submit" class="primary small" id="fb-run">Run portfolio backtest</button><span class="sub" id="fb-status"></span>
         </div>
         <div class="sub">Monthly rebalance into the top stocks with the same ranking, real Indian charges on every trade, compared with NIFTY 50 including dividends and an equal-weight hold of the universe. Uses the universe selected above. NIFTY 50 uses each month's actual members, including stocks later dropped; other universes use today's members.</div>
-        <div class="sub" id="fb-paper-hint"><b>Your paper accounts:</b> pick NIFTYMIDCAP150 above and hold top 20 to test the list the forward paper account trades (the model, resmom, top-10 and brake accounts are variants of it). The model account's own picks are judged going forward on the Paper accounts tab, not backtested here.</div>
+        <div class="sub" id="fb-paper-hint"><b>Your paper accounts:</b> pick NIFTYMIDCAP150 above and hold top 20 to test the list the forward paper account trades (the model, resmom, top-10 and brake accounts are variants of it; the cluster-buying account trades insider clusters instead). The model account's own picks are judged going forward on the Paper accounts tab, not backtested here.</div>
         <div id="fb-result"></div>
       </form>
     </details>
@@ -1539,7 +1539,7 @@
     el.innerHTML = frictionRows(f.telemetry);
   }
 
-  // ---- Paper accounts tab: the five accounts the server runs after each close (read-only, /api/paper-accounts) ----
+  // ---- Paper accounts tab: the six accounts the server runs after each close (read-only, /api/paper-accounts) ----
   let PA = null, paLoading = false;
   async function loadPaper(){
     if(paLoading) return; paLoading = true;
@@ -1550,7 +1550,7 @@
   function renderPaper(){
     if(!PA) return;
     const accts = PA.accounts || [], live = accts.filter(a => a.started && a.history && a.history.length);
-    const colors = [C.s1, C.s2, "var(--color-demo)", "var(--color-replay)", "var(--color-accent-300)"];   // the index fund: grey and dashed
+    const colors = [C.s1, C.s2, "var(--color-demo)", "var(--color-replay)", "var(--color-accent-300)", "var(--color-accent-600)"];   // the index fund: grey and dashed
     const fall = v => v != null && v < 0 ? "worst fall " + pct(v) : "no fall yet";
     $("pa-note").textContent = live.length
       ? `Each line is an account's return since it started, with the index fund (${esc((live[0].benchmark) || "MID150BEES")}) bought on each start day. Give them several months before reading anything into a gap.`

@@ -171,6 +171,20 @@ def parse_model_paper_start(value: object) -> str | None:
 RESMOM_PAPER_DEFAULT = "2026-10-19"
 TOP10_PAPER_DEFAULT = "2026-10-19"
 BRAKE_PAPER_DEFAULT = "2026-10-20"
+CLUSTER_PAPER_DEFAULT = "2026-10-22"
+
+
+def parse_cluster_paper_start(value: object) -> str | None:
+    """CLUSTER_PAPER_START: the YYYY-MM-DD the cluster-buying paper account starts (unset: 2026-10-22; off: never)."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return CLUSTER_PAPER_DEFAULT
+    if text.lower() in ("off", "false", "no", "0", "none"):
+        return None
+    try:
+        return parse_forward_start(text)
+    except ValueError:
+        raise ValueError("CLUSTER_PAPER_START must be a date as YYYY-MM-DD, or off") from None
 
 
 def parse_brake_paper_start(value: object) -> str | None:
@@ -347,6 +361,7 @@ class Settings:
     model_paper_start: str | None = MODEL_PAPER_DEFAULT  # the prediction model's own paper account from this date
     top10_paper_start: str | None = TOP10_PAPER_DEFAULT  # variant B's (top 10) paper account from this date
     brake_paper_start: str | None = BRAKE_PAPER_DEFAULT  # the drawdown brake's paper account from this date
+    cluster_paper_start: str | None = CLUSTER_PAPER_DEFAULT  # the cluster-buying paper account from this date
     resmom_paper_start: str | None = RESMOM_PAPER_DEFAULT  # residual momentum's (variant E's) paper account from this date
     # Read-only check of the real services (integration.py), run by the watch service at 08:35 IST on trading days.
     integration_check: bool = True
@@ -491,6 +506,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         resmom_paper_start = parse_resmom_paper_start(env("RESMOM_PAPER_START"))
         top10_paper_start = parse_top10_paper_start(env("TOP10_PAPER_START"))
         brake_paper_start = parse_brake_paper_start(env("BRAKE_PAPER_START"))
+        cluster_paper_start = parse_cluster_paper_start(env("CLUSTER_PAPER_START"))
     except ValueError as e:
         raise SystemExit(str(e)) from None
     data_source = (env("DATA_SOURCE") or ("nse" if market == "in" else "quiver")).lower()
@@ -586,6 +602,7 @@ def load_settings(dotenv: Path | None = Path(".env")) -> Settings:
         resmom_paper_start=resmom_paper_start,
         top10_paper_start=top10_paper_start,
         brake_paper_start=brake_paper_start,
+        cluster_paper_start=cluster_paper_start,
         forward_universe=(env("FORWARD_UNIVERSE") or "NIFTYMIDCAP150").strip().upper().replace(" ", ""),
         integration_check=_bool(env("INTEGRATION_CHECK"), True),
         integration_claude=_bool(env("INTEGRATION_CLAUDE"), False),
