@@ -856,7 +856,8 @@
     const chip = held ? `<span class="dl-tag held">Held · ${esc(held.toLocaleString("en-IN"))} sh</span>` : (sell && held === 0 ? '<span class="dl-tag">You hold none</span>' : "");
     const value = z ? bigInr(z.qty * z.price) : "";
     return `<tr class="${d.status === "new" ? "is-new" : ""}" data-open-stock="${esc(d.ticker)}"><td colspan="5" class="dl-cell"><a class="dl-deal" href="/?stock=${encodeURIComponent(d.ticker)}" data-lookup="${esc(d.ticker)}" title="${esc(d.investor)}">
-        <span class="dl-l1"><span class="dl-side ${sell ? "sell" : "buy"}"><span class="side-chip-text">${sell ? "▼ SELL" : "▲ BUY"}</span></span><span class="dl-sym">${esc(d.ticker)}</span>${d.status === "new" ? '<span class="dl-new">NEW</span>' : ""}<span class="dl-val ${sell ? "sell" : "buy"}">${esc(value)}</span></span>
+        <span class="dl-l1"><span class="dl-side ${sell ? "sell" : "buy"}"><span class="side-chip-text">${sell ? "▼ SELL" : "▲ BUY"}</span></span><span class="dl-sym">${esc(d.ticker)}</span>${d.status === "new" ? '<span class="dl-new">NEW</span>' : ""}</span>
+        <span class="dl-val ${sell ? "sell" : "buy"}">${esc(value)}</span>
         <span class="dl-l2"><span class="dl-who">${esc(who)}</span> · ${esc(d.exchange || "NSE")} ${esc(dealKind(d))} · ${esc(SAFE.day(d.transaction_date) || d.transaction_date)}</span>
         <span class="dl-l3"><span class="dl-num">${z ? `${esc(z.qty.toLocaleString("en-IN"))} sh @ ${esc(inr(z.price, 2))}` : esc(d.size)}</span>${chip}</span></a></td></tr>`;
   }
@@ -1200,10 +1201,11 @@
     if(sm && sm.orders){
       const unreal = (tv.trades || []).filter(t => t.kind === "open").reduce((a, t) => { const f = tradeFacts(t); return f.net == null ? a : a + f.net; }, 0);
       const chg = sm.charges != null ? sm.charges : (perf ? perf.fees_paid : null);
-      box.innerHTML = `<div><span>Realised P/L</span><b class="${sm.realised >= 0 ? "up" : "down"}">${sm.realised >= 0 ? "▲" : "▼"} ${tsgn(sm.realised)}</b><small>${sm.closed} closed trade${sm.closed === 1 ? "" : "s"}${sm.charges == null ? "" : ", after charges"}</small></div>
-        <div><span>Unrealised P/L</span><b class="${unreal >= 0 ? "up" : "down"}">${unreal >= 0 ? "▲" : "▼"} ${tsgn(unreal)}</b><small>${sm.open} open at today's price</small></div>
-        <div><span>Charges paid</span><b>${chg == null ? "n/a" : money(chg, 2)}</b><small>${chg == null ? "Groww does not report them here" : "buy + sell, all orders"}</small></div>
-        <div><span>Orders</span><b>${sm.orders}</b><small>${sm.closed} closed trade${sm.closed === 1 ? "" : "s"}, ${sm.open} open</small></div>`;
+      const closedT = (tv.trades || []).filter(x => x.kind === "closed"), wins = closedT.filter(x => { const f = tradeFacts(x); return f.net != null && f.net > 0; }).length;
+      box.innerHTML = `<div><span>Trades</span><b>${sm.closed + sm.open}</b><small>${sm.closed} closed, ${sm.open} open${sm.open ? " · " + tsgn(unreal) + " unrealised" : ""}</small></div>
+        <div><span>Win rate</span><b class="${closedT.length ? (wins * 2 >= closedT.length ? "up" : "down") : ""}">${closedT.length ? Math.round(wins / closedT.length * 100) + "%" : "n/a"}</b><small>${closedT.length ? `${wins} of ${closedT.length} closed trade${closedT.length === 1 ? "" : "s"} made money` : "no closed trade yet"}</small></div>
+        <div><span>Realised P/L</span><b class="${sm.realised >= 0 ? "up" : "down"}">${sm.realised >= 0 ? "▲" : "▼"} ${tsgn(sm.realised)}</b><small>${sm.closed} closed trade${sm.closed === 1 ? "" : "s"}${sm.charges == null ? "" : ", after charges"}</small></div>
+        <div><span>Fees paid</span><b>${chg == null ? "n/a" : money(chg, 2)}</b><small>${chg == null ? "Groww does not report them here" : "buy + sell, all orders"}</small></div>`;
     }
     $("orders-head").innerHTML = ordersView === "trades" ? OH_HEAD_TRADES : OH_HEAD_ALL;
     const colspan = ordersView === "trades" ? 8 : 6;
@@ -1564,16 +1566,19 @@
       if(a.error) return `<div class="cardbody pa-acct"><h3>${esc(a.title)}</h3><div class="sub">Unreadable: ${esc(a.error)}</div></div>`;
       if(!a.started) return `<div class="cardbody pa-acct"><h3>${esc(a.title)}</h3><div class="sub">${esc(a.about)}</div><div class="sub">Not started yet: it starts on its first run after the close.</div></div>`;
       const hold = (a.holdings || []).slice(0, 12).map(h => `<a href="#" data-lookup="${esc(h.symbol)}">${esc(h.symbol)}</a>${h.weight != null ? ` <span class="sub">${(h.weight * 100).toFixed(1)}%</span>` : ""}`).join(" · ");
-      return `<div class="cardbody pa-acct"><div class="row" style="justify-content:space-between"><h3>${esc(a.title)}</h3><span class="sub">since ${shortDate(a.since || "")} · ${a.days} day${a.days === 1 ? "" : "s"}</span></div>
+      const dot = colors[accts.indexOf(a) % colors.length], nPos = (a.holdings || []).length;
+      return `<div class="cardbody pa-acct"><div class="pa-tile">
+        <div class="pa-top"><span class="pa-dot" style="background:${dot}" aria-hidden="true"></span><b>${esc(a.title)}</b><span class="sub">${nPos} position${nPos === 1 ? "" : "s"}</span></div>
         <div class="sub">${esc(a.about)}</div>
-        <div class="fw-stats">
-          ${stat("Value", money(a.value), "started with " + money(a.capital))}
-          ${stat("Return", pct(a.strategy_return, 2), fall(a.strategy_max_drawdown), toneOf(a.strategy_return))}
-          ${stat(esc(a.benchmark), pct(a.benchmark_return, 2), fall(a.benchmark_max_drawdown))}
-          ${stat("Gap", pct(a.gap, 2), "account minus fund", toneOf(a.gap))}
-          ${stat("Charges", money(a.charges_paid), `${a.rebalances} rebalance${a.rebalances === 1 ? "" : "s"} · last ${esc(a.last_rebalance || "none")}`)}
-        </div>
-        <div class="sub">${(a.holdings || []).length ? `Holding ${a.holdings.length}: ${hold}${a.holdings.length > 12 ? " …" : ""}` : "No holdings yet."}</div></div>`;
+        <div class="pa-val"><b>${money(a.value)}</b><span class="pa-pill ${toneOf(a.strategy_return)}">${pct(a.strategy_return, 2)}</span></div>
+        <div class="sub">vs ${esc(a.benchmark)} <span class="${toneOf(a.gap)}">${pct(a.gap, 2)}</span> · worst fall ${a.strategy_max_drawdown != null && a.strategy_max_drawdown < 0 ? pct(a.strategy_max_drawdown) : "none yet"} · since ${shortDate(a.since || "")}, ${a.days} day${a.days === 1 ? "" : "s"}</div></div>
+        <details class="pa-more"><summary>Charges and holdings</summary>
+          <div class="fw-stats">
+            ${stat("Started with", money(a.capital), "practice money")}
+            ${stat(esc(a.benchmark), pct(a.benchmark_return, 2), fall(a.benchmark_max_drawdown))}
+            ${stat("Charges", money(a.charges_paid), `${a.rebalances} rebalance${a.rebalances === 1 ? "" : "s"} · last ${esc(a.last_rebalance || "none")}`)}
+          </div>
+          <div class="sub">${nPos ? `Holding ${nPos}: ${hold}${nPos > 12 ? " …" : ""}` : "No holdings yet."}</div></details></div>`;
     }).join("");
   }
   $("pa-refresh").addEventListener("click", () => loadPaper());
