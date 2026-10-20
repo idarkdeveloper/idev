@@ -59,3 +59,13 @@ def test_recommendation_cards_have_a_coloured_edge_per_action():
     css = (UI / "nocturne.css").read_text(encoding="utf-8")
     for needle in (".recs .rec.buy {", ".recs .rec.sell {", ".act.buy {", ".act.sell {", ".act.hold {", ".l2.pl-profit"):
         assert needle in css, needle
+
+
+def test_the_phone_has_a_bottom_tab_bar_wired_to_the_workspaces():
+    html = (UI / "index.html").read_text(encoding="utf-8")
+    bar = html[html.index('id="ws-bottom"'):html.index("</nav>", html.index('id="ws-bottom"'))]
+    for ws in ("overview", "deals", "research", "paper", "tools", "health"):
+        assert f'data-ws-go="{ws}"' in bar, ws
+    assert "goWorkspace(b.dataset.wsGo)" in html
+    css = (UI / "nocturne.css").read_text(encoding="utf-8")
+    assert ".ws-bottom { display: none; }" in css

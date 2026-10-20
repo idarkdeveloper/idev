@@ -1777,3 +1777,17 @@ svg.lk-mini.down .lk-fill { fill: color-mix(in srgb, var(--color-loss) 14%, tran
 .pa-pill { font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 6px; background: color-mix(in srgb, currentColor 14%, transparent); }
 .pa-more { margin-top: 6px; } .pa-more > summary { cursor: pointer; font-size: 13px; color: var(--color-muted); }
 .pa-more[open] > summary { margin-bottom: 8px; }
+
+/* The phone's bottom tab bar (the Portfolio design): the six sections as icons, one thumb away. Wider screens keep the top tabs. */
+.ws-bottom { display: none; }
+@media (max-width: 700px) {
+  .ws-bottom { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; background: var(--color-surface);
+    border-top: 1px solid var(--color-divider); padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px)); }
+  .ws-bottom button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 48px; padding: 4px 2px; border: none; border-radius: 8px;
+    background: transparent; color: var(--color-muted); font-size: 10.5px; font-weight: 600; }
+  .ws-bottom button[aria-current="page"] { color: var(--color-text); background: var(--color-hover); }
+  .ws-tabbar { display: none; }
+  body { padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+  .va { bottom: calc(68px + env(safe-area-inset-bottom, 0px)); }
+  .va-on { padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+}

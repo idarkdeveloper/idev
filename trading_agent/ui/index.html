@@ -345,7 +345,8 @@
       <div class="cardbody" id="gl-body"><p class="sub">loading…</p></div>
     </section>
   </section>
-  <footer>Paper trading only. Bulk-deal client names can be brokers acting for someone else. Not financial advice.</footer>
+  <nav class="ws-bottom" id="ws-bottom" aria-label="Sections"><button type="button" data-ws-go="overview"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"></path></svg>Overview</button><button type="button" data-ws-go="deals"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"></path></svg>Deals</button><button type="button" data-ws-go="research"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-4.3-4.3"></path></svg>Research</button><button type="button" data-ws-go="paper"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18v12H3zM3 11h18M7 15h4"></path></svg>Paper</button><button type="button" data-ws-go="tools"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5l-9.6 9.6a2 2 0 0 1-2.8-2.8l9.6-9.6a4 4 0 0 0-2.2-2.2z"></path></svg>Tools</button><button type="button" data-ws-go="health"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>Health</button></nav>
+<footer>Paper trading only. Bulk-deal client names can be brokers acting for someone else. Not financial advice.</footer>
   </div>
 </main>
 
@@ -599,6 +600,7 @@
       $("ws-" + id).hidden = layout === "tabs" && !on;
       t.setAttribute("aria-selected", on ? "true" : "false"); t.tabIndex = on || layout !== "tabs" ? 0 : -1;
     });
+    document.querySelectorAll("[data-ws-go]").forEach(b => b.setAttribute("aria-current", b.dataset.wsGo === curWs ? "page" : "false"));
     document.querySelectorAll("[data-density]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.density === density)));
     document.querySelectorAll("[data-layout]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.layout === layout)));
   }
@@ -638,6 +640,7 @@
     window.addEventListener("hashchange", () => { const a = String((here() || {}).hash || "").replace(/^#/, ""); if(WS_OF[a]) goWorkspace(a, true); });
   }
   paintWorkspaces();
+  document.querySelectorAll("[data-ws-go]").forEach(b => b.addEventListener("click", () => { goWorkspace(b.dataset.wsGo); if(window.scrollTo) window.scrollTo(0, 0); }));   // the phone's bottom bar
   $("ws-tabs").addEventListener("keydown", (ev) => {   // arrow keys move along the tabs
     const t = ev.target; if(!t || !t.dataset || !t.dataset.wsTab || (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft")) return;
     const ids = WORKSPACES.map(w => w[0]), i = ids.indexOf(t.dataset.wsTab), n = ids[(i + (ev.key === "ArrowRight" ? 1 : ids.length - 1)) % ids.length];
