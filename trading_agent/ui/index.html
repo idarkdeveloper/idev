@@ -121,10 +121,6 @@
       <div class="cardhead"><h2>Practice portfolio</h2><span class="sub" id="pricesrc"></span></div>
       <div class="cardbody" style="padding-top:0;border-top:none;border-bottom:1px solid var(--line)"><div class="stats" id="pp-stats"></div></div>
       <div class="cardbody sub" id="pp-tax" style="border-bottom:1px solid var(--line)"></div>
-      <div class="cardbody" style="border-bottom:1px solid var(--line)">
-        <div class="row" style="justify-content:space-between"><h3>Account value</h3><span class="sub" id="eq-note"></span></div>
-        <div class="chart" id="eq-chart"></div>
-      </div>
       <div class="cardbody sub" id="stop-banner" style="border-bottom:1px solid var(--line)">Practice stops are checked every minute in market hours while the dashboard is running; prices may be delayed.</div>
       <div class="scroll"><table><thead><tr><th>Stock</th><th class="num">Qty</th><th class="num">Buy price</th><th class="num">Current price</th><th class="num">Invested</th><th class="num">Value now</th><th class="num">Profit / loss</th><th class="num">P&amp;L %</th><th>Stop-loss</th><th><span class="sr-only">Close position</span></th></tr></thead><tbody id="positions"></tbody><tfoot id="pp-foot"></tfoot></table></div>
       <div class="cardbody" id="stop-sold" hidden style="border-top:1px solid var(--line)"></div>
@@ -999,7 +995,7 @@
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
     renderOrders();
     renderStopSold();
-    if(MODE === "demo"){ renderEquity(); paintHero(); }
+    if(MODE === "demo") paintHero();
     renderForward();
     if(S.factor_backtest && S.factor_backtest.dates && $("fb-result").dataset.at !== S.factor_backtest.at){ renderFactor(S.factor_backtest); $("fb-result").dataset.at = S.factor_backtest.at; }
     // each research tool is disabled only while ITS job runs (or an exclusive job runs, or three tools already run)
@@ -1608,20 +1604,6 @@
         <td class="num ${tone(pl)}">${signed(pl)}</td><td class="num ${tone(plPct)}">${plPct == null ? "n/a" : spctP(plPct)}</td><td></td><td></td><td></td></tr>` : "";
   }
 
-  function renderEquity(){
-    if(MODE !== "demo") return;
-    const h = S.equity_history || [], el = $("eq-chart"), start = S.settings.paper_starting_cash;
-    const perf = S.performance;
-    const es = S.equity_stats;
-    $("eq-note").textContent = h.length ? `${h.length} point${h.length === 1 ? "" : "s"} since ${shortDate(h[0].at.slice(0,10))}` +
-      (es ? (es.drawdown_now < 0 ? ` · ${pct(es.drawdown_now)} from peak` : " · at its peak") +
-            (es.max_drawdown < 0 ? ` · worst fall ${pct(es.max_drawdown)}` : "") : "") : "";
-    lineChart(el, {x: h.map(p => p.at), series: [{name:"Account value", color:C.s1, area:true, values: h.map(p => p.equity)}],
-      refs: perf ? [{y: perf.baseline || perf.starting_cash, label: perf.copied_in > 0 ? "Starting value (cash + copied holdings)" : "Starting cash"}] : [], yFmt: rupeesShort, height: 180, endLabels: false, left: 64,
-      label: "Paper account value over time",
-      empty: "The curve starts with the next check or paper order. Each check records the account value."});
-  }
-
   function renderBacktest(b){
     const sm = b.summary, rows = [];
     for(const [side, perH] of Object.entries(sm.by_side||{})){
@@ -2081,7 +2063,7 @@
   });
   function redrawCharts(){   // after a resize, or when a tab that was hidden (no width) is shown
     if(!S) return;
-    renderEquity(); renderForward(); renderPaper();
+    renderForward(); renderPaper();
     if(S.factor_backtest && S.factor_backtest.dates) renderFactor(S.factor_backtest);
     if(S.backtest && S.backtest.summary) renderBacktest(S.backtest);
     if(S.signal_lab && S.signal_lab.results) renderSignalLab(S.signal_lab);

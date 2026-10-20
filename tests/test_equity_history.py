@@ -45,7 +45,7 @@ def test_the_value_chart_function_has_its_own_name():
     """index.html already has a practice-account renderEquity(); a second one with that name silently replaced it
     (hoisting) and the Portfolio chart stayed empty."""
     html = (UI / "index.html").read_text(encoding="utf-8")
-    assert html.count("function renderEquity(") == 1
+    assert "function renderEquity(" not in html and html.count("function renderValueChart(") == 1   # the old practice chart is gone; the hero draws it
 
 
 def test_the_forward_factor_screen_lives_on_the_paper_accounts_tab():
