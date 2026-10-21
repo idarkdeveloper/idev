@@ -1624,6 +1624,27 @@ def cmd_brake_paper(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cluster_paper(args: argparse.Namespace) -> int:
+    """The cluster-buying paper account: show it, or with --run do today's after-close run now."""
+    from .cluster_paper import ClusterPaper, format_cluster_paper, run_cluster_paper_due
+    from .resmom_paper import control_over
+    from .runner import free_prices
+    settings = _settings(args)
+    prices = free_prices(settings)
+    if args.run:
+        print(run_cluster_paper_due(settings, prices, _market_holidays(settings)))
+        return 0
+    cp = ClusterPaper(settings.state_dir, universe=settings.forward_universe, capital=settings.paper_starting_cash,
+                      price_fn=prices.latest_price)
+    if not cp.ft.started:
+        print("Cluster-buying paper account: not started (starts "
+              f"{settings.cluster_paper_start or 'never: CLUSTER_PAPER_START=off'}, after the close, from the watch service).")
+        return 0
+    s = {**cp.ft.summary(), "rebalanced": None}
+    print(format_cluster_paper(s, control_over(settings.state_dir, settings.forward_universe, s.get("started"))))
+    return 0
+
+
 def cmd_research_regimes(args: argparse.Namespace) -> int:
     """How the adopted rules did in bull, sideways, bear and high-volatility months (a diagnostic, not a filter)."""
     from .costs import cost_model_for
@@ -2172,6 +2193,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
         print(run_top10_paper_due(settings, forward_prices, holidays))
         from .brake_paper import run_brake_paper_due   # the drawdown brake's own paper account (never raises)
         print(run_brake_paper_due(settings, forward_prices, holidays))
+        from .cluster_paper import run_cluster_paper_due   # cluster buying's own paper account (never raises)
+        print(run_cluster_paper_due(settings, forward_prices, holidays))
     forward = ForwardScheduler(settings.state_dir, after_close, holidays=holidays)
     w = Watcher(settings, every=args.every, news=news, digest=digest, forward=forward,
                 integration=make_integration_scheduler(settings, notifier, holidays),
@@ -2484,6 +2507,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("brake-paper", help="the drawdown brake's (100-day average) paper account (practice money only)")
     sp.add_argument("--run", action="store_true", help="do today's after-close run now (brake check, monthly rebalance, mark)")
     sp.set_defaults(func=cmd_brake_paper)
+    sp = sub.add_parser("cluster-paper", help="the cluster-buying (3+ insiders) paper account (practice money only)")
+    sp.add_argument("--run", action="store_true", help="do today's after-close run now (floor, monthly buys and sales, mark)")
+    sp.set_defaults(func=cmd_cluster_paper)
     sp = sub.add_parser("research-pead", help="research: post-results drift and promoter-buying signals")
     sp.add_argument("--universe", default="NIFTYMIDCAP150")
     sp.add_argument("--years", type=int, default=5)

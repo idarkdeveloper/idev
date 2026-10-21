@@ -670,6 +670,13 @@ run by the watch service in the same after-close job; nothing in them is retuned
   average. From `BRAKE_PAPER_START` (default 20 Oct 2026; `off` disables it), in its own files
   (`state/forward/brake_<universe>.json`). It changes nothing live; how it is read is in
   `docs/research/brake-paper-account-2026-10-19.md`. `brake-paper --run` does today's run by hand.
+- `cluster-paper`: cluster buying. A stock where 3 or more insiders (promoters, directors, key managers, relatives)
+  bought in the open market, on 2 or more different days, in the filings disclosed over the last 30 days. Each cluster
+  stock that passes the forward test's filters (liquidity, price bands, ASM/GSM, results, pledges; no trend rule) is
+  bought at the next monthly run in a 5% slot (up to 20 names; the rest stays in cash) and sold after 6 months, or
+  earlier if it closes 25% below its buy price. Judged after 12 months against HDFCSML250. From `CLUSTER_PAPER_START`
+  (default 22 Oct 2026; `off` disables it), files `state/forward/cluster_<universe>.json`; the plan is
+  `docs/research/cluster-buying-paper-account-2026-10-21.md`. `cluster-paper --run` does today's run by hand.
 
 **US, Japan and UK replication (once per market).** `research-replication --market us|jp|uk --confirm` runs the adopted rules,
 unchanged except that no tax is charged, on the S&P MidCap 400 (against IJH) or the TOPIX Mid400 (against the TOPIX ETF
