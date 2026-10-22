@@ -47,9 +47,14 @@ def reb(date, traded, equity=100_000.0, charges=50.0):
 def test_turnover_skips_the_build_and_annualises():
     d = state([reb("2026-10-09", 100_000), reb("2026-11-02", 16_000), reb("2026-12-01", 24_000)], 110_000, 105_000)
     t = ftm.telemetry(d, charges_paid=500.0)
-    assert t["turnover_year"] == pytest.approx((0.08 + 0.12) / 2 * 12)        # 120% a year: on the line
+    assert t["turnover_year"] == pytest.approx((0.08 + 0.12) / 2 * 12)        # 120% a year: well under the 250% line
     assert t["per_rebalance"][0]["build"] and t["rebalances_after_start"] == 2
     assert next(c for c in t["checks"] if c["name"] == "Turnover a year")["status"] == "ok"
+    high = ftm.telemetry(state([reb("2026-10-09", 100_000), reb("2026-11-02", 40_000), reb("2026-12-01", 60_000)],
+                               110_000, 105_000), charges_paid=500.0)
+    assert high["turnover_year"] == pytest.approx(3.0)                            # 300% a year: over the 250% line
+    assert next(c for c in high["checks"] if c["name"] == "Turnover a year")["status"] == "warn"
+    assert ftm.TURNOVER_MAX == 2.5 and "under 250%" in next(c for c in high["checks"] if c["name"] == "Turnover a year")["target"]
 
 
 def test_charge_share_and_the_gate():
