@@ -377,7 +377,8 @@ class LocalPaperBroker:
                 pass
         if symbol in self._state["prices"]:
             return float(self._state["prices"][symbol])
-        raise LookupError(f"No price known for {symbol}; set one with set_price() or a price_fn")
+        # read by people on the dashboard too, so no API names here (a test sets one with set_price() or a price_fn)
+        raise LookupError(f"No price known for {symbol} yet")
 
     def _held_symbols(self) -> list[str]:
         """The held symbols, without any lock: from the file when shared (it is swapped in whole, never half

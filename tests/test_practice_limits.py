@@ -107,3 +107,14 @@ def test_the_practice_checker_fills_them_only_in_market_hours_and_never_under_ha
     (settings.state_dir / "HALT").unlink()
     chk.check_once(TUE_10)
     assert len(chk.limit_fills) == 1 and b.positions()[0].qty == 1
+
+
+def test_a_missing_price_leaves_a_plain_note_without_api_names(tmp_path):
+    b, book = broker(tmp_path, {"TCS": 2900.0}), LimitBook(tmp_path, now_fn=Clock(MON_10))
+    o = book.add("NOPRICE", "buy", 100, qty=1)
+    assert book.sweep(b, MON_10) == []
+    waiting = next(x for x in book.orders() if x["id"] == o["id"])
+    assert waiting["status"] == "open" and waiting["note"] == "no price for NOPRICE yet; checked again next minute"
+    with pytest.raises(LookupError) as e:
+        b.latest_price("NOPRICE")
+    assert "set_price" not in str(e.value) and "price_fn" not in str(e.value) and "NOPRICE" in str(e.value)

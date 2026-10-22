@@ -1823,3 +1823,75 @@ def test_the_elapsed_formatter_gives_minutes_and_seconds():
     js = fn + '; console.log(JSON.stringify([mmss(0), mmss(5), mmss(42), mmss(60), mmss(125.9), mmss(3599), mmss(-4), mmss("x")]))'
     out = subprocess.run(["node", "-e", js], capture_output=True, text=True, check=True).stdout
     assert json.loads(out) == ["0:00", "0:05", "0:42", "1:00", "2:05", "59:59", "0:00", "0:00"]
+
+
+# --------------------------------------------------------------------------- #
+# 22 Oct 2026: security headers on every answer; deals served stale while a background fetch refreshes them
+# --------------------------------------------------------------------------- #
+def test_every_answer_carries_the_security_headers(server):
+    base, _ = server
+    for path in ("/", "/api/state", "/static/common.js", "/screener"):
+        with urllib.request.urlopen(base + path, timeout=30) as r:
+            h = r.headers
+            assert h["X-Content-Type-Options"] == "nosniff" and h["X-Frame-Options"] == "DENY", path
+            assert h["Referrer-Policy"] == "same-origin", path
+    try:
+        urllib.request.urlopen(base + "/api/no-such-thing", timeout=30)
+    except urllib.error.HTTPError as e:
+        assert e.headers["X-Frame-Options"] == "DENY"        # an error answer too
+    else:  # pragma: no cover - the route table may answer 200 with an error body
+        pass
+
+
+class _CountingData(_FakeData):
+    def __init__(self, trades):
+        super().__init__(trades)
+        self.calls, self.fail = 0, False
+
+    def trades_for_investor(self, investor, source, **kw):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("BSE refused")
+        return self.trades
+
+
+def _settle(app, seconds=5.0):
+    """Wait for the background deal fetch to finish."""
+    t0 = time.time()
+    while app._deals_refreshing and time.time() - t0 < seconds:
+        time.sleep(0.02)
+    assert not app._deals_refreshing
+
+
+def test_stale_deals_are_served_at_once_and_refreshed_behind_the_page(settings, sample_rows):
+    from trading_agent import ui as ui_mod
+    settings.market = "in"
+    trades = filter_by_investor([_norm_congress(r) for r in sample_rows], "Nancy Pelosi")
+    data = _CountingData(trades)
+    pb = LocalPaperBroker(settings.state_dir / "pb.json", starting_cash=100_000, price_fn=lambda s: 100.0)
+    app = App(settings, broker=pb, data=data, dotenv=None)
+    assert len(app.deals()) == 3 and data.calls >= 1 and app._deals_error is None   # the first look fetches, in line
+    first = data.calls
+    assert app.deals() is not None and data.calls == first                            # fresh: no fetch
+
+    data.trades = trades[:1]
+    app._deals_at = time.time() - ui_mod.DEALS_TTL_SECONDS - 1                      # stale
+    t0 = time.time()
+    assert len(app.deals()) == 3 and time.time() - t0 < 1.0                          # the old list, at once
+    _settle(app)
+    assert data.calls > first and len(app.deals()) == 1                             # the background fetch landed
+
+    data.fail = True
+    before = data.calls
+    app._deals_at = time.time() - ui_mod.DEALS_TTL_SECONDS - 1
+    assert len(app.deals()) == 1                                                     # stale again: the last list
+    _settle(app)
+    assert data.calls > before and "BSE refused" in (app._deals_error or "")
+    retry_in = ui_mod.DEALS_TTL_SECONDS - (time.time() - app._deals_at)
+    assert 0 < retry_in <= ui_mod.DEALS_RETRY_SECONDS + 1                            # tried again in a minute, not now
+    after = data.calls
+    assert len(app.deals()) == 1 and data.calls == after                             # no fetch inside the minute
+
+    data.fail = False
+    data.trades = trades[:2]
+    assert len(app.deals(refresh=True)) == 2 and app._deals_error is None            # an explicit refresh waits for it
