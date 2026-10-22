@@ -757,7 +757,9 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                 if rules.vol_scale:   # variant V: the basket's share, applied when it moves by the dead band or more
                     v = vol_exposure(m, keep + new, d, rules)
                     if abs(v["share"] - exposure) >= rules.vol_band:
-                        rescale(v["share"], t, "scale")
+                        # the kept names alone sit at share x (their slots / top) of the account; the new names are
+                        # then bought at share x account / top each, so the whole basket carries the share
+                        rescale(v["share"] * len(pos) / rules.top, t, "scale")
                         exposure = v["share"]
                     scale_log.append({"date": m.dates[t], "target": v["share"], "applied": exposure,
                                       "names": v["names"], "recent": v["recent"], "ref": v["ref"]})

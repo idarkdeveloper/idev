@@ -65,3 +65,12 @@ statement about the data, not about what the strategy does.
 - The control in batch 4 is simulated both ways and the two numbers are printed side by side, as a description of
   how much the missing names flattered the development years. That is a diagnostic, not a trial.
 - The forward test and the paper accounts are not affected: they trade real, current names and need no repair.
+
+## Clarification, 22 Oct 2026 (before any run)
+
+The "stopped trading" label in repair 2 is read off the **whole loaded series**: on the session after a stock's last
+bar the simulator already knows that no later bar exists in the data. On that session itself nobody could have known
+whether the stock was delisted or merely halted for a day. So the timing of the haircut is stylised, not something known
+on the day. It is also conservative: it cuts and sells on the earliest possible session, which leans against every rule
+set; and it never changes a buy or a ranking made before that session. The leakage test, which checks that decisions use
+only data up to their day, runs the adopted rules without the haircut and is unaffected. No number changes.

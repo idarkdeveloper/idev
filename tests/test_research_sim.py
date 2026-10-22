@@ -471,13 +471,15 @@ def test_the_quarterly_tax_wait_keeps_a_profitable_name_from_273_days():
     assert not oct_sales(wide) and wide["events"]["tax_waits"] >= 1               # kept under the wider band
 
 
-def _vol_paths(n, late_vol, names, seed=3):
+def _vol_paths(n, late_vol, names, seed=3, band=None):
+    """Random walks at 1% a day, ``late_vol`` inside ``band`` (default: the last 126 sessions)."""
+    lo, hi = band or (n - 126, n)
     rng = random.Random(seed)
     out = {}
     for s in names:
         p, path = 100.0, []
         for i in range(n):
-            p *= math.exp((0.01 if i < n - 126 else late_vol) * rng.gauss(0, 1))
+            p *= math.exp((late_vol if lo <= i < hi else 0.01) * rng.gauss(0, 1))
             path.append(p)
         out[s] = path
     return out
@@ -523,3 +525,20 @@ def test_volatility_scaling_trims_at_a_rebalance_and_only_past_the_dead_band():
         simulate(m, Rules(top=12, buffer=20, vol_scale=True, brake="sma100"), 400, n - 1, ranker=fixed(*names))
     last = m.dates.index(log[-1]["date"])                 # the share is measured on the rebalance day itself
     assert vol_exposure(m, names, last, rules)["share"] == pytest.approx(log[-1]["target"])
+
+
+def test_volatility_scaling_sizes_the_kept_names_to_their_slots_when_slots_are_open():
+    n = 800
+    names = [f"W{i}" for i in range(12)]
+    m = market(_vol_paths(n, 0.03, names, band=(300, 450)))          # a volatile spell, then calm again
+    rules = Rules(top=20, buffer=20, vol_scale=True, liquid_rate=0.0)
+    r = simulate(m, rules, 400, n - 1, ranker=fixed(*names))          # 12 names in 20 slots: 8 stay open
+    log = r["scale_log"]
+    prev = None
+    for e in log:   # whenever the share is (re)applied, the invested share is the share x 12/20, trim or top-up alike
+        if e["applied"] != prev:
+            assert r["exposure"][m.dates.index(e["date"]) - 400] == pytest.approx(e["applied"] * 12 / 20, abs=1e-9)
+        prev = e["applied"]
+    applied = [e["applied"] for e in log]
+    assert applied[0] < 0.8 and min(applied) < 0.8 and applied[-1] == 1.0     # cut in the spell, back to 1 after it
+    assert r["events"]["scale_trades"] >= 1 and r["exposure"][-1] > 0.5
