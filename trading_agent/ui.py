@@ -46,6 +46,7 @@ from .digest_schedule import build_digest
 log = logging.getLogger(__name__)
 
 DEALS_TTL_SECONDS = 600
+DEALS_RETRY_SECONDS = 60   # after a failed fetch: the next try waits this long, not the next request
 CANDLES_TTL_SECONDS = 300
 INTRADAY_TTL_SECONDS = 90          # 1D / 1W bars: a fresh read every minute or two in market hours
 MEMBERS_TTL_SECONDS = 12 * 3600    # the NSE index constituent lists behind industry peers and similar stocks
@@ -207,6 +208,8 @@ class App:
         self._deals: list[DisclosedTrade] | None = demo_trades
         self._deals_at = time.time() if demo_trades else 0.0
         self._deals_error: str | None = None
+        self._deals_lock = threading.Lock()   # guards _deals_refreshing: one background deal fetch at a time
+        self._deals_refreshing = False
         self._candle_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._members_cache: tuple[float, list[dict[str, str]]] | None = None
         from .fundamentals import YahooFundamentals
@@ -835,17 +838,42 @@ class App:
         fresh = self._deals is not None and time.time() - self._deals_at < DEALS_TTL_SECONDS
         if self.demo_trades is not None or (fresh and not refresh):
             return self._deals or []
+        if self._deals is not None and not refresh:
+            # stale but known: answer now and fetch behind the page. The fetch walks BSE's form in six requests, two
+            # seconds apart, then NSE; inside the request it held the page's first paint for that long every TTL.
+            self._refresh_deals_later()
+            return self._deals
+        self._fetch_deals()
+        return self._deals or []
+
+    def _fetch_deals(self) -> None:
+        """Today's deals from the sources, recorded for the Health tab. A failure keeps the last list and is retried
+        after DEALS_RETRY_SECONDS, not on the very next request."""
         try:
             from . import health
-            self._deals = health.recorded(self.settings.state_dir, health.deals_source(self.settings),
-                                          lambda: fetch_followed(self.data, self.settings.investors, self.settings.watch_source))
-            self._deals_at = time.time()
-            self._deals_error = None
+            got = health.recorded(self.settings.state_dir, health.deals_source(self.settings),
+                                  lambda: fetch_followed(self.data, self.settings.investors, self.settings.watch_source))
+            self._deals, self._deals_at, self._deals_error = got, time.time(), None
         except Exception as e:  # noqa: BLE001
             self._deals_error = str(e)
             log.warning("deal fetch failed: %s", e)
             self._deals = self._deals or []
-        return self._deals
+            self._deals_at = time.time() - DEALS_TTL_SECONDS + DEALS_RETRY_SECONDS
+
+    def _refresh_deals_later(self) -> None:
+        """One background fetch at a time; the page keeps the last list until it lands."""
+        with self._deals_lock:
+            if self._deals_refreshing:
+                return
+            self._deals_refreshing = True
+
+        def run() -> None:
+            try:
+                self._fetch_deals()
+            finally:
+                with self._deals_lock:
+                    self._deals_refreshing = False
+        threading.Thread(target=run, name="deals-refresh", daemon=True).start()
 
     # -- snapshot for the page -----------------------------------------------
     def snapshot(self) -> dict[str, Any]:
@@ -2640,6 +2668,14 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 
         def log_message(self, fmt: str, *args: Any) -> None:  # quieter default log
             log.debug("%s - " + fmt, self.address_string(), *args)
+
+        def end_headers(self) -> None:
+            # on every answer, page or API: browsers never sniff a type, the dashboard is never framed by another
+            # site, and the page's address is not sent along with the outbound links it carries
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "same-origin")
+            super().end_headers()
 
         # helpers
         def _json(self, payload: Any, status: int = 200) -> None:

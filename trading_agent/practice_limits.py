@@ -149,7 +149,8 @@ class LimitBook:
             try:
                 price = float(broker.latest_price(o["symbol"]))
             except Exception as e:  # noqa: BLE001 - no price this minute: try next minute
-                results[o["id"]] = {"note": f"no price: {e}"[:160]}
+                log.debug("practice limit order %s: no price for %s (%s)", o["id"], o["symbol"], e)
+                results[o["id"]] = {"note": f"no price for {o['symbol']} yet; checked again next minute"}
                 continue
             if not price > 0 or not marketable(o["side"], price, o["limit"]):
                 continue

@@ -48,7 +48,7 @@ def test_script_parses():
 def test_page_has_the_pickers_filters_table_and_export():
     for needle in ('id="sc-universe"', 'id="sc-presets"', 'id="sc-q"', 'id="sc-chips"', 'id="sc-addbtn"', 'id="sc-pop"', 'id="sc-density"',
                    'id="sc-allcols"', 'id="sc-export"', 'id="sc-save"', 'id="sc-head"', 'id="sc-rows"', 'id="sc-count"', 'id="sc-fresh"',
-                   'id="sc-status"', 'id="sc-drawer"', 'aria-controls="sc-pop"',
+                   'id="sc-status"', 'id="sc-notes"', 'id="sc-drawer"', 'aria-controls="sc-pop"',
                    'name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"', "<title>Screener"):
         assert needle in HTML, needle
     assert HTML.index("/static/common.js") < HTML.index("/static/palette.js") < HTML.index("/static/screener.js")
@@ -216,3 +216,13 @@ def test_market_tabs_cover_every_list_and_nse_hours(tmp_path):
     assert o["all"] == o["uni"] and o["ids"] == ["IN", "US", "UK", "JP"]
     assert o["titles"] == ["Nifty 50", "Nifty Midcap 150", "S&P 500", "My holdings"]
     assert o["open"] == [True, False, False, False]   # Mon 09:30 IST open; 09:10 before; 15:35 after; Sunday closed
+
+
+def test_the_loading_row_holds_only_the_loading_message_and_the_notes_stand_apart():
+    """While the list loads, the progress block (spinner, message, timer) carries one short message; the filter and
+    TradingView notes go to their own line, so a phone never squeezes them between the spinner and the timer."""
+    body = JS[JS.index("function renderFresh"):]
+    body = body[:body.index("// ---- presets")]
+    assert 'TA.loader.progress($("sc-status"), bits.shift() || "Loading…"' in body
+    assert 'TA.loader.clearProgress($("sc-status"), "")' in body and '$("sc-notes").textContent = bits.join(" ")' in body
+    assert HTML.index('id="sc-status"') < HTML.index('id="sc-notes"') < HTML.index("Click a row for details")
