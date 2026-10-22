@@ -5,7 +5,7 @@ monthly rebalance this measures that friction, against fixed targets:
 
 * **Turnover a year**: half of what each rebalance bought and sold, as a share of the account, averaged over the
   monthly rebalances and times 12. The first rebalance builds the portfolio from cash and does not count. Target
-  under 120% a year.
+  under 250% a year (1.5x the 168% the adopted rules measured in research).
 * **Active share (approximate)**: how different the holdings are from the fund, ``1 - sum(min(w_portfolio,
   w_fund))``. The fund's real weights are not published daily, so they are approximated from the index members'
   market caps (full, not free-float) when at least 80% of them have one, else by equal weights (and labelled so).
@@ -31,7 +31,9 @@ from typing import Any, Callable, Iterable
 
 log = logging.getLogger(__name__)
 
-TURNOVER_MAX = 1.20
+# 1.5x the 168% a year the adopted rules measured in research (B2-B4); the India test ran 244%. Set 22 Oct 2026: the
+# earlier 120% predated the research rules and would have flagged a strategy behaving as designed.
+TURNOVER_MAX = 2.50
 ACTIVE_SHARE_RANGE = (0.75, 0.90)
 SLIPPAGE_MAX_BPS = 15.0
 CHARGE_SHARE_WARN = 0.15
@@ -133,9 +135,9 @@ def telemetry(data: dict[str, Any], charges_paid: float, live_orders: Iterable[d
 
     checks = []
     if turnover_year is None:
-        checks.append(_check("Turnover a year", None, "under 120%", "n/a", "after the first monthly rebalance"))
+        checks.append(_check("Turnover a year", None, "under 250%", "n/a", "after the first monthly rebalance"))
     else:
-        checks.append(_check("Turnover a year", turnover_year, "under 120%",
+        checks.append(_check("Turnover a year", turnover_year, "under 250%",
                              "ok" if turnover_year <= TURNOVER_MAX else "warn",
                              f"{turnover_year * 100:.0f}% a year from {len(monthly)} monthly rebalance"
                              f"{'s' if len(monthly) != 1 else ''}"))

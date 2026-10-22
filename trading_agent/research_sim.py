@@ -53,6 +53,7 @@ class Rules:
     buffer: int | None = None       # keep holdings while ranked this or better (35 in the spec)
     tax_aware: bool = False         # with a buffer: a profitable holding aged 335-364 days waits for day 366
     tax_aware_floor: int = 50       # ... unless its rank falls below this
+    tax_aware_from: int = 335       # the first age (days) of that wait; 273 under a quarterly calendar (batch 4)
     brake: str = "none"             # one of BRAKES
     breadth_floor: float = 0.35
     breadth_days: int = 3
@@ -68,6 +69,17 @@ class Rules:
     lag: int = 0                    # sessions between a decision and its trade (1 = the next session's close)
     cost_mult: float = 1.0          # charges times this (a stress test)
     industry_cap: int | None = None # with a buffer: no new buy while this many holdings share its industry
+    # survivorship-2026-10-22.md: a holding whose stock stops trading loses this share and is sold (None: sold at its
+    # last close at the next rebalance, as before)
+    delist_haircut: float | None = None
+    # preregistered-batch-2026-10-22.md, variant V: at each rebalance the invested share is min(1, the basket's
+    # long-run volatility / its recent volatility), applied when it moves by vol_band or more
+    vol_scale: bool = False
+    vol_recent: int = 126
+    vol_ref: int = 756
+    vol_min_days: int = 378
+    vol_min_names: int = 10
+    vol_band: float = 0.10
 
     def label(self) -> str:
         parts = [f"stop={self.stop}"] if self.stop != "none" else []
@@ -87,6 +99,10 @@ class Rules:
             parts.append(f"costs x{self.cost_mult:g}")
         if self.industry_cap:
             parts.append(f"at most {self.industry_cap} per industry")
+        if self.vol_scale:
+            parts.append(f"vol-scaled {self.vol_recent}/{self.vol_ref}")
+        if self.delist_haircut:
+            parts.append(f"delisting haircut {self.delist_haircut * 100:.0f}%")
         return ", ".join(parts) or "baseline"
 
 
@@ -170,6 +186,7 @@ class Market:
         self.members_on = members_on
         self.min_turnover = min_turnover
         self.raw = series
+        self.regime = regime          # the fund's raw bars, so a study can build a second Market on the same calendar
         self.raw_dates = {s: [b["date"] for b in bars] for s, bars in series.items()}
         self.close: dict[str, list[float | None]] = {}
         self.adj: dict[str, list[float | None]] = {}
@@ -180,6 +197,8 @@ class Market:
         self.fund_sma100 = sma(self.fund_close, 100)
         self.flows = flows or {}
         self.missing: list[str] = []
+        self.filled: list[str] = []   # members with no Yahoo history, filled from NSE's daily files (survivorship.py)
+        self.fill_report: dict[str, Any] = {}
         self.point_in_time = False   # membership taken at each date (load_market with a membership history)
         self.unit_jumps: list[str] = []   # stocks whose close jumps >50x in a day (a pence/pound mix-up)
         self.excluded: list[str] = []     # stocks left out for a data error (listed in the report)
@@ -207,6 +226,18 @@ class Market:
             close.append(last_c if first and d >= first else None)
             adj.append(last_a if first and d >= first else None)
         return close, adj
+
+    def ended_on(self, sym: str, margin: int = 5) -> int | None:
+        """The calendar index of the session after ``sym``'s last bar, when that bar is more than ``margin`` sessions
+        before the end of the loaded data: the stock stopped trading (delisted, suspended or moved out of the EQ
+        series). None for a stock traded to the end, or with no bars on this calendar."""
+        dates = self.raw_dates.get(sym)
+        if not dates:
+            return None
+        last = bisect_right(self.dates, dates[-1]) - 1   # the calendar session of its last bar (or the one before)
+        if last < 0 or len(self.dates) - 1 - last <= margin:
+            return None
+        return last + 1
 
     def atr(self, sym: str) -> list[float | None]:
         if sym not in self._atr:
@@ -299,8 +330,10 @@ class Market:
 
 
 def load_market(members: list[str], prices: Any, *, regime: str, years: int, until: str | None,
-                membership: Any | None = None, workers: int = 8, flows: dict[str, float] | None = None) -> Market:
-    """Fetch the regime fund and every symbol ever in the index during the window (plus a lookback year)."""
+                membership: Any | None = None, workers: int = 8, flows: dict[str, float] | None = None,
+                fill: Callable[[list[str], list[str]], dict[str, Any]] | None = None) -> Market:
+    """Fetch the regime fund and every symbol ever in the index during the window (plus a lookback year). With
+    ``fill`` (survivorship.nse_filler), members with no history are filled from NSE's daily files."""
     since_until = 0
     if until:
         since_until = max(0, math.ceil((date.today() - date.fromisoformat(until[:10])).days / 365.25))
@@ -320,9 +353,17 @@ def load_market(members: list[str], prices: Any, *, regime: str, years: int, unt
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         series = {s: b for s, b in ex.map(load, universe) if b}
+    missing = sorted(set(universe) - set(series))
+    report: dict[str, Any] = {}
+    if fill is not None and missing:
+        report = fill(missing, calendar)
+        series.update(report.get("series") or {})
+        missing = sorted(set(universe) - set(series))
     members_on = (lambda d: membership.members_on(d)) if membership is not None else (lambda d: set(members))
     m = Market(calendar, series, reg, members_on, flows=flows)
-    m.missing = sorted(set(universe) - set(series))
+    m.missing = missing
+    m.filled = sorted(report.get("series") or {})
+    m.fill_report = {k: v for k, v in report.items() if k != "series"}
     m.point_in_time = membership is not None
     if until:   # the test starts ``years`` before the cutoff; earlier bars are only the ranking's lookback
         end = date.fromisoformat(until[:10])
@@ -451,17 +492,60 @@ def stop_triggered(m: Market, sym: str, p: Position, t: int, rule: str) -> bool:
     raise ValueError(f"unknown stop rule {rule}")
 
 
+def vol_exposure(m: Market, names: list[str], t: int, rules: Rules) -> dict[str, Any]:
+    """Variant V's invested share on day ``t`` (preregistered-batch-2026-10-22.md): min(1, sigma_ref / sigma_recent)
+    for the equal-weighted basket of ``names``, where sigma_recent is the population standard deviation of the basket's
+    daily returns over the last ``vol_recent`` sessions and sigma_ref the same over up to ``vol_ref`` sessions. A name
+    with fewer than ``vol_min_days`` returns is left out; with fewer than ``vol_min_names`` names left, the share is 1.
+    Returns {"share", "names", "recent", "ref"}; everything it reads is on or before day ``t``."""
+    lo = max(1, t - rules.vol_ref + 1)
+    rets_by_day: dict[int, list[float]] = {}
+    used = 0
+    for s in names:
+        adj = m.adj.get(s)
+        if adj is None:
+            continue
+        own: list[tuple[int, float]] = []
+        for k in range(lo, t + 1):
+            a0, a1 = adj[k - 1], adj[k]
+            if a0 and a1 and a0 > 0 and a1 > 0:
+                own.append((k, a1 / a0 - 1))
+        if len(own) < rules.vol_min_days:
+            continue
+        used += 1
+        for k, r in own:
+            rets_by_day.setdefault(k, []).append(r)
+    out = {"share": 1.0, "names": used, "recent": None, "ref": None}
+    if used < rules.vol_min_names:
+        return out
+    days = sorted(rets_by_day)
+    basket = [math.fsum(rets_by_day[k]) / len(rets_by_day[k]) for k in days]
+    recent = basket[-rules.vol_recent:]
+    if len(recent) < rules.vol_recent or len(basket) < rules.vol_min_days:
+        return out
+    s_recent, s_ref = statistics.pstdev(recent), statistics.pstdev(basket)
+    out["recent"], out["ref"] = s_recent * math.sqrt(252), s_ref * math.sqrt(252)
+    if s_recent > 0:
+        out["share"] = min(1.0, s_ref / s_recent)
+    return out
+
+
 def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 500_000.0,
              cost_model: Any | None = None, ranker: Callable[[Market, int], list[str]] | None = None,
              industries: dict[str, str] | None = None) -> dict[str, Any]:
     """Run ``rules`` from day ``start`` to day ``end`` (indices into ``m.dates``, inclusive). ``industries`` maps a
     symbol to its industry for ``rules.industry_cap`` (names with no industry are never capped)."""
+    if rules.vol_scale and (rules.brake != "none" or not rules.buffer):
+        raise ValueError("volatility scaling (variant V) runs with the rank buffer and without a brake")
     rank = ranker or (lambda mk, t: mk.momentum_ranking(t))
     rebal = set(m.rebalance_days(start, end, rules.rebalance, rules.rebalance_month))
     daily_rate = (1 + rules.liquid_rate) ** (1 / 365.0) - 1
     cash = capital
     pos: dict[str, Position] = {}
-    curve, exposure_log, trades, events = [], [], [], {"stops": 0, "brake_trades": 0, "tax_waits": 0, "floors": 0}
+    curve, exposure_log, trades = [], [], []
+    events = {"stops": 0, "brake_trades": 0, "tax_waits": 0, "floors": 0, "delistings": 0, "scale_trades": 0}
+    delisted: list[dict[str, Any]] = []     # (symbol, date, value lost) of every holding cut for stopping trading
+    scale_log: list[dict[str, Any]] = []    # variant V: each rebalance's target share and the share applied
     costs = traded = 0.0
     traded_cum: list[float] = []   # traded notional so far, at each day's close (turnover by period)
     fills: list[tuple[int, str, float]] = []   # (day, symbol, notional) of every buy and sell (capacity)
@@ -499,8 +583,11 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                 tax.st += proceeds - basis
         if frac >= 0.999999:
             c = m.close[sym][t]
+            ret = (c / p.entry_px - 1) if c and p.entry_px else None
+            if reason == "delisted":   # the carried-forward close no longer prices it: the money does
+                ret = (proceeds / p.cost - 1) if p.cost else None
             trades.append({"symbol": sym, "entry": m.dates[p.entry_t], "exit": m.dates[t], "days": t - p.entry_t,
-                           "return": (c / p.entry_px - 1) if c and p.entry_px else None, "reason": reason})
+                           "return": ret, "reason": reason})
             del pos[sym]
         else:
             p.value -= proceeds
@@ -561,6 +648,24 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
             return {s: 1 / len(names) for s in names}
         return {s: 1 / rules.top for s in names}
 
+    def rescale(level: float, t: int, reason: str) -> None:
+        """Trim every holding pro rata to ``level`` of the account, or top each up from cash (the brake's move, also
+        variant V's)."""
+        nonlocal cash
+        total = cash + sum(p.value for p in pos.values())
+        invested = sum(p.value for p in pos.values())
+        target = level * total
+        if invested > 0 and target < invested:
+            frac = 1 - target / invested
+            for sym in list(pos):
+                sell(sym, t, frac, reason)
+            events[f"{reason}_trades"] += 1
+        elif invested > 0 and target > invested:
+            room = min(target - invested, cash)
+            for sym, p in list(pos.items()):
+                buy(sym, t, room * p.value / invested)
+            events[f"{reason}_trades"] += 1
+
     def below_floor(sym: str, p: Position, d: int, t: int) -> bool:
         """Was the holding at least ``rules.floor`` below its cost on day d's close (d = t when fills are same-day)?"""
         if not rules.floor or p.cost <= 0:
@@ -582,6 +687,17 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                 if a0 and a1:
                     p.value *= a1 / a0
             cash *= (1 + daily_rate) ** ((date.fromisoformat(day) - date.fromisoformat(m.dates[t - 1])).days)
+        # 1b. a holding whose stock stopped trading: cut by the haircut and sold now (survivorship-2026-10-22.md);
+        # the stop and the floor below never see it, so their counts stay honest
+        if rules.delist_haircut:
+            for sym in [s for s in pos if m.ended_on(s) == t]:
+                p = pos[sym]
+                lost = p.value * rules.delist_haircut
+                p.value -= lost
+                delisted.append({"symbol": sym, "date": day, "lost": lost})
+                sell(sym, t, 1.0, "delisted")
+                stopped.add(sym)
+                events["delistings"] += 1
         # shares held on 31 Jan 2018 keep that day's value as their minimum cost for long-term gains
         if rules.tax and not grandfather_done and day >= GRANDFATHER_DAY:
             grandfather_done = True
@@ -608,27 +724,17 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                 sell(sym, t, 1.0, "floor")
                 stopped.add(sym)
                 events["floors"] += 1
-        # 3. brake
-        new_level = brake_level(d) if d >= start else exposure
+        # 3. brake (variant V sets the share itself, at the rebalance below)
+        new_level = brake_level(d) if d >= start and not rules.vol_scale else exposure
         if new_level != exposure:
-            total = cash + sum(p.value for p in pos.values())
-            invested = sum(p.value for p in pos.values())
-            target = new_level * total
-            if invested > 0 and target < invested:
-                frac = 1 - target / invested
-                for sym in list(pos):
-                    sell(sym, t, frac, "brake")
-                events["brake_trades"] += 1
-            elif invested > 0 and target > invested:
-                room = min(target - invested, cash)
-                for sym, p in list(pos.items()):
-                    buy(sym, t, room * p.value / invested)
-                events["brake_trades"] += 1
+            rescale(new_level, t, "brake")
         exposure = new_level
         # 4. rebalance
         if d in rebal and d >= start and t < end:
             stopped.clear()
             ranked = rank(m, d)
+            if rules.delist_haircut:   # a stock that has stopped trading is never bought (its stats would be stale)
+                ranked = [s for s in ranked if (e := m.ended_on(s)) is None or e > d]
             rank_pos = {s: i + 1 for i, s in enumerate(ranked)}
             total = cash + sum(p.value for p in pos.values())
             if rules.buffer:
@@ -637,7 +743,8 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                     for s in [s for s in pos if s not in keep]:
                         p = pos[s]
                         age = (date.fromisoformat(m.dates[d]) - date.fromisoformat(p.bought)).days
-                        if 335 <= age <= 365 and p.value > p.cost and rank_pos.get(s, 10 ** 6) <= rules.tax_aware_floor:
+                        if (rules.tax_aware_from <= age <= 365 and p.value > p.cost
+                                and rank_pos.get(s, 10 ** 6) <= rules.tax_aware_floor):
                             keep.append(s)
                             events["tax_waits"] += 1
                 for s in [s for s in list(pos) if s not in keep]:
@@ -647,6 +754,16 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
                     new = capped_picks(ranked, keep, slots, rules.top, rules.industry_cap, industries)
                 else:
                     new = [s for s in ranked[:rules.top] if s not in keep][:max(slots, 0)]
+                if rules.vol_scale:   # variant V: the basket's share, applied when it moves by the dead band or more
+                    v = vol_exposure(m, keep + new, d, rules)
+                    if abs(v["share"] - exposure) >= rules.vol_band:
+                        # the kept names alone sit at share x (their slots / top) of the account; the new names are
+                        # then bought at share x account / top each, so the whole basket carries the share
+                        rescale(v["share"] * len(pos) / rules.top, t, "scale")
+                        exposure = v["share"]
+                    scale_log.append({"date": m.dates[t], "target": v["share"], "applied": exposure,
+                                      "names": v["names"], "recent": v["recent"], "ref": v["ref"]})
+                    total = cash + sum(p.value for p in pos.values())
                 w = weights_for(keep + new, t)
                 for s in new:
                     buy(s, t, min(cash, exposure * total * w.get(s, 1 / rules.top)))
@@ -680,7 +797,7 @@ def simulate(m: Market, rules: Rules, start: int, end: int, *, capital: float = 
     open_days = [end - p.entry_t for p in pos.values()]
     return {"rules": rules, "label": rules.label(), "dates": m.dates[start:end + 1], "curve": curve,
             "exposure": exposure_log, "trades": trades, "open_days": open_days, "costs": costs, "traded": traded,
-            "traded_cum": traded_cum, "fills": fills, "held": held,
+            "traded_cum": traded_cum, "fills": fills, "held": held, "delisted": delisted, "scale_log": scale_log,
             "tax_paid": tax.paid, "tax_by_fy": tax.by_fy, "events": events, "capital": capital}
 
 
@@ -729,7 +846,8 @@ def summarize(run: dict[str, Any], m: Market, start: int, end: int) -> dict[str,
             "turnover": run["traded"] / avg / years / 2 if avg else None,   # one-way, a year
             "median_hold_days": statistics.median(held) if held else None,
             "completed_trades": len(run["trades"]), "stops": run["events"]["stops"],
-            "floors": run["events"].get("floors", 0),
+            "floors": run["events"].get("floors", 0), "delistings": run["events"].get("delistings", 0),
+            "scale_trades": run["events"].get("scale_trades", 0),
             "brake_trades": run["events"]["brake_trades"], "tax_waits": run["events"]["tax_waits"],
             "costs": run["costs"], "tax_paid": run["tax_paid"],
             "avg_invested": statistics.fmean(run["exposure"]) if run["exposure"] else None}

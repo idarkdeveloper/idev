@@ -418,18 +418,18 @@ def fetch_bhav(day: str, cache: Path, session: Any) -> list[dict[str, Any]] | No
     return parse_bhav(text)
 
 
-def fetch_actions(cache: Path, client: Any) -> list[dict[str, Any]]:
-    """NSE's corporate actions from DATA_FROM to WINDOW_END, by half-year, cached."""
+def fetch_actions(cache: Path, client: Any, *, start: str = DATA_FROM, end: str = WINDOW_END) -> list[dict[str, Any]]:
+    """NSE's corporate actions from ``start`` to before ``end`` (ISO dates), by half-year, cached."""
     cache.mkdir(parents=True, exist_ok=True)
-    f = cache / f"corporate_actions_{DATA_FROM}_{WINDOW_END}.json"
+    f = cache / f"corporate_actions_{start}_{end}.json"
     if f.exists():
         return json.loads(f.read_text())
     rows: list[dict[str, Any]] = []
-    y0, y1 = int(DATA_FROM[:4]), int(WINDOW_END[:4])
+    y0, y1 = int(start[:4]), int(end[:4])
     for y in range(y0, y1 + 1):
         for a, b in (("01-01", "30-06"), ("01-07", "31-12")):
-            start = f"{y}-{a[3:]}-{a[:2]}"
-            if start >= WINDOW_END or f"{y}-{b[3:]}-{b[:2]}" < DATA_FROM:
+            half_start = f"{y}-{a[3:]}-{a[:2]}"
+            if half_start >= end or f"{y}-{b[3:]}-{b[:2]}" < start:
                 continue
             d = client._get("api/corporates-corporateActions",
                             {"index": "equities", "from_date": f"{a}-{y}", "to_date": f"{b}-{y}"})

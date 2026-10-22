@@ -627,7 +627,7 @@ HALT_ALLOWED = {"telegram-preview", "kill-switch", "app-device", "app-api", "ui"
                 "research-capacity", "research-leakage",
                 "research-momentum", "research-holdout",
                 "research-macro", "research-sectors", "research-backward", "research-replication",
-                "research-batch3", "research-circuits", "research-india-2007"}
+                "research-batch3", "research-batch4", "research-circuits", "research-india-2007"}
 
 
 def _halt_refusal(args: argparse.Namespace) -> str | None:
@@ -1034,6 +1034,7 @@ def _research_market(args: argparse.Namespace, settings: Any) -> Any:
     from .research_sim import load_market
     from .runner import free_prices
     from .screen import load_universe
+    from .survivorship import FillError
     universe = args.universe.upper()
     if universe not in INDEX_FUNDS:
         raise SystemExit(f"{universe} has no index fund; use one of {', '.join(INDEX_FUNDS)}")
@@ -1046,8 +1047,18 @@ def _research_market(args: argparse.Namespace, settings: Any) -> Any:
     except (OSError, ValueError, KeyError, TypeError):
         pass
     print(f"Loading {universe} prices for {args.years} years before {args.until} (this takes a few minutes)…")
-    m = load_market([x["symbol"] for x in members], free_prices(settings), regime=INDEX_FUNDS[universe],
-                    years=args.years, until=args.until, membership=membership, flows=flows)
+    fill = None
+    if getattr(args, "fill_nse", False):   # survivorship-2026-10-22.md: members with no Yahoo history, from NSE's files
+        from .survivorship import nse_filler
+        fill = nse_filler(settings.state_dir, progress=print)
+    try:
+        m = load_market([x["symbol"] for x in members], free_prices(settings), regime=INDEX_FUNDS[universe],
+                        years=args.years, until=args.until, membership=membership, flows=flows, fill=fill)
+    except FillError as e:
+        raise SystemExit(f"Stopped before any claim: {e}. Nothing is spent; try again later.") from e
+    if m.filled:
+        print(f"Filled {len(m.filled)} past member(s) from NSE's daily files: {', '.join(m.filled[:12])}"
+              + (" …" if len(m.filled) > 12 else ""))
     if m.missing:
         print(f"No price history for {len(m.missing)} past member(s): {', '.join(m.missing[:12])}"
               + (" …" if len(m.missing) > 12 else ""))
@@ -1172,6 +1183,47 @@ def cmd_research_batch3(args: argparse.Namespace) -> int:
                    "max_drawdown": x["max_drawdown"], "turnover": x["turnover"], "passes": x.get("passes"),
                    "skill": x["skill"].get("probability")})
     print(format_batch3(r, note))
+    if args.json:
+        print(json.dumps({**r, "results": {k: {kk: vv for kk, vv in v.items() if kk != "skill"}
+                                           for k, v in r["results"].items()}}, default=str))
+    return 0
+
+
+def cmd_research_batch4(args: argparse.Namespace) -> int:
+    """Pre-registered batch 4 (quarterly rebalance H, volatility scaling V) on the development years, ONCE, on the
+    repaired data (members filled from NSE's files, 30% delisting haircut). Refused without --confirm and after the
+    first time (the trial log records it). The NSE data gate stops it before the claim, with nothing spent."""
+    from .costs import cost_model_for
+    from .gap_diagnosis import log_trial
+    from .research_batch4 import PREREGISTRATION, STUDY, batch4, format_batch4
+    from .research_sim import Market
+    from .research_studies import HOLDOUT_START, prior_trials
+    from .survivorship import fill_note
+    settings = _settings(args)
+    if _once_used(settings, STUDY):
+        return 2
+    if not args.confirm:
+        print(f"This runs pre-registered batch 4 ({PREREGISTRATION}) on Oct 2020 to Sep 2025, ONCE. It first loads "
+              "NSE's daily files for the members Yahoo lacks (the data gate stops it unspent if they fail). The result "
+              "is final and the batch is spent. Run again with --confirm.")
+        return 2
+    args.universe, args.years, args.until, args.fill_nse = "NIFTYMIDCAP150", 5, HOLDOUT_START, True
+    m = _research_market(args, settings)
+    filled = set(m.filled)
+    plain = Market(m.dates, {k: v for k, v in m.raw.items() if k not in filled}, m.regime, m.members_on,
+                   min_turnover=m.min_turnover, flows=m.flows)
+    plain.start_day, plain.point_in_time, plain.missing = m.start_day, m.point_in_time, sorted(m.missing + m.filled)
+    if not _claim_once(settings, STUDY):   # after the data loaded: a refused download does not spend it
+        return 2
+    r = batch4(m, plain, cost_model=cost_model_for("in"), capital=settings.paper_starting_cash,
+               extra_trials=prior_trials(settings.state_dir))
+    for k, x in r["results"].items():   # logged before printing: once run, the batch is spent
+        log_trial(settings.state_dir, STUDY, {"variant": k, "name": x["name"], "from": r["start"], "to": r["end"],
+                                              "rules": x["rules"]},
+                  {"return": x["total_return"], "excess": x["excess"], "cagr": x["cagr"],
+                   "max_drawdown": x["max_drawdown"], "turnover": x["turnover"], "passes": x.get("passes"),
+                   "delistings": x.get("delistings"), "skill": x["skill"].get("probability")})
+    print(format_batch4(r, fill_note(m)))
     if args.json:
         print(json.dumps({**r, "results": {k: {kk: vv for kk, vv in v.items() if kk != "skill"}
                                            for k, v in r["results"].items()}}, default=str))
@@ -2461,6 +2513,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--universe", default="NIFTYMIDCAP150")
         sp.add_argument("--years", type=int, default=5, help="years before --until (plus a lookback year)")
         sp.add_argument("--until", default="2025-10-01", help="first date NOT used (the sealed holdout)")
+        sp.add_argument("--fill-nse", dest="fill_nse", action="store_true",
+                        help="fill members with no Yahoo history from NSE's daily files (survivorship-2026-10-22.md)")
         if name == "research-portfolio":
             from .research_sim import STOP_RULES
             sp.add_argument("--stop", default="none", choices=STOP_RULES,
@@ -2475,6 +2529,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--confirm", action="store_true", help="really run it (once)")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_research_batch3)
+    sp = sub.add_parser("research-batch4", help="research: pre-registered batch 4 (quarterly rebalance, volatility "
+                                                "scaling) on the survivorship-repaired data, ONCE")
+    sp.add_argument("--confirm", action="store_true", help="really run it (once)")
+    sp.add_argument("--json", action="store_true")
+    sp.set_defaults(func=cmd_research_batch4)
     sp = sub.add_parser("research-replication", help="research: the adopted rules on US, Japanese or UK midcaps, ONCE "
                                                      "per market (pre-registered)")
     # its own dest: an argument named "market" would be read by _settings as the app's MARKET (in / us)

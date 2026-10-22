@@ -416,3 +416,129 @@ def test_research_momentum_command_logs_every_variant(synthetic, tmp_path, monke
     assert "Momentum robustness" in capsys.readouterr().out
     rows = [json.loads(x) for x in (tmp_path / "research" / "trials.jsonl").read_text().splitlines()]
     assert len(rows) == 1 + len(rs.MOMENTUM_VARIANTS) and "research-momentum" in cli.HALT_ALLOWED
+
+
+# --------------------------------------------------------------------------- #
+# batch 4 (quarterly rebalance, volatility scaling) and the delisting haircut (22 Oct 2026)
+# --------------------------------------------------------------------------- #
+def test_quarterly_rebalances_fall_on_quarter_starts_after_the_first_day():
+    m = market({"A": [100.0] * 400})
+    start = next(i for i, d in enumerate(m.dates) if d >= "2019-02-01")      # a mid-quarter start
+    got = [m.dates[t] for t in m.rebalance_days(start, 399, "quarterly")]
+    assert got[0] == m.dates[start]
+    assert all(d[5:7] in ("01", "04", "07", "10") and int(d[8:]) <= 7 for d in got[1:])
+    assert len(got) == 1 + len({d[:7] for d in got[1:]}) and got[1][:7] == "2019-04"
+
+
+def test_delisting_haircut_cuts_30_percent_sells_the_next_session_and_never_rebuys():
+    n = 120
+    m = market({"A": [100.0] * n, "B": [100.0] * 60})      # B's last bar is session 59
+    assert m.ended_on("B") == 60 and m.ended_on("A") is None
+    plain = simulate(m, Rules(top=2, buffer=4, liquid_rate=0.0, floor=0.25), 0, n - 1, ranker=fixed("A", "B"))
+    cut = simulate(m, Rules(top=2, buffer=4, liquid_rate=0.0, floor=0.25, delist_haircut=0.30), 0, n - 1,
+                   ranker=fixed("A", "B"))
+    assert plain["events"]["delistings"] == 0 and plain["curve"][-1] == pytest.approx(plain["curve"][0])
+    assert cut["events"]["delistings"] == 1 and cut["events"]["floors"] == 0
+    sold = cut["trades"][0]
+    assert sold["symbol"] == "B" and sold["reason"] == "delisted" and sold["exit"] == m.dates[60]
+    assert sold["return"] == pytest.approx(-0.30) and cut["delisted"][0]["lost"] == pytest.approx(0.30 * 50_000 * 5)
+    assert cut["curve"][-1] == pytest.approx(0.85 * cut["curve"][0])     # half the account lost 30%
+    assert not any(tr["symbol"] == "B" for tr in cut["trades"][1:]) and cut["exposure"][-1] == pytest.approx(0.5 / 0.85)
+    assert "delisting haircut 30%" in cut["label"] and summarize(cut, m, 0, n - 1)["delistings"] == 1
+
+
+def test_a_stock_whose_last_bar_is_within_five_sessions_of_the_end_is_not_cut():
+    m = market({"A": [100.0] * 100, "B": [100.0] * 97})
+    assert m.ended_on("B") is None
+    r = simulate(m, Rules(top=2, buffer=4, liquid_rate=0.0, delist_haircut=0.30), 0, 99, ranker=fixed("A", "B"))
+    assert r["events"]["delistings"] == 0
+
+
+def test_the_quarterly_tax_wait_keeps_a_profitable_name_from_273_days():
+    n = 300
+    others = [f"F{i:02d}" for i in range(45)]
+    series = {"A": [100 + 0.1 * i for i in range(n)], **{s: [100.0] * n for s in others}}
+    m = market(series)
+    assert m.dates[0] == "2019-01-01"
+
+    def ranker(mk, t):   # A leads until October, then drops to rank 41 (within the tax-aware floor of 50)
+        return ["A"] + others if mk.dates[t] < "2019-10-01" else others[:40] + ["A"] + others[40:]
+    base = Rules(top=1, buffer=35, tax_aware=True, tax_aware_floor=50, rebalance="quarterly", liquid_rate=0.0)
+    narrow = simulate(m, base, 0, n - 1, ranker=ranker)
+    wide = simulate(m, Rules(**{**base.__dict__, "tax_aware_from": 273}), 0, n - 1, ranker=ranker)
+    oct_sales = lambda r: [tr for tr in r["trades"] if tr["symbol"] == "A" and tr["exit"] == "2019-10-01"]  # noqa: E731
+    assert len(oct_sales(narrow)) == 1 and narrow["events"]["tax_waits"] == 0      # aged 273: outside 335-365
+    assert not oct_sales(wide) and wide["events"]["tax_waits"] >= 1               # kept under the wider band
+
+
+def _vol_paths(n, late_vol, names, seed=3, band=None):
+    """Random walks at 1% a day, ``late_vol`` inside ``band`` (default: the last 126 sessions)."""
+    lo, hi = band or (n - 126, n)
+    rng = random.Random(seed)
+    out = {}
+    for s in names:
+        p, path = 100.0, []
+        for i in range(n):
+            p *= math.exp((late_vol if lo <= i < hi else 0.01) * rng.gauss(0, 1))
+            path.append(p)
+        out[s] = path
+    return out
+
+
+def test_vol_exposure_is_one_when_calm_and_falls_when_recent_volatility_jumps():
+    from trading_agent.research_sim import vol_exposure
+    n = 800
+    rules = Rules(buffer=35, vol_scale=True)
+    calm = _vol_paths(n, 0.01, [f"C{i}" for i in range(12)])
+    m = market(calm)
+    v = vol_exposure(m, list(calm), n - 1, rules)
+    assert v["names"] == 12 and v["share"] > 0.9 and v["recent"] is not None and v["ref"] is not None
+    wild = market(_vol_paths(n, 0.03, [f"W{i}" for i in range(12)]))
+    w = vol_exposure(wild, [f"W{i}" for i in range(12)], n - 1, rules)
+    assert 0.4 < w["share"] < 0.65                      # recent vol about 3x; the reference window holds a sixth of it
+    assert vol_exposure(m, list(calm)[:5], n - 1, rules) == {"share": 1.0, "names": 5, "recent": None, "ref": None}
+    assert vol_exposure(m, list(calm), 300, rules)["names"] == 0      # under 378 returns: nobody counts
+
+
+def test_volatility_scaling_trims_at_a_rebalance_and_only_past_the_dead_band():
+    from trading_agent.research_sim import vol_exposure
+    n = 800
+    names = [f"W{i}" for i in range(12)]
+    m = market(_vol_paths(n, 0.03, names))
+    rules = Rules(top=12, buffer=20, vol_scale=True, liquid_rate=0.0)
+    r = simulate(m, rules, 400, n - 1, ranker=fixed(*names))
+    log = r["scale_log"]
+    assert log and log[0]["applied"] == 1.0 and r["events"]["scale_trades"] >= 1
+    assert r["exposure"][-1] < 0.7 and 0.4 < log[-1]["applied"] < 0.65
+    applied = 1.0
+    for e in log:                                          # the share moves only by the dead band or more
+        if e["applied"] != applied:
+            assert abs(e["target"] - applied) >= rules.vol_band - 1e-12 and e["applied"] == e["target"]
+            applied = e["applied"]
+        else:
+            assert abs(e["target"] - applied) < rules.vol_band
+    assert all(tr["reason"] in ("scale", "rank") for tr in r["trades"]) or not r["trades"]
+    assert "vol-scaled 126/756" in r["label"] and summarize(r, m, 400, n - 1)["scale_trades"] == r["events"]["scale_trades"]
+    with pytest.raises(ValueError):
+        simulate(m, Rules(top=12, vol_scale=True), 400, n - 1, ranker=fixed(*names))             # needs the buffer
+    with pytest.raises(ValueError):
+        simulate(m, Rules(top=12, buffer=20, vol_scale=True, brake="sma100"), 400, n - 1, ranker=fixed(*names))
+    last = m.dates.index(log[-1]["date"])                 # the share is measured on the rebalance day itself
+    assert vol_exposure(m, names, last, rules)["share"] == pytest.approx(log[-1]["target"])
+
+
+def test_volatility_scaling_sizes_the_kept_names_to_their_slots_when_slots_are_open():
+    n = 800
+    names = [f"W{i}" for i in range(12)]
+    m = market(_vol_paths(n, 0.03, names, band=(300, 450)))          # a volatile spell, then calm again
+    rules = Rules(top=20, buffer=20, vol_scale=True, liquid_rate=0.0)
+    r = simulate(m, rules, 400, n - 1, ranker=fixed(*names))          # 12 names in 20 slots: 8 stay open
+    log = r["scale_log"]
+    prev = None
+    for e in log:   # whenever the share is (re)applied, the invested share is the share x 12/20, trim or top-up alike
+        if e["applied"] != prev:
+            assert r["exposure"][m.dates.index(e["date"]) - 400] == pytest.approx(e["applied"] * 12 / 20, abs=1e-9)
+        prev = e["applied"]
+    applied = [e["applied"] for e in log]
+    assert applied[0] < 0.8 and min(applied) < 0.8 and applied[-1] == 1.0     # cut in the spell, back to 1 after it
+    assert r["events"]["scale_trades"] >= 1 and r["exposure"][-1] > 0.5
