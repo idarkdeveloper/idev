@@ -635,7 +635,8 @@ practice account that follows Claude's deal-based picks keeps its own stops: the
 strategy.
 
 **Friction telemetry.** `forward --status`, the daily report and the forward card measure what trading the screen
-costs, against fixed targets: turnover (under 120% a year, from the monthly rebalances after the first build),
+costs, against fixed targets: turnover (under 250% a year, from the monthly rebalances after the first build; 1.5x the
+168% the adopted rules measured in research, set on 22 Oct 2026 in place of a 120% target that predated those rules),
 approximate active share against the fund (75–90%; the fund's weights approximated by the members' market caps from
 Yahoo, or equal weights when too few are known), slippage a side (15 bps or less; the paper account fills at the close,
 so this is measured on real Groww fills against the last price when placed, and shows the cost model's assumption
@@ -702,6 +703,29 @@ bulk or block deal buying by clients named FUND, INSURANCE or PENSION in the pre
 40. It first downloads NSE's deal history (Oct 2019 – Sep 2025, 90-day windows, cached); if a window fails, nothing
 runs and nothing is spent. A variant passes with +2 points a year over the adopted rules, a worst fall within 5 points
 and turnover at most 1.5x; a pass only earns a 12-month paper account.
+
+**Survivorship repairs (from 22 Oct 2026).** Two data repairs, fixed in
+[survivorship-2026-10-22.md](research/survivorship-2026-10-22.md), that every later Indian study uses; no spent study
+is rerun. (1) Members of the point-in-time index with no Yahoo history are filled from NSE's own daily files (the
+bhavcopy archive, cached under `state/research/nse_bhav/`), renamed to today's symbols and adjusted with NSE's
+corporate actions, the India test's pipeline unchanged: `--fill-nse` on the research commands, always on in batch 4.
+If fewer than 99% of the trading days' files load, or the corporate actions cannot be fetched, the study stops before
+its claim with nothing spent. (2) A holding whose stock stops trading (its last bar more than 5 sessions before the end
+of the data) loses 30% and is sold on the session after that bar (`Rules.delist_haircut`; Shumway's delisting return),
+instead of being sold at its last price. It also hits mergers, so it leans against every rule set. Off by default so
+earlier tests stay as they were; each new plan turns it on and says so.
+
+**Batch 4 (once).** `research-batch4 --confirm` runs the two ideas
+[pre-registered](research/preregistered-batch-2026-10-22.md) on 22 Oct 2026 beside the adopted rules on the development
+years, all three on the repaired data above: H rebalances on the first session of each calendar quarter instead of each
+month (the tax-aware wait's age band widens from 335–365 to 273–365 days, because quarterly checks are up to 92 days
+apart); V sets the invested share at each monthly rebalance to min(1, the basket's volatility over 756 sessions ÷ its
+volatility over the last 126), applied when it moves by 0.10 or more, never leveraged (Barroso and Santa-Clara 2015).
+H passes if it beats the fund, stays within 1 point a year of the adopted rules, keeps its worst fall within 5 points
+and cuts turnover by at least a third; V passes if it beats the fund with a worst fall at least 5 points shallower,
+within 1 point a year and turnover at most 1.5x. The run also prints the adopted rules on Yahoo's names alone, without
+the haircut, beside the repaired control: a survivorship diagnostic, not a trial. A pass only earns a 12-month paper
+account. It needs the server's index history and about 1,500 NSE daily files on the first run.
 
 **Circuit-lock audit.** `research-circuits` (a diagnostic, not a trial) finds the adopted rules' sells made on days
 that look locked at the lower price band (open = high = low = close below the previous close, or a fall of 4.5% or more
