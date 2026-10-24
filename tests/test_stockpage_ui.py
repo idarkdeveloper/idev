@@ -137,6 +137,7 @@ def test_tabs_and_sections_follow_the_brief():
         assert f'"{title}"' in JS, title
     assert "Top mutual funds" not in JS and "F&amp;O" not in JS and "F&O" not in JS
     for label in ("Mkt cap", "ROE", "P/E (TTM)", "EPS (TTM)", "P/B", "Div yield", "Industry P/E", "Book value", "Debt to equity", "Face value",
+                  "Operating cash (TTM)", "Free cash (TTM)", "Mkt cap ÷ op. cash", "Mkt cap ÷ free cash",
                   "Lower circuit", "Upper circuit", "Prev. close", "1Y (TTM)", "3Y CAGR", "Promoters", "DIIs", "Public", "FIIs"):
         assert label in JS, label
     assert "unavailable from NSE right now" in (ROOT / "trading_agent" / "stockpage.py").read_text(encoding="utf-8")
@@ -175,3 +176,12 @@ def test_stockpage_script_is_served(settings):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_the_cash_lines_draw_no_verdict():
+    """The cash-flow lines are information only: no fair multiple, no 'undervalued' wording anywhere in the page code."""
+    code = _code(JS)
+    assert "f.operating_cash_cr" in code and "f.price_to_cash" in code and "f.cash_note" in code
+    assert "not whether the price is fair" in JS
+    for word in ("undervalued", "overvalued", "fair value", "30x", "30×"):
+        assert word not in code.lower(), word
