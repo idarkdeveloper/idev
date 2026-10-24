@@ -16,6 +16,7 @@ import io
 import json
 import math
 import re
+import time
 import zipfile
 from bisect import bisect_left
 from collections.abc import Callable, Iterable
@@ -426,6 +427,13 @@ def fetch_bse_rows(day: str, cache: Path, session: Any) -> list[list[str]]:
 # --------------------------------------------------------------------------- #
 # downloads (cached)
 # --------------------------------------------------------------------------- #
+# A burst of ~1,500 requests made NSE answer 403 to 20 days that do exist (24 Oct 2026; the same files answered 200 minutes
+# later). A 403, an error page or a 5xx is therefore retried and, if it persists, left out of the cache; only a 404 is
+# remembered as "no file".
+FETCH_RETRY_PAUSES = (2.0, 5.0, 10.0)
+_sleep = time.sleep
+
+
 def fetch_bhav(day: str, cache: Path, session: Any) -> list[dict[str, Any]] | None:
     """One day's EQ rows, cached as CSV text; None when NSE has no file for the day. From UDIFF_FROM the day is read
     from NSE's UDiFF file (cached as ``<day>.udiff.csv``, so a legacy cache is never mixed with it); earlier days are
@@ -439,11 +447,17 @@ def fetch_bhav(day: str, cache: Path, session: Any) -> list[dict[str, Any]] | No
         return parse(f.read_text(encoding="latin-1"))
     if miss.exists():
         return None
-    r = session.get(udiff_url(day) if new else bhav_url(day), headers=HEADERS, timeout=60)
-    if r.status_code != 200 or not r.content.startswith(b"PK"):
-        if r.status_code in (403, 404) or not r.content.startswith(b"PK"):
-            miss.write_text(str(r.status_code))
-        return None
+    url = udiff_url(day) if new else bhav_url(day)
+    for pause in (*FETCH_RETRY_PAUSES, None):
+        r = session.get(url, headers=HEADERS, timeout=60)
+        if r.status_code == 200 and r.content.startswith(b"PK"):
+            break
+        if r.status_code == 404:
+            miss.write_text("404")      # NSE has no file for the day: remembered
+            return None
+        if pause is None:
+            return None                 # 403 (throttled), an error page, a 5xx: not remembered, so a later run tries again
+        _sleep(pause)
     z = zipfile.ZipFile(io.BytesIO(r.content))
     text = z.read(z.namelist()[0]).decode("latin-1")
     f.write_text(text, encoding="latin-1")

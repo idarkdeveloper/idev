@@ -740,7 +740,9 @@ H passes if it beats the fund, stays within 1 point a year of the adopted rules,
 and cuts turnover by at least a third; V passes if it beats the fund with a worst fall at least 5 points shallower,
 within 1 point a year and turnover at most 1.5x. The run also prints the adopted rules on Yahoo's names alone, without
 the haircut, beside the repaired control: a survivorship diagnostic, not a trial. A pass only earns a 12-month paper
-account. It needs the server's index history and about 1,500 NSE daily files on the first run.
+account. It needs the server's index history and about 1,500 NSE daily files on the first run. NSE may answer a
+burst of that size with 403 for files that exist; the download retries those and remembers only a 404 as "no file".
+If the 99% gate still stops the run, nothing is spent: run it again.
 
 **Circuit-lock audit.** `research-circuits` (a diagnostic, not a trial) finds the adopted rules' sells made on days
 that look locked at the lower price band (open = high = low = close below the previous close, or a fall of 4.5% or more

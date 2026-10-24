@@ -289,3 +289,34 @@ def test_fetch_bhav_reads_the_new_file_from_8_jul_2024_and_the_old_one_before(tm
     gone = _Session(lambda url: _Resp(404, b"<!"))
     assert ri.fetch_bhav("2025-01-01", tmp_path, gone) is None and (tmp_path / "2025-01-01.udiff.none").exists()
     assert ri.fetch_bhav("2025-01-01", tmp_path, gone) is None and len(gone.urls) == 1                                   # the miss is cached
+
+
+def test_fetch_bhav_retries_a_403_and_only_remembers_a_404(tmp_path, monkeypatch):
+    # 24 Oct 2026: a burst of ~1,500 requests got a 403 for 20 days whose files exist; the old code cached each as "no file".
+    pauses: list[float] = []
+    monkeypatch.setattr(ri, "_sleep", pauses.append)
+    legacy = "SYMBOL,SERIES,CLOSE,TOTTRDQTY,TOTTRDVAL,ISIN\nOLDCO,EQ,50,10,500,INE1\n"
+    seen = {"n": 0}
+
+    def flaky(url):
+        seen["n"] += 1
+        return _Resp(403, b"<!") if seen["n"] <= 2 else _Resp(200, _zip("y.csv", legacy))
+    s = _Session(flaky)
+    assert [r["symbol"] for r in ri.fetch_bhav("2021-07-22", tmp_path, s)] == ["OLDCO"]      # recovered on the third try
+    assert len(s.urls) == 3 and pauses == [2.0, 5.0] and (tmp_path / "2021-07-22.csv").exists()
+
+    pauses.clear()
+    blocked = _Session(lambda url: _Resp(403, b"<!"))
+    assert ri.fetch_bhav("2021-07-27", tmp_path, blocked) is None
+    assert len(blocked.urls) == 4 and pauses == [2.0, 5.0, 10.0]                               # three retries, then give up
+    assert not (tmp_path / "2021-07-27.none").exists()                                          # ...but never remembered
+    assert ri.fetch_bhav("2021-07-27", tmp_path, _Session(lambda url: _Resp(200, _zip("y.csv", legacy)))) is not None
+
+    pauses.clear()
+    html = _Session(lambda url: _Resp(200, b"<html>blocked</html>"))
+    assert ri.fetch_bhav("2021-07-28", tmp_path, html) is None and not (tmp_path / "2021-07-28.none").exists()
+
+    pauses.clear()
+    gone = _Session(lambda url: _Resp(404, b"<!"))
+    assert ri.fetch_bhav("2021-08-02", tmp_path, gone) is None and (tmp_path / "2021-08-02.none").read_text() == "404"
+    assert len(gone.urls) == 1 and pauses == []                                                  # a 404 is final: no retries
