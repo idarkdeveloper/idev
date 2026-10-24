@@ -317,7 +317,8 @@ who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
 figures (`financialData`), so they differ from a single financial year: Eternal read ₹872 Cr TTM against the ₹308 Cr of
 its March 2025 year. Yahoo has none for some stocks (Samvardhana Motherson showed none), which reads n/a, never zero; a
 ratio needs a positive cash flow and a known market cap; and a company whose cash flow is reported in another currency
-than its shares trade in (Vodafone: euros against pence) shows no figures, with a note. It is information only: no
+than its shares trade in (Vodafone: euros against pence) shows no figures, with a note; a London quote in pence is compared
+as pounds, so a pound reporter such as Tesco shows its ratios. It is information only: no
 "fair" multiple (such as 30x), no verdict, and nothing in the screen, the paper accounts or any rule reads it. The
 strategy cannot test it: the project holds no cash-flow history (NSE's filings carry balance sheets only from FY2023, and
 Yahoo's statement-history modules come back empty), and a new signal costs a trial. (`trading_agent/stockpage.py`,
@@ -327,7 +328,10 @@ Yahoo's statement-history modules come back empty), and a new signal costs a tri
 VOD, 7203), or type it with its market: `AAPL.US`, `VOD.L` (London), `7203.T` (Tokyo). A company name works too: *tesla*
 under *US* finds TSLA (the card says "Matched TESLA to TSLA.US"). The card and the full view show
 the price in the stock's own currency ($, pence for London quotes, ¥), the trend, the chart (line and candles), Yahoo's
-company figures and financials (amounts as $/£/¥ with K/M/B/T), the indicators and headlines. Nothing Indian applies to
+company figures and financials (amounts as $/£/¥ with K/M/B/T), the indicators and headlines. London shares are quoted in pence, but Yahoo gives a London company's market cap and statements in
+whole pounds (or the currency it reports in: Vodafone and Unilever report in euros, HSBC and BP in dollars) and its EPS and
+book value per share in that currency too, so the page shows the market cap in £, statements in the company's own currency,
+EPS and book value in pence for pound reporters (P/B is then price over book) and n/a for the rest. Nothing Indian applies to
 them: no agent's checklist, price band, ASM/GSM or pledge flags, NSE/BSE announcements, shareholding or similar stocks,
 and no orders of any kind (the practice order form refuses them). Prices are Yahoo Finance's, delayed.
 (`trading_agent/markets.py`.)

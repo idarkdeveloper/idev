@@ -137,7 +137,12 @@
     const cur = () => (st.stock && st.stock.currency) || (st.r && st.r.currency) || "INR";
     const rupees = (v, d) => foreign() ? TA.px(v, cur(), d == null ? 2 : d) : rupeesIN(v, d);
     const signedRupees = (v, d) => !foreign() ? signedRupeesIN(v, d) : !isNum(v) ? "n/a" : (v >= 0 ? "+" : "−") + TA.px(Math.abs(v), cur(), d == null ? 2 : d);
-    const crore = (cr) => foreign() ? (isNum(cr) ? TA.bigMoney(cr * 1e7, cur()) : "n/a") : croreIN(cr);
+    // Yahoo gives a London stock's market cap and statements in whole pounds (and the company's own currency), never in
+    // the pence its share price is quoted in: TA.bigMoney divides pence by 100, so it is given pounds here
+    const bigCur = () => cur() === "GBp" || cur() === "GBX" ? "GBP" : cur();
+    const finCur = () => (st.stock && st.stock.financial_currency) || bigCur();
+    const crore = (cr) => foreign() ? (isNum(cr) ? TA.bigMoney(cr * 1e7, bigCur()) : "n/a") : croreIN(cr);
+    const fcrore = (cr) => foreign() ? (isNum(cr) ? TA.bigMoney(cr * 1e7, finCur()) : "n/a") : croreIN(cr);   // statement amounts: the company's currency
     const volume = (v) => !isNum(v) ? "n/a" : foreign() ? Number(v).toLocaleString("en-US", {maximumFractionDigits: 0}) : group(v, 0);
 
     const price = () => {
@@ -226,7 +231,7 @@
         ${kv("P/E (TTM)", ratio(f.pe))}${kv("EPS (TTM)", rupees(f.eps))}${kv("P/B", ratio(f.pb))}${kv("Div yield", percent(f.dividend_yield))}
         ${kv("Industry P/E", ratio(f.industry_pe))}${kv("Book value", rupees(f.book_value))}
         ${kv("Debt to equity", ratio(f.debt_to_equity))}${kv("Face value", rupees(f.face_value))}
-        ${kv("Operating cash (TTM)", crore(f.operating_cash_cr))}${kv("Free cash (TTM)", crore(f.free_cash_cr))}
+        ${kv("Operating cash (TTM)", fcrore(f.operating_cash_cr))}${kv("Free cash (TTM)", fcrore(f.free_cash_cr))}
         ${kv("Mkt cap ÷ op. cash", ratio(f.price_to_cash, 1))}${kv("Mkt cap ÷ free cash", ratio(f.price_to_free_cash, 1))}</div>
         <div class="sub" style="font-size:12px">Figures from ${esc(d.source || "Yahoo Finance")}${peers ? "; industry P/E is the median over same-industry peers we have saved" + esc(peers) : ""}.
         Cash flow is Yahoo's trailing twelve months and n/a where Yahoo has none; the two ratios need a positive cash flow. They describe what the market pays per rupee of cash, not whether the price is fair.${f.cash_note ? " " + esc(f.cash_note) + "." : ""}</div>`;
@@ -242,14 +247,14 @@
       const n = periods.length, gw = 300 / Math.max(n, 1), bw = Math.min(26, gw * 0.3), base = 96;
       const svg = bars.map((b, i) => {
         const x = i * gw + gw / 2, sel = i === v.index;
-        return `<g class="sp-grp${sel ? " sel" : ""}" data-fin-idx="${i}" role="button" tabindex="0" aria-label="${esc(b.label)}: revenue ${esc(crore(periods[i].revenue_cr))}, profit ${esc(crore(periods[i].profit_cr))}" aria-pressed="${sel}">
+        return `<g class="sp-grp${sel ? " sel" : ""}" data-fin-idx="${i}" role="button" tabindex="0" aria-label="${esc(b.label)}: revenue ${esc(fcrore(periods[i].revenue_cr))}, profit ${esc(fcrore(periods[i].profit_cr))}" aria-pressed="${sel}">
           <rect class="sp-hit" x="${(x - gw / 2).toFixed(1)}" y="0" width="${gw.toFixed(1)}" height="132"></rect>
           <rect class="sp-bar-rev" x="${(x - bw - 1).toFixed(1)}" y="${(base - b.revenue).toFixed(1)}" width="${bw.toFixed(1)}" height="${b.revenue.toFixed(1)}" rx="2"></rect>
           <rect class="${b.loss ? "sp-bar-loss" : "sp-bar-profit"}" x="${(x + 1).toFixed(1)}" y="${(b.loss ? base : base - b.profit).toFixed(1)}" width="${bw.toFixed(1)}" height="${b.profit.toFixed(1)}" rx="2"></rect>
           <text class="sp-axis" x="${x.toFixed(1)}" y="126" text-anchor="middle">${esc(b.label)}</text></g>`;
       }).join("");
       const cur = v.cur, prev = v.prev;
-      const line = (name, val, ch) => `<div class="sp-fin-i"><div class="label">${name}</div><div class="sp-v">${esc(crore(val))}</div><div class="${tone(ch)}" style="font-size:12px">${ch == null ? "" : esc(signedPercent(ch, 1)) + " vs " + esc(prev ? prev.label : "")}</div></div>`;
+      const line = (name, val, ch) => `<div class="sp-fin-i"><div class="label">${name}</div><div class="sp-v">${esc(fcrore(val))}</div><div class="${tone(ch)}" style="font-size:12px">${ch == null ? "" : esc(signedPercent(ch, 1)) + " vs " + esc(prev ? prev.label : "")}</div></div>`;
       return `<div class="ck-chips" role="group" aria-label="Period">${chips}</div>
         <svg class="sp-fin" viewBox="0 0 300 132" role="group" aria-label="Revenue and profit, last ${n} ${kind === "quarterly" ? "quarters" : "years"}">${svg}</svg>
         <div class="sp-legend sub"><span><i class="sp-sw sp-sw-rev"></i>Revenue</span><span><i class="sp-sw sp-sw-profit"></i>Profit</span><span>Tap a bar for that period</span></div>

@@ -456,8 +456,36 @@ def test_cash_in_another_currency_than_the_shares_is_hidden_with_a_note():
     r = _with_cash(1.4e10, 5e9, price_cur="GBp", fin_cur="EUR", cap=2.7e10)        # Vodafone: euros against pence
     f = sp.build_fundamentals("VOD.L", r, sp.parse_price(r), face_value=None, industry_pe=None, fetched_at=1.0)
     assert f["operating_cash_cr"] is None and f["price_to_cash"] is None
-    assert f["cash_note"] == "Yahoo reports this company's cash flow in EUR, not GBp"
-    pence = _with_cash(1.4e10, 5e9, price_cur="GBp", fin_cur="GBP", cap=2.7e10)    # pence is not pounds: also hidden
-    assert sp.parse_cash(pence, 2.7e10)["price_to_cash"] is None and sp.parse_cash(pence, 2.7e10)["cash_note"]
+    assert f["cash_note"] == "Yahoo reports this company's cash flow in EUR, not GBP"
+    # a London company that reports in pounds: Yahoo gives the market cap and the cash flows in pounds (only the share
+    # price is in pence), so the pence quote is compared as pounds and the ratio is shown (Tesco: £33.5bn / £4.34bn)
+    pence = _with_cash(4.34e9, 2.0e9, price_cur="GBp", fin_cur="GBP", cap=3.3486e10)
+    got = sp.parse_cash(pence, 3.3486e10)
+    assert got["price_to_cash"] == pytest.approx(7.7) and got["price_to_free_cash"] == pytest.approx(16.7) and got["cash_note"] is None
+    assert sp.parse_cash(_with_cash(1e9, 1e9, price_cur="GBX", fin_cur="GBP"), 1e10)["price_to_cash"] == pytest.approx(10.0)
+    assert sp.major_currency("GBp") == "GBP" and sp.major_currency("GBX") == "GBP" and sp.major_currency("GBP") == "GBP"
+    assert sp.major_currency("USD") == "USD" and sp.major_currency("JPY") == "JPY" and sp.major_currency("INR") == "INR"
     us = _with_cash(1.4e11, 1.0e11, price_cur="USD", fin_cur="USD", cap=5.0e12)
     assert sp.parse_cash(us, 5.0e12)["price_to_cash"] == pytest.approx(35.7) and sp.parse_cash(us, 5.0e12)["cash_note"] is None
+
+
+def test_london_per_share_figures_are_shown_in_pence_and_only_for_pound_reporters():
+    """Yahoo's EPS and book value are in whole pounds for a pound reporter while the price is in pence: Tesco's 0.30 / 1.86
+    read as 30p / 186p and P/B comes out 2.9, not 289. A euro or dollar reporter's per-share figures cannot be set beside
+    pence without an exchange rate, so they read n/a (the ratio is Yahoo's own where it gives one)."""
+    r = full_result()
+    r["price"].update({"currency": "GBp", "regularMarketPrice": raw(537.6)})
+    r["defaultKeyStatistics"] = {"trailingEps": raw(0.30), "bookValue": raw(1.86)}
+    r["financialData"] = {"financialCurrency": "GBP", "returnOnEquity": raw(0.2)}
+    f = sp.build_fundamentals("TSCO.L", r, sp.parse_price(r), face_value=None, industry_pe=None, fetched_at=1.0)
+    assert f["eps"] == pytest.approx(30.0) and f["book_value"] == pytest.approx(186.0) and f["pb"] == pytest.approx(2.89)
+    assert f["roe"] == pytest.approx(0.30 / 1.86)                               # a ratio of two pound figures: unchanged
+    e = full_result()
+    e["price"].update({"currency": "GBp", "regularMarketPrice": raw(118.2)})
+    e["defaultKeyStatistics"] = {"trailingEps": raw(-0.01), "bookValue": raw(1.84)}
+    e["financialData"] = {"financialCurrency": "EUR"}
+    g = sp.build_fundamentals("VOD.L", e, sp.parse_price(e), face_value=None, industry_pe=None, fetched_at=1.0)
+    assert g["eps"] is None and g["book_value"] is None and g["pb"] is None
+    us = full_result()                                                        # everything else is untouched
+    h = sp.build_fundamentals("TCS", us, sp.parse_price(us), face_value=1.0, industry_pe=None, fetched_at=1.0)
+    assert h["eps"] == 4.4 and h["book_value"] == 20.0 and h["pb"] == 5.5
