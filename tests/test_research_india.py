@@ -225,3 +225,67 @@ def test_addendum_2_constants_match_the_document():
         assert needle in text
     assert ri.CRASH_DAY_FALL == -0.05 and ri.BSE_GENUINE_FLAGS == ("XR", "SA")
     assert ri.BSE_SPLIT_FLAGS == ("XB", "XS", "SS", "CS") and ri.GATE_MAX_UNRECORDED == 15
+
+
+# --------------------------------------------------------------------------- #
+# NSE's new daily file (UDiFF), from 8 Jul 2024
+# --------------------------------------------------------------------------- #
+UDIFF = ("TradDt,BizDt,Sgmt,Src,FinInstrmTp,FinInstrmId,ISIN,TckrSymb,SctySrs,OpnPric,HghPric,LwPric,ClsPric,LastPric,"
+         "PrvsClsgPric,TtlTradgVol,TtlTrfVal\n"
+         "2025-01-15,2025-01-15,CM,NSE,STK,1,INE216P01012,AAVAS,EQ,1,1,1,1638.40,1,1,149384,244623421.10\n"
+         "2025-01-15,2025-01-15,CM,NSE,STK,2,INE000000001,SOMEBE,BE,1,1,1,10,1,1,5,50\n"
+         "2025-01-15,2025-01-15,CM,NSE,STK,3,INE000000002,ZEROQTY,EQ,1,1,1,10,1,1,0,0\n"
+         "2025-01-15,2025-01-15,CM,NSE,STK,4,INF000000003,NIFTYBEES,EQ,1,1,1,260.5,1,1,1000,260500\n")
+
+
+def test_udiff_url_and_parse_keep_eq_rows_in_the_same_shape():
+    assert ri.udiff_url("2025-01-15") == \
+        "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_20250115_F_0000.csv.zip"
+    rows = ri.parse_udiff(UDIFF)
+    assert [r["symbol"] for r in rows] == ["AAVAS", "NIFTYBEES"]
+    assert rows[0] == {"symbol": "AAVAS", "close": 1638.40, "volume": 149384.0, "value": 244623421.10, "isin": "INE216P01012"}
+    assert set(rows[0]) == set(ri.parse_bhav("SYMBOL,SERIES,CLOSE,TOTTRDQTY,TOTTRDVAL,ISIN\nA,EQ,1,1,1,X\n")[0])
+
+
+class _Resp:
+    def __init__(self, status, content=b""):
+        self.status_code, self.content = status, content
+
+
+class _Session:
+    def __init__(self, answers):
+        self.answers, self.urls = answers, []
+
+    def get(self, url, headers=None, timeout=None):
+        self.urls.append(url)
+        return self.answers(url)
+
+
+def _zip(name, text):
+    import io
+    import zipfile
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr(name, text)
+    return b.getvalue()
+
+
+def test_fetch_bhav_reads_the_new_file_from_8_jul_2024_and_the_old_one_before(tmp_path):
+    legacy = ("SYMBOL,SERIES,CLOSE,TOTTRDQTY,TOTTRDVAL,ISIN\nOLDCO,EQ,50,10,500,INE1\n")
+
+    def answers(url):
+        if "BhavCopy_NSE_CM" in url:
+            return _Resp(200, _zip("x.csv", UDIFF))
+        return _Resp(200, _zip("y.csv", legacy))
+    s = _Session(answers)
+    assert ri.UDIFF_FROM == "2024-07-08"
+    old = ri.fetch_bhav("2024-07-05", tmp_path, s)
+    new = ri.fetch_bhav("2024-07-08", tmp_path, s)
+    assert [r["symbol"] for r in old] == ["OLDCO"] and [r["symbol"] for r in new] == ["AAVAS", "NIFTYBEES"]
+    assert s.urls[0].endswith("/2024/JUL/cm05JULbhav.csv.zip".replace("cm05JULbhav", "cm05JUL2024bhav")) and "BhavCopy_NSE_CM_0_0_0_20240708" in s.urls[1]
+    assert (tmp_path / "2024-07-05.csv").exists() and (tmp_path / "2024-07-08.udiff.csv").exists()
+    n = len(s.urls)
+    assert [r["symbol"] for r in ri.fetch_bhav("2024-07-08", tmp_path, s)] == ["AAVAS", "NIFTYBEES"] and len(s.urls) == n   # cached
+    gone = _Session(lambda url: _Resp(404, b"<!"))
+    assert ri.fetch_bhav("2025-01-01", tmp_path, gone) is None and (tmp_path / "2025-01-01.udiff.none").exists()
+    assert ri.fetch_bhav("2025-01-01", tmp_path, gone) is None and len(gone.urls) == 1                                   # the miss is cached

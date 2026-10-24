@@ -74,3 +74,16 @@ whether the stock was delisted or merely halted for a day. So the timing of the 
 on the day. It is also conservative: it cuts and sells on the earliest possible session, which leans against every rule
 set; and it never changes a buy or a ranking made before that session. The leakage test, which checks that decisions use
 only data up to their day, runs the adopted rules without the haircut and is unaffected. No number changes.
+
+## Clarification, 24 Oct 2026 (before any run): NSE's daily file changed format in July 2024
+
+Probing NSE before the first run showed that the legacy daily file (`cmDDMONYYYYbhav.csv.zip`) exists up to 5 Jul 2024
+and answers 404 from 8 Jul 2024. NSE publishes the same day's figures as its "UDiFF" file
+(`content/cm/BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv.zip`), available from 5 Jul 2024. Left as built, repair 1 would
+have failed its own gate (about 20% of the days in the window are after the change) and the study could never have run.
+
+From 8 Jul 2024 the fill therefore reads the UDiFF file. It carries the same fields for the EQ series: the ticker, the
+close, the total traded volume, the traded value and the ISIN, and the rows are turned into exactly the shape the legacy
+file gives. Nothing else changes: the gate is still 99% of the days' files, the symbol changes, the corporate actions,
+the adjustments and the haircut are as written above. Days before 8 Jul 2024 are read as before, and a cached legacy
+file is never mixed with a UDiFF one. No rule, number or pass condition of the batch 4 plan changes.
