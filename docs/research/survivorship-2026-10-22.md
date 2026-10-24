@@ -74,3 +74,32 @@ whether the stock was delisted or merely halted for a day. So the timing of the 
 on the day. It is also conservative: it cuts and sells on the earliest possible session, which leans against every rule
 set; and it never changes a buy or a ranking made before that session. The leakage test, which checks that decisions use
 only data up to their day, runs the adopted rules without the haircut and is unaffected. No number changes.
+
+## Clarification, 24 Oct 2026 (before any run): NSE's daily file changed format in July 2024
+
+Probing NSE before the first run showed that the legacy daily file (`cmDDMONYYYYbhav.csv.zip`) exists up to 5 Jul 2024
+and answers 404 from 8 Jul 2024. NSE publishes the same day's figures as its "UDiFF" file
+(`content/cm/BhavCopy_NSE_CM_0_0_0_YYYYMMDD_F_0000.csv.zip`), available from 5 Jul 2024. Left as built, repair 1 would
+have failed its own gate (about 20% of the days in the window are after the change) and the study could never have run.
+
+From 8 Jul 2024 the fill therefore reads the UDiFF file. It carries the same fields for the EQ series: the ticker, the
+close, the total traded volume, the traded value and the ISIN, and the rows are turned into exactly the shape the legacy
+file gives. Nothing else changes: the gate is still 99% of the days' files, the symbol changes, the corporate actions,
+the adjustments and the haircut are as written above. Days before 8 Jul 2024 are read as before, and a cached legacy
+file is never mixed with a UDiFF one. No rule, number or pass condition of the batch 4 plan changes.
+
+## Clarification, 24 Oct 2026 (after the first attempt stopped at the gate, nothing claimed): a throttled 403 was cached as "no file"
+
+The first attempt downloaded all 1,533 daily files and stopped at the data gate: 1,513 loaded (98.7%), against the
+gate's 99%. Nothing was claimed, no rule set was simulated, no result was seen. The 20 missing days were all cached
+403 answers, spread over Aug 2019 – Nov 2021. Fetched again minutes later, every one I tried answered 200 with a
+file: NSE had throttled the burst of about 1,500 requests, and the download code had remembered each 403 as "NSE has
+no file for this day".
+
+Two things followed, and neither touches a rule, a number or a pass condition:
+
+- The 20 cached 403 markers were deleted and the identical command was run again on the same pinned commit (`0dc80b2`).
+  The gate is still 99% of the days' files.
+- The download code now retries a 403, an error page or a 5xx three times with growing pauses, and never remembers
+  one as "no file": only a 404 is. This change is on the branch and was **not** in the code that ran the study; it
+  only makes a future download less likely to stop at the gate. The result document says which commit ran.

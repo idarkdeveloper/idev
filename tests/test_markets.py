@@ -120,6 +120,7 @@ def test_the_stock_page_payload_for_a_foreign_stock_skips_the_indian_parts():
         return {"price": {"regularMarketPrice": {"raw": 120.5}, "regularMarketPreviousClose": {"raw": 122.0},
                           "longName": "Vodafone Group", "currency": "GBp"},
                 "summaryDetail": {"marketCap": {"raw": 2.79e10}, "fiftyTwoWeekLow": {"raw": 85.2}, "fiftyTwoWeekHigh": {"raw": 132.1}},
+                "financialData": {"financialCurrency": "EUR", "operatingCashflow": {"raw": 1.4e10}},
                 "assetProfile": {"sector": "Communication Services", "longBusinessSummary": "Phones."}}
     svc = StockService(StockSources(modules=modules, shareholding=fail("shareholding"), daily_bars=lambda b, e: [],
                                     universe=fail("universe"), peer_pe=fail("peer_pe"), price_pair=fail("price_pair"),
@@ -129,6 +130,9 @@ def test_the_stock_page_payload_for_a_foreign_stock_skips_the_indian_parts():
     assert d["name"] == "Vodafone Group" and d["price"]["last"] == 120.5 and d["about"]["sector"] == "Communication Services"
     assert d["similar"] == [] and d["shareholding"]["state"] == "unavailable" and d["view_only"]
     assert d["fundamentals"]["market_cap_cr"] == pytest.approx(2.79e10 / 1e7)
+    # statements are in the company's own currency (euros here), not the pence the shares are quoted in
+    assert d["financial_currency"] == "EUR" and d["fundamentals"]["operating_cash_cr"] is None
+    assert d["fundamentals"]["cash_note"] == "Yahoo reports this company's cash flow in EUR, not GBP"
     assert svc.get("VOD.L") is d                                # cached under the whole ticker
 
 
@@ -140,7 +144,8 @@ def test_the_page_formats_each_market_in_its_own_currency(tmp_path):
         eval(require('fs').readFileSync(process.argv[2], 'utf8') + '; globalThis.TA = window.TA;');
         console.log(JSON.stringify({
           px: [TA.px(343.456, "USD"), TA.px(120.55, "GBp"), TA.px(3102, "JPY"), TA.px(2489.5, "INR"), TA.px(12.5, "EUR"), TA.px(null, "USD"), TA.px(-1.5, "USD")],
-          big: [TA.bigMoney(5.01e12, "USD"), TA.bigMoney(2.79e12, "GBp"), TA.bigMoney(3.65e13, "JPY"), TA.bigMoney(null, "USD")],
+          big: [TA.bigMoney(5.01e12, "USD"), TA.bigMoney(2.79e12, "GBp"), TA.bigMoney(3.65e13, "JPY"), TA.bigMoney(null, "USD"),
+                TA.bigMoney(2.74e10, "GBP"), TA.bigMoney(3.74e10, "EUR")],
           q: [TA.qualifyTicker(" aapl ", "US"), TA.qualifyTicker("vod", "UK"), TA.qualifyTicker("7203", "JP"),
               TA.qualifyTicker("tcs", "IN"), TA.qualifyTicker("AAPL.US", "JP"), TA.qualifyTicker("", "US")],
           fm: [TA.foreignMarket("AAPL.US"), TA.foreignMarket("7203.t"), TA.foreignMarket("TCS")]}));
@@ -151,7 +156,8 @@ def test_the_page_formats_each_market_in_its_own_currency(tmp_path):
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
     assert out["px"] == ["$343.46", "120.55p", "¥3,102", "₹2,489.50", "EUR 12.50", "n/a", "−$1.50"]
-    assert out["big"] == ["$5.01T", "£27.9B", "¥36.5T", "n/a"]
+    # bigMoney reads a GBp amount as pence; the stock page hands it pounds (market cap, statements): 2.74e10 -> £27.4B
+    assert out["big"] == ["$5.01T", "£27.9B", "¥36.5T", "n/a", "£27.4B", "EUR 37.4B"]
     assert out["q"] == ["AAPL.US", "VOD.L", "7203.T", "TCS", "AAPL.US", ""]
     assert out["fm"] == ["US", "JP", None]
 

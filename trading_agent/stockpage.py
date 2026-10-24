@@ -177,6 +177,12 @@ def parse_profile(result: dict[str, Any]) -> dict[str, Any]:
             "website": text("website")}
 
 
+def major_currency(code: str) -> str:
+    """The currency a quote's company-level figures use: a London quote in pence (GBp, GBX) is in pounds (GBP) for the
+    market cap and the statements; every other code is itself."""
+    return "GBP" if code in ("GBp", "GBX") else code
+
+
 def parse_cash(result: dict[str, Any], market_cap: float | None) -> dict[str, Any]:
     """Trailing-twelve-month operating and free cash flow from Yahoo's ``financialData`` (crore scale, like the market
     cap), and the market cap divided by each. Information only: there is no "fair" multiple, so no verdict is drawn.
@@ -184,14 +190,15 @@ def parse_cash(result: dict[str, Any], market_cap: float | None) -> dict[str, An
     Yahoo fills these for some stocks and leaves them out for others, so a missing figure is None, never zero. The
     ratios need a positive cash flow and a known market cap. A company whose cash flow is reported in another currency
     than its shares trade in (Vodafone: euros against pence) gets no figures at all, with a note, because dividing one
-    by the other would be wrong by a currency. Currency codes are compared exactly: GBp (pence) is not GBP (pounds)."""
+    by the other would be wrong by a currency. A London quote in pence (GBp, GBX) is compared as pounds (GBP): Yahoo
+    gives the market cap and the cash flows in pounds, and only the share price is in pence."""
     fd = result.get("financialData") or {}
     quote_cur = (result.get("price") or {}).get("currency") or (result.get("summaryDetail") or {}).get("currency")
     fin_cur = fd.get("financialCurrency")
     out: dict[str, Any] = {"operating_cash_cr": None, "free_cash_cr": None, "price_to_cash": None,
                            "price_to_free_cash": None, "cash_note": None}
-    if isinstance(quote_cur, str) and isinstance(fin_cur, str) and quote_cur != fin_cur:
-        out["cash_note"] = f"Yahoo reports this company's cash flow in {fin_cur}, not {quote_cur}"
+    if isinstance(quote_cur, str) and isinstance(fin_cur, str) and major_currency(quote_cur) != fin_cur:
+        out["cash_note"] = f"Yahoo reports this company's cash flow in {fin_cur}, not {major_currency(quote_cur)}"
         return out
     ocf, fcf = _raw(fd, "operatingCashflow"), _raw(fd, "freeCashflow")
     out["operating_cash_cr"], out["free_cash_cr"] = to_crore(ocf), to_crore(fcf)
@@ -208,7 +215,18 @@ def build_fundamentals(ticker: str, result: dict[str, Any], price: dict[str, Any
     """The Fundamentals grid. Debt to equity is Yahoo's percentage turned into a ratio (90 -> 0.90) by parse_summary."""
     parsed = parse_summary(result)
     q = build_quote(ticker, parsed, fetched_at=fetched_at)
-    last, book = price.get("last"), parsed.get("book_value")
+    last, book, eps = price.get("last"), parsed.get("book_value"), parsed.get("eps")
+    quote_cur = (result.get("price") or {}).get("currency")
+    if quote_cur in ("GBp", "GBX"):
+        # a London stock's share price is in pence but Yahoo's per-share figures are in whole units of the company's
+        # reporting currency: pounds for a pound reporter (shown in pence beside the price, so P/B = price / book is
+        # a ratio), another currency for the rest (euros, dollars), which cannot be set beside pence without an exchange
+        # rate: n/a rather than a wrong figure
+        if (result.get("financialData") or {}).get("financialCurrency") == "GBP":
+            eps = eps * 100 if eps is not None else None
+            book = book * 100 if book is not None else None
+        else:
+            eps = book = None
     pb = parsed.get("pb")
     if pb is None and last and book and book > 0:
         pb = last / book
@@ -216,7 +234,7 @@ def build_fundamentals(ticker: str, result: dict[str, Any], price: dict[str, Any
     cap_cr = to_crore(cap) if cap and cap > 0 else None
     roe = parsed.get("roe")
     return {"fund": q["fund"], "market_cap_cr": cap_cr, "market_cap_text": crore_text(cap_cr), "roe": roe,
-            "pe": q["pe"], "eps": parsed.get("eps"), "pb": None if pb is None or pb <= 0 else round(pb, 2),
+            "pe": q["pe"], "eps": eps, "pb": None if pb is None or pb <= 0 else round(pb, 2),
             "dividend_yield": q["dividend_yield"], "industry_pe": industry_pe, "book_value": book,
             "debt_to_equity": parsed.get("debt_to_equity"), "face_value": face_value,
             "week52_low": q["week52_low"], "week52_high": q["week52_high"], **parse_cash(result, cap)}
@@ -404,11 +422,15 @@ class StockService:
             out["error"] = errors["yahoo"]
         price = parse_price(result)
         currency = (result.get("price") or {}).get("currency")
+        fin_cur = (result.get("financialData") or {}).get("financialCurrency")
         fund = build_fundamentals(ticker, result, price, face_value=None, industry_pe=None, fetched_at=now) if result else None
         quarterly, yearly = parse_periods(result, "quarterly"), parse_periods(result, "yearly")
         out.update(
             name=price.pop("name"), fund=bool(fund and fund["fund"]), price=price,
             currency=currency if isinstance(currency, str) and currency else m.get("currency"),
+            # the currency of the statements (revenue, profit, cash flow): the company's own, which can differ from
+            # the one its shares are quoted in (Vodafone reports in euros and trades in pence)
+            financial_currency=fin_cur if isinstance(fin_cur, str) and fin_cur else None,
             week52={"low": fund["week52_low"], "high": fund["week52_high"]} if fund else {"low": None, "high": None},
             circuit={"state": "none_foreign"}, fundamentals=fund, industry_pe_n=0,
             financials={"quarterly": quarterly, "yearly": yearly, "growth": growth_table(quarterly, yearly)},

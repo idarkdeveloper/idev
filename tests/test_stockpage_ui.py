@@ -185,3 +185,15 @@ def test_the_cash_lines_draw_no_verdict():
     assert "not whether the price is fair" in JS
     for word in ("undervalued", "overvalued", "fair value", "30x", "30×"):
         assert word not in code.lower(), word
+
+
+def test_london_amounts_are_formatted_as_pounds_and_statements_in_the_companys_currency():
+    """Yahoo gives a London stock's market cap and statement amounts in whole pounds (or the company's own currency),
+    never in pence: the page hands bigMoney pounds, so Vodafone's 27.4bn is not shown as 274M."""
+    code = _code(JS)
+    assert 'cur() === "GBp" || cur() === "GBX" ? "GBP" : cur()' in code
+    assert "TA.bigMoney(cr * 1e7, bigCur())" in code and "TA.bigMoney(cr * 1e7, finCur())" in code
+    assert "st.stock.financial_currency" in code
+    for needle in ("fcrore(f.operating_cash_cr)", "fcrore(f.free_cash_cr)", "fcrore(periods[i].revenue_cr)", "fcrore(val)"):
+        assert needle in code, needle
+    assert "crore(f.market_cap_cr)" in code and "fcrore(f.market_cap_cr)" not in code

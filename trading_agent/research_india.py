@@ -16,6 +16,7 @@ import io
 import json
 import math
 import re
+import time
 import zipfile
 from bisect import bisect_left
 from collections.abc import Callable, Iterable
@@ -69,6 +70,34 @@ _DIV = re.compile(r"div(?:idend)?[a-z.]*\s*[-:]?\s*(?:of\s*)?r[se]\.?\s*([\d.]+)
 def bhav_url(day: str) -> str:
     d = date.fromisoformat(day)
     return BHAV_URL.format(y=d.year, mon=MONTHS[d.month - 1], d=d.day)
+
+
+# NSE stopped publishing the legacy daily file after 5 Jul 2024 (its URL answers 404 from 8 Jul) and publishes the
+# same day's figures as the "UDiFF" file instead. Probed 24 Oct 2026: legacy 200 up to 2024-07-05, UDiFF 200 from
+# 2024-07-05 on, 404 for legacy on every later day. Both give the EQ series' close, volume, traded value and ISIN.
+UDIFF_FROM = "2024-07-08"
+UDIFF_URL = "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{ymd}_F_0000.csv.zip"
+
+
+def udiff_url(day: str) -> str:
+    return UDIFF_URL.format(ymd=day.replace("-", ""))
+
+
+def parse_udiff(text: str) -> list[dict[str, Any]]:
+    """One day's UDiFF file -> the same EQ rows as ``parse_bhav`` {symbol, close, volume, value, isin}."""
+    out = []
+    for r in csv.DictReader(io.StringIO(text)):
+        r = {str(k).strip(): (v or "").strip() for k, v in r.items() if k}
+        if r.get("SctySrs") != "EQ":
+            continue
+        try:
+            close, qty, val = float(r["ClsPric"]), float(r["TtlTradgVol"]), float(r["TtlTrfVal"])
+        except (KeyError, ValueError):
+            continue
+        if close > 0 and qty > 0:
+            out.append({"symbol": r["TckrSymb"].upper(), "close": close, "volume": qty, "value": val,
+                        "isin": r.get("ISIN", "")})
+    return out
 
 
 def parse_bhav(text: str) -> list[dict[str, Any]]:
@@ -398,24 +427,41 @@ def fetch_bse_rows(day: str, cache: Path, session: Any) -> list[list[str]]:
 # --------------------------------------------------------------------------- #
 # downloads (cached)
 # --------------------------------------------------------------------------- #
+# A burst of ~1,500 requests made NSE answer 403 to 20 days that do exist (24 Oct 2026; the same files answered 200 minutes
+# later). A 403, an error page or a 5xx is therefore retried and, if it persists, left out of the cache; only a 404 is
+# remembered as "no file".
+FETCH_RETRY_PAUSES = (2.0, 5.0, 10.0)
+_sleep = time.sleep
+
+
 def fetch_bhav(day: str, cache: Path, session: Any) -> list[dict[str, Any]] | None:
-    """One day's EQ rows, cached as CSV text; None when NSE has no file for the day."""
+    """One day's EQ rows, cached as CSV text; None when NSE has no file for the day. From UDIFF_FROM the day is read
+    from NSE's UDiFF file (cached as ``<day>.udiff.csv``, so a legacy cache is never mixed with it); earlier days are
+    read exactly as before."""
     cache.mkdir(parents=True, exist_ok=True)
-    f = cache / f"{day}.csv"
-    miss = cache / f"{day}.none"
+    new = day >= UDIFF_FROM
+    f = cache / (f"{day}.udiff.csv" if new else f"{day}.csv")
+    miss = cache / (f"{day}.udiff.none" if new else f"{day}.none")
+    parse = parse_udiff if new else parse_bhav
     if f.exists():
-        return parse_bhav(f.read_text(encoding="latin-1"))
+        return parse(f.read_text(encoding="latin-1"))
     if miss.exists():
         return None
-    r = session.get(bhav_url(day), headers=HEADERS, timeout=60)
-    if r.status_code != 200 or not r.content.startswith(b"PK"):
-        if r.status_code in (403, 404) or not r.content.startswith(b"PK"):
-            miss.write_text(str(r.status_code))
-        return None
+    url = udiff_url(day) if new else bhav_url(day)
+    for pause in (*FETCH_RETRY_PAUSES, None):
+        r = session.get(url, headers=HEADERS, timeout=60)
+        if r.status_code == 200 and r.content.startswith(b"PK"):
+            break
+        if r.status_code == 404:
+            miss.write_text("404")      # NSE has no file for the day: remembered
+            return None
+        if pause is None:
+            return None                 # 403 (throttled), an error page, a 5xx: not remembered, so a later run tries again
+        _sleep(pause)
     z = zipfile.ZipFile(io.BytesIO(r.content))
     text = z.read(z.namelist()[0]).decode("latin-1")
     f.write_text(text, encoding="latin-1")
-    return parse_bhav(text)
+    return parse(text)
 
 
 def fetch_actions(cache: Path, client: Any, *, start: str = DATA_FROM, end: str = WINDOW_END) -> list[dict[str, Any]]:
