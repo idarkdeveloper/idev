@@ -225,8 +225,11 @@
       return `<div class="sp-kv sp-kv2">${kv("Mkt cap", f.market_cap_cr == null ? "n/a" : crore(f.market_cap_cr))}${kv("ROE", percent(f.roe))}
         ${kv("P/E (TTM)", ratio(f.pe))}${kv("EPS (TTM)", rupees(f.eps))}${kv("P/B", ratio(f.pb))}${kv("Div yield", percent(f.dividend_yield))}
         ${kv("Industry P/E", ratio(f.industry_pe))}${kv("Book value", rupees(f.book_value))}
-        ${kv("Debt to equity", ratio(f.debt_to_equity))}${kv("Face value", rupees(f.face_value))}</div>
-        <div class="sub" style="font-size:12px">Figures from ${esc(d.source || "Yahoo Finance")}${peers ? "; industry P/E is the median over same-industry peers we have saved" + esc(peers) : ""}.</div>`;
+        ${kv("Debt to equity", ratio(f.debt_to_equity))}${kv("Face value", rupees(f.face_value))}
+        ${kv("Operating cash (TTM)", crore(f.operating_cash_cr))}${kv("Free cash (TTM)", crore(f.free_cash_cr))}
+        ${kv("Mkt cap ÷ op. cash", ratio(f.price_to_cash, 1))}${kv("Mkt cap ÷ free cash", ratio(f.price_to_free_cash, 1))}</div>
+        <div class="sub" style="font-size:12px">Figures from ${esc(d.source || "Yahoo Finance")}${peers ? "; industry P/E is the median over same-industry peers we have saved" + esc(peers) : ""}.
+        Cash flow is Yahoo's trailing twelve months and n/a where Yahoo has none; the two ratios need a positive cash flow. They describe what the market pays per rupee of cash, not whether the price is fair.${f.cash_note ? " " + esc(f.cash_note) + "." : ""}</div>`;
     }
     function financialHtml(){
       const d = st.stock; if(!d) return st.stockError ? `<div class="sub">Unavailable: ${esc(st.stockError)}</div>` : loading("financials");

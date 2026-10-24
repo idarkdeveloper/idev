@@ -312,6 +312,17 @@ who traded. Prices come from Yahoo Finance and are cached under `state/cache/`.
   minute between 08:45 and 18:30 IST on weekdays, notifying on anything new. Meant for a
   machine with a fixed IP, which the April 2026 SEBI rules require for live orders.
 
+**Cash flow on the stock page (from 22 Oct 2026).** The Fundamentals grid ends with *Operating cash (TTM)*, *Free cash
+(TTM)* and two ratios: market cap ÷ operating cash and market cap ÷ free cash. They are Yahoo's trailing-twelve-month
+figures (`financialData`), so they differ from a single financial year: Eternal read ₹872 Cr TTM against the ₹308 Cr of
+its March 2025 year. Yahoo has none for some stocks (Samvardhana Motherson showed none), which reads n/a, never zero; a
+ratio needs a positive cash flow and a known market cap; and a company whose cash flow is reported in another currency
+than its shares trade in (Vodafone: euros against pence) shows no figures, with a note. It is information only: no
+"fair" multiple (such as 30x), no verdict, and nothing in the screen, the paper accounts or any rule reads it. The
+strategy cannot test it: the project holds no cash-flow history (NSE's filings carry balance sheets only from FY2023, and
+Yahoo's statement-history modules come back empty), and a new signal costs a trial. (`trading_agent/stockpage.py`,
+`parse_cash`.)
+
 **US, UK and Japan stocks (view only).** Pick *US*, *UK* or *Japan* beside the Look up box and type the code (AAPL,
 VOD, 7203), or type it with its market: `AAPL.US`, `VOD.L` (London), `7203.T` (Tokyo). A company name works too: *tesla*
 under *US* finds TSLA (the card says "Matched TESLA to TSLA.US"). The card and the full view show

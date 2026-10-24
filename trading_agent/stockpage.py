@@ -177,6 +177,32 @@ def parse_profile(result: dict[str, Any]) -> dict[str, Any]:
             "website": text("website")}
 
 
+def parse_cash(result: dict[str, Any], market_cap: float | None) -> dict[str, Any]:
+    """Trailing-twelve-month operating and free cash flow from Yahoo's ``financialData`` (crore scale, like the market
+    cap), and the market cap divided by each. Information only: there is no "fair" multiple, so no verdict is drawn.
+
+    Yahoo fills these for some stocks and leaves them out for others, so a missing figure is None, never zero. The
+    ratios need a positive cash flow and a known market cap. A company whose cash flow is reported in another currency
+    than its shares trade in (Vodafone: euros against pence) gets no figures at all, with a note, because dividing one
+    by the other would be wrong by a currency. Currency codes are compared exactly: GBp (pence) is not GBP (pounds)."""
+    fd = result.get("financialData") or {}
+    quote_cur = (result.get("price") or {}).get("currency") or (result.get("summaryDetail") or {}).get("currency")
+    fin_cur = fd.get("financialCurrency")
+    out: dict[str, Any] = {"operating_cash_cr": None, "free_cash_cr": None, "price_to_cash": None,
+                           "price_to_free_cash": None, "cash_note": None}
+    if isinstance(quote_cur, str) and isinstance(fin_cur, str) and quote_cur != fin_cur:
+        out["cash_note"] = f"Yahoo reports this company's cash flow in {fin_cur}, not {quote_cur}"
+        return out
+    ocf, fcf = _raw(fd, "operatingCashflow"), _raw(fd, "freeCashflow")
+    out["operating_cash_cr"], out["free_cash_cr"] = to_crore(ocf), to_crore(fcf)
+    if market_cap and market_cap > 0:
+        if ocf is not None and ocf > 0:
+            out["price_to_cash"] = round(market_cap / ocf, 1)
+        if fcf is not None and fcf > 0:
+            out["price_to_free_cash"] = round(market_cap / fcf, 1)
+    return out
+
+
 def build_fundamentals(ticker: str, result: dict[str, Any], price: dict[str, Any], *, face_value: float | None,
                        industry_pe: float | None, fetched_at: float) -> dict[str, Any]:
     """The Fundamentals grid. Debt to equity is Yahoo's percentage turned into a ratio (90 -> 0.90) by parse_summary."""
@@ -193,7 +219,7 @@ def build_fundamentals(ticker: str, result: dict[str, Any], price: dict[str, Any
             "pe": q["pe"], "eps": parsed.get("eps"), "pb": None if pb is None or pb <= 0 else round(pb, 2),
             "dividend_yield": q["dividend_yield"], "industry_pe": industry_pe, "book_value": book,
             "debt_to_equity": parsed.get("debt_to_equity"), "face_value": face_value,
-            "week52_low": q["week52_low"], "week52_high": q["week52_high"]}
+            "week52_low": q["week52_low"], "week52_high": q["week52_high"], **parse_cash(result, cap)}
 
 
 def industry_pe(peer_pes: list[float | None]) -> tuple[float | None, int]:

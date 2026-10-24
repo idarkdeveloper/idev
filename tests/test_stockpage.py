@@ -418,3 +418,46 @@ def test_fundamentals_peek_reads_saved_snapshots_without_a_request(tmp_path):
     (tmp_path / "fundamentals" / "INFY.json").write_text('{"pe": 24.0}', encoding="utf-8")
     (tmp_path / "fundamentals" / "BAD.json").write_text('{"error": "x"}', encoding="utf-8")
     assert f.peek("infy") == {"pe": 24.0} and f.peek("BAD") is None
+
+
+# ---------- cash flow lines (22-24 Oct 2026) ----------
+def _with_cash(ocf, fcf, *, price_cur="INR", fin_cur="INR", cap=4.0e12):
+    r = full_result()
+    r["price"]["currency"] = price_cur
+    r["summaryDetail"]["marketCap"] = raw(cap)
+    r["financialData"].update({"financialCurrency": fin_cur, "operatingCashflow": raw(ocf), "freeCashflow": raw(fcf)})
+    return r
+
+
+def test_cash_lines_and_the_two_ratios():
+    r = _with_cash(8.72e9, 9.36e8, cap=2.924e12)                   # Eternal's shape: tiny cash against a huge market cap
+    f = sp.build_fundamentals("ETERNAL", r, sp.parse_price(r), face_value=1.0, industry_pe=None, fetched_at=1.0)
+    assert f["operating_cash_cr"] == pytest.approx(872.0) and f["free_cash_cr"] == pytest.approx(93.6)
+    assert f["price_to_cash"] == pytest.approx(335.3) and f["price_to_free_cash"] == pytest.approx(3123.9)
+    assert f["cash_note"] is None
+    m = _with_cash(6.286e10, 1.0e10, cap=1.08366e12)               # Motherson's shape: ~17x operating cash
+    g = sp.build_fundamentals("MOTHERSON", m, sp.parse_price(m), face_value=1.0, industry_pe=None, fetched_at=1.0)
+    assert g["price_to_cash"] == pytest.approx(17.2) and g["price_to_free_cash"] == pytest.approx(108.4)
+
+
+def test_missing_zero_or_negative_cash_gives_no_ratio_and_never_a_zero():
+    none = sp.build_fundamentals("X", full_result(), sp.parse_price(full_result()), face_value=None, industry_pe=None, fetched_at=1.0)
+    assert none["operating_cash_cr"] is None and none["free_cash_cr"] is None and none["price_to_cash"] is None
+    neg = _with_cash(-8.44e9, 0.0)                                # Yahoo's figures can be negative or zero
+    f = sp.build_fundamentals("LOSS", neg, sp.parse_price(neg), face_value=None, industry_pe=None, fetched_at=1.0)
+    assert f["operating_cash_cr"] == pytest.approx(-844.0) and f["free_cash_cr"] == 0.0
+    assert f["price_to_cash"] is None and f["price_to_free_cash"] is None
+    nocap = _with_cash(1e9, 1e9, cap=None)                        # TCS answered without a market cap once: no ratio
+    h = sp.build_fundamentals("TCS", nocap, sp.parse_price(nocap), face_value=None, industry_pe=None, fetched_at=1.0)
+    assert h["operating_cash_cr"] == pytest.approx(100.0) and h["price_to_cash"] is None and h["market_cap_cr"] is None
+
+
+def test_cash_in_another_currency_than_the_shares_is_hidden_with_a_note():
+    r = _with_cash(1.4e10, 5e9, price_cur="GBp", fin_cur="EUR", cap=2.7e10)        # Vodafone: euros against pence
+    f = sp.build_fundamentals("VOD.L", r, sp.parse_price(r), face_value=None, industry_pe=None, fetched_at=1.0)
+    assert f["operating_cash_cr"] is None and f["price_to_cash"] is None
+    assert f["cash_note"] == "Yahoo reports this company's cash flow in EUR, not GBp"
+    pence = _with_cash(1.4e10, 5e9, price_cur="GBp", fin_cur="GBP", cap=2.7e10)    # pence is not pounds: also hidden
+    assert sp.parse_cash(pence, 2.7e10)["price_to_cash"] is None and sp.parse_cash(pence, 2.7e10)["cash_note"]
+    us = _with_cash(1.4e11, 1.0e11, price_cur="USD", fin_cur="USD", cap=5.0e12)
+    assert sp.parse_cash(us, 5.0e12)["price_to_cash"] == pytest.approx(35.7) and sp.parse_cash(us, 5.0e12)["cash_note"] is None
